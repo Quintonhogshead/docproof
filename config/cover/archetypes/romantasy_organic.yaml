@@ -3,17 +3,39 @@
 # =============================================================================
 #
 # Reference DNA: the contemporary romantasy trade paperback — Devney Perry's
-# RITES OF THE STARLING, the wider Bloom/Entangled shelf. A flat dark cloth
-# ground; one vertical metal object hanging on the centre axis; a painted
-# organic tangle growing around it; and a huge stone-white display title that
-# the tangle grows BOTH BEHIND AND IN FRONT OF, so the type sits inside the
-# arrangement rather than on top of it.
+# RITES OF THE STARLING, the wider Bloom/Entangled shelf. A flat dark ground;
+# one vertical object hanging on the centre axis; a tangle of SOMETHING massed
+# around it; and a huge stone-white display title that the tangle grows BOTH
+# BEHIND AND IN FRONT OF, so the type sits inside the arrangement rather than
+# on top of it.
+#
+# THE SKELETON IS THE TEMPLATE. THE MATERIAL IS THE BOOK'S.
+#
+# What is fixed here is a STRUCTURE — a far tier, a spine up the centre, two
+# upper masses, one hanging focal object, a front tier that crosses the type,
+# falling matter, a ground. Not a garden. The reference shelf reaches that
+# structure with briars and roses, and the first cover built from this file
+# did too, and it came out looking like every other romantasy on the table.
+# The slots below are ROLES with a geometry, a cut edge and a light: what
+# actually fills them is whatever the BOOK is made of.
+#
+#   briar canes and roses          antlers, bone shards, dried sinew
+#   wrought iron and rust          coral, kelp, barnacle crust
+#   cabling, wire and circuitry    torn paper, ribbon, burnt vellum
+#   frost, glass shards, quartz    smoke, ash, cinders, moth wings
+#   feathers, wings, talons        rope, net, chain, sailcloth
+#
+# Every one of those lands in this composition. A book of iron and bone should
+# come back iron and bone; if it comes back roses, the direction call defaulted
+# to the genre instead of reading the manuscript. The frames below are written
+# to say SHAPE ONLY — mass, span, direction, where the cut is — and to name no
+# material at all, so that whatever noun arrives is not quietly argued with.
 #
 # This template is written to be ONE-SHOT. Everything that took six revision
 # rounds to get right on the first cover built from it is fixed here and is
 # never re-decided per book: the layer order, the anchors, the overshoot, the
 # effect stacks, the finishing strength, the foot wash, the scrim kinds, the
-# occlusion budget. The art-direction call chooses TEN NOUNS, five palette
+# occlusion budget. The art-direction call chooses ELEVEN NOUNS, five palette
 # hexes, two fonts and a tagline. Nothing else.
 #
 # -----------------------------------------------------------------------------
@@ -21,11 +43,16 @@
 # -----------------------------------------------------------------------------
 #
 # 1. SEVERED ENDS MUST LEAVE THE FRAME, AND OVERSHOOT WHEN THEY DO.
-#    Every plate here is a cutout of something that grows or hangs, so each
-#    one has a cut stem, root, chain or ribbon somewhere on its own edge. That
-#    edge must be flush with the trim or past it — a branch that starts and
-#    stops in mid-air inside the cover reads as a mistake, the same way a
+#    Most plates here are a cutout of something that grows, spans or hangs, so
+#    they have a cut stem, root, chain or ribbon somewhere on their own edge.
+#    That edge must be flush with the trim or past it — a branch that starts
+#    and stops in mid-air inside the cover reads as a mistake, the same way a
 #    standing figure with no ground under them does.
+#
+#    This rule governs plates that HAVE a severed end; it does not require one.
+#    A self-contained object — something that floats, rests, or simply IS —
+#    has no cut to place and must not be given a fake one. `cut_edge: ""` says
+#    exactly that, and `hero` is the slot where it matters (see below).
 #
 #    And grazing is not bleeding. Every generated plate leaves a small
 #    transparent margin inside its own frame, so a plate placed flush with the
@@ -70,23 +97,29 @@
 #
 # The slots are roles. The art-direction call says what each role IS for this
 # book; the template already knows where it goes, how big it is, which edge it
-# is cut on, and what it is lit like. The first cover built from this template
-# filled them: hanging iron lantern / briar canes / wild roses / a brass key on
-# a ribbon / rose petals and embers. A second book fills them differently and
-# lands in the same composition.
+# is cut on, and what it is lit like. Nothing below names a material, and the
+# slot ids are historical — `bloom_front` is "the big front-tier feature at the
+# lower left", not "a flower", and a book whose world is bone should read it as
+# a skull, a book of wrecks as a ship's bell.
 #
 #   mat            the ground the whole cover is printed on
 #   fall           the particle field, drifting behind everything
 #   veil_back      the pale far tier, pushed back by `haze_back`
-#   spine          what rises from the bottom edge and branches
-#   cluster_left   the upper-left foliage mass
-#   cluster_right  the upper-right bloom mass
-#   hero           THE FOCAL SUBJECT — the vertical object on the centre axis
+#   spine          what rises from the bottom edge and divides
+#   cluster_left   the upper-left mass — the finer, busier one
+#   cluster_right  the upper-right mass — the bolder, rounder one
+#   hero           THE FOCAL SUBJECT — the object on the upper centre axis,
+#                  held there however its own nature says it should be
 #   sweep_front    the front tier's long diagonal, crossing the type
-#   charm          the small hanging thing that crosses the title's first line
-#   bloom_front    the big front-tier flower at the lower left
+#   bloom_front    the big front-tier feature at the lower left
 #   drift_front    the small front-tier fill for the lower right
 #   foot           what rises from the bottom in FRONT of the type
+#
+# Filled three ways, to show the range the geometry actually holds:
+#
+#   ROMANTASY   hanging lantern / briar canes / wild roses / fallen petals
+#   BONE-GOTHIC hanging censer / antler racks / cracked skulls / loose teeth
+#   DROWNED     hanging ship's bell / kelp fronds / coral heads / shell shards
 #
 # -----------------------------------------------------------------------------
 # ENGINE SUPPORT THIS FILE REQUIRES  (all eight landed)
@@ -122,16 +155,24 @@ recipe_strength: 0.30          # (g) dark_academia at full strength cooks a
                                 # ten-plate collage sepia; it is wanted here
                                 # only for its vignette, dust and paper tooth
 describe: >-
-  A dark cloth ground with one hanging metal object on the centre axis and a
-  painted organic tangle growing around it — mass behind a huge stone-white
-  display title, and more of the same tangle drawn in FRONT of it, casting
-  shadows onto the letterforms. Tagline top-left, credit line and author at
-  the foot over a feathered wash.
+  A dark textured ground; one object alone on the upper centre axis — hanging,
+  floating, resting or embedded, whichever is true to what it is — lit from
+  within or picked out by the light; and a tangle of organic or
+  wrought material massed around it — behind a huge stone-white display title,
+  and more of the same material drawn in FRONT of it, casting shadows onto the
+  letterforms. The material is NOT specified by this archetype and must come
+  from the book itself: briar and roses, but equally bone and antler, iron and
+  rust, coral and kelp, wire and circuitry, frost and glass, feathers, rope and
+  chain, torn paper, smoke and ash. Pick what the manuscript is actually made
+  of. Tagline top-left, credit line and author at the foot over a feathered
+  wash.
 composition_note: >-
-  Painted in rich photorealistic botanical-illustration style, lit softly from
-  the upper left with warm lamplight — deep shadow side, restrained specular
-  highlights. No scene, no horizon, no sky, no landscape, no figures or faces,
-  no vignette, no cast shadow on any surface.
+  Rendered as a rich, tactile, photoreal natural-history plate of the subject
+  itself — every material shown with its own true surface, colour and wear, not
+  restyled toward any other. Lit softly from the upper left with warm lamplight
+  — deep shadow side, restrained specular highlights. No scene, no horizon, no
+  sky, no landscape, no human figures, no vignette, no cast shadow on any
+  surface.
 
 # =============================================================================
 art:
@@ -209,13 +250,13 @@ art:
     offset: [0.00, 0.06]
     scale: 0.80
     prompt_frame: >-
-      {subject}, climbing upward from the bottom of the frame and branching
-      into three main limbs.
+      {subject}, rising from the bottom of the frame and dividing into three
+      main arms as it climbs.
     effects:
       - {kind: drop_shadow, dy: 0.008, blur: 0.012, alpha: 0.50}
 
   - id: cluster_left
-    role: foliage
+    role: mass_fine
     generatable: true
     transparent: true
     fit: contain
@@ -224,13 +265,13 @@ art:
     offset: [-0.06, -0.06]
     scale: 0.50
     prompt_frame: >-
-      A loose spray of {subject} on thin whipping stems scattered across the
-      frame at varied angles.
+      A loose spray of {subject}, fine and busy, scattered across the frame at
+      many varied angles on thin whipping lengths.
     effects:
       - {kind: drop_shadow, dy: 0.005, blur: 0.010, alpha: 0.45}
 
   - id: cluster_right
-    role: blooms
+    role: mass_bold
     generatable: true
     transparent: true
     fit: contain
@@ -239,8 +280,9 @@ art:
     offset: [0.06, -0.06]
     scale: 0.48
     prompt_frame: >-
-      A cluster of {subject}, some fully open and some half open, arranged
-      loosely across the frame at different sizes and angles.
+      A cluster of {subject}, bold and rounded, arranged loosely across the
+      frame at different sizes and angles — some square to the viewer, some
+      turned away.
     effects:
       - {kind: drop_shadow, dy: 0.006, blur: 0.012, alpha: 0.50}
 
@@ -248,17 +290,36 @@ art:
     role: focal_subject
     # THE FOCAL SUBJECT, and it must stay the loudest thing in the frame:
     # brightest value, highest local contrast, most detail. Drawn AFTER the
-    # foliage for exactly that reason — under it, the first build buried the
-    # lantern beneath the flower cluster and the cover had no subject at all.
+    # upper masses for exactly that reason — under them, the first build
+    # buried the lantern in the cluster and the cover had no subject at all.
+    #
+    # WHAT THIS SLOT REQUIRES IS THE POSITION, NOT THE HANGING. Upper centre
+    # axis, still, and belonging there. HOW it is present is the object's own
+    # business: a lantern or a cage hangs, a stone or a star floats, a helm or
+    # a reliquary rests on something, a shard is embedded, a growth grows. The
+    # slot used to declare `cut_edge: top`, which put "cut off cleanly at the
+    # top edge and continues past it" into every prompt and so made a chain
+    # COMPULSORY — a floating object had to be hung to fit the slot. That was
+    # rule 1 applied to a plate rule 1 does not govern: a self-contained
+    # object has no severed end, and inventing one is the defect, not the fix.
+    # `cut_edge: ""` now, and the frame below carries rule 1 only for the case
+    # that actually needs it — if the thing DOES hang, its cord must leave the
+    # frame rather than stopping in mid-air inside it.
     generatable: true
     transparent: true
     fit: contain
-    cut_edge: top              # it HANGS: the chain/cord leaves through the top
+    cut_edge: ""               # see above — the object decides how it is held
     anchor: [0.50, 0.00]
     scale: 0.55
     prompt_frame: >-
-      {subject}, suspended from a chain or cord that rises straight up and out
-      of the top of the frame, hanging still and dead vertical.
+      {subject}, presented alone and still in the upper part of the frame,
+      dead centred on the vertical axis and square to the viewer. However this
+      object is held there must look natural and physically true for a thing
+      of its own kind and weight — hanging, floating, resting on something,
+      embedded in something, or growing from it — never propped or balanced in
+      a way that would not hold. If it hangs, whatever suspends it runs
+      straight up and out through the top of the frame and is never left
+      stopping in mid-air inside it.
     effects:
       - {kind: drop_shadow, dy: 0.007, blur: 0.011, alpha: 0.55}
       - {kind: outer_glow, blur: 0.030, alpha: 0.35}
@@ -288,24 +349,11 @@ art:
     offset: [-0.06, 0.06]
     scale: 0.55
     prompt_frame: >-
-      A single arching stem carrying {subject}, sweeping diagonally across the
-      frame from lower left to upper right; crisply lit and sharply focused.
+      A single long arching length carrying {subject}, sweeping diagonally
+      across the frame from lower left to upper right; crisply lit and sharply
+      focused.
     effects:
       - {kind: drop_shadow, dy: 0.006, blur: 0.010, alpha: 0.60}
-
-  - id: charm
-    role: hanging_accent
-    generatable: true
-    transparent: true
-    fit: contain
-    cut_edge: top
-    anchor: [0.84, 0.00]
-    scale: 0.42
-    prompt_frame: >-
-      {subject}, hanging dead straight from a cord or ribbon that rises up and
-      out of the top of the frame.
-    effects:
-      - {kind: drop_shadow, dy: 0.006, blur: 0.009, alpha: 0.60}
 
   - id: bloom_front
     role: front_feature
@@ -317,9 +365,22 @@ art:
     anchor: [0.00, 0.70]       # trim instead of pointing back into the frame
     offset: [-0.08, 0.00]
     scale: 0.32
+    # The head must be WHOLE. Every other slot here is a spray, a cane or a
+    # canopy, so a plate cropped by its own frame just reads as more tangle
+    # running off the page. This one is a single closed object sitting in
+    # open ground at 0.32 scale, and `cut_edge: left` promises the ONLY flat
+    # edge is the stem's, out through the trim. When the generator cropped
+    # the bloom across the TOP instead, that second flat edge landed 1260px
+    # inside the cover with nothing behind it and the whole plate read as a
+    # rectangular photo pasted on — rule 1's "starts and stops in mid-air",
+    # in the one place the composition can least afford it. So the frame says
+    # so outright rather than trusting the generator to compose politely.
     prompt_frame: >-
-      One very large single {subject} seen slightly from the side, with a short
-      cut stem; crisply lit and sharply focused.
+      One very large single {subject} seen slightly from the side, on a short
+      severed stalk, stem or shaft; crisply lit and sharply focused. The subject
+      itself is complete and entirely inside the frame with clear space around
+      it, never cropped or cut off by the top, bottom or right edge — that
+      severed end is the only part that runs off the picture.
     effects:
       - {kind: drop_shadow, dy: 0.007, blur: 0.012, alpha: 0.55}
 
@@ -337,9 +398,9 @@ art:
     offset: [0.04, 0.00]
     scale: 0.26
     prompt_frame: >-
-      Three or four fallen {subject} lying loosely overlapped, curled and
-      slightly bruised at the edges, one turned to show its paler underside.
-      No stem, no leaves, no whole flower — only the loose pieces.
+      Three or four fallen {subject} lying loosely overlapped, worn and
+      slightly damaged at the edges, one turned to show its paler underside.
+      Only the loose shed pieces — never the whole thing they came off.
     effects:
       - {kind: drop_shadow, dy: 0.006, blur: 0.011, alpha: 0.50}
 
@@ -353,7 +414,7 @@ art:
     offset: [0.00, 0.06]
     scale: 0.50
     prompt_frame: >-
-      Three stems of {subject} rising from the bottom of the frame, fanning
+      Three lengths of {subject} rising from the bottom of the frame, fanning
       slightly apart as they rise.
     effects:
       - {kind: drop_shadow, dy: 0.006, blur: 0.011, alpha: 0.50}
@@ -424,7 +485,7 @@ scrims:
 # =============================================================================
 text:
   - id: subtitle
-    # The tagline, top-left. It sits over foliage, so it carries its own
+    # The tagline, top-left. It sits over the left mass, so it carries its own
     # shadow as well as a halo — at 0.018 with neither it measured 4.56, a
     # hair over the floor and genuinely hard to read.
     zone: {x: 0.085, y: 0.110, w: 0.52, h: 0.065}
@@ -447,9 +508,19 @@ text:
     size_min: 0.055
     size_max: 0.155
     effects:
-      # A tight dark contact shadow under a wide soft one — the pro type move.
+      # A tight dark contact shadow, a wide soft one, then a big deep cast —
+      # the pro type move, three deep. The first two alone are tuned for the
+      # near-black ground the reference cover had; on a pale field they have
+      # almost nothing to darken and the title goes flat against it. The Grey
+      # Elegy build measured 5.69 with white type sitting on bone and antler,
+      # a third of the 17.8 the credit line got over its wash. The third
+      # shadow is the one that does the work there: wide enough to read as
+      # depth under the letterforms rather than as an outline around them,
+      # and low-alpha enough to stay invisible on a dark ground, where the
+      # first two are already sufficient and nothing needs rescuing.
       - {kind: drop_shadow, dy: 0.003, blur: 0.004, alpha: 0.70}
       - {kind: drop_shadow, dy: 0.013, blur: 0.030, alpha: 0.38}
+      - {kind: drop_shadow, dy: 0.026, blur: 0.062, alpha: 0.45}
       # soft_light, NOT multiply: a stone plate at multiply/0.32 pulled a bone
       # title down to 75% brightness and made the type read translucent.
       - {kind: texture_overlay, texture_file: marble, blend: soft_light, opacity: 0.30}
@@ -477,11 +548,11 @@ text:
 
 # =============================================================================
 # Z-ORDER, bottom first. The two things that are easy to get wrong and fatal:
-# `fall` is at the BOTTOM (rule 3), and `hero` is drawn AFTER all the foliage.
+# `fall` is at the BOTTOM (rule 3), and `hero` is drawn AFTER the two masses.
 layers: [mat, fall, mat_grade, tooth, keylight,
         veil_back, haze_back, spine, cluster_left, cluster_right, hero,
         "scrim:0", "scrim:2", subtitle, title,
-        sweep_front, charm, bloom_front, drift_front, foot,
+        sweep_front, bloom_front, drift_front, foot,
         foot_wash, "scrim:1", series, author,
         tonal_spine, hero_bloom]
 
