@@ -2048,3 +2048,35 @@ eye has nowhere to rest. The relic wins by being the **soft, lit, simple** mass 
 broad diffuse light, gentle falloff, an outline that eases rather than cuts, a wider and weaker
 contact shadow than the border plates carry. `relic_soften` — a masked `blur` mixed back at 0.45 —
 backs the prompt up in the engine, so the read does not depend on one generation coming back tender.
+
+### 20.5 `strewn` cut — a slot whose every rule was damage control
+
+Owner note, second revision: *broken shards of pottery and shell should be removed from the
+archetype.* `strewn` — loose detached fragments of the border material, come to rest on the floor
+around the relic's foot — is gone. Eleven generated slots now, not twelve.
+
+The cut is the same ruling `romantasy_enclosure` made about its cabinet of curiosities and
+`crossed_relics` made about its second scatter, and the tell was visible in this template's own
+history without needing the note. Every property `strewn` carried was a rule invented to stop it
+doing damage:
+
+- a **hard scale ceiling** under the relic's, because the first build ran it at 0.68 against a 0.46
+  relic and put debris bigger than the focal object across the middle of the cover;
+- an **off-axis anchor**, because a symmetric spill under a symmetric relic under a symmetric crest
+  is three bullseyes in a column;
+- an **anchor that had to clear the title band**, re-tuned three separate times as the title grew;
+- and it **buried `pendant`** outright on two of those tunings — the one plate rule 5 says the
+  composition comes apart without.
+
+A slot that needs four rules to stop it hurting the design is not being governed, it is being
+tolerated. And the underlying fault was material, not placement: the fragments were made of the
+*same stuff as the border*, so wherever they landed they read as the border having leaked into the
+middle — the one region rule 2 exists to defend.
+
+**The floor between the relic and the type is meant to be empty.** A book that wants debris at its
+relic's foot should ask `floor` for a surface that already has some, which costs no slot, cannot
+drift inward, and is lit by the same light as the plane it sits on.
+
+Worth generalising: on a template built by addition, the honest test for a slot is not "does it look
+good here" but **"how many rules does it need in order to be safe?"** Zero is a structural slot. One
+is a slot with a known hazard. Four is a slot that should not exist.

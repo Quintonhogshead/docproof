@@ -73,6 +73,20 @@
 #    out-shouting the middle, the fault is a border fill that is too pale, not a
 #    relic that is too small.
 #
+#    AND IT IS THE ONLY THING ON THE ALTAR. An earlier draft carried a `strewn`
+#    slot — loose detached fragments of the border material, come to rest on
+#    the floor around the relic's foot. It was cut on owner note, and the cut
+#    is the right one for the same reason romantasy_enclosure's cabinet of
+#    curiosities was cut and crossed_relics' second scatter was deleted: the
+#    fragments were made of the SAME material as the border, so they read as
+#    the border having leaked into the middle — the one place this template
+#    defends. Every tuning it needed (a hard scale ceiling under the relic's,
+#    an off-axis anchor, a clear of the title band) was a rule invented to stop
+#    it doing damage, which is the signature of a slot that should not exist.
+#    The floor between the relic and the type is meant to be EMPTY. A book that
+#    wants debris at the relic's foot should ask its `floor` for a surface that
+#    already has some.
+#
 #    DOMINANCE IS NOT HARDNESS, and the first build of this template confused
 #    the two. Its frame asked for hard edges, a cold specular rim and "every
 #    surface mark, crack and pit sharply in focus" — against a border of
@@ -134,7 +148,6 @@
 #   finial     the bottom-centre ornament, free-standing between title and byline
 #   pendant    the token on a chain, hanging from the relic toward the title
 #   relic      THE FOCAL OBJECT — pale, centred, resting on the floor
-#   strewn     detached fragments come to rest on the floor
 #   blaze      the light-emitting band along the bottom trim
 #
 # EVERY FRAME BELOW IS WRITTEN IN GEOMETRY AND LIGHT, NEVER IN NOUNS —
@@ -183,10 +196,8 @@
 # ONE plate crosses the type: `blaze`, on screen, over the byline. That is the
 # entire budget and it is smaller than any other template's here on purpose,
 # because this cover already spends its complexity on the border. The two
-# border columns are pinned to the side trims; `strewn` sits above the title
-# band and must stay smaller than the relic; `finial`
-# lives in the gap between the title and the byline and must not grow into
-# either. If the composer reports occlusion on anything but `blaze`, a plate
+# border columns are pinned to the side trims; `finial` lives in the gap
+# between the title and the byline and must not grow into either. If the composer reports occlusion on anything but `blaze`, a plate
 # has drifted inward and the fix is its anchor, not the title's scrim.
 # =============================================================================
 name: burning_cartouche
@@ -501,34 +512,6 @@ art:
       - {kind: drop_shadow, dy: 0.012, blur: 0.030, alpha: 0.38}
       - {kind: outer_glow, blur: 0.048, alpha: 0.34}
 
-  - id: strewn
-    role: fallen_fragments
-    # Detached pieces come to rest on the floor between the relic and the type.
-    # Discrete whole things lying flat: `keep_whole`, no cut edge. Off the
-    # centre axis, because a symmetric spill under a symmetric relic under a
-    # symmetric crest is three bullseyes in a column.
-    generatable: true
-    transparent: true
-    fit: contain
-    place_by: ink
-    keep_whole: true
-    anchor: [0.28, 0.420]
-    # HARD CEILING: this scale must stay well under `relic`'s. At 0.68 the
-    # first render put fragments BIGGER than the focal object across the middle
-    # of the cover, which buried `pendant` outright and broke rule 3 — a
-    # scatter of debris cannot out-mass the thing on the altar.
-    scale: 0.22
-    opacity: 0.85
-    prompt_frame: >-
-      Five or six SMALL loose detached pieces of {subject} lying flat and
-      scattered apart where they came to rest on a level surface, seen from
-      just above, each at a different angle, one turned to show its paler
-      underside, with plenty of empty space between and around them.
-      Only the detached fragments — nothing whole, nothing still attached to
-      anything, nothing standing up.
-    effects:
-      - {kind: drop_shadow, dy: 0.004, blur: 0.009, alpha: 0.48}
-
 # -- the one plate in front of the type ---------------------------------------
   - id: blaze
     role: front_band
@@ -748,7 +731,7 @@ text:
     # The zone is wide because this shelf's titles run edge to edge, and it can
     # afford to be: the band beneath it is graded wall and reflected floor, ONE
     # value regime, so the worst-region legibility measure has nothing to trip
-    # on. Do not slide it up into the strewn fragments.
+    # on. Do not slide it up into the pendant's hanging token.
     # A TALL zone and THREE lines, and both halves are the same decision: on
     # this template the title has to be big, and the uniform fit sizes every
     # line to whatever the LONGEST line can carry. Two lines of "THE /
@@ -829,7 +812,7 @@ text:
 # and `blaze` is the ONLY plate after the type.
 layers: [field, field_grade, floor, floor_recede, keylight, motes,
         bower_left, bower_right, bough, filigree, crest, finial,
-        pendant, relic, strewn,
+        pendant, relic,
         "scrim:3", series,
         foot_wash,
         "scrim:2", subtitle,
@@ -841,7 +824,7 @@ layers: [field, field_grade, floor, floor_recede, keylight, motes,
 # =============================================================================
 # WHAT THE DIRECTOR STILL CHOOSES, AND NOTHING ELSE
 # =============================================================================
-#   * twelve `{subject}` fills, one per generatable slot. `bower_left` and
+#   * eleven `{subject}` fills, one per generatable slot. `bower_left` and
 #     `bower_right` must be given the SAME material — they are one border in
 #     two pieces, and the asymmetry is in their scale and height, never in
 #     their species. `filigree` and

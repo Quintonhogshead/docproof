@@ -1116,7 +1116,7 @@ def test_burning_cartouche_metal_is_symmetric_and_the_organic_is_not():
     assert by_id["filigree"].corners
     assert by_id["filigree"].corners_flip_vertical, (
         "a rocaille scroll is top/bottom symmetric and wants the full mirror")
-    for sid in ("bower_left", "bower_right", "bough", "strewn"):
+    for sid in ("bower_left", "bower_right", "bough", "floor"):
         assert not by_id[sid].corners, f"{sid} is the irregular half of rule 1"
 
 
@@ -1144,15 +1144,26 @@ def test_burning_cartouche_hides_the_chains_cut_behind_the_relic():
     assert layers.index("pendant") < layers.index("relic")
 
 
-def test_burning_cartouche_keeps_the_relic_larger_than_the_debris():
-    """Rule 3: a scatter of fragments may never out-mass the thing on the
-    altar. The first build ran `strewn` at 0.68 against a 0.46 relic, which
-    buried the pendant outright and turned the middle of the cover into more
-    border."""
-    by_id = {s.id: s for s in ARCHETYPES["burning_cartouche"].art}
-    assert by_id["strewn"].scale < by_id["relic"].scale
-    # Both rest rather than grow, hang or span, so neither may be trim-cut.
-    assert by_id["relic"].keep_whole and by_id["strewn"].keep_whole
+def test_burning_cartouche_puts_nothing_but_the_relic_on_the_altar():
+    """Rule 3. An earlier draft carried a `strewn` slot — loose fragments of
+    the border material come to rest around the relic's foot — and it was cut
+    on owner note, for the same reason romantasy_enclosure's cabinet of
+    curiosities and crossed_relics' second scatter were cut: made of the same
+    stuff as the border, the fragments read as the border leaking into the
+    middle, which is the one place this template defends. Every tuning it
+    needed was a rule invented to stop it doing damage.
+
+    The floor between the relic and the type is meant to be EMPTY, so guard
+    the emptiness rather than trusting the comment."""
+    a = ARCHETYPES["burning_cartouche"]
+    assert "strewn" not in {s.id for s in a.art}
+    # What is left on the centre axis below the border tier: the chain and the
+    # relic, and nothing else.
+    between = a.layers[a.layers.index("finial") + 1:a.layers.index("scrim:3")]
+    assert between == ["pendant", "relic"], between
+    # The relic rests rather than grows, hangs or spans, so it may not be
+    # trim-cut (§15.25).
+    assert {s.id: s for s in a.art}["relic"].keep_whole
 
 
 def test_burning_cartouche_grounds_its_type_before_drawing_it():
