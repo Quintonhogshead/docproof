@@ -1668,6 +1668,119 @@ would be a different decision than the archetype asked for.
 **Ask which kind of thing a plate holds before reaching for an overshooting
 anchor.** That question is now part of authoring a slot.
 
+### 15.31 The single-saturation rule, and Archetype Thirteen (`sable_regalia`)
+
+**The archetype.** `config/cover/archetypes/sable_regalia.yaml` — one ornate object mounted
+head-on above the title like a coat of arms, a fan of tall thin forms bursting behind it, long
+curling arms reaching in from both trims, **the entire art tier in silver and black**, and every
+saturated pixel on the cover spent on a huge three-line foil-stamped title, the author's name in
+the same foil, and a scatter of one small object that matches them. It is the dark-fantasy
+special-edition hardback, and it is the shelf's other pole from the three romantasy templates:
+where those are asymmetric many-coloured collages built around a figure, this is a near-symmetric
+monochrome **emblem** with no figure in it at all.
+
+**The single-saturation rule — the whole template is a stacking order.** `mono_line` is a
+full-frame `grade` at `saturation: -1.0` sitting at a fixed point in `layers`. Everything beneath
+it (ground, all-over ornament, glow, far tier, both arms, the crest) is monochrome *by
+construction*, whatever colours nine separate generations happen to come back as; everything above
+it (the two chroma plates and all four text slots) carries the cover's entire colour budget.
+
+This is not a palette preference, and it is the one thing about this template that cannot be
+softened:
+
+- A red title on a red-lit silver relic is **a red cover**. A red title on a *neutral* silver
+  relic is **foil**. Nothing else in the composition makes metal look stamped.
+- At `saturation: -0.8` a warm-lit generation stays faintly warm under the type, and the effect
+  collapses — so the value is stated as a rule with a test, not left as a dial.
+- The layer *order* is the assertion, so it is tested as an order:
+  `test_sable_regalia_every_mount_plate_is_below_the_mono_line` names both halves. Move a plate
+  across that line and the template stops being this template.
+
+It also resolves what would otherwise be a standoff with §19.4's shelf-wide photoreal ban. That
+ban exists because an untreated photoreal plate is the biggest "AI-generated" tell, and its
+mitigation is stylization — duotone, silhouette, posterize, `photo_soft`. **Every one of those
+destroys this cover**: `photo_soft` maps each plate onto the background→primary ramp, which here
+is BLACK→RED, so the mitigation would paint the relic the colour of the title. `mono_line` *is*
+this template's stylization, which is why it ships `photoreal: true` — and, per the flag's own
+bargain, a finishing `recipe` (`dark_academia` at `recipe_strength: 0.35`) for the vignette, dust
+and paper tooth that put nine generations on one jacket. That recipe's `+0.35` warm step is
+pre-cancelled by `mono_line`'s own `temperature: -0.34`, which is the honest way to borrow a shelf
+recipe you only want two thirds of.
+
+**A mounted mass has no floor — dissolve the foot, do not cut it.** §15.23's cardinal rule is that
+a standing figure must look like it is standing on something, and that when the plate has no floor
+you GENERATE the ground. This is the documented exception, and an exception has to say why it is
+allowed to be one: **nothing here is standing.** The crest is *mounted* — hung, held up, heraldic —
+and a coat of arms does not get a floor, it gets a field.
+
+But a mounted mass still cannot END. A plate whose ink stops in a flat horizontal line inside the
+frame reads as amputated however good it is. So `crest` and `fan` each carry an **inverted linear
+gradient mask** taking their lower thirds down into the ground: the mass arrives out of the dark.
+That is a third answer alongside the two the shelf already had, and the three are now a closed
+set an author picks from when placing any slot:
+
+| the plate's subject | the answer |
+|---|---|
+| grows or hangs — a stem, cane, chain, blade (§15.21 rule 1) | **cut edge**, carried off the trim by `anchor`/`offset` |
+| is a discrete whole object — a berry, a float, a mask (§15.25) | **`keep_whole`**, clamped inside the trim |
+| is mounted, with no cut end and no ground | **foot fade**, an inverted gradient mask |
+
+`cut_edge` and a foot fade are mutually exclusive instructions and the archetype test says so.
+
+**Rule 1's price, and the plate that pays it — a cover-fit plate's only scale knob is the
+prompt.** Keeping the chroma above `mono_line` puts the drift plate structurally IN FRONT of the
+crest; there is nowhere else it can go and stay coloured. So it is the one slot here that can bury
+the subject, and the first build of this archetype did exactly that: asked for "many different
+sizes... sparse... large empty gaps" at `fit: cover`, the generator answered with fist-sized fruit
+filling the frame, which covered the mask, matched the title's own red, and made the title the
+lowest-contrast element on the cover. A `contain` slot would have been fixed with `scale`; a cover
+fit has no scale knob at all, so **the size of the objects has to be stated in the prompt as a
+fraction of the frame** ("no wider than a fortieth of the frame", "perhaps thirty in the whole
+frame"), not implied by adjectives. One $0.03 repaint, and the same fix protects every book that
+ever uses the template. Generalisable: adjectives do not set scale, and on a cover-fit plate
+nothing else can.
+
+**Three smaller things worth stealing.**
+
+- **Near-symmetry, never a mirror.** The composition is heraldic and declares `axis: center`, but
+  the two arms sit at different heights (0.20 / 0.14) and different scales (0.52 / 0.46) and are
+  asked for different *kinds* of thing, and the front chroma plate is pinned off-axis on one side
+  only. Two identical halves are a logo. A symmetry the eye reads as balanced and the measurement
+  reads as unequal is an emblem.
+- **The foil title is built, not coloured.** Flat ink is not foil. The stack is a tight contact
+  shadow, a wide soft one, a two-stop metallic `gradient_overlay` (`accent` body → `primary`
+  highlight, same hue family, 25–40 L\* apart), and a `bevel` — the light rim top-left, the dark
+  rim bottom-right — which is the only layer on the cover that says PRESSED INTO rather than
+  PRINTED ON. Deliberately no `texture_overlay`: a stone or paper plate over the ink reads as
+  *worn*, which is the opposite claim. The ramp stops at `0.95` rather than `1.00` so the
+  legibility autopilot's ink flip retains some authority instead of being driven into halving the
+  finishing stack.
+- **The author's name is a second wordmark.** `font_role: title` on the author slot, wearing the
+  same metallic ramp at `0.85` — visibly the quieter stamp of the two. This is the convention
+  `font_role` was added for and half the shelf runs on it; a plain sans there reads as a different
+  book's credit block.
+
+**The palette contract is this template's own**, and a director has to be told so: `accent` is the
+FOIL BODY and the only saturated colour on the cover, `primary` is the FOIL HIGHLIGHT and must be
+the same hue family, `background` is near-black, `text` is near-white for the two small lines. A
+`primary` from a different hue makes the title look mis-registered rather than metallic. That, the
+casting note ("cast from the book's institution and its relic, not from its characters"), and the
+instruction that `seeds_back` and `seeds_front` get the SAME noun are the whole brief the art
+direction receives.
+
+**Honest scope.** Dark fantasy, gothic horror, grimdark, occult, cursed-object stories. It does
+not fit anything whose cover needs a person, a place, or more than one colour. The riskiest plate
+is `crest`: it is the only object on the cover and must come back symmetrical, ornate and cleanly
+cut out — no template rule can fix one that does not.
+
+Provenance: built 2026-09-01 against the dark-fantasy foil-jacket shelf, and proved on *The
+Orchard of Hollow Saints* (an iron saint's mask over pomegranate seeds), nine draft plates.
+
+Numbering note: §15.26 and §15.27 are Archetypes Eight (`gilded_descent`) and Nine
+(`gilded_sigil`), on sibling branches; §15.28–§15.30 are reserved for Ten through Twelve, two of
+which (`gilded_cartouche`, `uplit_vigil`) were in flight unnumbered when this was written. Whoever
+merges last renumbers, as usual.
+
 ## 16. The director and the atelier (DECIDED 2026-08-31, owner) — how a cover is made now
 
 The old flow was: distil a manuscript *sample* into a grounding sheet, ask one call for N directions, then paint each concept and put it through a fixed critique loop. The new flow is two acts, and it is what the owner arrived at by building six Longsword covers by hand with six agents:

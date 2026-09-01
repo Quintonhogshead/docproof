@@ -22,6 +22,7 @@ from docproof.cover.archetypes import (ARCHETYPES, ARCHETYPES_DIR,
                                        zone_px)
 from docproof.cover.compose import compose
 from docproof.cover.recipes import RECIPES
+from docproof.cover.textures import TEXTURES
 from docproof.cover.fonts import AUTHOR_FONT_DEFAULT, FAMILIES, describe_fonts, font_path
 from docproof.cover.model import Brief, Direction, Palette, Zone, build_spec
 
@@ -216,6 +217,7 @@ _EXPECTED_GENRES = {
     "portrait_luminary": ["fantasy", "romance"],
     "elemental_aperture": ["fantasy", "science_fiction", "romance",
                           "mystery_thriller", "horror"],
+    "sable_regalia": ["fantasy", "horror"],
 }
 
 
@@ -1070,3 +1072,147 @@ def test_pale_reliquary_keeps_its_discrete_object_plates_whole():
     for sid in ("crown", "undergrowth", "beast", "bloom", "claw"):
         assert not by_id[sid].keep_whole
         assert by_id[sid].cut_edge
+
+
+# -- Archetype Thirteen: the single-saturation rule (§15.31) ------------------
+
+def test_sable_regalia_mono_line_is_a_total_desaturation():
+    """Rule 1. The whole template is a stacking order, and this is the layer
+    the order is about: at anything softer than -1.0 a red-lit generation
+    stays faintly red under the type, and the foil stops reading as foil."""
+    a = ARCHETYPES["sable_regalia"]
+    mono = next(adj for adj in a.adjust if adj.id == "mono_line")
+    assert mono.op == "grade"
+    assert mono.saturation == -1.0
+    # ...and it is a FULL-FRAME grade: a mask would let a plate through.
+    assert mono.mask is None
+    assert mono.opacity == 1.0
+
+
+def test_sable_regalia_every_mount_plate_is_below_the_mono_line():
+    """The rule stated as an ordering assertion rather than as prose. Ground,
+    ornament, glow, far tier, both arms and the crest are monochrome by
+    construction; the two chroma plates and all four text slots are not."""
+    a = ARCHETYPES["sable_regalia"]
+    cut = a.layers.index("mono_line")
+    below = set(a.layers[:cut])
+    above = set(a.layers[cut + 1:])
+    for slot in ("field", "damask", "halo", "fan", "crown_left",
+                 "crown_right", "crest"):
+        assert slot in below, f"{slot} must be desaturated by mono_line"
+    for slot in ("seeds_back", "seeds_front", "brambles",
+                 "title", "subtitle", "author", "series"):
+        assert slot in above, f"{slot} carries chroma and must clear mono_line"
+
+
+def test_sable_regalia_chroma_is_one_object_seen_at_two_depths():
+    """`seeds_back` and `seeds_front` are the cover's entire colour budget
+    besides the type, and the casting note tells the director to give them the
+    same noun — so they must be the only two non-mount generatable plates
+    above the line, and one of them must be in front of the title."""
+    a = ARCHETYPES["sable_regalia"]
+    assert a.layers.index("seeds_front") > a.layers.index("title")
+    assert a.layers.index("seeds_back") < a.layers.index("title")
+
+
+def test_sable_regalia_mounted_masses_dissolve_their_feet():
+    """Rule 2, the §15.23 exception. Nothing here stands on anything, so the
+    two plates that would otherwise end in a flat hem inside the frame carry
+    an INVERTED linear gradient mask instead of a cut edge."""
+    a = ARCHETYPES["sable_regalia"]
+    by_id = {s.id: s for s in a.art}
+    for sid in ("crest", "fan"):
+        slot = by_id[sid]
+        assert slot.mask is not None and slot.mask.gradient is not None, sid
+        assert slot.mask.invert, f"{sid}'s foot fade must run opaque->clear"
+        assert slot.mask.gradient.kind == "linear"
+        assert not slot.cut_edge, (
+            f"{sid} dissolves its foot; a cut edge is the other answer")
+
+
+def test_sable_regalia_places_every_contain_slot_by_its_ink():
+    # Archetype Six's rule 0 (§15.25), inherited: a contain-fit slot here is
+    # anchored on either a severed edge or the centre axis, and the frame
+    # measurement can honour neither.
+    a = ARCHETYPES["sable_regalia"]
+    contain = [s for s in a.art if s.fit == "contain"]
+    assert contain
+    assert all(s.place_by == "ink" for s in contain), [
+        s.id for s in contain if s.place_by != "ink"]
+
+
+def test_sable_regalia_discrete_objects_stay_whole_and_arms_overshoot():
+    a = ARCHETYPES["sable_regalia"]
+    by_id = {s.id: s for s in a.art}
+    for sid in ("crest", "seeds_front"):
+        assert by_id[sid].keep_whole, f"{sid} is one or more whole objects"
+    for sid in ("crown_left", "crown_right", "brambles"):
+        assert not by_id[sid].keep_whole
+        assert by_id[sid].cut_edge, f"{sid} has a severed end to carry off"
+
+
+def test_sable_regalia_arms_are_a_near_symmetry_not_a_mirror():
+    """Rule 3. Two identical halves are a logo; the eye must read balance
+    while the measurement reads difference."""
+    a = ARCHETYPES["sable_regalia"]
+    by_id = {s.id: s for s in a.art}
+    left, right = by_id["crown_left"], by_id["crown_right"]
+    assert a.axis == "center"
+    assert left.anchor[1] != right.anchor[1]
+    assert left.scale != right.scale
+    assert left.prompt_frame != right.prompt_frame
+
+
+def test_sable_regalia_title_is_a_built_foil_stamp():
+    """Rule 5: flat ink is not foil. The metallic ramp and the bevel are the
+    two effects that cannot be dropped without the type going to plain ink,
+    and the ramp stops short of opaque so the autopilot's flip keeps a say."""
+    a = ARCHETYPES["sable_regalia"]
+    title = next(t for t in a.text if t.id == "title")
+    kinds = [e.kind for e in title.effects]
+    assert "gradient_overlay" in kinds and "bevel" in kinds
+    ramp = next(e for e in title.effects if e.kind == "gradient_overlay")
+    assert ramp.stops == ["accent", "primary"], "foil body -> foil highlight"
+    assert ramp.opacity < 1.0
+    # Rule 6: the justified stack is the emphasis, so a short last line runs
+    # enormous — unreachable under the uniform fit.
+    assert title.fit_mode == "justify_stack"
+
+
+def test_sable_regalia_author_wears_the_display_face_and_the_same_foil():
+    """The one shelf convention `font_role` was added for: the author's name
+    is a second wordmark, not a credit block."""
+    a = ARCHETYPES["sable_regalia"]
+    author = next(t for t in a.text if t.id == "author")
+    title = next(t for t in a.text if t.id == "title")
+    assert author.font_role == "title"
+    a_ramp = next(e for e in author.effects if e.kind == "gradient_overlay")
+    t_ramp = next(e for e in title.effects if e.kind == "gradient_overlay")
+    assert a_ramp.stops == t_ramp.stops
+    assert a_ramp.opacity < t_ramp.opacity, "visibly the quieter stamp"
+
+
+def test_sable_regalia_keeps_its_occlusion_budget_to_two_plates():
+    """Half romantasy_vignette's, on purpose: this title is the largest
+    object on the cover and its job is to be a wordmark."""
+    a = ARCHETYPES["sable_regalia"]
+    art_ids = {s.id for s in a.art}
+    after_title = [n for n in a.layers[a.layers.index("title") + 1:]
+                   if n in art_ids]
+    assert after_title == ["brambles", "seeds_front"]
+    for sid in after_title:
+        slot = next(s for s in a.art if s.id == sid)
+        assert any(e.kind == "drop_shadow" for e in slot.effects), (
+            f"{sid} crosses the type; without a shadow onto the letterforms "
+            f"it reads as a sticker")
+
+
+def test_sable_regalia_all_over_ornament_degrades_to_a_shelf_plate():
+    """Rule 4: the unbroken patterned field is the cheapest layer on the
+    cover and the one it can least afford to lose, so it carries a $0
+    fallback and lifts out of the black by screening rather than by paint."""
+    a = ARCHETYPES["sable_regalia"]
+    damask = next(s for s in a.art if s.id == "damask")
+    assert damask.fit == "cover" and damask.blend == "screen"
+    assert damask.texture_file in TEXTURES
+    assert damask.opacity < 0.4, "tone-on-tone, not a foreground pattern"
