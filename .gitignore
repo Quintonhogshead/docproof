@@ -21,3 +21,8 @@ hubspot.config.yml
 .env
 .env.*
 secrets.db
+
+# Cover Studio job store (pipeline.default_root) and hand-directed build dirs —
+# generated renders and paid art assets, never source.
+cover_jobs/
+build_cover/
