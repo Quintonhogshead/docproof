@@ -209,6 +209,18 @@ genre's shelf actually uses, then the family whose vibe line fits the \
 concept, honoring any "pairs with" hint for the author line:
 {describe_fonts()}
 
+token_layout: where a template's two accent plates sit, from the closed \
+list far_high_left / far_high_right / far_low_left / far_low_right (or \
+"" to keep the template's own default). It applies only to archetypes \
+that declare a token_far/token_near pair and is ignored everywhere else. \
+Name says where the SMALLER, further token sits; the larger, nearer one \
+answers from the opposite corner. Vary it across concepts and across \
+books: the placement is the one part of such a template's arrangement \
+you can move, and leaving every cover on the same layout is what makes a \
+list of books built on one template read as one cover reprinted. Pick \
+the corner that leaves the subject's own silhouette and the light source \
+uncrowded.
+
 Palette: five hexes by role (background, primary, accent, text, scrim). \
 Grounds must be FLAT and CONFIDENT, never muddy: commit to a single color \
 (cream, or one saturated hue) or a lightly textured field, and use 2–4 \
@@ -238,7 +250,21 @@ exceptions: never ask for text, letters, numbers, typography, book covers, \
 mockups, borders, or frames; never name a living artist; describe a scene, \
 not a cover. For a symbolic-object slot, direct ONE clean, instantly \
 recognizable object, described plainly (a brass key, a single feather); \
-never a surreal composite, never anatomy on inanimate things. Prefer \
+never a surreal composite, never anatomy on inanimate things.
+
+EVERY NOUN YOU SUPPLY MUST COME FROM THIS BOOK. Each slot is listed with \
+its ROLE after a dash — a role naming a figure, character, lead or \
+subject wants THIS BOOK'S ACTUAL PEOPLE: the characters the text is about, \
+described as the text describes them (their age, build, colouring, dress, \
+what they carry, what they are marked by), never a generic hooded figure, \
+never a stock warrior or sorceress, never a stand-in assembled from the \
+genre at large. A role naming a ground, material, border or motif wants a \
+material or motif the book itself names. Where an archetype supplies a \
+prompt frame, that frame owns the STRUCTURE — the pose, the crop, the \
+lighting, which edge a cut sits on — and you own only the nouns dropped \
+into it; do not restate or fight the structure, and do not surrender the \
+nouns to it. A cover whose figures are not recognisably this book's \
+characters has failed, however well it renders. Prefer \
 illustrated, painterly, or graphic media (oil painting, \
 gouache, flat vector, linocut, paper-cutout collage, and the like) over \
 photorealism. A photographic or photoreal render is permitted ONLY when \
@@ -247,13 +273,25 @@ duotone-ramp + grain treatment that makes a photograph shelf-safe) or with \
 treatment: "duotone"/"silhouette" — an untreated (treatment: "none") \
 photographic prompt is never allowed, brief or no brief. Stylized media \
 hide generation artifacts, and a raw, untreated photoreal image is the \
-single biggest "AI-generated" tell. The composition note that keeps room \
-for the type is appended by code afterward — do not write it yourself.
+single biggest "AI-generated" tell. THE ONE EXEMPTION: an archetype marked \
+[PHOTOREAL TEMPLATE] in the list above is photographic by construction and \
+carries its own discipline instead — its composition note fixes the medium, \
+the key light and the saturation identically for every plate, and its \
+finishing recipe grades, blooms and grains them onto one piece of film. On \
+those archetypes, and ONLY those, prompt every plate photoreal and leave \
+treatment "none": photo_soft there is a mistake, not a safety net, because \
+it is a duotone and will flatten the whole cover into one sepia mass. On \
+every other archetype the rule above stands unchanged. The composition note \
+that keeps room for the type is appended by code afterward — do not write \
+it yourself.
 
 Image simplicity is not a vague preference — simple shapes and silhouettes \
-hide AI-generation artifacts far better than rendered detail does. For \
-every generatable art prompt, reach for the SIMPLEST form on this list that \
-still serves the concept, in order:
+hide AI-generation artifacts far better than rendered detail does. This \
+ladder does not apply on a [PHOTOREAL TEMPLATE], whose plates are \
+photographs by construction; there, describe the real thing in real light \
+and let the template's own note and finishing recipe do the unifying. \
+Everywhere else, for every generatable art prompt, reach for the SIMPLEST \
+form on this list that still serves the concept, in order:
 1. Flat SILHOUETTE — one flat color, a pure shape, no interior detail at \
 all (pair it with treatment: "silhouette").
 2. DUOTONE single subject — one subject rendered tone-on-tone against the \
@@ -290,7 +328,8 @@ graphic look), "sticker" (outlines a transparent cutout with a text-\
 colored edge — collage looks want this), or "photo_soft" (blurs, fully \
 desaturates, and maps a photographic image through the same duotone ramp \
 plus a light grain overlay — the treatment that makes a photographic or \
-photoreal prompt allowed at all; see the photorealism rule above). \
+photoreal prompt allowed at all on an ordinary archetype, and a mistake on \
+a [PHOTOREAL TEMPLATE]; see the photorealism rule above). \
 `treatment` is the ONLY effects-rack field you ever set. Mirrored corners \
 (ornamental-frame \
 conventions), motif scatter (repeating-pattern conventions), and \
