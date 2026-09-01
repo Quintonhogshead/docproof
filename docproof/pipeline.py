@@ -410,7 +410,8 @@ def _resolve_variant(cfg: Config, fmt, pkg) -> Variant:
 def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             max_chunks: int | None = None,
             selection: Sequence[str] | None = None,
-            analyses: bool = True) -> Prepared:
+            analyses: bool = True,
+            dry_run: bool = False) -> Prepared:
     """Ingest, chunk, and resolve error types. Raises IngestError on a document
     docproof refuses to touch (tracked changes, corruption).
 
@@ -424,7 +425,16 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
     pass, and the audit baseline. A drop-time preflight only wants section and
     token counts and throws all of that away, so paying for it there (the spell
     scan's Hunspell suggestions are seconds per manuscript) is pure latency.
-    The real run leaves it on."""
+    The real run leaves it on.
+
+    `dry_run=True` is a costed preview, not a run: every stage prepare() can
+    spend on is skipped, so the call needs no API key and bills nothing. Those
+    stages are the story sheet (one whole-book read) and the candidate-screening
+    judge — both of which a mechanical-wave config ships ON, and both of which
+    `review --dry-run` and `galley flights --dry-run` used to reach: without a
+    key the price check crashed, and with one it quietly billed a whole-book
+    read to answer "what would this cost?". Everything deterministic still runs,
+    so the counts a dry run prints are the real ones."""
     fmt = get_format(input_path)
     pkg = fmt.preflight(str(input_path), cfg.tracked_changes_policy)
     # Resolve the English variant BEFORE normalization/sweeps/spell-scan, which
@@ -716,7 +726,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
         # prepare time, not at collect: it feeds the detector system prompts,
         # which are built (and, for a batch, sent) now. One cacheable call.
         story_sheet = ""
-        if cfg.storysheet.enabled and whole:
+        if cfg.storysheet.enabled and whole and not dry_run:
             from .providers import build_provider
             from .storysheet import build_storysheet, prompt_section
             scfg = cfg.model_copy(deep=True)
@@ -750,7 +760,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             adjudicate_candidates=adjudicate_candidates)
 
     candidate_screening = None
-    if analyses and candidate_screening_enabled(cfg):
+    if analyses and not dry_run and candidate_screening_enabled(cfg):
         from .candidate_ledger import CandidateLedger
         from .candidate_screening import (
             CandidateScreeningRun, prepare_candidate_screening)
@@ -778,7 +788,10 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                     adjudicate_candidates=adjudicate_candidates,
                     story_sheet=story_sheet,
                     whole_document=whole,
-                    n_detectors=len(cfg.ensemble.detectors) or 1,
+                    # An ensemble switched off explicitly (`ensemble.enabled:
+                    # false`) reads as one detector however many are listed.
+                    n_detectors=(len(cfg.ensemble.detectors)
+                                 if cfg.ensemble.enabled else 0) or 1,
                     examination=examination,
                     candidate_screening=candidate_screening)
 

@@ -7,6 +7,25 @@ cache-read cost we've measured. Everything you need to write a run config is
 here. If a knob you need genuinely isn't documented here, that is an
 ESCALATION (the knob may not exist), not a reason to go read the source.
 
+## What changed in v0.182.0 (Redding run fixes)
+
+- **`docproof merge` enforces strict cross-lane non-overlap** — a copy-edit row overlapping any
+  mechanical span loses (ledgered "mechanics win overlaps (strict)"); subsumption only when the
+  rewrite contains the mechanical correction verbatim AND passes sweeps+LT. The artifact loop
+  drops the whole parent of a split member and converges.
+- **`galley flights` pre-filter** drops malformed proposals (`malformed_head`, `malformed_shape`),
+  strips or drops editorial notes inside a replacement (`editorial_note`), and the judge demotes
+  any accepted change that alters a number, a name, or a title to a QUERY.
+- **`number_style` never touches labels** ("Mindset Number 23", "Chapter 4", "3)").
+- **`sweep_terminal_period` skips attribution, display, and template lines; the dialogue-tag
+  rule never periods a tag that is followed by an opening quote.**
+- **`galley certify` marks `change_verify.json`/`finished_walk.json` older than the build as
+  stale (skip), never reports a previous build's verdict.**
+- **`ensemble.enabled: false` now disables the ensemble** even with detectors listed.
+- **New stage `poetry-touch` + genre `poetry`**: verse is proofread for real-word misspellings only; everything else locked off.
+- **`review --dry-run` / `flights --dry-run` no longer build the storysheet provider** (they
+  would have called Luna on a dry run).
+
 ## What changed (galley CLI contract fixes)
 
 - **`flights.posture` defaults to `lenient`** (config + CLI) — the copy-edit
@@ -133,9 +152,11 @@ Three separate axes compose onto a base config. Precedence, strict-to-loose:
 - **`--genre`** (`config/genres/`) sets *posture only* (judge stance, name bar,
   smoothing volume, query scans) — never a lane switch. Taxonomy: `general_
   fiction`, `literary_memoir`, `fantasy_sf`, `general_nonfiction`, `academic`,
-  `historical`, `religious`, `self_help_business`. Run theological non-fiction
+  `historical`, `religious`, `self_help_business`, `poetry`. Run theological non-fiction
   under `religious`, never `self_help_business` (that one turns edits + rewrite
-  on).
+  on). Run verse ONLY as `--genre poetry --stage poetry-touch`: the stage keeps
+  `error_types: [spelling]` + the spell scan and locks every other lane, sweep,
+  and gate off — feather-soft, spelling only.
 - **`docproof galley approve`** freezes the composed config into `approval.json`
   (source + config hashes, allowed models/providers, stage, lanes, budget).
   `docproof review --approval …` refuses to run on any deviation; `docproof

@@ -327,6 +327,45 @@ def _load_json(path: Path) -> Any | None:
         return None
 
 
+# A verify artifact that predates the findings it claims to have read is a
+# PREVIOUS build's verdict. Redding Book 1 rebuilt its deliverable after
+# `galley verify` had run, and certify reported the old run's clean read over
+# the new run's edits — the one way this gate can lie. Both comparisons are
+# made when they can be: the recorded `generated_at` timestamps (authoritative,
+# and survive a copy) and, failing that, the files' own mtimes.
+_STALE = "stale — regenerate with `galley verify`"
+
+
+def _generated_at(payload: Any) -> str:
+    if isinstance(payload, dict):
+        value = payload.get("generated_at")
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _is_stale(run: Path, artifact: str, payload: Any) -> str:
+    """Why this artifact is out of date with the run's findings, or ""."""
+    findings = run / "findings.json"
+    if not findings.exists():
+        findings = run / "flights_findings.json"
+    if not findings.exists():
+        return ""
+    made = _generated_at(payload)
+    findings_made = _generated_at(_load_json(findings))
+    if made and findings_made:
+        # ISO-8601 UTC strings from the same writer compare lexicographically.
+        return (f"{artifact} was written {made}, before the run's "
+                f"{findings.name} ({findings_made})") if made < findings_made \
+            else ""
+    try:
+        if (run / artifact).stat().st_mtime < findings.stat().st_mtime:
+            return (f"{artifact} is older than the run's {findings.name}")
+    except OSError:
+        return ""
+    return ""
+
+
 def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
                 cfg: Any | None = None, source: str | Path | None = None
                 ) -> Certificate:
@@ -452,6 +491,9 @@ def _certify_change_verify(run: Path) -> Check:
         return Check("change verifier", "skip",
                      "no change_verify.json — run `galley verify` to re-read "
                      "every applied edit for meaning/grammar/voice damage")
+    stale = _is_stale(run, "change_verify.json", payload)
+    if stale:
+        return Check("change verifier", "skip", f"{stale}: {_STALE}")
     # `galley verify` records whether this gate actually ran (`--walk-only`
     # writes the file with ran: false and no problems, which is NOT a clean
     # read). Absent `ran` is an older record that always ran both gates.
@@ -483,6 +525,9 @@ def _certify_finished_walk(run: Path) -> Check:
         return Check("finished-text walk", "skip",
                      "no finished_walk.json — run `galley verify` to proofread "
                      "the accepted text for residual errors")
+    stale = _is_stale(run, "finished_walk.json", payload)
+    if stale:
+        return Check("finished-text walk", "skip", f"{stale}: {_STALE}")
     if payload.get("ran") is False:
         why = payload.get("reason") or "verify ran with --changes-only"
         return Check("finished-text walk", "skip",

@@ -7,7 +7,11 @@ lane is a finished, independent findings set. This module reconciles the two
 into ONE set of tracked changes, deciding — span by span — which lane's edit
 survives where the two disagree.
 
-The four claim rules, in priority order:
+The claim rules, in priority order — STRICT since the 2026-09-01 corruption
+(overlapping rewrites composed with mechanical fixes into "response was was",
+"talk about about", "deeplyly"; both rows landed because their *shrunk* diffs
+happened not to touch, and the validator's minimal-region splitting then
+interleaved them inside one sentence):
 
   (a) a composite/cluster (Finding.cluster_id, the repair channel's atomic
       multi-edit unit — see docproof/repair.py) claims its spans FIRST,
@@ -18,24 +22,45 @@ The four claim rules, in priority order:
       this module only has to place cluster members first and hand the merged
       set to a caller that still runs the atomicity pass. (`pipeline.finish`
       does, unconditionally now — see the comment at its call site.)
-  (b) a copy-edit rewrite may SUBSUME an overlapping mechanical fix, but only
-      when the rewrite's own resulting sentence passes the $0 checks clean —
-      the deterministic sweeps and (when installed) LanguageTool find nothing
-      wrong with it. Any hit and the rewrite loses outright; LanguageTool
-      being unavailable is not "clean" either — see `rewrite_is_clean`.
-  (c) otherwise, on any span the two lanes both touch, the mechanical fix
-      wins. This is also what happens to a copy-edit rewrite that failed (b).
+  (b) MECHANICS WIN OVERLAPS (STRICT): a copy-edit finding whose claimed span
+      overlaps ANY mechanical-lane finding's span loses outright, and is
+      REMOVED from the merged set — not merely ordered behind the mechanical
+      row. The one exception is a true subsumption: the rewrite's own
+      corrected text already CONTAINS every contested mechanical row's
+      corrected text verbatim (so the rewrite makes that fix itself, rather
+      than racing it) AND the rewrite passes the $0 checks clean — the
+      deterministic sweeps and (when installed) LanguageTool find nothing
+      wrong with it. Then, and only then, the rewrite subsumes them and the
+      mechanical rows step aside. Any sweep/LanguageTool hit, or a rewrite
+      that does not repeat the mechanical fix verbatim, and the rewrite loses;
+      LanguageTool being unavailable is not "clean" either — `rewrite_is_clean`.
+  (c) same-lane overlaps between two ordinary (non-cluster) findings: the
+      EARLIER one in the input order keeps the span, the later one is removed
+      and ledgered "same-lane overlap". Two alternative rewrites of one
+      sentence are versions, never halves to be composed.
   (d) two edits that do not overlap both land — this needs no code of its
       own, since the arbitration only ever restricts CONTESTED spans.
 
-This module does not itself decide who "wins" and delete a finding. Instead —
-matching finish()'s own philosophy (pipeline.py: "arbitration is order, not
-deletion") — it produces one ORDERED list of pending findings, winner-first,
-and hands it to `validator.validate_findings` (directly, for the ledger this
-module reports, and again inside `pipeline.finish` for the real write) which
-does the actual first-come-wins overlap accounting. Two traps that ordering
-alone resolves for free, because `validate_findings`'/`_overlaps`' semantics
-already cover them:
+A copy-edit finding's CLAIM is its whole quoted span, not the shrunk diff:
+a rewrite re-types its whole quote, so anything a mechanical row does inside
+that quote is contested even when the two minimal diffs miss each other.
+That widening is the actual fix for the corruption above. A mechanical row
+claims the shrunk span the validator itself claims. The invariant this module
+now owns: no two findings whose claims overlap can both reach `validated`.
+
+Losers are removed from `MergeResult.findings` (so nothing downstream can
+re-derive them) but are still reported: they come back in
+`MergeResult.rejected`, and in `MergeResult.validated`, stamped
+`rejected_overlap`, with the ledger naming the winner and the rule.
+
+For everything the claim rules leave standing, this module still does not
+decide who "wins" span by span — matching finish()'s own philosophy
+(pipeline.py: "arbitration is order, not deletion") it produces one ORDERED
+list of pending findings, winner-first, and hands it to
+`validator.validate_findings` (directly, for the ledger this module reports,
+and again inside `pipeline.finish` for the real write) which does the actual
+first-come-wins overlap accounting. Two traps that ordering alone resolves for
+free, because `validate_findings`'/`_overlaps`' semantics already cover them:
 
   * same-point insertions from both lanes composing into ",," — two zero-
     width insertions conflict exactly when they share a point (see
@@ -60,6 +85,14 @@ splices every surviving edit into its paragraph, runs
 doubled-space/space-before-punctuation guard, never wired into the main
 pipeline today), and — bounded — drops the losing edit and rechecks until the
 merged paragraph is clean or the loop gives up and reports the hole loudly.
+It drops the losing edit's whole PARENT finding: the validator emits one
+tracked change per minimal region, so a wide row reaches the scan as several
+edits with derived ids ("fl-0646" -> "fl-0646b", "fl-0646c"). Dropping the
+derived id alone left the parent in the working set, which re-derived the
+same member on the next pass — the loop that never converged and reported
+"UNRESOLVED" one row per run until the parent was deleted from the input by
+hand. Dropping the parent removes every sibling with it and guarantees each
+iteration strictly shrinks the working set.
 """
 from __future__ import annotations
 
@@ -69,7 +102,8 @@ from dataclasses import dataclass, field
 from typing import Callable, Sequence
 
 from .candidate_screening import text_invariant_violation
-from .models import DocumentModel, Finding, ParagraphRef, index_paragraphs
+from .models import (Anchor, DocumentModel, Finding, ParagraphRef,
+                     index_paragraphs)
 from .validator import anchor_offset, shrink
 
 log = logging.getLogger("docproof.mergedesk")
@@ -141,14 +175,19 @@ class _Span:
     end: int
 
 
-def _provisional_span(f: Finding, doc: DocumentModel) -> _Span | None:
+def _provisional_span(f: Finding, doc: DocumentModel,
+                      paras: dict[str, ParagraphRef] | None = None
+                      ) -> _Span | None:
     """Steps 1 and 2 of `validator.validate_findings` — locate the quote, shrink
     it to a minimal diff — replicated read-only, with no confidence gate, edit
     guard, or span bookkeeping. This is ONLY used to detect cross-lane overlap
     before the real arbitration; `validate_findings` (called on this module's
     ordered output, both here for the ledger and again in `pipeline.finish`
-    for the write) is the sole source of truth for what actually lands."""
-    para = index_paragraphs(doc).get(f.para_id)
+    for the write) is the sole source of truth for what actually lands.
+
+    `paras` is `index_paragraphs(doc)`, passed in when the caller already has
+    it so a whole-book merge does not rebuild the index per finding."""
+    para = (paras if paras is not None else index_paragraphs(doc)).get(f.para_id)
     if para is None:
         return None
     s = anchor_offset(para.text, f.original_text, f.occurrence)
@@ -158,6 +197,60 @@ def _provisional_span(f: Finding, doc: DocumentModel) -> _Span | None:
     if not deleted and not inserted:
         return None
     return _Span(s + pre, s + pre + len(deleted))
+
+
+@dataclass(frozen=True)
+class _Placed:
+    """A finding with both spans the claim rules need: `span`, the shrunk diff
+    the validator would claim, and `claim`, the span this module arbitrates
+    on — wider for a copy-edit row (see `_claim_span`)."""
+    f: Finding
+    span: _Span | None
+    claim: _Span | None
+
+
+def _claim_span(f: Finding, span: _Span | None,
+                paras: dict[str, ParagraphRef]) -> _Span | None:
+    """The span a finding CLAIMS for arbitration.
+
+    A mechanical row claims exactly what the validator claims: its shrunk
+    diff. A copy-edit row claims its WHOLE QUOTED SPAN, because a rewrite
+    re-types the sentence it quotes — every mechanical fix inside that quote
+    is contested by it, even when the two minimal diffs happen to fall on
+    different characters. Composing those two "non-overlapping" edits is
+    exactly what produced "response was was" and "and, and and" on
+    2026-09-01; the wide claim is what makes rule (b) able to see them."""
+    if span is None:
+        return None
+    if (f.lane or MECHANICAL) != COPYEDIT or f.cluster_id or not f.original_text:
+        return span
+    para = paras.get(f.para_id)
+    if para is None:
+        return span
+    s = anchor_offset(para.text, f.original_text, f.occurrence)
+    if s == -1:
+        return span
+    return _Span(s, s + len(f.original_text))
+
+
+def _place(f: Finding, doc: DocumentModel,
+           paras: dict[str, ParagraphRef]) -> _Placed:
+    span = _provisional_span(f, doc, paras)
+    return _Placed(f, span, _claim_span(f, span, paras))
+
+
+def _as_rejected(p: _Placed, paras: dict[str, ParagraphRef]) -> Finding:
+    """A claim-rule loser, stamped the way the validator stamps an edit that
+    lost a contested span. Removed from the merged set, but still reported —
+    a row that vanished with no status at all would be a silent deletion."""
+    para = paras.get(p.f.para_id)
+    anchor = None
+    if p.span is not None and para is not None:
+        _pre, _deleted, inserted = shrink(p.f.original_text, p.f.corrected_text)
+        anchor = Anchor(start=p.span.start, end=p.span.end,
+                        delete_text=para.text[p.span.start:p.span.end],
+                        insert_text=inserted)
+    return dataclasses.replace(p.f, status="rejected_overlap", anchor=anchor)
 
 
 def _overlaps(s1: int, e1: int, s2: int, e2: int) -> bool:
@@ -215,6 +308,16 @@ def rewrite_is_clean(sentence: str, *, sweep_keys: Sequence[str] | None = None,
 
 # --- the claim ledger -----------------------------------------------------------
 
+# The doctrine each ledger rule enforces, in words, carried on the record
+# itself so a ledger read on its own says WHY without a lookup table. `rule`
+# stays the stable machine key (`__main__._LEDGER_VERBS` renders it).
+STRICT_MECHANICS = "mechanics win overlaps (strict)"
+SAME_LANE = "same-lane overlap"
+CLUSTER_FIRST = "a cluster claims its spans first and whole"
+NO_SUBSUMPTION = ("the rewrite does not contain the mechanical fix verbatim — "
+                  "not a subsumption")
+
+
 @dataclass(frozen=True)
 class ClaimRecord:
     """One contested span and how it was settled."""
@@ -225,8 +328,12 @@ class ClaimRecord:
     winner_lane: str
     loser_id: str
     loser_lane: str
-    rule: str            # "cluster_atomic" | "rewrite_clean" | "mechanical_default"
+    # "cluster_atomic" | "rewrite_clean" | "mechanical_default"
+    #  | "same_lane_overlap"
+    rule: str
     reason: str = ""      # the rewrite checker's reason, when rule == "mechanical_default"
+    # The claim rule in words — STRICT_MECHANICS / SAME_LANE / CLUSTER_FIRST.
+    policy: str = ""
 
     def to_json(self) -> dict:
         return dataclasses.asdict(self)
@@ -235,16 +342,18 @@ class ClaimRecord:
 @dataclass
 class MergeResult:
     """`findings` is winner-ordered and PENDING (unanchored, unvalidated) — the
-    shape `pipeline.finish` takes as its `findings` argument. `validated` is
-    the same set after this module's own `validate_findings` pass, offered so
-    a caller (or a test) can inspect exactly what would land without invoking
-    the full pipeline. `ledger` explains every contested span this module
-    itself detected (an overlap between the two lanes); a span a cluster
-    claims from an ordinary finding of either lane is settled by ordering
-    alone and is not separately entered here — see `merge_lanes`."""
+    shape `pipeline.finish` takes as its `findings` argument, and it holds
+    WINNERS ONLY: a finding that lost a contested span is removed outright
+    (strict claim rules), never merely ordered behind its winner. `validated`
+    is that set after this module's own `validate_findings` pass PLUS the
+    losers, stamped `rejected_overlap`, offered so a caller (or a test) can
+    inspect exactly what would land — and what did not — without invoking the
+    full pipeline. `rejected` is just the losers. `ledger` explains every
+    contested span this module settled."""
     findings: list[Finding]
     validated: list[Finding] = field(default_factory=list)
     ledger: list[ClaimRecord] = field(default_factory=list)
+    rejected: list[Finding] = field(default_factory=list)
 
 
 def merge_lanes(mechanical: Sequence[dict | Finding],
@@ -258,7 +367,9 @@ def merge_lanes(mechanical: Sequence[dict | Finding],
                 sweep_keys: Sequence[str] | None = None,
                 variant=None, ellipsis_style: str = "nbsp") -> MergeResult:
     """Reconcile the mechanical and copy-edit findings sets into one ordered,
-    winner-first list, per the four claim rules (see module docstring).
+    winner-first list of SURVIVORS, per the claim rules (see module docstring
+    — mechanics win overlaps strictly; a loser is removed and reported in
+    `MergeResult.rejected`, not merely ordered behind its winner).
 
     `rewrite_checker`, if given, replaces `rewrite_is_clean` entirely — the
     seam a test uses to fake LanguageTool/sweep results without a JVM or a
@@ -273,83 +384,151 @@ def merge_lanes(mechanical: Sequence[dict | Finding],
     decides the deliverable."""
     from .validator import validate_findings
 
+    paras = index_paragraphs(doc)
     mech = tag_lane(mechanical, MECHANICAL)
     ce = tag_lane(copyedit, COPYEDIT)
     checker = rewrite_checker or (lambda s: rewrite_is_clean(
         s, sweep_keys=sweep_keys, variant=variant, ellipsis_style=ellipsis_style))
 
-    mech_spans = [(f, _provisional_span(f, doc)) for f in mech]
-    ce_spans = [(f, _provisional_span(f, doc)) for f in ce]
+    placed_m = [_place(f, doc, paras) for f in mech]
+    placed_c = [_place(f, doc, paras) for f in ce]
 
     # (a) — clusters claim their spans first, atomic, regardless of lane.
     # `enforce_cluster_atomicity` (docproof/repair.py) is what actually
     # withdraws a partial cluster; this only has to make sure a cluster
-    # member's span is never conceded to an ordinary finding by ARRIVING
-    # later in the list validate_findings arbitrates.
-    mech_cluster = [f for f, _ in mech_spans if f.cluster_id]
-    ce_cluster = [f for f, _ in ce_spans if f.cluster_id]
-    mech_rest = [(f, s) for f, s in mech_spans if not f.cluster_id]
-    ce_rest = [(f, s) for f, s in ce_spans if not f.cluster_id]
+    # member's span is never conceded to an ordinary finding — here by
+    # claiming ahead of every ordinary row in the sweep below, and by
+    # ARRIVING first in the list validate_findings arbitrates.
+    mech_cluster = [p for p in placed_m if p.f.cluster_id]
+    ce_cluster = [p for p in placed_c if p.f.cluster_id]
+    mech_rest = [p for p in placed_m if not p.f.cluster_id]
+    ce_rest = [p for p in placed_c if not p.f.cluster_id]
 
     ledger: list[ClaimRecord] = []
-    promoted: list[Finding] = []
-    promoted_ids: set[str] = set()
+    rejected: list[Finding] = []
+    out_ids: set[str] = set()        # every finding the claim rules removed
+    promoted_ids: set[str] = set()   # copy-edit rows that subsumed a mechanical row
 
-    # (b)/(c) — for every copy-edit finding overlapping one or more mechanical
-    # findings, one clean-rewrite check decides all of them: a rewrite is a
-    # property of its own resulting sentence, not of which fix it contests.
-    for ce_f, ce_span in ce_rest:
-        if ce_span is None:
+    # (b) — the strict cross-lane rule. For every copy-edit finding whose claim
+    # overlaps one or more mechanical findings, ONE clean-rewrite check decides
+    # all of them (a rewrite is a property of its own resulting sentence, not of
+    # which fix it contests) — but cleanliness alone is no longer enough: the
+    # rewrite must also already SAY what each contested mechanical row says,
+    # verbatim. Otherwise the two are rival fixes for one span, and mechanics
+    # win; the copy-edit row is removed, not just ordered behind.
+    for cp in ce_rest:
+        if cp.claim is None:
             continue
-        contested = [(mf, ms) for mf, ms in mech_rest
-                    if ms is not None and mf.para_id == ce_f.para_id
-                    and _overlaps(ce_span.start, ce_span.end, ms.start, ms.end)]
+        contested = [mp for mp in mech_rest
+                    if mp.claim is not None and mp.f.para_id == cp.f.para_id
+                    and mp.f.finding_id not in out_ids
+                    and _overlaps(cp.claim.start, cp.claim.end,
+                                  mp.claim.start, mp.claim.end)]
         if not contested:
             continue
-        clean, reason = checker(ce_f.corrected_text)
-        if clean:
-            promoted.append(ce_f)
-            promoted_ids.add(ce_f.finding_id)
-            for mf, _ms in contested:
+        clean, reason = checker(cp.f.corrected_text)
+        subsumes = all(mp.f.corrected_text
+                      and mp.f.corrected_text in cp.f.corrected_text
+                      for mp in contested)
+        if clean and subsumes:
+            promoted_ids.add(cp.f.finding_id)
+            for mp in contested:
                 ledger.append(ClaimRecord(
-                    ce_f.para_id, ce_span.start, ce_span.end,
-                    ce_f.finding_id, COPYEDIT, mf.finding_id, MECHANICAL,
-                    "rewrite_clean"))
+                    cp.f.para_id, cp.claim.start, cp.claim.end,
+                    cp.f.finding_id, COPYEDIT, mp.f.finding_id, MECHANICAL,
+                    "rewrite_clean", policy=STRICT_MECHANICS))
+                out_ids.add(mp.f.finding_id)
+                rejected.append(_as_rejected(mp, paras))
         else:
-            for mf, ms in contested:
+            why = reason if not clean else NO_SUBSUMPTION
+            for mp in contested:
                 ledger.append(ClaimRecord(
-                    mf.para_id, ms.start, ms.end,
-                    mf.finding_id, MECHANICAL, ce_f.finding_id, COPYEDIT,
-                    "mechanical_default", reason=reason))
+                    mp.f.para_id, mp.claim.start, mp.claim.end,
+                    mp.f.finding_id, MECHANICAL, cp.f.finding_id, COPYEDIT,
+                    "mechanical_default", reason=why, policy=STRICT_MECHANICS))
+            out_ids.add(cp.f.finding_id)
+            rejected.append(_as_rejected(cp, paras))
 
-    spans_by_id = {f.finding_id: s for f, s in mech_spans + ce_spans}
-    for f in mech_cluster + ce_cluster:
-        span = spans_by_id.get(f.finding_id)
+    for p in mech_cluster + ce_cluster:
         ledger.append(ClaimRecord(
-            f.para_id, span.start if span else -1, span.end if span else -1,
-            f.finding_id, f.lane or MECHANICAL, "", "", "cluster_atomic"))
+            p.f.para_id, p.span.start if p.span else -1,
+            p.span.end if p.span else -1,
+            p.f.finding_id, p.f.lane or MECHANICAL, "", "", "cluster_atomic",
+            policy=CLUSTER_FIRST))
 
-    ce_tail = [f for f, _ in ce_rest if f.finding_id not in promoted_ids]
-    ordered = (mech_cluster + ce_cluster + promoted
-              + [f for f, _ in mech_rest] + ce_tail)
+    # (a)/(c) and the invariant — one greedy claim sweep, winner-first, over
+    # everything still standing. Cluster members claim unconditionally (their
+    # co-dependent spans are settled among themselves by validate_findings, and
+    # rule (a) puts them ahead of every ordinary row); each ordinary row must
+    # then find its claim free. A row that does not is removed and ledgered.
+    # This is what makes "no two findings that overlap on a span both reach
+    # validated" true by construction rather than by hoping the shrunk diffs
+    # collide the way the validator's own overlap check needs them to.
+    order = (mech_cluster + ce_cluster
+            + [p for p in ce_rest if p.f.finding_id in promoted_ids]
+            + [p for p in mech_rest if p.f.finding_id not in out_ids]
+            + [p for p in ce_rest if p.f.finding_id not in out_ids
+               and p.f.finding_id not in promoted_ids])
+    claims: dict[str, list[tuple[int, int, Finding]]] = {}
+    ordered: list[Finding] = []
+    for p in order:
+        if p.claim is None or p.f.cluster_id:
+            # No anchor (validate_findings will reject it honestly), or a
+            # cluster member, which never yields.
+            ordered.append(p.f)
+            if p.claim is not None:
+                claims.setdefault(p.f.para_id, []).append(
+                    (p.claim.start, p.claim.end, p.f))
+            continue
+        clash = next((w for a, b, w in claims.get(p.f.para_id, [])
+                     if _overlaps(p.claim.start, p.claim.end, a, b)), None)
+        if clash is not None:
+            same_lane = (clash.lane or MECHANICAL) == (p.f.lane or MECHANICAL)
+            if clash.cluster_id:
+                rule, policy = "cluster_atomic", CLUSTER_FIRST
+            elif same_lane:
+                rule, policy = "same_lane_overlap", SAME_LANE
+            else:
+                rule, policy = "mechanical_default", STRICT_MECHANICS
+            ledger.append(ClaimRecord(
+                p.f.para_id, p.claim.start, p.claim.end,
+                clash.finding_id, clash.lane or MECHANICAL,
+                p.f.finding_id, p.f.lane or MECHANICAL, rule,
+                reason=policy, policy=policy))
+            out_ids.add(p.f.finding_id)
+            rejected.append(_as_rejected(p, paras))
+            log.info("merge desk: %s loses the span [%d:%d] in %s to %s (%s).",
+                    p.f.finding_id, p.claim.start, p.claim.end, p.f.para_id,
+                    clash.finding_id, policy)
+            continue
+        ordered.append(p.f)
+        claims.setdefault(p.f.para_id, []).append(
+            (p.claim.start, p.claim.end, p.f))
 
     validated = validate_findings(
         ordered, doc, min_confidence, query_types=query_types,
         format_types=format_types or {}, edit_guard=edit_guard,
         guard_exempt=frozenset({"repair"}))
 
-    return MergeResult(findings=ordered, validated=validated, ledger=ledger)
+    return MergeResult(findings=ordered, validated=validated + rejected,
+                      ledger=ledger, rejected=rejected)
 
 
 # --- deliverable 2: the merged-result artifact scan ----------------------------
 
 @dataclass(frozen=True)
 class ArtifactHit:
-    """One artifact the merged result would introduce, and how it was settled."""
+    """One artifact the merged result would introduce, and how it was settled.
+
+    `dropped_id` is the PARENT finding removed to clear it (never a derived
+    split id — see `iterate_until_clean`). `finding_ids` names the findings
+    that contribute to an UNRESOLVED artifact, so a run that gives up says
+    which rows to look at instead of only which paragraph."""
     para_id: str
     pattern: str
     dropped_id: str | None
     resolved: bool
+    finding_ids: tuple[str, ...] = ()
 
     def to_json(self) -> dict:
         return dataclasses.asdict(self)
@@ -401,11 +580,24 @@ def iterate_until_clean(merge: MergeResult, doc: DocumentModel, *,
                         max_iterations: int = 25
                         ) -> tuple[MergeResult, list[ArtifactHit]]:
     """Re-run `merge`'s ordered findings through `validate_findings`, scan the
-    result for artifacts, and — bounded — drop the losing edit and recheck
+    result for artifacts, and — bounded — drop the losing FINDING and recheck
     until the merged paragraphs are clean.
 
+    What gets dropped is the whole parent finding, never one derived edit.
+    `validate_findings` emits one tracked change per minimal region, so a row
+    with id "fl-0646" reaches the scan as "fl-0646", "fl-0646b", "fl-0646c";
+    dropping "fl-0646c" alone left the parent in the working set, which
+    re-derived the identical member on the very next iteration — the loop that
+    burned its whole budget and reported "artifact loop did not converge —
+    UNRESOLVED" until a human deleted the parent row from the input file, one
+    row per run. `_parent_finding_id` walks the trailing letter suffix back to
+    the id actually in the working set, and a dropped parent takes every
+    sibling region (and, defensively, every co-member of its cluster) with it,
+    so each iteration strictly shrinks the working set and the ordinary case
+    converges on the first or second pass.
+
     "Losing" prefers a copy-edit finding over a mechanical one in the same
-    paragraph (mechanical wins ties elsewhere, so it keeps that preference
+    paragraph (mechanics win ties elsewhere, so it keeps that preference
     here); among several candidates in a lane, each is tried in turn and the
     first whose removal actually clears the violation is dropped — a single
     blind "drop the last edit" can leave the real culprit in place and loop
@@ -419,11 +611,14 @@ def iterate_until_clean(merge: MergeResult, doc: DocumentModel, *,
     Returns the (possibly narrower) `MergeResult` and the list of hits —
     empty when the merge started clean, non-empty and every `resolved=True`
     when the loop fixed it, and containing an unresolved hit only when the
-    bound was exhausted or no droppable edit could clear it."""
+    bound was exhausted or no droppable finding could clear it. An unresolved
+    hit names the contributing findings in `finding_ids`."""
     from .validator import validate_findings
 
     findings = list(merge.findings)
+    paras = index_paragraphs(doc)
     reports: list[ArtifactHit] = []
+    dropped_ids: set[str] = set()
     for _ in range(max_iterations):
         validated = validate_findings(
             findings, doc, min_confidence, query_types=query_types,
@@ -431,38 +626,101 @@ def iterate_until_clean(merge: MergeResult, doc: DocumentModel, *,
             guard_exempt=frozenset({"repair"}))
         hits = scan_artifacts(validated, doc)
         if not hits:
-            return MergeResult(findings, validated, merge.ledger), reports
+            return MergeResult(findings, validated + merge.rejected,
+                              merge.ledger, merge.rejected), reports
         hit = hits[0]
-        by_id = {f.finding_id: f for f in validated
+        working = {f.finding_id: f for f in findings}
+        edits = [f for f in validated
                 if f.status == "validated" and f.anchor is not None
-                and f.para_id == hit.para_id and not f.format}
-        para = index_paragraphs(doc)[hit.para_id]
-        candidates = [f for f in by_id.values() if not f.cluster_id]
-        candidates.sort(key=lambda f: 0 if f.lane == COPYEDIT else 1)
+                and f.para_id == hit.para_id and not f.format]
+        para = paras[hit.para_id]
+
+        # Group this paragraph's edits under the parent finding each came
+        # from, so a candidate is a ROW the caller could delete, not a region
+        # this module invented.
+        parent_of = {f.finding_id: _parent_finding_id(f.finding_id, working)
+                    for f in edits}
+        candidates: list[str] = []
+        for f in edits:
+            pid = parent_of[f.finding_id]
+            if pid is None or pid in candidates or pid in dropped_ids:
+                continue
+            if working[pid].cluster_id:
+                continue     # rule (a): a cluster is claimed whole or not at all
+            candidates.append(pid)
+        candidates.sort(
+            key=lambda pid: 0 if (working[pid].lane or "") == COPYEDIT else 1)
+
         dropped_id = None
-        for cand in candidates:
-            remaining = [f for f in by_id.values()
-                        if f.finding_id != cand.finding_id]
+        for pid in candidates:
+            doomed = _kin_ids(working[pid], working)
+            remaining = [f for f in edits
+                        if parent_of[f.finding_id] not in doomed]
             if text_invariant_violation(para.text,
                                         _splice(para.text, remaining)) is None:
-                dropped_id = cand.finding_id
+                dropped_id = pid
                 break
         if dropped_id is None:
-            reports.append(hit)
+            offenders = tuple(sorted(
+                {parent_of[f.finding_id] or f.finding_id for f in edits}))
+            reports.append(ArtifactHit(hit.para_id, hit.pattern, None, False,
+                                      offenders))
             log.warning("merge desk: artifact %r in %s could not be resolved "
-                       "by dropping any losing edit — reported, not fixed.",
-                       hit.pattern, hit.para_id)
-            return MergeResult(findings, validated, merge.ledger), reports
-        findings = [f for f in findings if f.finding_id != dropped_id]
-        reports.append(ArtifactHit(hit.para_id, hit.pattern, dropped_id, True))
+                       "by dropping any losing finding (%s) — reported, not "
+                       "fixed.", hit.pattern, hit.para_id, ", ".join(offenders))
+            return MergeResult(findings, validated + merge.rejected,
+                              merge.ledger, merge.rejected), reports
+        doomed = _kin_ids(working[dropped_id], working)
+        findings = [f for f in findings if f.finding_id not in doomed]
+        dropped_ids |= doomed
+        reports.append(ArtifactHit(hit.para_id, hit.pattern, dropped_id, True,
+                                  tuple(sorted(doomed))))
         log.info("merge desk: dropped %s to clear artifact %r in %s.",
-                dropped_id, hit.pattern, hit.para_id)
-    # Bound exhausted — should not happen (each iteration strictly shrinks
-    # `findings`), but report rather than loop forever on something unforeseen.
-    reports.append(ArtifactHit("", "artifact loop did not converge", None, False))
-    return MergeResult(findings, merge.validated, merge.ledger), reports
+                ", ".join(sorted(doomed)), hit.pattern, hit.para_id)
+    # Bound exhausted — cannot happen while every iteration removes at least
+    # one finding from `findings`, but report loudly (with the ids still in
+    # play) rather than loop forever on something unforeseen.
+    stuck = tuple(r.para_id for r in reports if not r.resolved) or ("",)
+    remaining_ids = tuple(sorted(
+        f.finding_id for f in findings if f.para_id in stuck))
+    reports.append(ArtifactHit("", "artifact loop did not converge", None,
+                              False, remaining_ids))
+    return MergeResult(findings, merge.validated, merge.ledger,
+                      merge.rejected), reports
+
+
+def _parent_finding_id(finding_id: str, working: dict[str, Finding]) -> str | None:
+    """The id of the finding in `working` that `finding_id` came from.
+
+    `validate_findings` splits one row into minimal regions and names them by
+    appending a letter to the parent id ("fl-0646" -> "fl-0646b", "fl-0646c"),
+    so a scan result's id is not necessarily a row anyone can delete. Walk the
+    trailing letters back until an id in the working set appears. None when
+    nothing matches, which means the edit came from somewhere this call cannot
+    withdraw — the caller reports it rather than dropping blindly."""
+    cand = finding_id
+    while cand:
+        if cand in working:
+            return cand
+        if not cand[-1].isalpha():
+            return None
+        cand = cand[:-1]
+    return None
+
+
+def _kin_ids(parent: Finding, working: dict[str, Finding]) -> set[str]:
+    """Every working id that must go when `parent` goes: the parent itself,
+    and — defensively, since a cluster member is never a drop candidate today
+    — every co-member of its cluster, because half a repair is worse than
+    none (see `repair.enforce_cluster_atomicity`)."""
+    doomed = {parent.finding_id}
+    if parent.cluster_id:
+        doomed |= {f.finding_id for f in working.values()
+                  if f.cluster_id == parent.cluster_id}
+    return doomed
 
 
 __all__ = ["MECHANICAL", "COPYEDIT", "MergeError", "ClaimRecord", "MergeResult",
           "ArtifactHit", "tag_lane", "rewrite_is_clean", "merge_lanes",
-          "scan_artifacts", "iterate_until_clean"]
+          "scan_artifacts", "iterate_until_clean",
+          "STRICT_MECHANICS", "SAME_LANE", "CLUSTER_FIRST", "NO_SUBSUMPTION"]

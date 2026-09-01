@@ -23,8 +23,10 @@ Shape, all deterministic glue at $0 except the two paid stages:
          prompt-caches across the whole matrix.
       -> SITE + FILTER: anchor every quote against its paragraph's canonical
          text (validator.anchor_offset, fuzzy-tolerant); drop what does not
-         anchor, is a no-op, or lands inside dialogue (smoothing.quote_spans);
-         dedup exact repeats.
+         anchor, is a no-op, is MALFORMED (a replacement that does not cover
+         the span it quotes), or lands inside dialogue (smoothing.quote_spans);
+         strip an editorial note a model wrote INTO its replacement text; dedup
+         exact repeats. Every drop is counted BY REASON (`DropCounts`).
       -> CLUSTER: candidates whose spans overlap within a paragraph merge
          transitively into one Cluster, across every flight. `agreement` counts
          distinct flight keys ("{model}:{lens}"), not raw candidate count — a
@@ -35,11 +37,15 @@ Shape, all deterministic glue at $0 except the two paid stages:
          sentence, the span, and every competing replacement, and returns
          keep / pick / synthesize, at one of two postures (see POSTURES).
       -> ACCEPT: an accepted cluster (pick or synthesize, at/above
-         --min-confidence) becomes a real EDIT-channel Finding — force_query is
-         NEVER set here. Unlike docproof.smoothing (whose findings are always
-         force_query'd margin questions, by design — see its module docstring),
-         this lane's whole premise is that the judge IS the taste gate: what
-         survives it is a tracked change, not a question.
+         --min-confidence) becomes a real EDIT-channel Finding. Unlike
+         docproof.smoothing (whose findings are always force_query'd margin
+         questions, by design — see its module docstring), this lane's whole
+         premise is that the judge IS the taste gate: what survives it is a
+         tracked change, not a question. The ONE exception is a FACT change
+         (`fact_change`): a replacement that alters a number, introduces a
+         proper noun, or rewrites a quoted/italic title is demoted to a QUERY,
+         because a copy editor may not silently change what the book SAYS —
+         judge posture is a taste knob, never a licence over fact.
 
 Every finding here carries error_type="copyedit" — the lane tag the merge desk
 keys off (Finding has no dedicated `lane` field) — plus a "lane": "copyedit"
@@ -53,6 +59,8 @@ this pipeline uses.
 from __future__ import annotations
 
 import logging
+import re
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Sequence
@@ -380,7 +388,7 @@ def propose_flight(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
                    concurrency: int = 1,
                    propose_chars: int = _PROPOSE_CHARS,
                    propose_max_paras: int = _PROPOSE_MAX_PARAS,
-                   ) -> tuple[list[Proposal], int, int, int]:
+                   ) -> tuple[list[Proposal], "DropCounts", int, int]:
     """Read the manuscript through one (model, lens) flight and return sited,
     filtered candidates, plus (dropped-by-filters, windows-read,
     windows-that-failed) — the same three-count contract as
@@ -429,10 +437,256 @@ def propose_flight(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
     cands, dropped = site_and_filter(
         ((s.para_id, s.quote, s.replacement, s.rationale) for s in raw),
         text_of, closing_quotes=closing_quotes, model=model, lens=lens)
-    log.info("flights propose %s:%s: %d candidate(s), %d dropped, "
-            "%d/%d read(s) failed.", model, lens, len(cands), dropped,
-            windows_failed, len(windows))
+    log.info("flights propose %s:%s: %d candidate(s), %d dropped%s, "
+            "%d note(s) stripped, %d/%d read(s) failed.", model, lens,
+            len(cands), dropped.total,
+            f" ({dropped.summary()})" if dropped.reasons else "",
+            dropped.stripped, windows_failed, len(windows))
     return cands, dropped, len(windows), windows_failed
+
+
+# --- deterministic guards: malformed spans, editorial notes, fact changes ----
+#
+# Three production failures on Redding Book 1 (2026-09-01) are what these
+# exist for, and each one is cheap to catch deterministically and expensive to
+# catch any other way:
+#
+#   MALFORMED   quote "It made me really stop and think about how…" with
+#               replacement "stop and think about how…" — the replacement does
+#               not cover the span it quotes, so applying it deleted the start
+#               of the sentence and left a lowercase fragment. The model meant
+#               "change the head of this span"; it wrote "replace all of it".
+#   NOTE        replacement "eighteen-year-old girl (spell out and hyphenate)"
+#               — the model addressed the EDITOR inside the text, and the note
+#               shipped into the manuscript.
+#   FACT        the lenient judge accepted "one 12 minute talk" -> "one
+#               twenty-one-minute talk", "False Expectations Appearing Real" ->
+#               "False Evidence Appearing Real", "my friend's luck" -> "Ava's
+#               luck". These are not taste calls at all: a copy editor asks.
+#
+# The first two drop (or repair) BEFORE the paid judge; the third demotes an
+# accepted verdict to a query, because the judge already proved it cannot be
+# trusted to hold this line.
+
+# A replacement carrying a parenthetical instruction to the editor, or a
+# dash-led marginal note appended after the actual replacement text.
+NOTE_PAREN_RE = re.compile(
+    r"\s*\((?:missing|spell|stray|note|see |should|consider|hyphenat|capitali)"
+    r"[^)]*\)", re.IGNORECASE)
+NOTE_DASH_RE = re.compile(r"\s*[—–]\s*(?:stray|missing|note)\b.*$",
+                          re.IGNORECASE)
+
+# Sentence-ending punctuation, any closing quotes/brackets, whitespace, and
+# then any OPENING quote/bracket — i.e. the text immediately before a span
+# that starts a sentence.
+_SENTENCE_END_RE = re.compile(r"[.!?…][\"'”’)\]]*\s+[\"'“‘(\[]*$")
+_LEADING_MARKS = " \t\"'“‘([{«"
+_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:['’][A-Za-z]+)?")
+_DIGITS_RE = re.compile(r"\d+")
+# A capitalized word, with an optional possessive tail, so "Ava's" reports as
+# "Ava" rather than as a word nobody wrote.
+_CAP_RE = re.compile(r"\b[A-Z][A-Za-z]*(?:['’][A-Za-z]+)?")
+# A quoted or italic title: "…" / “…” / *…* / _…_.
+_TITLE_RE = re.compile(r"“([^“”]{1,160})”|\"([^\"]{1,160})\"|"
+                       r"\*([^*\n]{1,160})\*|_([^_\n]{1,160})_")
+
+# malformed_shape's floor. Deliberately low: an economy pass EARNS its keep by
+# cutting words, and "in order to make sure everything was ready" -> "to ensure
+# everything was ready" keeps only 44% of them. Below 40% of a >6-word span,
+# though, the replacement is no longer a rewrite of that span — it is a
+# fragment of it, which is the shape the Redding failure had.
+_SHAPE_MIN_RETENTION = 0.40
+_SHAPE_MIN_WORDS = 6
+
+
+def strip_editorial_note(replacement: str) -> tuple[str, bool]:
+    """Remove an editorial note the model wrote INTO its replacement text.
+    Returns (text, found). The text is stripped of surrounding whitespace only
+    when something was removed, so an untouched replacement round-trips
+    byte-identical."""
+    cleaned = NOTE_DASH_RE.sub("", replacement)
+    cleaned = NOTE_PAREN_RE.sub("", cleaned)
+    if cleaned == replacement:
+        return replacement, False
+    return cleaned.strip(), True
+
+
+def _initial_letter(text: str) -> str:
+    """The first letter of `text` once leading whitespace and opening marks are
+    skipped — "" when it does not start with a letter at all (a numeral, an
+    ellipsis), where case tells us nothing."""
+    trimmed = text.lstrip(_LEADING_MARKS)
+    return trimmed[0] if trimmed and trimmed[0].isalpha() else ""
+
+
+def at_sentence_start(text: str, start: int) -> bool:
+    """Does the span at `start` begin a sentence — the paragraph's first
+    character, or preceded by sentence-ending punctuation and a space?"""
+    before = text[:start]
+    if not before.strip():
+        return True
+    return bool(_SENTENCE_END_RE.search(before))
+
+
+def _words(text: str) -> list[str]:
+    return [w.lower() for w in _WORD_RE.findall(text)]
+
+
+def word_retention(original: str, replacement: str) -> float:
+    """The fraction of the original span's words the replacement still
+    contains, as a multiset overlap (so a doubled word counts twice). 1.0 for
+    an empty original — nothing to lose."""
+    ow = _words(original)
+    if not ow:
+        return 1.0
+    pool = Counter(_words(replacement))
+    kept = 0
+    for w in ow:
+        if pool[w] > 0:
+            pool[w] -= 1
+            kept += 1
+    return kept / len(ow)
+
+
+def malformed_reason(text: str, start: int, original: str, replacement: str
+                     ) -> str | None:
+    """Why this (span, replacement) pair cannot be applied as written, or
+    None. Two shapes, both meaning "the replacement does not cover its span":
+
+    - `malformed_head`: the span starts a sentence with a capital and the
+      replacement starts lowercase — applying it decapitates the sentence.
+    - `malformed_shape`: a span of more than six words whose replacement keeps
+      under 40% of them — a fragment of the span, not a rewrite of it.
+    """
+    if (at_sentence_start(text, start)
+            and _initial_letter(original).isupper()
+            and _initial_letter(replacement).islower()):
+        return "malformed_head"
+    if (len(_words(original)) > _SHAPE_MIN_WORDS
+            and word_retention(original, replacement) < _SHAPE_MIN_RETENTION):
+        return "malformed_shape"
+    return None
+
+
+def _titles(text: str) -> list[str]:
+    out: list[str] = []
+    for m in _TITLE_RE.finditer(text):
+        for g in m.groups():
+            if g is not None:
+                out.append(g.strip())
+                break
+    return out
+
+
+def _fmt(items: Sequence[str]) -> str:
+    return ", ".join(f'"{i}"' for i in items)
+
+
+def fact_change(original: str, replacement: str) -> str | None:
+    """What FACT this replacement changes relative to the span it replaces, as
+    a short phrase naming the changed item — or None when it changes only how
+    the sentence reads.
+
+    A fact change is not a taste call, so it is not the judge's to make. Three
+    kinds, cheapest first:
+
+    - a digit sequence added, removed, or altered ("one 12 minute talk" ->
+      "one twenty-one-minute talk"). Note that this also catches the legitimate
+      spell-out "12" -> "twelve": asking is the right outcome there too, since
+      only the author knows whether the numeral was right.
+    - a quoted or italic title rewritten.
+    - a capitalized word in the replacement that is absent from the original
+      and is not merely a re-casing of a word that IS there ("my friend's luck"
+      -> "Ava's luck"). A capital in the replacement's FIRST position is
+      ignored when the original also starts capitalized, because there the
+      capital is forced by orthography rather than chosen — otherwise every
+      recast sentence opening ("It is clear that we should go" -> "Clearly, we
+      should go") would read as a new proper noun.
+    """
+    o_nums, r_nums = Counter(_DIGITS_RE.findall(original)), Counter(
+        _DIGITS_RE.findall(replacement))
+    if o_nums != r_nums:
+        removed = sorted((o_nums - r_nums).elements())
+        added = sorted((r_nums - o_nums).elements())
+        if removed and added:
+            return f"number {_fmt(removed)} -> {_fmt(added)}"
+        if added:
+            return f"number {_fmt(added)} added"
+        return f"number {_fmt(removed)} removed"
+
+    o_titles, r_titles = Counter(_titles(original)), Counter(_titles(replacement))
+    if o_titles != r_titles:
+        removed = sorted((o_titles - r_titles).elements())
+        added = sorted((r_titles - o_titles).elements())
+        if removed and added:
+            return f"title {_fmt(removed)} -> {_fmt(added)}"
+        if added:
+            return f"title {_fmt(added)} added"
+        return f"title {_fmt(removed)} removed"
+
+    o_words = set(_words(original))
+    lead_is_capital = bool(_initial_letter(original).isupper())
+    for m in _CAP_RE.finditer(replacement):
+        word = m.group(0)
+        core = re.sub(r"['’]s$", "", word)
+        if core == "I" or not core:
+            continue                       # a pronoun, not a proper noun
+        if lead_is_capital and not replacement[:m.start()].strip(_LEADING_MARKS):
+            continue                       # sentence-initial: forced capital
+        if core in original or core.lower() in o_words:
+            continue                       # present already, or merely re-cased
+        return f'proper noun "{core}" not in the original'
+    return None
+
+
+@dataclass(frozen=True)
+class DropCounts:
+    """Why `site_and_filter` dropped what it dropped.
+
+    Source-compatible with the plain `int` this used to be: it compares,
+    formats, and does arithmetic as the total, so `dropped == 1`, `n +=
+    dropped`, and `f"{dropped} dropped"` all keep working at existing call
+    sites (docproof/__main__.py prints it that way) while `.reasons` carries
+    the breakdown the log line now reports."""
+    reasons: dict[str, int] = field(default_factory=dict)
+    stripped: int = 0        # editorial notes REPAIRED, not dropped
+
+    @property
+    def total(self) -> int:
+        return sum(self.reasons.values())
+
+    def summary(self) -> str:
+        """"reason=n, reason=n", commonest first — "" when nothing dropped."""
+        return ", ".join(f"{k}={v}" for k, v in
+                         sorted(self.reasons.items(), key=lambda kv: (-kv[1], kv[0])))
+
+    def to_json(self) -> dict[str, Any]:
+        return {"total": self.total, "reasons": dict(self.reasons),
+                "notes_stripped": self.stripped}
+
+    # -- int-alike surface (see the class docstring) --------------------------
+    def __int__(self) -> int: return self.total
+    def __index__(self) -> int: return self.total
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, DropCounts):
+            return self.reasons == other.reasons and self.stripped == other.stripped
+        return self.total == other
+    def __ne__(self, other: Any) -> bool: return not self.__eq__(other)
+    def __hash__(self) -> int: return hash(self.total)
+    def __lt__(self, other: Any) -> bool: return self.total < int(other)
+    def __le__(self, other: Any) -> bool: return self.total <= int(other)
+    def __gt__(self, other: Any) -> bool: return self.total > int(other)
+    def __ge__(self, other: Any) -> bool: return self.total >= int(other)
+    def __bool__(self) -> bool: return bool(self.total)
+    def __add__(self, other: Any) -> int: return self.total + int(other)
+    __radd__ = __add__
+    def __sub__(self, other: Any) -> int: return self.total - int(other)
+    def __rsub__(self, other: Any) -> int: return int(other) - self.total
+    def __format__(self, spec: str) -> str:
+        return format(self.total, spec) if spec else str(self.total)
+    def __str__(self) -> str: return str(self.total)
+    def __repr__(self) -> str:
+        return f"DropCounts(total={self.total}, reasons={self.reasons!r})"
 
 
 def _overlaps(a: int, b: int, c: int, d: int) -> bool:
@@ -442,55 +696,83 @@ def _overlaps(a: int, b: int, c: int, d: int) -> bool:
 def site_and_filter(raw: Sequence[tuple[str, str, str, str]],
                     text_of: dict[str, str], *, closing_quotes: str,
                     model: str, lens: str
-                    ) -> tuple[list[Proposal], int]:
+                    ) -> tuple[list[Proposal], "DropCounts"]:
     """Site and deterministically filter a batch of (para_id, quote,
     replacement, rationale) rows into anchored :class:`Proposal`\\ s, before
     any candidate exists for a judge to spend money on.
 
-    Drop reasons, in order: unknown para_id or empty quote; the quote does not
-    anchor (`validator.anchor_offset`, fuzzy-tolerant but never a guess); the
-    replacement is identical to the original (a no-op); the span overlaps
-    quoted dialogue (`smoothing.quote_spans` — a character's diction is
-    theirs); an exact (span, wording) duplicate. Shared by `propose_flight`
-    (model-sourced rows) and `load_external_proposals` (rows a subagent flight
-    produced without ever calling this module's own propose path), so a
-    subagent's candidates are filtered exactly as strictly as an API flight's."""
+    Drop reasons, in order — each counted by name in the returned
+    :class:`DropCounts` (which still reads as the plain total at every call
+    site):
+
+    - `unknown_para`: unknown para_id, or an empty quote.
+    - `unanchored`: the quote does not anchor (`validator.anchor_offset`,
+      fuzzy-tolerant but never a guess).
+    - `editorial_note`: the replacement carried a note to the editor
+      ("… (spell out and hyphenate)"). The note is STRIPPED when what remains
+      is still a usable replacement, and only dropped when nothing is left.
+    - `no_op`: the replacement is identical to the original.
+    - `malformed_head` / `malformed_shape`: the replacement does not cover the
+      span it quotes — see `malformed_reason`.
+    - `dialogue`: the span overlaps quoted dialogue (`smoothing.quote_spans` —
+      a character's diction is theirs).
+    - `duplicate`: an exact (span, wording) repeat.
+
+    Shared by `propose_flight` (model-sourced rows) and
+    `load_external_proposals` (rows a subagent flight produced without ever
+    calling this module's own propose path), so a subagent's candidates are
+    filtered exactly as strictly as an API flight's."""
     dialogue = {pid: quote_spans(t, closing_quotes) for pid, t in text_of.items()}
     cands: list[Proposal] = []
     seen: set[tuple[str, int, int, str]] = set()
-    dropped = 0
+    reasons: dict[str, int] = {}
+    stripped = 0
+
+    def drop(reason: str) -> None:
+        reasons[reason] = reasons.get(reason, 0) + 1
+
     for para_id, quote, replacement, rationale in raw:
         text = text_of.get(para_id)
         if text is None or not quote:
-            dropped += 1
+            drop("unknown_para")
             continue
         start = anchor_offset(text, quote, 1)   # fuzzy-tolerant, no guessing
         if start == -1:
-            dropped += 1
+            drop("unanchored")
             continue
         end = start + len(quote)
         original = text[start:end]
+        replacement, had_note = strip_editorial_note(replacement)
+        if had_note:
+            if not replacement.strip():         # the note WAS the replacement
+                drop("editorial_note")
+                continue
+            stripped += 1
         if replacement == original:                 # a no-op suggestion
-            dropped += 1
+            drop("no_op")
+            continue
+        malformed = malformed_reason(text, start, original, replacement)
+        if malformed:
+            drop(malformed)
             continue
         if any(_overlaps(start, end, a, b) for a, b in dialogue.get(para_id, ())):
-            dropped += 1
+            drop("dialogue")
             continue
         key = (para_id, start, end, replacement)
         if key in seen:
-            dropped += 1
+            drop("duplicate")
             continue
         seen.add(key)
         cands.append(Proposal(para_id=para_id, start=start, end=end,
                               original=original, replacement=replacement,
                               rationale=rationale, model=model, lens=lens))
-    return cands, dropped
+    return cands, DropCounts(reasons=reasons, stripped=stripped)
 
 
 def load_external_proposals(rows: Sequence[dict[str, Any]],
                             text_of: dict[str, str], *, closing_quotes: str,
                             model: str = "external", lens: str = "external"
-                            ) -> tuple[list[Proposal], int]:
+                            ) -> tuple[list[Proposal], "DropCounts"]:
     """Site and filter proposals a flight produced OUTSIDE this module's own
     propose path — a Claude Code session subagent reading the manuscript
     itself, say, rather than a `provider.complete_structured` call. Each row
@@ -511,13 +793,16 @@ def load_external_proposals(rows: Sequence[dict[str, Any]],
         tag = (str(row.get("model", model)), str(row.get("lens", lens)))
         by_tag.setdefault(tag, []).append((para_id, quote, replacement, rationale))
     cands: list[Proposal] = []
-    dropped = 0
+    reasons: dict[str, int] = {}
+    stripped = 0
     for (m, l), tagged_rows in by_tag.items():
         c, d = site_and_filter(tagged_rows, text_of, closing_quotes=closing_quotes,
                                model=m, lens=l)
         cands.extend(c)
-        dropped += d
-    return cands, dropped
+        for reason, n in d.reasons.items():     # merge, keeping the breakdown
+            reasons[reason] = reasons.get(reason, 0) + n
+        stripped += d.stripped
+    return cands, DropCounts(reasons=reasons, stripped=stripped)
 
 
 @dataclass(frozen=True)
@@ -711,6 +996,14 @@ def findings_from_accepted(accepted: Sequence[tuple[Cluster, "_Verdict"]],
     source) so finding ids stay unique across a run that also has other
     passes filling the same findings.json.
 
+    The one exception to "never force_query": a cluster whose accepted
+    replacement changes a FACT (`fact_change` — a number, a proper noun, a
+    quoted or italic title) is DEMOTED to a query. Its corrected_text equals
+    its original_text, so the validator's query branch anchors a margin
+    question and cannot produce a tracked change, and its explanation names
+    what changed. The judge is the taste gate; it is not, and after the Redding
+    run demonstrably cannot be, the gate on what the book says.
+
     Every finding's `error_type` is the module constant `LANE` ("copyedit"),
     passed by name rather than through a locally-renamed parameter — on
     purpose: `tests/test_labels.py` statically resolves an `error_type=`
@@ -719,6 +1012,7 @@ def findings_from_accepted(accepted: Sequence[tuple[Cluster, "_Verdict"]],
     same-named pass-through parameter (the shape docproof.rewrite.confirm
     uses) would make this call site opaque to that scanner instead."""
     out: list[Finding] = []
+    demoted = 0
     for cluster, v in accepted:
         quote, lo, occurrence = sentence_window(cluster.para_text, cluster.start,
                                                 cluster.end)
@@ -732,6 +1026,15 @@ def findings_from_accepted(accepted: Sequence[tuple[Cluster, "_Verdict"]],
                       if rationale else
                       f'"{cluster.original}" -> "{v.chosen_text}" '
                       f'({"/".join(lenses)})')
+        fact = fact_change(cluster.original, v.chosen_text)
+        force_query = fact is not None
+        if force_query:
+            demoted += 1
+            corrected = quote            # a question changes nothing
+            explanation = (
+                f'Fact change, asking rather than changing ({fact}): '
+                f'"{cluster.original}" -> "{v.chosen_text}"'
+                f' ({"/".join(lenses)}). Confirm before applying.')
         out.append(Finding(
             finding_id=f"fl-{next(ids):04d}",
             chunk_id=chunk_id,
@@ -742,8 +1045,11 @@ def findings_from_accepted(accepted: Sequence[tuple[Cluster, "_Verdict"]],
             corrected_text=corrected,
             explanation=explanation,
             confidence=v.confidence if v.confidence in _CONF_RANK else "low",
-            force_query=False,
+            force_query=force_query,
             agreement=cluster.agreement))
+    if demoted:
+        log.info("flights: %d of %d accepted cluster(s) demoted to a query — "
+                 "the replacement changed a fact.", demoted, len(out))
     return out
 
 
@@ -806,7 +1112,9 @@ __all__ = [
     "lens_system", "POSTURES", "DEFAULT_POSTURE", "STRICT_JUDGE_SYSTEM",
     "LENIENT_JUDGE_SYSTEM", "Proposal", "Cluster", "FlightSpec",
     "flight_matrix", "usable_paragraphs", "propose_flight", "propose_flights",
-    "site_and_filter", "load_external_proposals",
+    "site_and_filter", "load_external_proposals", "DropCounts",
+    "fact_change", "strip_editorial_note", "malformed_reason",
+    "at_sentence_start", "word_retention",
     "cluster_proposals", "judge_cluster", "judge_clusters", "JudgeCounts",
     "accept", "findings_from_accepted", "finding_to_json", "project_cost",
 ]

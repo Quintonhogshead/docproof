@@ -1212,11 +1212,14 @@ def _approval_guard(args, cfg) -> int | None:
 def cmd_review(args) -> int:
     cfg, error_dir = _configure(args)
     if getattr(args, "dry_run", False):
-        # Price the exact config without spending: prepare() reads and chunks the
-        # book but makes no provider call, so its counts drive the same estimate
-        # `inventory` prints. The one authoritative number for the plan gate.
+        # Price the exact config without spending: dry_run=True makes prepare()
+        # skip the two stages it can bill for (the story sheet, the
+        # candidate-screening judge), so the estimate needs no API key and costs
+        # nothing — the counts still come from the real ingest and chunking, and
+        # drive the same estimate `inventory` prints. The one authoritative
+        # number for the plan gate.
         try:
-            prepared = prepare(cfg, args.input, error_dir)
+            prepared = prepare(cfg, args.input, error_dir, dry_run=True)
         except (IngestError, FileNotFoundError, ValueError) as e:
             print(f"error: {e}", file=sys.stderr)
             return 2
@@ -2041,7 +2044,8 @@ def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
         cfg.error_types = list(cfg.error_types) + [_missing_fmt]
 
     try:
-        prepared = prepare(cfg, args.manuscript, error_dir)
+        prepared = prepare(cfg, args.manuscript, error_dir,
+                           dry_run=bool(getattr(args, "dry_run", False)))
     except (IngestError, FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -2153,7 +2157,9 @@ def _load_findings_file(path: Path) -> list[dict] | None:
 
 _LEDGER_VERBS = {"rewrite_clean": "copy-edit rewrite (clean) subsumes",
                  "mechanical_default": "mechanical wins over",
-                 "cluster_atomic": "cluster claims its span for"}
+                 "cluster_atomic": "cluster claims its span for",
+                 "same_lane_overlap": "keeps the span (same-lane overlap) over",
+                 "mechanical_strict": "mechanical wins overlap (strict) over"}
 
 
 def cmd_merge(args) -> int:
@@ -2196,7 +2202,8 @@ def cmd_merge(args) -> int:
     setup_logging(out)
     error_dir = _resolve_error_dir(args.config)
     try:
-        prepared = prepare(cfg, args.input, error_dir)
+        prepared = prepare(cfg, args.input, error_dir,
+                           dry_run=bool(getattr(args, "dry_run", False)))
     except (IngestError, FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -2223,7 +2230,7 @@ def cmd_merge(args) -> int:
     for r in merged.ledger:
         tail = f" — {r.reason}" if r.reason else ""
         loser = f" {r.loser_id}" if r.loser_id else ""
-        print(f"  {r.para_id} [{r.start}:{r.end}]  {_LEDGER_VERBS[r.rule]}"
+        print(f"  {r.para_id} [{r.start}:{r.end}]  {_LEDGER_VERBS.get(r.rule, r.rule)}"
               f"{loser}{tail}  (winner {r.winner_id}, {r.winner_lane})")
     if artifacts:
         print(f"\n{len(artifacts)} merged-result artifact(s):")
@@ -2602,6 +2609,9 @@ def _galley_verify(args) -> int:
     _galley_over_budget(args, cost)
 
     payload_changes = {
+        # Stamped so certify can tell a verdict on THIS build from a previous
+        # build's (see galley.manifest._is_stale).
+        "generated_at": _now_iso(),
         "results_dir": str(results), "model": model,
         "ran": changes.ran_changes, "reason": changes.reason,
         "applied_edits": len(edits),
@@ -2609,6 +2619,7 @@ def _galley_verify(args) -> int:
         "cost": _cost_field(usage_changes, model),
     }
     payload_walk = {
+        "generated_at": _now_iso(),
         "results_dir": str(results), "model": model,
         "ran": walk.ran_walk, "reason": walk.reason,
         "paragraphs": sum(1 for t in accepted.values() if t.strip()),
@@ -3115,7 +3126,10 @@ def _galley_flights(args) -> int:
 
     error_dir = _resolve_error_dir(args.config)
     try:
-        prepared = prepare(cfg, args.input, error_dir)
+        # A dry run prices the flights; prepare() must not spend a whole-book
+        # story-sheet read (or a screening judge) to answer that.
+        prepared = prepare(cfg, args.input, error_dir,
+                           dry_run=bool(args.dry_run))
     except (IngestError, FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -3299,6 +3313,14 @@ def _cost_line(usage: Usage, model: str) -> str:
     cost = (cost_of_usage(usage, fallback_model=model) or 0.0) \
         + (getattr(usage, "sapling_cost", 0.0) or 0.0)
     return f"${cost:.4f} spent ({usage.api_calls} model call(s))"
+
+
+def _now_iso() -> str:
+    """UTC now, in the same ISO-8601 shape findings.json stamps itself with —
+    the two are compared as strings when certify checks a verify artifact for
+    staleness (galley.manifest._is_stale)."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _cost_field(usage: Usage, model: str) -> dict:

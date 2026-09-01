@@ -28,7 +28,7 @@ GENRES_DIR = Path(__file__).parent.parent / "config" / "genres"
 
 SHIPPED_GENRES = ("academic", "fantasy_sf", "general_fiction",
                   "general_nonfiction", "historical", "literary_memoir",
-                  "religious", "self_help_business")
+                  "poetry", "religious", "self_help_business")
 
 # The non-fiction posture presets added by the config/genre taxonomy work.
 # House rule for every one of them: a genre sets POSTURE, never a workflow
