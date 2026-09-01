@@ -221,6 +221,19 @@ list of books built on one template read as one cover reprinted. Pick \
 the corner that leaves the subject's own silhouette and the light source \
 uncrowded.
 
+text_overrides: per-BOOK typography, as {{slot: {{...}}}} keyed by "title", \
+"author", "subtitle" or "series". Any of zone {{x, y, w, h}} as 0-1 fractions \
+of the cover, plus align, valign, case, tracking, max_lines, size_min, size_max, \
+color_role (background/primary/accent/text/scrim) and font_family. Omit it \
+entirely, or leave a field out, to keep what the archetype ships — its zones \
+are tuned and they are a good default. Reach for it when THIS book's art \
+argues with them: the byline sitting on the busiest part of the plate, a \
+tagline landing in the one bright corner, a long title needing a taller \
+band, or a colour role that disappears into this palette. Move type to the \
+quiet region this particular cover has, and vary it across concepts and \
+across books — four books on one template with the title, byline, subtitle \
+and tagline in the same four spots read as one cover reprinted.
+
 Palette: five hexes by role (background, primary, accent, text, scrim). \
 Grounds must be FLAT and CONFIDENT, never muddy: commit to a single color \
 (cream, or one saturated hue) or a lightly textured field, and use 2–4 \

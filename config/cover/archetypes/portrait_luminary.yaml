@@ -220,7 +220,7 @@ art:
     anchor: [0.50, 1.00]
     offset: [0.00, 0.10]
     scale: 1.00
-    opacity: 0.72
+    opacity: 0.92
     prompt_frame: >-
       A wide row of {subject} standing in a broken line right across the frame
       at many different heights, seen as flat silhouettes against nothing,
@@ -238,7 +238,7 @@ art:
     anchor: [0.50, 1.00]
     offset: [0.00, 0.14]
     scale: 1.05
-    opacity: 0.60
+    opacity: 1.00
     prompt_frame: >-
       A dense clustered row of {subject} crowded across the frame, much closer
       to the viewer, dark and sharply detailed, their bases running straight
