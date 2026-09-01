@@ -354,13 +354,14 @@ def test_direction_rejects_unregistered_author_font():
 
 
 def test_direction_requires_every_field_with_no_default():
-    # `recipe` (§15.6), `type_move` (§15.12), and `emphasis_word` (§15.12)
-    # are the deliberate exceptions: "" (none) is a real, common answer for
-    # each, and defaulting them keeps every archived direction and every
-    # pre-wave caller valid — the wire still REQUIRES them
-    # (strict_json_schema promotes defaulted fields into `required`), so
-    # the model must answer even though Python code may omit them.
-    defaulted = {"recipe": "", "type_move": "", "emphasis_word": ""}
+    # `recipe` (§15.6), `type_move`, `emphasis_word` and `title_breaks`
+    # (§15.12) are the deliberate exceptions: "" / [] (none) is a real,
+    # common answer for each, and defaulting them keeps every archived
+    # direction and every pre-wave caller valid — the wire still REQUIRES
+    # them (strict_json_schema promotes defaulted fields into `required`),
+    # so the model must answer even though Python code may omit them.
+    defaulted = {"recipe": "", "type_move": "", "emphasis_word": "",
+                 "title_breaks": []}
     full = _direction().model_dump()
     for key in full:
         partial = {k: v for k, v in full.items() if k != key}

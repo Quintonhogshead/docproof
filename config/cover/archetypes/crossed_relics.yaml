@@ -1,0 +1,378 @@
+# =============================================================================
+# ARCHETYPE FIVE — crossed_relics
+# =============================================================================
+#
+# Reference DNA: the dark-romantasy weapon flat-lay — Armentrout's FROM BLOOD
+# AND ASH and the shelf that grew around it. A near-black slab photographed
+# from directly overhead; TWO long relics laid across it in a shallow X; a
+# ring of one small repeated object scattered around the perimeter; and a huge
+# white high-contrast serif title stacked down the middle of the frame,
+# sitting fully ON TOP of the whole arrangement.
+#
+# It is the OPPOSITE of romantasy_organic and that is the point. There is no
+# sandwich here — nothing is drawn in front of the type, and no plate may
+# occlude a letterform. The depth comes from the flat-lay itself: an overhead
+# shot has no horizon to get wrong, so the composition cannot fail the way a
+# figure-with-no-ground fails. What it CAN fail is legibility, and this
+# template's whole job is to make that impossible.
+#
+# WHAT IS DELIBERATELY NOT HERE: the reference's gold SPECIAL EDITION seal.
+# That is a marketing sticker for one printing, not a piece of the design —
+# it belongs to the edition, not to the archetype, and a template that ships
+# one puts a foil badge on every book whether or not there is a special
+# edition to sell. If a job genuinely needs one it is a sticker slot added to
+# that job, not a slot every book inherits.
+#
+# -----------------------------------------------------------------------------
+# THE SIX RULES THIS TEMPLATE ENCODES
+# -----------------------------------------------------------------------------
+#
+# 1. THE GROUND MUST BE A DEAD BAND. Three values only: near-black slab,
+#    white type, bright relic surface. The slab plate is prompted for crushed
+#    shadow with narrow specular rims and NO midtone, and `slab_grade` takes
+#    another 28% of brightness and 45% of saturation out of it before a
+#    single other plate lands. A generated "dark stone" plate always comes
+#    back as a bright photograph OF dark stone; graded, it becomes a ground.
+#
+# 2. THE ART IS ARRANGED AROUND THE TYPE, NEVER BEHIND IT. Every prompt
+#    frame here says where its subject sits AND that the middle vertical
+#    column of the frame stays empty. The scatter ring is prompted as a ring
+#    with a hole in it. This is why the title needs no panel scrim: nothing
+#    is under it but graded slab.
+#
+# 3. TWO RELICS, CROSSED, AND NEITHER IS CUT. Long rigid objects are the one
+#    thing `cut_edge` cannot help with — both ends want to leave the frame,
+#    and a slot has only one cut edge. So the relics are prompted CORNER TO
+#    CORNER inside their own plate and placed at scale > 1: the overshoot
+#    carries both ends past the trim, no anchor judgement required. They run
+#    on opposite diagonals at shallow angles, and `relic_over` is drawn after
+#    `relic_under` so the X reads as two objects lying on each other rather
+#    than as one printed graphic.
+#
+# 4. THE SCATTER IS ONE PLATE, NOT `scatter: 10`. Same rule romantasy_organic
+#    learned on its particle field: stamping one cutout ten times reads as a
+#    rendering defect. The whole ring is generated as a single full-frame
+#    plate so every piece is a different artefact, at a different angle, with
+#    its own highlight.
+#
+# 5. ONE HUE, QUARANTINED. Whatever the ring is made of carries the accent
+#    and nothing else does. NEVER `duotone` or `photo_soft` on this template —
+#    both greyscale a plate onto the background->primary ramp, which is
+#    exactly the one colour this cover is spending its entire chroma budget
+#    on.
+#
+# 6. THE FINISH IS COLD-NEUTRAL. No shelf recipe: `dark_academia` is the
+#    obvious pick for the genre and it pushes temperature +0.35, which turns
+#    every ground sepia whether the book wants that or not. The adjust stack
+#    below is the same idea (vignette, tonal spine, motes) built without an
+#    opinion about temperature, so the palette's own background->primary ramp
+#    decides whether a cover reads cold or warm.
+#
+# -----------------------------------------------------------------------------
+# ROLES, NOT NOUNS — AND THE NOUNS COME FROM THE BOOK
+# -----------------------------------------------------------------------------
+#
+#   slab          the material the whole flat-lay is photographed on
+#   veil          what the air of this world is full of, dissolving up out of
+#                 the bottom edge
+#   ring          the small repeated object, 8-12 of them, around the perimeter
+#   relic_under   the first hero object, lower-left to upper-right
+#   relic_over    the second hero object, crossing it on the other diagonal
+#
+# THERE IS EXACTLY ONE DECORATION AND IT IS `ring`. An earlier draft also
+# carried a `spatter` slot for a few small pieces up near the type, and the
+# first book through it filled the two slots with two different objects —
+# bougainvillea in the ring, loose gears in the spatter. That is two
+# decorative vocabularies on one cover, and it reads as two covers fighting.
+# The reference has one: red leaves, and the few flecks near the title are
+# the same story as the leaves, not a second object. So the second slot is
+# gone rather than governed by a rule nobody will remember at 2am.
+#
+# The first draft of this file had `ring` prompted as "glossy and wet-looking
+# with hard specular highlights and DEEP VEINING" — which is not a role, it
+# is a leaf. A director asked for brass gears against that frame gets a wet
+# veined gear. Every frame below is now written so that ANY physical object
+# can fill it: bougainvillea bracts, gear teeth, playing cards, moth wings,
+# bone chips, spent brass, oyster shells. The lighting and the placement are
+# the template's; the noun is the book's.
+#
+# AND IT MUST ACTUALLY BE THE BOOK'S. The ring is the single loudest colour
+# decision on the cover, so it may not be chosen for looking good — it is
+# chosen because that object is IN the manuscript, in quantity, and means
+# something. Red leaves on the reference cover are not decoration; they are
+# the ash-and-blood the title names. A ring of roses on a book with no roses
+# in it is the exact failure this line exists to prevent.
+# -----------------------------------------------------------------------------
+name: crossed_relics
+genres: [fantasy, romance, mystery_thriller, science_fiction, historical]
+axis: center
+recipe: ""                      # rule 6
+describe: >-
+  A near-black slab shot from directly overhead with two long relics laid
+  across it in a shallow X, a ring of one small repeated object from the
+  book's own world scattered around the perimeter, and a huge white
+  high-contrast serif title stacked down the centre on top of everything.
+  Series line at the head, credit line and author at the foot.
+composition_note: >-
+  Photographed from directly overhead as a flat lay, lit by a single hard
+  raking light from the upper left — deep crushed shadow, narrow specular
+  rims, almost no midtone. The middle vertical third of the frame is left
+  empty and dark. No scene, no horizon, no sky, no landscape, no figures or
+  faces, no hands, no vignette.
+
+# =============================================================================
+art:
+# -- ground band --------------------------------------------------------------
+  - id: slab
+    role: ground
+    generatable: true
+    procedural: gradient        # $0 fallback only; this slot is meant to be shot
+    fit: cover
+    prompt_frame: >-
+      A full-frame overhead photograph of {subject}, filling the whole frame
+      edge to edge, with deep channels and crevices running through it and
+      the raking light catching only along their ridges. Nearly black, lifting
+      only where an edge finds the light. Nothing lying on it.
+
+  - id: veil
+    role: dissolve
+    # Opaque plate dissolved upward into the slab by its own gradient mask,
+    # rather than a transparent generation: a "wisp of vapour on a
+    # transparent background" comes back opaque about half the time, and a
+    # rectangle of fog with a visible top edge ruins the ground.
+    generatable: true
+    fit: cover
+    opacity: 0.85
+    mask:
+      gradient: {kind: linear, angle: 90.0, start: 0.42, end: 1.0}
+    prompt_frame: >-
+      A full-frame field of {subject}, marbled and slowly moving, very dark
+      and almost without colour, densest across the bottom of the frame and
+      thinning to nothing toward the top.
+
+  - id: tooth
+    generatable: false
+    fit: cover
+    texture_file: dust_grain
+    texture_fit: tile
+    opacity: 0.10
+    blend: multiply
+
+  - id: keylight
+    # The single raking source, restated on the ground so the centre of the
+    # field is fractionally brighter than the corners before `edge_close`
+    # shuts the edges down. Screen, low: this is a light, not a wash.
+    generatable: false
+    fit: cover
+    procedural: radial_glow
+    opacity: 0.22
+    blend: screen
+
+# -- the arrangement, all of it BEHIND the type -------------------------------
+  - id: ring
+    role: scatter
+    # Rule 4. One plate, cover-fit, so its own edges are always outside the
+    # trim and the ring's hole always lands on the type column.
+    #
+    # The frame below says SIZE, COUNT, PLACEMENT and LIGHT and nothing else.
+    # No material, no surface, no colour: those are the subject's own, and
+    # baking any of them here quietly restricts the template to one genre.
+    generatable: true
+    transparent: true
+    fit: cover
+    opacity: 0.88
+    prompt_frame: >-
+      Eight to twelve {subject} laid loosely around the outer edges of the
+      frame in a broad ring — pairs in the upper left and upper right, singles
+      down each side and along the bottom. Every one is a separate object at
+      a different size and angle, none identical to another, each lying flat
+      and catching the same hard raking light along one edge. Where an
+      object has holes, spokes, teeth, gaps or a see-through edge, those
+      openings are genuinely empty and you can see straight through them;
+      nothing is filled in solid. The entire middle of the frame is empty;
+      none of them reach the centre.
+    effects:
+      - {kind: drop_shadow, dy: 0.005, blur: 0.011, alpha: 0.55}
+
+  - id: relic_under
+    role: hero_a
+    # Rule 3: corner to corner in its own plate, scale > 1 so both severed
+    # ends leave the trim without a cut_edge.
+    generatable: true
+    transparent: true
+    fit: contain
+    anchor: [0.50, 0.50]
+    offset: [-0.02, 0.02]
+    scale: 1.30
+    prompt_frame: >-
+      {subject}, lying flat and dead straight on its side, running the full
+      diagonal of the frame from the lower left corner to the upper right
+      corner, both ends running out of the picture. A hard highlight along
+      one edge, the broad faces left dark.
+    effects:
+      - {kind: drop_shadow, dx: 0.004, dy: 0.008, blur: 0.014, alpha: 0.60}
+
+  - id: relic_over
+    role: hero_b
+    generatable: true
+    transparent: true
+    fit: contain
+    anchor: [0.50, 0.50]
+    offset: [0.02, -0.01]
+    scale: 1.24
+    prompt_frame: >-
+      {subject}, lying flat and dead straight on its side, running the full
+      diagonal of the frame from the upper left corner down to the lower right
+      corner, both ends running out of the picture. A hard highlight along one
+      edge, the broad faces left dark and heavily detailed.
+    effects:
+      - {kind: drop_shadow, dx: 0.005, dy: 0.009, blur: 0.012, alpha: 0.65}
+      - {kind: outer_glow, blur: 0.026, alpha: 0.22}
+
+  - id: motes
+    generatable: false
+    fit: cover
+    procedural: dust
+    opacity: 0.30
+    blend: screen
+
+# =============================================================================
+adjust:
+  - id: slab_grade
+    # Rule 1. Sits directly on the slab, before any other plate.
+    op: grade
+    brightness: -0.28
+    saturation: -0.45
+    contrast: 0.10
+
+  - id: cold_spine
+    # One shared colour spine under a stack of separately-lit plates, taken
+    # from the palette's own ramp — so a warm palette warms it and a cold
+    # palette cools it, which is rule 6's whole point.
+    op: gradient_map
+    stops: [background, primary, text]
+    opacity: 0.18
+    blend: soft_light
+
+  - id: foot_wash
+    # The credit line and the author sit on the busiest part of the ring.
+    # Feathered black, held fully clear until 0.74 so it never shows an edge.
+    op: color_wash
+    color: "#000000"
+    blend: normal
+    opacity: 0.58
+    mask:
+      gradient: {kind: linear, angle: 90.0, start: 0.74, end: 1.0}
+
+  - id: relic_bloom
+    # Threshold low enough to actually catch a relic's lit edge — at 0.85 it
+    # only found the white type, which is the one thing that did not need it.
+    op: bloom
+    threshold: 0.72
+    radius: 0.020
+    strength: 0.38
+
+  - id: edge_close
+    op: vignette
+    strength: 0.62
+
+# =============================================================================
+scrims:
+  # Halo only — a gradient_up/down scrim on a slot that is not at the very
+  # bottom paints a full-width slab with hard vertical edges (romantasy_organic
+  # rule 5, learned the same way). The title's is reactive: nothing is under
+  # it but graded slab, so the autopilot should almost never need to raise it.
+  - {kind: halo, protects: title, strength: 0.10}
+  - {kind: halo, protects: author, strength: 0.16}
+  - {kind: halo, protects: subtitle, strength: 0.28}
+  - {kind: halo, protects: series, strength: 0.22}
+
+# =============================================================================
+text:
+  - id: subtitle
+    # The series line at the very head of the cover, small caps, wide.
+    zone: {x: 0.10, y: 0.028, w: 0.80, h: 0.034}
+    case: upper
+    align: center
+    valign: top
+    tracking: 95
+    max_lines: 1
+    optional: true
+    size_min: 0.011
+    size_max: 0.018
+    effects:
+      - {kind: drop_shadow, dy: 0.003, blur: 0.006, alpha: 0.70}
+
+  - id: title
+    # `justify_stack` on the direction is what makes each line fill the
+    # measure; a four-word title lands as the reference's wide/wide/short/wide
+    # rhythm only when the wrap happens to isolate the connective, which is
+    # the one thing this template cannot dictate today.
+    zone: {x: 0.055, y: 0.150, w: 0.89, h: 0.505}
+    case: upper
+    align: center
+    valign: middle
+    tracking: 8
+    max_lines: 4
+    size_min: 0.045
+    size_max: 0.140
+    effects:
+      # Tight dark contact shadow under a wide soft one, so white type holds
+      # its edge where it passes over a lit relic.
+      - {kind: drop_shadow, dy: 0.0025, blur: 0.004, alpha: 0.72}
+      - {kind: drop_shadow, dy: 0.012, blur: 0.028, alpha: 0.34}
+      # The metallic sheen. soft_light, never multiply — multiply drags a
+      # white title to grey and it stops reading as metal and starts reading
+      # as dirt.
+      - {kind: gradient_overlay, stops: ["#FFFFFF", "#C9D2D6", "#FFFFFF"], angle: 90.0, blend: soft_light, opacity: 0.55}
+
+  - id: series
+    # The credit line — "#1 NATIONAL BESTSELLING AUTHOR", or the series
+    # position. The supporting face carries it.
+    zone: {x: 0.10, y: 0.836, w: 0.80, h: 0.032}
+    case: upper
+    tracking: 60
+    max_lines: 1
+    optional: true
+    size_min: 0.012
+    size_max: 0.020
+
+  - id: author
+    font_role: title            # the author's name wears the display face
+    zone: {x: 0.07, y: 0.874, w: 0.86, h: 0.105}
+    case: upper
+    tracking: 40
+    max_lines: 2
+    size_min: 0.028
+    size_max: 0.062
+    effects:
+      - {kind: drop_shadow, dy: 0.0025, blur: 0.005, alpha: 0.70}
+      - {kind: gradient_overlay, stops: ["#FFFFFF", "#C9D2D6", "#FFFFFF"], angle: 90.0, blend: soft_light, opacity: 0.50}
+
+# =============================================================================
+# Z-ORDER, bottom first. The one thing that matters: EVERY art plate is below
+# the title. Nothing on this template is ever drawn in front of the type.
+layers: [slab, slab_grade, veil, tooth, keylight,
+        ring, relic_under, relic_over, motes,
+        cold_spine,
+        "scrim:0", "scrim:2", subtitle, title,
+        foot_wash, "scrim:1", "scrim:3", series, author,
+        relic_bloom, edge_close]
+
+# =============================================================================
+# WHAT THE DIRECTOR STILL CHOOSES, AND NOTHING ELSE
+# =============================================================================
+#   * five `{subject}` fills — slab, veil, ring, relic_under, relic_over —
+#     EVERY ONE of them an object or material that appears in the
+#     manuscript. Not a mood, not a genre convention: a thing in the book.
+#   * five palette hexes; take `text` to true white and `accent` to the one
+#     hue the book owns
+#   * title_font (a high-contrast display serif) and author_font
+#   * the series line, the credit line, and `type_move: justify_stack`
+#
+# HONEST SCOPE: the skeleton is "two long objects crossed on a dark slab,
+# seen from above". It needs a book with two nameable physical objects in
+# it — a weapon and a token, two blades, a wrench and a machete, a cane and
+# a rifle. A book whose iconography is a place, a creature or a person has
+# nothing to cross, and should go to a different template rather than be
+# forced through this one.
