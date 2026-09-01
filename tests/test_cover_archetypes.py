@@ -216,6 +216,7 @@ _EXPECTED_GENRES = {
     "portrait_luminary": ["fantasy", "romance"],
     "elemental_aperture": ["fantasy", "science_fiction", "romance",
                           "mystery_thriller", "horror"],
+    "gilded_cartouche": ["fantasy", "romance", "historical", "horror"],
 }
 
 
@@ -333,7 +334,14 @@ def test_describe_archetypes_genre_filter_includes_multi_genre_tags():
 
 def test_describe_archetypes_genre_filter_shrinks_the_enumeration():
     # A real assertion that filtering actually filters, not just includes.
-    assert len(describe_archetypes("historical").splitlines()) < len(ARCHETYPES)
+    # Count ENTRY lines ("- name — describe"), not raw lines: an archetype's
+    # optional `casting` block is emitted as an indented paragraph underneath
+    # its entry, so a raw line count measures how chatty the matching
+    # templates are rather than how many of them matched.
+    def _entries(text: str) -> int:
+        return sum(1 for line in text.splitlines() if line.startswith("- "))
+
+    assert _entries(describe_archetypes("historical")) < len(ARCHETYPES)
 
 
 @pytest.mark.parametrize("genre", sorted(SUBJECT_KEYS))
