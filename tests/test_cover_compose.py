@@ -46,7 +46,7 @@ def _palette(**overrides) -> Palette:
 
 def _direction(**overrides) -> Direction:
     data = dict(concept_name="Test Concept", rationale="A test rationale.",
-               archetype="big_type", palette=_palette(),
+               archetype="probe_typographic", palette=_palette(),
                title_font="Playfair Display", author_font="Spectral",
                art_prompts={}, texture=False)
     data.update(overrides)
@@ -60,7 +60,7 @@ def _brief(**overrides) -> Brief:
     return Brief(**data)
 
 
-def _spec(archetype_name="big_type", **direction_overrides):
+def _spec(archetype_name="probe_typographic", **direction_overrides):
     archetype = ARCHETYPES[archetype_name]
     direction = _direction(archetype=archetype_name, **direction_overrides)
     return build_spec(direction, _brief(), archetype)
@@ -73,7 +73,7 @@ def _flat_png(path: Path, size: tuple[int, int], rgb: tuple[int, int, int]) -> N
 # -- procedural render: the $0 fallback --------------------------------------
 
 def test_procedural_big_type_spec_renders_at_the_requested_canvas():
-    spec = _spec("big_type")   # no assets anywhere - fully procedural
+    spec = _spec("probe_typographic")   # no assets anywhere - fully procedural
     image, report = compose(spec, Path("/nonexistent-job-dir"), canvas=CANVAS)
     assert image.size == CANVAS
     assert image.mode == "RGB"
@@ -86,7 +86,7 @@ def test_procedural_full_bleed_and_cutout_sandwich_also_render_procedurally():
     # Neither archetype's launch design assumes a $0 render, but compose()
     # must still produce *something* rather than crash when an asset is
     # simply absent (§7.3: "synthesizes procedural layers otherwise").
-    for name in ("full_bleed_art", "cutout_sandwich"):
+    for name in ("probe_scene", "probe_sandwich"):
         spec = _spec(name, art_prompts={})
         image, report = compose(spec, Path("/nonexistent-job-dir"), canvas=CANVAS)
         assert image.size == CANVAS
@@ -95,7 +95,7 @@ def test_procedural_full_bleed_and_cutout_sandwich_also_render_procedurally():
 
 def test_default_canvas_is_the_ebook_target():
     assert (EBOOK_W, EBOOK_H) == (1600, 2560)
-    spec = _spec("big_type")
+    spec = _spec("probe_typographic")
     image, _ = compose(spec, Path("/nonexistent-job-dir"))   # canvas omitted
     assert image.size == (EBOOK_W, EBOOK_H)
 
@@ -103,7 +103,7 @@ def test_default_canvas_is_the_ebook_target():
 # -- determinism ---------------------------------------------------------------
 
 def test_two_composes_of_the_same_procedural_spec_are_byte_identical():
-    spec = _spec("big_type", texture=True)   # also exercises the grain layer
+    spec = _spec("probe_typographic", texture=True)   # also exercises the grain layer
     image1, report1 = compose(spec, Path("/nonexistent-job-dir"), canvas=CANVAS)
     image2, report2 = compose(spec, Path("/nonexistent-job-dir"), canvas=CANVAS)
     assert image1.tobytes() == image2.tobytes()
@@ -111,7 +111,7 @@ def test_two_composes_of_the_same_procedural_spec_are_byte_identical():
 
 
 def test_grain_texture_alone_is_deterministic_across_composes():
-    spec = _spec("full_bleed_art", art_prompts={}, texture=True)
+    spec = _spec("probe_scene", art_prompts={}, texture=True)
     image1, _ = compose(spec, Path("/nonexistent-job-dir"), canvas=CANVAS)
     image2, _ = compose(spec, Path("/nonexistent-job-dir"), canvas=CANVAS)
     assert image1.tobytes() == image2.tobytes()
@@ -120,7 +120,7 @@ def test_grain_texture_alone_is_deterministic_across_composes():
 # -- optional slots -------------------------------------------------------------
 
 def test_empty_optional_subtitle_is_skipped_not_measured_or_drawn():
-    spec = _spec("full_bleed_art", art_prompts={})   # brief has no subtitle
+    spec = _spec("probe_scene", art_prompts={})   # brief has no subtitle
     subtitle = next(t for t in spec.text if t.id == "subtitle")
     assert subtitle.optional is True and subtitle.content == ""
     _, report = compose(spec, Path("/nonexistent-job-dir"), canvas=CANVAS)
@@ -142,7 +142,7 @@ def test_dark_text_on_dark_background_escalates_its_scrim_past_the_default(tmp_p
     # zone's mean, so the background has to be forgiving enough for even
     # that weakest row to clear threshold once escalation is done.)
     _flat_png(tmp_path / "bg.png", CANVAS, (120, 120, 120))
-    spec = _spec("full_bleed_art", art_prompts={"background": "irrelevant"})
+    spec = _spec("probe_scene", art_prompts={"background": "irrelevant"})
     for art in spec.art:
         if art.id == "background":
             art.asset = "bg.png"
@@ -165,7 +165,7 @@ def test_contrast_that_still_fails_at_max_scrim_strength_flips_text_color(tmp_pa
     # and even the flip cannot clear the 4.5 threshold from this luminance.
     worst_case_gray = "#767676"
     _flat_png(tmp_path / "bg.png", CANVAS, (0x76, 0x76, 0x76))
-    spec = _spec("full_bleed_art", art_prompts={"background": "irrelevant"},
+    spec = _spec("probe_scene", art_prompts={"background": "irrelevant"},
                 palette=_palette(background=worst_case_gray, text=worst_case_gray,
                                 scrim=worst_case_gray))
     for art in spec.art:
@@ -213,7 +213,7 @@ def test_half_busy_half_clear_zone_fails_worst_region_even_though_mean_would_pas
     _split_png(tmp_path / "bg.png", CANVAS, (245, 245, 245), (10, 10, 10))
     # dark ink; a LIGHT scrim color, so escalating it can actually brighten
     # (help) the dark half instead of only ever darkening the light half.
-    spec = _spec("big_type", art_prompts={},
+    spec = _spec("probe_typographic", art_prompts={},
                 palette=_palette(text="#111111", scrim="#f5f1e8"))
     for art in spec.art:
         if art.id == "background":
@@ -242,7 +242,7 @@ def test_contrast_thresholds_differ_for_title_versus_subtitle(tmp_path):
     # contrast decision rests entirely on the lower 3.0 threshold — confirm
     # a luminance that fails title's 4.5 bar still cleanly passes subtitle's.
     _flat_png(tmp_path / "bg.png", CANVAS, (90, 90, 90))
-    spec = _spec("full_bleed_art", art_prompts={"background": "irrelevant"})
+    spec = _spec("probe_scene", art_prompts={"background": "irrelevant"})
     for art in spec.art:
         if art.id == "background":
             art.asset = "bg.png"
@@ -275,7 +275,7 @@ def test_busy_backdrop_auto_adds_the_default_shadow(tmp_path):
     _flat_png(tmp_path / "flat.png", CANVAS, (10, 10, 10))
 
     def make(asset: str, shadow):
-        spec = _spec("big_type", texture=False)
+        spec = _spec("probe_typographic", texture=False)
         for art in spec.art:
             if art.id == "background":
                 art.asset = asset
@@ -311,7 +311,7 @@ def test_legibility_sampling_reads_the_slots_own_zone_not_the_whole_canvas(tmp_p
     # exactly at the author zone (which sits away from the origin) — if the
     # autopilot ever samples the wrong rectangle (or a degenerate one), it
     # will not see that black patch and will wrongly flag author's contrast.
-    spec = _spec("cutout_sandwich", art_prompts={"background": "x", "focal": "y"},
+    spec = _spec("probe_sandwich", art_prompts={"background": "x", "focal": "y"},
                 palette=_palette(background="#808080", text="#f5f1e8"))
     author = next(t for t in spec.text if t.id == "author")
     left, top, w, h = zone_px(author.zone, CANVAS)
@@ -346,7 +346,7 @@ def test_opaque_focal_asset_swaps_behind_its_title_and_warns(tmp_path):
     _flat_png(tmp_path / "background.png", CANVAS, (60, 60, 90))
     _solid_rgba((200, 300), (200, 50, 50, 255)).save(tmp_path / "focal.png")   # fully opaque
 
-    spec = _spec("cutout_sandwich", art_prompts={"background": "x", "focal": "y"})
+    spec = _spec("probe_sandwich", art_prompts={"background": "x", "focal": "y"})
     for art in spec.art:
         if art.id == "background":
             art.asset = "background.png"
@@ -373,7 +373,7 @@ def test_focal_asset_with_real_transparency_does_not_swap_or_warn(tmp_path):
             focal.putpixel((x, y), (200, 50, 50, 255))
     focal.save(tmp_path / "focal.png")
 
-    spec = _spec("cutout_sandwich", art_prompts={"background": "x", "focal": "y"})
+    spec = _spec("probe_sandwich", art_prompts={"background": "x", "focal": "y"})
     for art in spec.art:
         if art.id == "background":
             art.asset = "background.png"
@@ -396,7 +396,7 @@ def test_focal_asset_with_real_transparency_does_not_swap_or_warn(tmp_path):
 # -- ComposeError ---------------------------------------------------------------
 
 def test_unreadable_art_asset_raises_composeerror_with_a_human_sentence(tmp_path):
-    spec = _spec("full_bleed_art", art_prompts={"background": "x"})
+    spec = _spec("probe_scene", art_prompts={"background": "x"})
     for art in spec.art:
         if art.id == "background":
             art.asset = "does_not_exist.png"
@@ -409,7 +409,7 @@ def test_unreadable_art_asset_raises_composeerror_with_a_human_sentence(tmp_path
 
 def test_corrupt_art_asset_raises_composeerror(tmp_path):
     (tmp_path / "background.png").write_bytes(b"not actually a png")
-    spec = _spec("full_bleed_art", art_prompts={"background": "x"})
+    spec = _spec("probe_scene", art_prompts={"background": "x"})
     for art in spec.art:
         if art.id == "background":
             art.asset = "background.png"
@@ -519,7 +519,7 @@ def test_legacy_texture_id_falls_back_to_grain_unchanged(tmp_path):
     # No `procedural` set: an archetype/spec written before this field
     # existed must render BYTE-IDENTICAL pixels to calling the grain
     # synthesizer directly by name.
-    spec = _spec("full_bleed_art", art_prompts={}, texture=True)
+    spec = _spec("probe_scene", art_prompts={}, texture=True)
     image, _ = compose(spec, tmp_path, canvas=CANVAS)
     direct = PROCEDURAL_SYNTHESIZERS["grain"](CANVAS, spec.palette,
                                               ArtSlot(id="texture"), spec.version)
@@ -534,7 +534,7 @@ def test_legacy_texture_id_falls_back_to_grain_unchanged(tmp_path):
 
 def test_legacy_background_id_falls_back_to_gradient_unchanged():
     from docproof.cover.compose import _procedural_art
-    spec = _spec("big_type", texture=False)
+    spec = _spec("probe_typographic", texture=False)
     art_by_id = {a.id: a for a in spec.art}
     direct = PROCEDURAL_SYNTHESIZERS["gradient"](CANVAS, spec.palette,
                                                  ArtSlot(id="background"),
@@ -653,7 +653,7 @@ def test_rule_frame_is_a_double_rule_inset_from_the_edge():
 
 
 def test_rule_frame_composes_cleanly_inside_woven_emblem_at_small_canvas():
-    spec = _spec("woven_emblem", texture=False)
+    spec = _spec("probe_ornament", texture=False)
     image, report = compose(spec, Path("/nonexistent-job-dir"), canvas=CANVAS)
     assert image.size == CANVAS
     assert "title" in report.contrast
@@ -664,7 +664,7 @@ def test_rule_frame_composes_cleanly_inside_woven_emblem_at_small_canvas():
 def test_woven_emblem_thumb_is_legible_at_search_result_size():
     from docproof.cover.compose import THUMB_SMALL
 
-    spec = _spec("woven_emblem", texture=False,
+    spec = _spec("probe_ornament", texture=False,
                  palette=Palette(background="#c23b22", primary="#1c1712",
                                  accent="#e8c468", text="#f6ede1", scrim="#000000"))
     image, report = compose(spec, Path("/nonexistent-job-dir"), canvas=(EBOOK_W, EBOOK_H))
@@ -1152,7 +1152,7 @@ def _framed_spec(title_zone, title_content="AN EXTREMELY WIDE TITLE LINE",
     from docproof.cover.model import (ArtSlot, CoverSpec, LayerRef, TextSlot,
                                       Zone)
     return CoverSpec(
-        archetype="big_type", concept_name="Frame Probe",
+        archetype="probe_typographic", concept_name="Frame Probe",
         rationale="frame clamp regression", palette=_TEST_PALETTE,
         art=[ArtSlot(id="background"),
              ArtSlot(id="frame", procedural=frame_procedural)],
@@ -1330,7 +1330,7 @@ def _move_spec(move_fields, title_zone=None, axis=None, extra_art=(),
                        max_lines=3)
     slot_fields.update(move_fields)
     return CoverSpec(
-        archetype="big_type", concept_name="Move Probe",
+        archetype="probe_typographic", concept_name="Move Probe",
         rationale="per-move guard matrix", palette=_TEST_PALETTE,
         axis=axis,
         art=[ArtSlot(id="background"), *extra_art],
@@ -1445,7 +1445,7 @@ def test_thriller_repro_title_stays_inside_its_zone_and_off_the_trim(tmp_path):
     # 0.0% from the left trim edge"). The fit escalation must keep every
     # glyph inside the title zone — at the ebook canvas and the test one —
     # and the finished cover must carry no title trim warning.
-    spec = _spec("thriller_bigtype_silhouette")   # _brief() IS the repro brief
+    spec = _spec("probe_typestack")   # _brief() IS the repro brief
     title = next(t for t in spec.text if t.id == "title")
     for canvas in (CANVAS, (EBOOK_W, EBOOK_H)):
         fit = typeset.fit_text(title, canvas)
@@ -1540,7 +1540,7 @@ def test_a_whole_word_can_pass_while_one_letter_is_entirely_buried():
     shipped reading LONGSW RD. A word is ~9 letters, so losing one whole
     letter costs the WORD about a ninth of its ink and costs the READER the
     word."""
-    ink = _title_ink(_spec("cutout_sandwich"))
+    ink = _title_ink(_spec("probe_sandwich"))
     boxes = _glyph_boxes(ink)
     assert len(boxes) > 3, "the fixture title should have several glyphs"
 
@@ -1589,7 +1589,7 @@ def test_a_cutout_that_buries_one_whole_letter_is_guarded_and_says_so(tmp_path):
     warning names the limit that actually broke -- a buried LETTER and a
     crowded WORD are different defects with different fixes."""
     _flat_png(tmp_path / "background.png", CANVAS, (60, 60, 90))
-    spec = _spec("cutout_sandwich", art_prompts={"background": "x", "focal": "y"})
+    spec = _spec("probe_sandwich", art_prompts={"background": "x", "focal": "y"})
 
     # The original fixture of test_focal_asset_with_real_transparency_does_
     # not_swap_or_warn, restored here because it turned out to reproduce the
@@ -1617,7 +1617,7 @@ def test_the_worst_glyph_is_reported_even_when_the_sandwich_passes(tmp_path):
     """An agent tuning a sandwich needs to see how close the worst letter
     came, not only that the word survived."""
     _flat_png(tmp_path / "background.png", CANVAS, (60, 60, 90))
-    spec = _spec("cutout_sandwich", art_prompts={"background": "x", "focal": "y"})
+    spec = _spec("probe_sandwich", art_prompts={"background": "x", "focal": "y"})
     focal = Image.new("RGBA", (200, 300), (200, 50, 50, 0))
     for y in range(200, 290):
         for x in range(60, 140):

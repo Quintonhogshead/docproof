@@ -1,4 +1,12 @@
-name: big_type
+# TEST FIXTURE — not shipped content.
+# No focal art at all: a procedural ground, an optional generated texture, a procedural rule frame, and type carrying the whole cover. The $0 shape.
+#
+# Structurally derived from the retired `big_type` template, so every
+# engine test that used to lean on that shipped archetype exercises the
+# same shape without depending on what happens to be on the shelf. Edit
+# this freely to serve a test; it ships to no one.
+# ---------------------------------------------------------------------
+name: probe_typographic
 describe: >-
   No focal art — a huge stacked title over a procedural gradient field is the
   whole cover. The $0 fallback, and the print-safest design of the three.

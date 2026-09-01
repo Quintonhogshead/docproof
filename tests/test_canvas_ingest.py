@@ -50,7 +50,7 @@ def _brief(**overrides) -> Brief:
     return Brief(**data)
 
 
-def _spec(archetype_name: str = "cutout_sandwich", **direction_overrides
+def _spec(archetype_name: str = "probe_sandwich", **direction_overrides
           ) -> CoverSpec:
     archetype = ARCHETYPES[archetype_name]
     data = dict(concept_name="Ash and Brass",
@@ -150,16 +150,16 @@ def test_a_spec_that_does_not_validate_is_reported_not_guessed_at(tmp_path):
 
 
 def test_concept_picks_which_cover_opens(tmp_path):
-    first, second = _spec("cutout_sandwich"), _spec("full_bleed_art")
+    first, second = _spec("probe_sandwich"), _spec("probe_scene")
     job_dir = _job_dir(tmp_path, first, second)
     assert ingest(job_dir, canvas=CANVAS).source_spec["archetype"] == \
-        "cutout_sandwich"
+        "probe_sandwich"
     assert ingest(job_dir, concept=1, canvas=CANVAS).source_spec["archetype"] \
-        == "full_bleed_art"
+        == "probe_scene"
 
 
 def test_a_missing_plate_names_the_file_it_looked_for(tmp_path):
-    spec = _spec("cutout_sandwich")
+    spec = _spec("probe_sandwich")
     job_dir = _job_dir(tmp_path, spec)
     (job_dir / spec.art[0].asset).unlink()
     with pytest.raises(CanvasIngestError) as excinfo:
@@ -168,7 +168,7 @@ def test_a_missing_plate_names_the_file_it_looked_for(tmp_path):
 
 
 def test_a_plate_that_is_not_an_image_names_the_file(tmp_path):
-    spec = _spec("cutout_sandwich")
+    spec = _spec("probe_sandwich")
     job_dir = _job_dir(tmp_path, spec)
     (job_dir / spec.art[0].asset).write_text("not a png", encoding="utf-8")
     with pytest.raises(CanvasIngestError, match="could not be read as an image"):
@@ -185,7 +185,7 @@ def test_the_document_carries_the_jobs_own_id_and_canvas(tmp_path):
 
 
 def test_the_default_canvas_is_the_composers_ebook_target(tmp_path):
-    doc = ingest(_job_dir(tmp_path, _spec("big_type")))
+    doc = ingest(_job_dir(tmp_path, _spec("probe_typographic")))
     assert (doc.canvas.w, doc.canvas.h) == (EBOOK_W, EBOOK_H)
 
 
@@ -196,13 +196,13 @@ def test_a_fresh_canvas_session_starts_at_zero_spend(tmp_path):
 
 
 def test_the_whole_spec_is_kept_verbatim_for_provenance(tmp_path):
-    spec = _spec("full_bleed_art")
+    spec = _spec("probe_scene")
     doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
     assert doc.source_spec == spec.model_dump(mode="json")
 
 
 def test_an_ingested_document_survives_a_save_and_load(tmp_path):
-    doc = ingest(_job_dir(tmp_path, _spec("full_bleed_art")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_scene")), canvas=CANVAS)
     path = tmp_path / "canvas.json"
     save_doc(doc, path)
     assert load_doc(path).model_dump() == doc.model_dump()
@@ -214,7 +214,7 @@ def test_layers_come_out_in_the_order_compose_draws_them(tmp_path):
     # cutout_sandwich: background, subtitle, title, focal, author -- the
     # cutout figure sits BETWEEN the title and the author line (§5.2.3), and
     # the empty subtitle draws nothing.
-    doc = ingest(_job_dir(tmp_path, _spec("cutout_sandwich")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_sandwich")), canvas=CANVAS)
     assert [(l.kind, l.name) for l in doc.layers] == [
         ("art", "background"), ("text", "title"), ("art", "focal"),
         ("text", "author")]
@@ -226,7 +226,7 @@ def test_adjust_layers_arrive_in_place_and_the_rest_keeps_its_order(tmp_path):
     to be dropped; the editor now carries them as real layers, which is
     what makes doctrine rule 6 something the canvas can DO and not only
     describe. The procedural grain plate still has no pixels to carry."""
-    doc = ingest(_job_dir(tmp_path, _spec("full_bleed_art")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_scene")), canvas=CANVAS)
     assert [(l.kind, l.name) for l in doc.layers] == [
         ("art", "background"),
         ("scrim", "scrim 0 (gradient_down)"),
@@ -243,7 +243,7 @@ def test_an_ingested_adjust_layer_covers_the_whole_canvas_in_literal_hexes(
     may point at palette ROLES. A canvas document carries no palette, so the
     roles have to be resolved at this boundary or they point at a table that
     did not travel with the document."""
-    spec = _spec("full_bleed_art")
+    spec = _spec("probe_scene")
     doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
     gmap = next(l for l in doc.layers if l.name == "gradient map (fx_map)")
     assert (gmap.frame.x, gmap.frame.y, gmap.frame.w, gmap.frame.h) == (
@@ -254,7 +254,7 @@ def test_an_ingested_adjust_layer_covers_the_whole_canvas_in_literal_hexes(
 
 
 def test_an_empty_text_slot_becomes_no_layer(tmp_path):
-    doc = ingest(_job_dir(tmp_path, _spec("cutout_sandwich")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_sandwich")), canvas=CANVAS)
     assert "subtitle" not in [l.name for l in doc.layers]
 
 
@@ -262,7 +262,7 @@ def test_a_procedural_field_with_no_plate_opens_on_the_right_ground(tmp_path):
     # big_type is fully procedural: its background synthesizes a gradient in
     # the palette's background role, and its rule_frame/grain slots are
     # ornament and texture, which a flat rectangle would misrepresent.
-    doc = ingest(_job_dir(tmp_path, _spec("big_type")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_typographic")), canvas=CANVAS)
     ground = doc.layers[0]
     assert (ground.kind, ground.name) == ("scrim", "background")
     assert ground.color == "#101820"
@@ -276,7 +276,7 @@ def test_a_procedural_field_with_no_plate_opens_on_the_right_ground(tmp_path):
 def test_a_cover_fit_plate_lands_where_compose_would_have_put_it(tmp_path):
     # 512x512 into 400x640 fills by 640/512 = 1.25, so the plate is 640x640:
     # exactly the canvas height, 1.6x its width, centered.
-    doc = ingest(_job_dir(tmp_path, _spec("cutout_sandwich")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_sandwich")), canvas=CANVAS)
     frame = doc.layers[0].frame
     assert (frame.x, frame.y) == (0.5, 0.5)
     assert (frame.w, frame.h) == pytest.approx((1.6, 1.0))
@@ -285,21 +285,21 @@ def test_a_cover_fit_plate_lands_where_compose_would_have_put_it(tmp_path):
 def test_a_contain_fit_cutout_keeps_its_anchor_and_scale(tmp_path):
     # cutout_sandwich's focal sits at anchor (0.66, 1.0), scale 0.62: a
     # 248x248 figure standing on the bottom edge, right of center.
-    doc = ingest(_job_dir(tmp_path, _spec("cutout_sandwich")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_sandwich")), canvas=CANVAS)
     focal = next(l for l in doc.layers if l.name == "focal")
     assert (focal.frame.w, focal.frame.h) == pytest.approx((0.62, 0.3875))
     assert (focal.frame.x, focal.frame.y) == pytest.approx((0.56, 0.80625))
 
 
 def test_the_cutout_flag_rides_along_because_regeneration_needs_it(tmp_path):
-    doc = ingest(_job_dir(tmp_path, _spec("cutout_sandwich")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_sandwich")), canvas=CANVAS)
     by_name = {l.name: l for l in doc.layers if l.kind == "art"}
     assert by_name["focal"].transparent is True
     assert by_name["background"].transparent is False
 
 
 def test_the_plate_source_is_the_job_relative_path_the_pipeline_wrote(tmp_path):
-    doc = ingest(_job_dir(tmp_path, _spec("cutout_sandwich")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_sandwich")), canvas=CANVAS)
     assert doc.layers[0].source == "assets/c0_background.png"
 
 
@@ -307,8 +307,8 @@ def test_an_art_layer_carries_the_assembled_prompt_not_the_raw_one(tmp_path):
     # A re-roll has to ask for the same thing the pipeline asked for --
     # composition note, cutout directive and negative suffix included.
     from docproof.cover.imaging import CUTOUT_SUFFIX, NEGATIVE_SUFFIX
-    archetype = ARCHETYPES["cutout_sandwich"]
-    doc = ingest(_job_dir(tmp_path, _spec("cutout_sandwich")), canvas=CANVAS)
+    archetype = ARCHETYPES["probe_sandwich"]
+    doc = ingest(_job_dir(tmp_path, _spec("probe_sandwich")), canvas=CANVAS)
     focal = next(l for l in doc.layers if l.name == "focal")
     assert focal.prompt.startswith("a smoky brass foundry at dusk")
     assert archetype.composition_note in focal.prompt
@@ -318,19 +318,19 @@ def test_an_art_layer_carries_the_assembled_prompt_not_the_raw_one(tmp_path):
 
 def test_a_non_cutout_slot_gets_no_cutout_directive(tmp_path):
     from docproof.cover.imaging import CUTOUT_SUFFIX
-    doc = ingest(_job_dir(tmp_path, _spec("cutout_sandwich")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_sandwich")), canvas=CANVAS)
     assert CUTOUT_SUFFIX not in doc.layers[0].prompt
 
 
 def test_an_archetype_that_left_the_shelf_still_opens(tmp_path):
-    spec = _spec("cutout_sandwich")
+    spec = _spec("probe_sandwich")
     spec.archetype = "an_archetype_since_retired"
     doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
     assert doc.layers[0].prompt == "a smoky brass foundry at dusk"
 
 
 def test_the_slots_own_opacity_and_fit_ride_across(tmp_path):
-    spec = _spec("cutout_sandwich")
+    spec = _spec("probe_sandwich")
     spec.art[0].opacity = 0.65
     doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
     assert doc.layers[0].opacity == 0.65
@@ -341,7 +341,7 @@ def test_the_slots_own_opacity_and_fit_ride_across(tmp_path):
 # -- text ---------------------------------------------------------------------
 
 def test_a_title_arrives_already_broken_because_the_canvas_never_wraps(tmp_path):
-    doc = ingest(_job_dir(tmp_path, _spec("cutout_sandwich")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_sandwich")), canvas=CANVAS)
     title = next(l for l in doc.layers if l.name == "title")
     assert "\n" in title.text
     assert title.text.replace("\n", " ") == "THE LIGHTHOUSE AT GULL POINT"
@@ -350,13 +350,13 @@ def test_a_title_arrives_already_broken_because_the_canvas_never_wraps(tmp_path)
 def test_the_case_the_composer_applied_is_baked_in(tmp_path):
     # cutout_sandwich's title slot is case="upper"; the canvas has no case
     # field, so the ingest resolves it once.
-    doc = ingest(_job_dir(tmp_path, _spec("cutout_sandwich")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_sandwich")), canvas=CANVAS)
     title = next(l for l in doc.layers if l.name == "title")
     assert title.text.isupper()
 
 
 def test_the_size_is_the_fitted_size_not_the_slots_ceiling(tmp_path):
-    spec = _spec("cutout_sandwich")
+    spec = _spec("probe_sandwich")
     title_slot = next(t for t in spec.text if t.id == "title")
     doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
     title = next(l for l in doc.layers if l.name == "title")
@@ -366,7 +366,7 @@ def test_the_size_is_the_fitted_size_not_the_slots_ceiling(tmp_path):
 
 
 def test_tracking_converts_from_em_per_thousand_to_ems(tmp_path):
-    spec = _spec("cutout_sandwich")
+    spec = _spec("probe_sandwich")
     title_slot = next(t for t in spec.text if t.id == "title")
     doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
     title = next(l for l in doc.layers if l.name == "title")
@@ -375,20 +375,20 @@ def test_tracking_converts_from_em_per_thousand_to_ems(tmp_path):
 
 
 def test_the_line_height_matches_the_composers(tmp_path):
-    doc = ingest(_job_dir(tmp_path, _spec("cutout_sandwich")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_sandwich")), canvas=CANVAS)
     title = next(l for l in doc.layers if l.name == "title")
     assert title.line_height == typeset.LINE_HEIGHT
 
 
 def test_the_color_comes_from_the_palette_role(tmp_path):
-    spec = _spec("cutout_sandwich", palette=_palette(text="#ffeecc"))
+    spec = _spec("probe_sandwich", palette=_palette(text="#ffeecc"))
     doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
     title = next(l for l in doc.layers if l.name == "title")
     assert title.color == "#ffeecc"
 
 
 def test_a_knockout_slot_takes_the_primary_role_the_composer_tests(tmp_path):
-    spec = _spec("cutout_sandwich", palette=_palette(primary="#00ff00"))
+    spec = _spec("probe_sandwich", palette=_palette(primary="#00ff00"))
     next(t for t in spec.text if t.id == "title").mode = "knockout"
     doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
     title = next(l for l in doc.layers if l.name == "title")
@@ -396,7 +396,7 @@ def test_a_knockout_slot_takes_the_primary_role_the_composer_tests(tmp_path):
 
 
 def test_the_family_is_the_one_the_direction_picked(tmp_path):
-    doc = ingest(_job_dir(tmp_path, _spec("cutout_sandwich")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_sandwich")), canvas=CANVAS)
     by_name = {l.name: l for l in doc.layers if l.kind == "text"}
     assert by_name["title"].family == "Playfair Display"
     assert by_name["author"].family == "Spectral"
@@ -406,7 +406,7 @@ def test_the_family_is_the_one_the_direction_picked(tmp_path):
     ("top", "top"), ("middle", "middle"), ("bottom", "bottom")])
 def test_valign_is_resolved_into_where_the_block_actually_sits(tmp_path, valign,
                                                                expected_y):
-    spec = _spec("cutout_sandwich")
+    spec = _spec("probe_sandwich")
     title_slot = next(t for t in spec.text if t.id == "title")
     title_slot.valign = valign
     doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
@@ -422,7 +422,7 @@ def test_valign_is_resolved_into_where_the_block_actually_sits(tmp_path, valign,
 
 
 def test_the_text_box_is_the_block_the_type_actually_fills(tmp_path):
-    spec = _spec("cutout_sandwich")
+    spec = _spec("probe_sandwich")
     title_slot = next(t for t in spec.text if t.id == "title")
     doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
     title = next(l for l in doc.layers if l.name == "title")
@@ -433,7 +433,7 @@ def test_the_text_box_is_the_block_the_type_actually_fills(tmp_path):
 
 
 def test_a_signature_tilt_becomes_a_frame_rotation(tmp_path):
-    spec = _spec("cutout_sandwich")
+    spec = _spec("probe_sandwich")
     next(t for t in spec.text if t.id == "title").rotate = -6.0
     doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
     title = next(l for l in doc.layers if l.name == "title")
@@ -441,7 +441,7 @@ def test_a_signature_tilt_becomes_a_frame_rotation(tmp_path):
 
 
 def test_a_spec_arc_becomes_the_warp_dial(tmp_path):
-    spec = _spec("cutout_sandwich")
+    spec = _spec("probe_sandwich")
     next(t for t in spec.text if t.id == "title").arc = 0.175   # half of 0.35
     doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
     title = next(l for l in doc.layers if l.name == "title")
@@ -450,7 +450,7 @@ def test_a_spec_arc_becomes_the_warp_dial(tmp_path):
 
 
 def test_a_straight_slot_has_no_warp(tmp_path):
-    doc = ingest(_job_dir(tmp_path, _spec("cutout_sandwich")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_sandwich")), canvas=CANVAS)
     title = next(l for l in doc.layers if l.name == "title")
     assert title.warp.kind == "none"
 
@@ -458,7 +458,7 @@ def test_a_straight_slot_has_no_warp(tmp_path):
 # -- scrims -------------------------------------------------------------------
 
 def test_a_protecting_scrim_takes_the_composers_own_four_percent_padding(tmp_path):
-    spec = _spec("full_bleed_art")
+    spec = _spec("probe_scene")
     doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
     title_zone = next(t for t in spec.text if t.id == "title").zone
     scrim = next(l for l in doc.layers if l.name.startswith("scrim 0"))
@@ -471,7 +471,7 @@ def test_a_protecting_scrim_takes_the_composers_own_four_percent_padding(tmp_pat
 
 
 def test_a_gradient_down_scrim_ramps_then_stays_solid_to_the_edge(tmp_path):
-    doc = ingest(_job_dir(tmp_path, _spec("full_bleed_art")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_scene")), canvas=CANVAS)
     scrim = next(l for l in doc.layers if l.name.startswith("scrim 0"))
     stops = scrim.gradient.stops
     assert scrim.gradient.angle == 90.0
@@ -484,7 +484,7 @@ def test_a_gradient_down_scrim_ramps_then_stays_solid_to_the_edge(tmp_path):
 def test_the_scrim_strength_is_the_one_the_render_escalated_to(tmp_path):
     # The legibility autopilot escalates at render time and records where it
     # landed; a spec-strength scrim would open weaker than the approved cover.
-    spec = _spec("full_bleed_art")
+    spec = _spec("probe_scene")
     job_dir = _job_dir(tmp_path, spec,
                        reports=[_report(scrim_final={0: 0.7, 1: 0.15})])
     doc = ingest(job_dir, canvas=CANVAS)
@@ -495,12 +495,12 @@ def test_the_scrim_strength_is_the_one_the_render_escalated_to(tmp_path):
 def test_a_scrim_the_composer_never_paints_becomes_no_layer(tmp_path):
     # big_type's two panel scrims sit at strength 0 unless the autopilot
     # raises them.
-    doc = ingest(_job_dir(tmp_path, _spec("big_type")), canvas=CANVAS)
+    doc = ingest(_job_dir(tmp_path, _spec("probe_typographic")), canvas=CANVAS)
     assert not [l for l in doc.layers if l.name.startswith("scrim")]
 
 
 def test_an_escalated_panel_scrim_becomes_a_flat_alpha_rectangle(tmp_path):
-    spec = _spec("big_type")
+    spec = _spec("probe_typographic")
     job_dir = _job_dir(tmp_path, spec, reports=[_report(scrim_final={0: 0.4})])
     doc = ingest(job_dir, canvas=CANVAS)
     scrim = next(l for l in doc.layers if l.name.startswith("scrim 0"))
@@ -516,7 +516,7 @@ def test_an_art_slots_mask_arrives_pointing_at_the_canvas_layer(tmp_path):
     has to come out the far side pointing at the right layer, or the plate
     opens unmasked — a full-bleed plate over a cover somebody thought they
     had windowed."""
-    spec = _spec("cutout_sandwich")
+    spec = _spec("probe_sandwich")
     focal = next(s for s in spec.art if s.id == "focal")
     focal.mask = CoverMaskSpec(from_text="title")
     doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
@@ -529,7 +529,7 @@ def test_an_art_slots_mask_arrives_pointing_at_the_canvas_layer(tmp_path):
 
 
 def test_a_gradient_mask_survives_field_for_field(tmp_path):
-    spec = _spec("cutout_sandwich")
+    spec = _spec("probe_sandwich")
     focal = next(s for s in spec.art if s.id == "focal")
     focal.mask = CoverMaskSpec(
         gradient=CoverGradientMask(kind="linear", angle=270, start=0.2, end=0.8),
@@ -545,7 +545,7 @@ def test_a_mask_naming_a_slot_with_no_layer_is_dropped_not_fatal(tmp_path):
     """It can only happen for a slot this module already declined to carry,
     and losing the mask is a smaller wrong than refusing to open the cover.
     """
-    spec = _spec("cutout_sandwich")
+    spec = _spec("probe_sandwich")
     focal = next(s for s in spec.art if s.id == "focal")
     focal.mask = CoverMaskSpec(from_text="subtitle")     # empty -> never a layer
     doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
@@ -557,7 +557,7 @@ def test_an_ingested_document_with_masks_still_validates(tmp_path):
     """The canvas model's below-only rule is stricter than nothing, and the
     ingest walk is the one place that could produce a document violating
     it. CanvasDoc construction is the check; this asserts it is reached."""
-    spec = _spec("cutout_sandwich")
+    spec = _spec("probe_sandwich")
     focal = next(s for s in spec.art if s.id == "focal")
     focal.mask = CoverMaskSpec(from_text="title")
     doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)

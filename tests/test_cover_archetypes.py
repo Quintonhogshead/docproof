@@ -19,39 +19,40 @@ from docproof.cover.archetypes import (ARCHETYPES, ARCHETYPES_DIR,
                                        describe_archetypes, load_archetypes,
                                        zone_px)
 from docproof.cover.compose import compose
+from docproof.cover.recipes import RECIPES
 from docproof.cover.fonts import AUTHOR_FONT_DEFAULT, FAMILIES, describe_fonts, font_path
 from docproof.cover.model import Brief, Direction, Palette, Zone, build_spec
+
+import cover_probes
 
 # -- the three untagged launch archetypes, plus the §5.3 genre-tagged library
 # grown from docs/cover_template_research.md, load and validate ------------
 
-LAUNCH_ARCHETYPES = ("big_type", "cutout_sandwich", "full_bleed_art")
-
-NEW_ARCHETYPES = (
-    "romantasy_emblem", "scifi_geometric_object_minimal",
-    "romance_flat_vector_couple", "romcom_maximalist_layered",
-    "thriller_bigtype_silhouette", "cozy_mystery_graphic_stamp",
-    "horror_dark_emblem_ornate", "historical_woman_walking_away",
-    "literary_minimal_symbolic_object", "memoir_restrained_object_portrait",
-    "nonfiction_bold_colorblock_typographic",
-    "young_readers_character_illustration",
-    "woven_emblem",
-    "title_window", "split_plate",
-)
-
-# Kept under its old name too — every existing test below that parametrizes
-# on SHIPPED_ARCHETYPES gets the broader, still-valid claim "this holds for
-# every shipped archetype", not just the original three.
-SHIPPED_ARCHETYPES = LAUNCH_ARCHETYPES + NEW_ARCHETYPES
+# THIS FILE is the one that asserts SHIPPED CONTENT. Every other cover test
+# reaches for a `probe_*` fixture archetype instead (see tests/conftest.py) so
+# that retiring or adding a template can never again break a third of a suite
+# that has nothing to do with templates.
+#
+# The probes ARE in the live registry, so anything here that reasons about
+# "the shelf" has to subtract them.
+SHIPPED_ARCHETYPES = tuple(
+    sorted(set(ARCHETYPES) - set(cover_probes.PROBE_ARCHETYPES)))
 
 
-def test_every_shipped_archetype_loaded():
-    assert set(ARCHETYPES) == set(SHIPPED_ARCHETYPES)
-
-
-def test_archetypes_dir_holds_exactly_the_shipped_files():
+def test_the_shelf_is_exactly_what_is_on_disk():
+    """The registry and the directory agree, probes excluded. Deliberately
+    NOT a hardcoded roster: a list of names in a test is a second place to
+    remember, and it was the thing that broke every time the shelf moved."""
     assert ARCHETYPES_DIR.is_dir()
-    assert {p.stem for p in ARCHETYPES_DIR.glob("*.yaml")} == set(ARCHETYPES)
+    on_disk = {p.stem for p in ARCHETYPES_DIR.glob("*.yaml")}
+    assert on_disk == set(SHIPPED_ARCHETYPES)
+    assert on_disk, "the shelf must not be empty"
+
+
+def test_probe_archetypes_are_not_shipped():
+    """The fixtures live under tests/, never in the shipped directory."""
+    on_disk = {p.stem for p in ARCHETYPES_DIR.glob("*.yaml")}
+    assert not (on_disk & set(cover_probes.PROBE_ARCHETYPES))
 
 
 @pytest.mark.parametrize("name", SHIPPED_ARCHETYPES)
@@ -64,21 +65,21 @@ def test_shipped_archetype_is_a_valid_archetype_with_matching_name(name):
     assert archetype.art and archetype.text and archetype.layers
 
 
-def test_big_type_has_no_focal_slot_and_a_procedural_background():
-    big_type = ARCHETYPES["big_type"]
+def test_probe_typographic_has_no_focal_slot_and_a_procedural_background():
+    probe = ARCHETYPES["probe_typographic"]
     # v2.1 BODY-fix wave added `rule_frame` (an always-procedural, never-
     # generatable double-rule) alongside the original background/texture —
     # still no focal slot at all, the point this test's own name makes.
-    assert {a.id for a in big_type.art} == {"background", "texture", "rule_frame"}
-    background = next(a for a in big_type.art if a.id == "background")
+    assert {a.id for a in probe.art} == {"background", "texture", "rule_frame"}
+    background = next(a for a in probe.art if a.id == "background")
     assert background.generatable is False   # the $0-fallback guarantee
-    rule_frame = next(a for a in big_type.art if a.id == "rule_frame")
+    rule_frame = next(a for a in probe.art if a.id == "rule_frame")
     assert rule_frame.generatable is False
     assert rule_frame.procedural == "rule_frame"
 
 
-def test_cutout_sandwich_focal_is_generatable_transparent_and_contained():
-    cutout = ARCHETYPES["cutout_sandwich"]
+def test_probe_sandwich_focal_is_generatable_transparent_and_contained():
+    cutout = ARCHETYPES["probe_sandwich"]
     focal = next(a for a in cutout.art if a.id == "focal")
     assert focal.generatable is True
     assert focal.transparent is True
@@ -92,15 +93,16 @@ def test_every_layers_entry_resolves(name):
     archetype = ARCHETYPES[name]
     art_ids = {a.id for a in archetype.art}
     text_ids = {t.id for t in archetype.text}
+    adjust_ids = {a.id for a in archetype.adjust}
     for ref in archetype.layers:
         if ref.startswith("scrim:"):
             assert int(ref.removeprefix("scrim:")) < len(archetype.scrims)
         else:
-            assert ref in art_ids or ref in text_ids
+            assert ref in art_ids or ref in text_ids or ref in adjust_ids
 
 
-def test_cutout_sandwich_layer_order_is_background_title_focal_author():
-    order = ARCHETYPES["cutout_sandwich"].layers
+def test_probe_sandwich_layer_order_is_background_title_focal_author():
+    order = ARCHETYPES["probe_sandwich"].layers
     assert (order.index("background") < order.index("title")
            < order.index("focal") < order.index("author"))
 
@@ -113,7 +115,7 @@ def test_zone_px_full_canvas():
 
 
 def test_zone_px_rounds_fractional_pixels():
-    archetype = ARCHETYPES["full_bleed_art"]
+    archetype = ARCHETYPES["probe_scene"]
     title = next(t for t in archetype.text if t.id == "title")   # x.08 y.62 w.84 h.22
     assert zone_px(title.zone, (1600, 2560)) == (128, 1587, 1344, 563)
 
@@ -138,43 +140,35 @@ def test_describe_archetypes_mentions_every_archetype_and_its_describe_line():
 
 # -- genres (§5.3): the field, its tags, and describe_archetypes(genre) ------
 
-def test_launch_archetypes_remain_untagged():
-    # DECIDED: the three launch archetypes fit every genre and are never
-    # edited to add a genres list (docs/cover_designer_spec.md §5.3).
-    for name in LAUNCH_ARCHETYPES:
-        assert ARCHETYPES[name].genres == []
+def test_an_untagged_archetype_is_in_scope_for_every_genre():
+    # §5.3: an archetype with no `genres` list fits every genre. Asserted as
+    # the RULE rather than as a list of names that fit it — the old version
+    # pinned the three launch archetypes, and retiring them took the rule's
+    # only coverage with them.
+    untagged = [n for n, a in ARCHETYPES.items() if not a.genres]
+    assert untagged, "the probe fixtures supply the untagged cases"
+    for genre in sorted(SUBJECT_KEYS):
+        text = describe_archetypes(genre)
+        for name in untagged:
+            assert name in text
 
 
 # One-line regression guard on every new archetype's actual tags, so a typo
 # that still happens to be a VALID subject key (passing model validation)
 # doesn't silently drift the library's genre coverage.
 _EXPECTED_GENRES = {
-    "romantasy_emblem": ["fantasy", "romance"],
-    "scifi_geometric_object_minimal": ["science_fiction"],
-    "romance_flat_vector_couple": ["romance"],
-    "romcom_maximalist_layered": ["romance"],
-    "thriller_bigtype_silhouette": ["mystery_thriller"],
-    "cozy_mystery_graphic_stamp": ["mystery_thriller"],
-    "horror_dark_emblem_ornate": ["horror", "romance"],
-    "historical_woman_walking_away": ["historical"],
-    "literary_minimal_symbolic_object": ["literary"],
-    "memoir_restrained_object_portrait": ["memoir_biography"],
-    "nonfiction_bold_colorblock_typographic": ["nonfiction"],
-    "young_readers_character_illustration": ["young_readers"],
-    "woven_emblem": ["fantasy", "romance", "literary", "historical"],
-    "title_window": ["literary", "memoir_biography", "nonfiction"],
-    "split_plate": ["literary", "science_fiction", "mystery_thriller"],
+    "romantasy_organic": ["fantasy", "romance"],
 }
 
 
 def test_new_archetypes_have_the_expected_genres():
-    assert set(_EXPECTED_GENRES) == set(NEW_ARCHETYPES)
+    assert set(_EXPECTED_GENRES) == set(SHIPPED_ARCHETYPES)
     for name, genres in _EXPECTED_GENRES.items():
         assert ARCHETYPES[name].genres == genres
 
 
 def test_every_new_archetype_genre_is_a_subject_key():
-    for name in NEW_ARCHETYPES:
+    for name in SHIPPED_ARCHETYPES:
         assert ARCHETYPES[name].genres, f"{name} should be genre-tagged"
         assert set(ARCHETYPES[name].genres) <= SUBJECT_KEYS
 
@@ -221,24 +215,32 @@ def test_describe_archetypes_genre_unknown_string_is_unfiltered():
 
 
 def test_describe_archetypes_genre_filters_to_tagged_plus_untagged():
-    text = describe_archetypes("literary")
-    for name in LAUNCH_ARCHETYPES:
-        assert name in text                     # untagged: always included
-    assert "literary_minimal_symbolic_object" in text   # tagged: matches
-    # tagged for a DIFFERENT genre only, and not literary: excluded
-    assert "nonfiction_bold_colorblock_typographic" not in text
-    assert "thriller_bigtype_silhouette" not in text
-    assert "young_readers_character_illustration" not in text
+    """The §5.3 rule, asserted against whatever is actually loaded rather
+    than against remembered names: an UNTAGGED archetype always appears, a
+    tagged one appears only under a genre it names."""
+    untagged = [n for n, a in ARCHETYPES.items() if not a.genres]
+    assert untagged, "the probe fixtures supply the untagged cases"
+    tagged = {n: a.genres for n, a in ARCHETYPES.items() if a.genres}
+    assert tagged, "the shelf supplies the tagged cases"
+    for genre in sorted({g for gs in tagged.values() for g in gs}):
+        text = describe_archetypes(genre)
+        for name in untagged:
+            assert name in text, f"untagged {name} missing from {genre}"
+        for name, genres in tagged.items():
+            if genre in genres:
+                assert name in text
+            else:
+                assert name not in text
 
 
 def test_describe_archetypes_genre_filter_includes_multi_genre_tags():
-    # romantasy_emblem is tagged [fantasy, romance] — it must show up under
-    # EITHER genre, not just the first one listed.
-    assert "romantasy_emblem" in describe_archetypes("fantasy")
-    assert "romantasy_emblem" in describe_archetypes("romance")
-    # horror_dark_emblem_ornate is tagged [horror, romance] likewise.
-    assert "horror_dark_emblem_ornate" in describe_archetypes("horror")
-    assert "horror_dark_emblem_ornate" in describe_archetypes("romance")
+    """A multi-genre archetype shows up under EVERY genre it names, not just
+    the first one listed."""
+    multi = {n: a.genres for n, a in ARCHETYPES.items() if len(a.genres) > 1}
+    assert multi, "at least one shipped archetype should be multi-genre"
+    for name, genres in multi.items():
+        for genre in genres:
+            assert name in describe_archetypes(genre), (name, genre)
 
 
 def test_describe_archetypes_genre_filter_shrinks_the_enumeration():
@@ -252,11 +254,10 @@ def test_describe_archetypes_every_subject_key_yields_at_least_one_match(genre):
     # untagged launch archetypes, and for every genre represented in
     # _EXPECTED_GENRES, at least one purpose-built match too.
     text = describe_archetypes(genre)
-    for name in LAUNCH_ARCHETYPES:
+    untagged = [n for n, a in ARCHETYPES.items() if not a.genres]
+    for name in untagged:
         assert name in text
-    tagged_for_this_genre = [n for n, gs in _EXPECTED_GENRES.items()
-                             if genre in gs]
-    for name in tagged_for_this_genre:
+    for name in [n for n, gs in _EXPECTED_GENRES.items() if genre in gs]:
         assert name in text
 
 
@@ -300,8 +301,8 @@ def test_every_archetype_composes_cleanly_at_small_canvas(name):
 
 # -- the two mask-forward archetypes (§15.13 part 3) --------------------------
 
-def test_title_window_is_an_art_fill_title_with_art_clipped_into_the_glyphs():
-    archetype = ARCHETYPES["title_window"]
+def test_probe_glyphmask_is_an_art_fill_title_with_art_clipped_into_the_glyphs():
+    archetype = ARCHETYPES["probe_glyphmask"]
     title = next(t for t in archetype.text if t.id == "title")
     assert title.mode == "art_fill"          # glyphs as a window (§7.4a)
     window = next(a for a in archetype.art if a.id == "window_art")
@@ -317,8 +318,8 @@ def test_title_window_is_an_art_fill_title_with_art_clipped_into_the_glyphs():
     assert order.index("window_art") < order.index("title")
 
 
-def test_split_plate_gradient_masks_plate_b_into_plate_a_with_type_on_the_seam():
-    archetype = ARCHETYPES["split_plate"]
+def test_probe_seam_gradient_masks_plate_b_into_plate_a_with_type_on_the_seam():
+    archetype = ARCHETYPES["probe_seam"]
     plates = [a for a in archetype.art if a.generatable]
     assert {p.id for p in plates} == {"background", "plate_lower"}
     lower = next(a for a in archetype.art if a.id == "plate_lower")
@@ -336,7 +337,7 @@ def test_split_plate_gradient_masks_plate_b_into_plate_a_with_type_on_the_seam()
         < order.index("title")
 
 
-@pytest.mark.parametrize("name", ("title_window", "split_plate"))
+@pytest.mark.parametrize("name", ("probe_glyphmask", "probe_seam"))
 def test_mask_forward_archetype_builds_a_spec_carrying_its_masks(name):
     # The archetype-authored mask must ride into the BUILT CoverSpec (the
     # new ArchetypeArt.mask -> ArtSlot.mask pass-through in build_spec) —
@@ -346,7 +347,7 @@ def test_mask_forward_archetype_builds_a_spec_carrying_its_masks(name):
                   genre="literary")
     spec = build_spec(_direction_for(name), brief, archetype)
     masked = {a.id: a.mask for a in spec.art if a.mask is not None}
-    if name == "title_window":
+    if name == "probe_glyphmask":
         assert masked["window_art"].from_text == "title"
     else:
         assert masked["plate_lower"].gradient is not None
@@ -356,7 +357,7 @@ def test_mask_forward_archetype_builds_a_spec_carrying_its_masks(name):
     assert spec.axis == "center"
 
 
-@pytest.mark.parametrize("name", ("title_window", "split_plate"))
+@pytest.mark.parametrize("name", ("probe_glyphmask", "probe_seam"))
 def test_mask_forward_archetype_procedural_render_is_green(name):
     # §15.13's own test bullet: both templates procedural-render green
     # through the legibility autopilot and the balance pass — no dead
@@ -487,7 +488,7 @@ def test_archetype_rejects_extra_fields():
 # -- malformed archetype files fail loudly, at load time ---------------------
 
 _MINIMAL = """\
-name: big_type
+name: loader_probe
 describe: "test archetype"
 composition_note: "test note"
 art:
@@ -503,10 +504,10 @@ layers: [background, title]
 
 
 def test_a_well_formed_minimal_archetype_loads(tmp_path):
-    (tmp_path / "big_type.yaml").write_text(_MINIMAL)
+    (tmp_path / "loader_probe.yaml").write_text(_MINIMAL)
     loaded = load_archetypes(tmp_path)
-    assert set(loaded) == {"big_type"}
-    assert loaded["big_type"].text[0].id == "title"
+    assert set(loaded) == {"loader_probe"}
+    assert loaded["loader_probe"].text[0].id == "title"
 
 
 def test_not_a_mapping_fails_loudly(tmp_path):
@@ -522,7 +523,7 @@ def test_invalid_yaml_syntax_fails_loudly(tmp_path):
 
 
 def test_name_not_matching_file_name_fails_loudly(tmp_path):
-    (tmp_path / "mismatch.yaml").write_text(_MINIMAL)   # declares name: big_type
+    (tmp_path / "mismatch.yaml").write_text(_MINIMAL)   # declares name: loader_probe
     with pytest.raises(ArchetypeError, match="does not match"):
         load_archetypes(tmp_path)
 
@@ -530,7 +531,7 @@ def test_name_not_matching_file_name_fails_loudly(tmp_path):
 def test_unresolvable_layer_reference_fails_loudly(tmp_path):
     broken = _MINIMAL.replace("layers: [background, title]",
                               "layers: [background, title, ghost]")
-    (tmp_path / "big_type.yaml").write_text(broken)
+    (tmp_path / "loader_probe.yaml").write_text(broken)
     with pytest.raises(ArchetypeError, match="ghost"):
         load_archetypes(tmp_path)
 
@@ -539,22 +540,22 @@ def test_typod_genre_tag_fails_loudly(tmp_path):
     # §5.3: "a typo'd genre tag must fail loudly at load" — the exact
     # scenario a template author hits when they write "fantsy" or "YA".
     broken = _MINIMAL + "genres: [fantsy]\n"
-    (tmp_path / "big_type.yaml").write_text(broken)
+    (tmp_path / "loader_probe.yaml").write_text(broken)
     with pytest.raises(ArchetypeError, match="fantsy"):
         load_archetypes(tmp_path)
 
 
 def test_valid_genre_tags_load_fine(tmp_path):
     ok = _MINIMAL + "genres: [fantasy, romance]\n"
-    (tmp_path / "big_type.yaml").write_text(ok)
+    (tmp_path / "loader_probe.yaml").write_text(ok)
     loaded = load_archetypes(tmp_path)
-    assert loaded["big_type"].genres == ["fantasy", "romance"]
+    assert loaded["loader_probe"].genres == ["fantasy", "romance"]
 
 
 def test_out_of_range_scrim_index_fails_loudly(tmp_path):
     broken = _MINIMAL.replace("layers: [background, title]",
                               'layers: [background, "scrim:0", title]')
-    (tmp_path / "big_type.yaml").write_text(broken)
+    (tmp_path / "loader_probe.yaml").write_text(broken)
     with pytest.raises(ArchetypeError, match="scrim:0"):
         load_archetypes(tmp_path)
 
@@ -564,7 +565,7 @@ def test_duplicate_art_id_fails_loudly(tmp_path):
         "art:\n  - id: background\n    generatable: false\n",
         "art:\n  - id: background\n    generatable: false\n"
         "  - id: background\n    generatable: true\n")
-    (tmp_path / "big_type.yaml").write_text(broken)
+    (tmp_path / "loader_probe.yaml").write_text(broken)
     with pytest.raises(ArchetypeError, match="duplicate"):
         load_archetypes(tmp_path)
 
@@ -717,16 +718,16 @@ def test_archetype_text_mask_from_does_not_need_to_precede_in_layers():
 
 # -- woven_emblem: the v2 BODY wave flagship ---------------------------------
 
-def test_woven_emblem_declares_the_designed_slot_vocabulary():
-    archetype = ARCHETYPES["woven_emblem"]
+def test_probe_ornament_declares_the_designed_slot_vocabulary():
+    archetype = ARCHETYPES["probe_ornament"]
     assert {a.id for a in archetype.art} == {
         "background", "paper", "rule_frame", "corner_vine", "emblem", "weave"}
     assert {t.id for t in archetype.text} == {
         "series", "title", "subtitle", "author"}
 
 
-def test_woven_emblem_procedural_slots_use_the_documented_synthesizers():
-    art_by_id = {a.id: a for a in ARCHETYPES["woven_emblem"].art}
+def test_probe_ornament_procedural_slots_use_the_documented_synthesizers():
+    art_by_id = {a.id: a for a in ARCHETYPES["probe_ornament"].art}
     assert art_by_id["background"].procedural == "gradient"
     assert art_by_id["paper"].procedural == "paper"
     assert art_by_id["rule_frame"].procedural == "rule_frame"
@@ -734,43 +735,43 @@ def test_woven_emblem_procedural_slots_use_the_documented_synthesizers():
         assert art_by_id[slot_id].generatable is False
 
 
-def test_woven_emblem_ornament_slots_are_tone_on_tone_silhouette():
+def test_probe_ornament_ornament_slots_are_tone_on_tone_silhouette():
     # Reference DNA #5: silhouette/duotone illustration, never a raw
     # full-color render, on every generated ornament.
-    art_by_id = {a.id: a for a in ARCHETYPES["woven_emblem"].art}
+    art_by_id = {a.id: a for a in ARCHETYPES["probe_ornament"].art}
     for slot_id in ("corner_vine", "emblem", "weave"):
         assert art_by_id[slot_id].treatment == "silhouette"
         assert art_by_id[slot_id].generatable is True
         assert art_by_id[slot_id].transparent is True
 
 
-def test_woven_emblem_corner_vine_mirrors_without_touching_the_emblem():
-    art_by_id = {a.id: a for a in ARCHETYPES["woven_emblem"].art}
+def test_probe_ornament_corner_vine_mirrors_without_touching_the_emblem():
+    art_by_id = {a.id: a for a in ARCHETYPES["probe_ornament"].art}
     assert art_by_id["corner_vine"].corners is True
     assert art_by_id["emblem"].corners is False
 
 
-def test_woven_emblem_title_is_huge_and_bottom_anchored():
+def test_probe_ornament_title_is_huge_and_bottom_anchored():
     # Reference DNA #2: type is the hero (size_max clears the 0.13 floor);
     # valign bottom is what makes `weave`'s fixed position reliably cross
     # the title's last line regardless of how many lines it needs.
-    title = next(t for t in ARCHETYPES["woven_emblem"].text if t.id == "title")
+    title = next(t for t in ARCHETYPES["probe_ornament"].text if t.id == "title")
     assert title.size_max >= 0.13
     assert title.max_lines == 4
     assert title.valign == "bottom"
 
 
-def test_woven_emblem_weave_is_drawn_after_title_in_layer_order():
+def test_probe_ornament_weave_is_drawn_after_title_in_layer_order():
     # Reference DNA #3: the interweave signature — an ornament crossing
     # back OVER the title's own lower edge only works if it is drawn later.
-    layers = ARCHETYPES["woven_emblem"].layers
+    layers = ARCHETYPES["probe_ornament"].layers
     assert layers.index("title") < layers.index("weave")
 
 
-def test_woven_emblem_scrims_default_to_the_local_panel_kind_at_zero_strength():
+def test_probe_ornament_scrims_default_to_the_local_panel_kind_at_zero_strength():
     # De-muted by design: strength 0 means nothing dims unless the
     # legibility autopilot actually measures a problem.
-    archetype = ARCHETYPES["woven_emblem"]
+    archetype = ARCHETYPES["probe_ornament"]
     assert len(archetype.scrims) == 2
     for scrim in archetype.scrims:
         assert scrim.kind == "panel"
@@ -782,31 +783,33 @@ def test_woven_emblem_scrims_default_to_the_local_panel_kind_at_zero_strength():
 # Deep-stack wave, PR4: recipe defaults, effect stacks, the fx_ reservation
 # ===========================================================================
 
-def test_the_three_pr4_retrofits_and_only_those_three():
-    """§15.9's retrofit, pinned: big_type wears quiet_literary,
-    full_bleed_art the cinematic grade, thriller a designed title stack —
-    and every other PRE-WAVE archetype stays recipe-less and effect-less,
-    which is what keeps the wave's golden-bytes guarantee scoped to
-    exactly three default renders. The two §15.13 mask-forward templates
-    (PR6: title_window, split_plate) are exempt by construction: they are
-    NEW this wave — no pre-wave bytes exist to hold golden — and the spec
-    itself hands each a default finishing recipe (title_window's "quiet
-    finishing recipe" is verbatim §15.13 part 3)."""
-    assert ARCHETYPES["big_type"].recipe == "quiet_literary"
-    assert ARCHETYPES["full_bleed_art"].recipe == "cinematic_duotone"
-    assert ARCHETYPES["thriller_bigtype_silhouette"].recipe == ""
-    with_recipe = {"big_type", "full_bleed_art", "thriller_bigtype_silhouette",
-                   "title_window", "split_plate"}
-    for name, archetype in ARCHETYPES.items():
-        if name in with_recipe:
+def test_a_named_default_recipe_is_on_the_shelf_and_expands():
+    """§15.6: a template's default `recipe` must name a real shelf entry,
+    and `recipe_strength` must be a fraction of it.
+
+    This replaces a test that pinned WHICH THREE archetypes wore a recipe.
+    That assertion was pure content bookkeeping — it broke the moment the
+    shelf changed, and it never protected the thing that actually matters,
+    which is that whatever a template names resolves and expands."""
+    for name in SHIPPED_ARCHETYPES:
+        archetype = ARCHETYPES[name]
+        if not archetype.recipe:
             continue
-        assert archetype.recipe == "", name
-        assert all(not t.effects for t in archetype.text), name
-        assert all(not a.effects for a in archetype.art), name
+        assert archetype.recipe in RECIPES, name
+        assert 0.0 <= archetype.recipe_strength <= 1.0, name
 
 
-def test_thriller_title_carries_the_stacked_double_shadow():
-    title = next(t for t in ARCHETYPES["thriller_bigtype_silhouette"].text
+def test_probes_cover_both_sides_of_the_recipe_default():
+    """The fixture set keeps a template WITH a default recipe and one
+    without, so both branches of build_spec's recipe fallback stay covered
+    no matter what the shipped shelf happens to look like."""
+    recipes = {n: ARCHETYPES[n].recipe for n in cover_probes.PROBE_ARCHETYPES}
+    assert any(recipes.values()), recipes
+    assert any(not r for r in recipes.values()), recipes
+
+
+def test_probe_typestack_title_carries_the_stacked_double_shadow():
+    title = next(t for t in ARCHETYPES["probe_typestack"].text
                  if t.id == "title")
     assert [e.kind for e in title.effects] == ["drop_shadow", "drop_shadow"]
     wide, tight = title.effects
@@ -817,16 +820,16 @@ def test_thriller_title_carries_the_stacked_double_shadow():
     assert tight.alpha > wide.alpha
 
 
-def test_retrofitted_thriller_spec_folds_the_stack_through_build_spec():
+def test_retrofitted_typestack_spec_folds_the_stack_through_build_spec():
     direction = Direction(
         concept_name="Test", rationale="test",
-        archetype="thriller_bigtype_silhouette",
+        archetype="probe_typestack",
         palette=Palette(background="#101820", primary="#c9382c",
                         accent="#c9a227", text="#f5f1e8", scrim="#000000"),
         title_font="Spectral", author_font="Spectral", art_prompts=[],
         texture=True)
     spec = build_spec(direction, Brief(title="Ash", author="V.", genre="literary"),
-                      ARCHETYPES["thriller_bigtype_silhouette"])
+                      ARCHETYPES["probe_typestack"])
     title = next(t for t in spec.text if t.id == "title")
     assert [e.kind for e in title.effects] == ["drop_shadow", "drop_shadow"]
 
@@ -849,8 +852,8 @@ def test_fx_prefix_rejection_reaches_a_yaml_load(tmp_path):
         load_archetypes(tmp_path)
 
 
-@pytest.mark.parametrize("name", ["big_type", "full_bleed_art",
-                                  "thriller_bigtype_silhouette"])
+@pytest.mark.parametrize("name", ["probe_typographic", "probe_scene",
+                                  "probe_typestack"])
 def test_retrofitted_default_render_passes_autopilot_and_balance(name):
     # Each PR4 retrofit's DEFAULT path (silent direction), rendered
     # procedurally: every slot's final contrast clears its threshold and

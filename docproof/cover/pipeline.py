@@ -475,15 +475,64 @@ def create_job(root: str | Path, brief: Brief, *,
 
 # -- prompt assembly (§7.2, §8) ------------------------------------------------
 
+# One sentence per ArchetypeArt.cut_edge value, appended to that slot's
+# prompt. A template pins each plate's severed end to a KNOWN edge so its own
+# fixed anchor/offset can carry that cut off the canvas — a stem that stops
+# in mid-air inside the cover reads as a mistake, and the template cannot
+# place a cut it cannot predict. Phrased as "cut off cleanly at ... and
+# continues past it" rather than "at the edge", because a generator asked
+# merely to put something near an edge will still politely finish it just
+# inside the frame.
+_CUT_EDGE_CLAUSES: dict[str, str] = {
+    "top": "top edge of the frame",
+    "bottom": "bottom edge of the frame",
+    "left": "left edge of the frame",
+    "right": "right edge of the frame",
+    "top_left": "top-left corner of the frame",
+    "top_right": "top-right corner of the frame",
+    "bottom_left": "bottom-left corner of the frame",
+    "bottom_right": "bottom-right corner of the frame",
+}
+
+
+def _cut_edge_clause(cut_edge: str) -> str:
+    where = _CUT_EDGE_CLAUSES.get(cut_edge, "")
+    if not where:
+        return ""
+    return (f" The subject is cut off cleanly at the {where} and continues "
+            f"past it, running out of the picture; nothing is left floating "
+            f"unattached there.")
+
+
 def _assemble_prompt(slot: ArtSlot, archetype: Archetype) -> str:
-    """slot.prompt + the archetype's composition note (steers the art to
-    leave room for the type) + the fixed negative suffix — assembled here,
-    not in imaging.py, because only the pipeline knows which archetype a
-    slot's spec belongs to. A transparent slot also gets the cutout
-    directive: without it the model paints a whole scene and calls it a
-    cutout (§7.2)."""
+    """The full image prompt for one art slot: the subject, the archetype's
+    composition note (steers the art to leave room for the type), the cutout
+    directive for a transparent slot (without it the model paints a whole
+    scene and calls it a cutout, §7.2), and the fixed negative suffix.
+    Assembled here, not in imaging.py, because only the pipeline knows which
+    archetype a slot's spec belongs to.
+
+    Where the archetype declares a `prompt_frame` for this slot, the
+    direction's own text is treated as the SUBJECT and expanded into that
+    frame, and the slot's `cut_edge` is spelled out as an explicit
+    instruction. That is what lets a template be one-shot: the composition of
+    each plate — which edge its stem is severed on, how it fills its frame —
+    is the template's decision, fixed once, and the art-direction call
+    supplies only a noun. A slot with no frame keeps the original behaviour
+    and uses the direction's prompt verbatim."""
+    spec_by_id = {a.id: a for a in archetype.art}
+    declared = spec_by_id.get(slot.id)
+    subject = slot.prompt.strip()
+    frame = getattr(declared, "prompt_frame", "") if declared else ""
+    if frame and subject:
+        # .replace, not .format: a frame is prose written by a human in a
+        # YAML file and may legitimately contain braces of its own.
+        body = " ".join(frame.replace("{subject}", subject).split())
+    else:
+        body = subject
+    body += _cut_edge_clause(getattr(declared, "cut_edge", "") if declared else "")
     cutout = f" {CUTOUT_SUFFIX}" if slot.transparent else ""
-    return f"{slot.prompt} {archetype.composition_note}{cutout} {NEGATIVE_SUFFIX}"
+    return f"{body} {archetype.composition_note}{cutout} {NEGATIVE_SUFFIX}"
 
 
 async def _generate_art_slot(image_client: Any, sem: asyncio.Semaphore,

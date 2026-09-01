@@ -280,6 +280,14 @@ def resolve_mask(mask: MaskSpec, canvas: tuple[int, int],
             fold_in(ink)
     if combined is None:
         return None
+    if mask.feather > 0:
+        # Applied to the COMBINED field, before `invert`, so a feathered
+        # mask inverts to its own feathered complement rather than back to a
+        # hard edge. This is what softens the two hard sources: `from_layer`
+        # is a 50% threshold stencil and `from_text` is only glyph-
+        # antialiased, so without this there is no way to feather either.
+        combined = combined.filter(
+            ImageFilter.GaussianBlur(mask.feather * canvas[1]))
     return ImageChops.invert(combined) if mask.invert else combined
 
 

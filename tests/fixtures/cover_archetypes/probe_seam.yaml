@@ -1,3 +1,11 @@
+# TEST FIXTURE — not shipped content.
+# MASK-FORWARD: two plates dissolved along a soft gradient mask — the shape for the gradient half of the mask vocabulary.
+#
+# Structurally derived from the retired `split_plate` template, so every
+# engine test that used to lean on that shipped archetype exercises the
+# same shape without depending on what happens to be on the shelf. Edit
+# this freely to serve a test; it ships to no one.
+# ---------------------------------------------------------------------
 # Mask-forward reference template #2 (deep-stack wave, §15.13 part 3):
 # the two-plates-into-one-scene collage — the exact move §15.2's
 # GradientMask start/end remapping was built for. Two full-bleed generated
@@ -14,7 +22,7 @@
 # template renders — seam, mask, and all — before a single image is
 # generated. Templates are how conventions propagate: the judge sees
 # this pass, revisions imitate it (§15.13's own reasoning).
-name: split_plate
+name: probe_seam
 genres: [literary, science_fiction, mystery_thriller]
 describe: >-
   Two generated plates dissolved into one scene along a soft horizontal

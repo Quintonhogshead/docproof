@@ -31,7 +31,7 @@ def _direction(**overrides) -> Direction:
     data = dict(
         concept_name="Ash and Brass",
         rationale="A brooding industrial-fantasy palette with warm brass accents.",
-        archetype="full_bleed_art",
+        archetype="probe_scene",
         palette=_palette(),
         title_font="Playfair Display",
         author_font="Spectral",
@@ -410,7 +410,7 @@ def test_jobstate_manuscript_fields_round_trip():
 
 
 def test_conceptstate_requires_a_status():
-    spec = build_spec(_direction(), _brief(), ARCHETYPES["full_bleed_art"])
+    spec = build_spec(_direction(), _brief(), ARCHETYPES["probe_scene"])
     with pytest.raises(ValidationError):
         ConceptState(spec=spec)
 
@@ -418,18 +418,18 @@ def test_conceptstate_requires_a_status():
 # -- build_spec: archetype + direction + brief -> CoverSpec ------------------
 
 def test_build_spec_full_bleed_art_merges_everything():
-    archetype = ARCHETYPES["full_bleed_art"]
+    archetype = ARCHETYPES["probe_scene"]
     brief = _brief(title="The Lighthouse at Gull Point", subtitle="A Novel",
                    author="J. R. Vance", genre="literary")
     direction = _direction(
-        archetype="full_bleed_art", title_font="Playfair Display",
+        archetype="probe_scene", title_font="Playfair Display",
         author_font="Spectral",
         art_prompts={"background": "A lonely lighthouse at dusk, oil painting."},
         texture=True)
 
     spec = build_spec(direction, brief, archetype)
 
-    assert spec.archetype == "full_bleed_art"
+    assert spec.archetype == "probe_scene"
     assert spec.concept_name == direction.concept_name
     assert spec.rationale == direction.rationale
     assert spec.palette == direction.palette
@@ -463,8 +463,8 @@ def test_build_spec_full_bleed_art_merges_everything():
 
 
 def test_build_spec_skips_texture_when_direction_declines_it():
-    archetype = ARCHETYPES["full_bleed_art"]
-    direction = _direction(archetype="full_bleed_art", texture=False)
+    archetype = ARCHETYPES["probe_scene"]
+    direction = _direction(archetype="probe_scene", texture=False)
     spec = build_spec(direction, _brief(), archetype)
     # fx_grain rides in from the default cinematic_duotone recipe (PR4
     # retrofit), not from the declined texture slot — the literal "texture"
@@ -474,16 +474,16 @@ def test_build_spec_skips_texture_when_direction_declines_it():
 
 
 def test_build_spec_rejects_a_mismatched_archetype():
-    archetype = ARCHETYPES["big_type"]
-    direction = _direction(archetype="full_bleed_art")   # names a different one
-    with pytest.raises(ValueError, match="full_bleed_art"):
+    archetype = ARCHETYPES["probe_typographic"]
+    direction = _direction(archetype="probe_scene")   # names a different one
+    with pytest.raises(ValueError, match="probe_scene"):
         build_spec(direction, _brief(), archetype)
 
 
 def test_build_spec_cutout_sandwich_focal_is_transparent_contain_and_sandwiched():
-    archetype = ARCHETYPES["cutout_sandwich"]
+    archetype = ARCHETYPES["probe_sandwich"]
     direction = _direction(
-        archetype="cutout_sandwich",
+        archetype="probe_sandwich",
         art_prompts={"background": "A misty forest clearing, watercolor.",
                      "focal": "A cloaked figure, cutout subject only."})
     spec = build_spec(direction, _brief(), archetype)
@@ -498,8 +498,8 @@ def test_build_spec_cutout_sandwich_focal_is_transparent_contain_and_sandwiched(
 
 
 def test_build_spec_big_type_title_matches_the_launch_spec():
-    archetype = ARCHETYPES["big_type"]
-    direction = _direction(archetype="big_type", texture=False)
+    archetype = ARCHETYPES["probe_typographic"]
+    direction = _direction(archetype="probe_typographic", texture=False)
     spec = build_spec(direction, _brief(), archetype)
     title = next(t for t in spec.text if t.id == "title")
     assert title.align == "left"
@@ -542,10 +542,10 @@ def test_build_spec_degrades_gracefully_for_a_series_slot_brief_has_no_field_for
 def test_coverspec_rejects_a_layers_reference_to_a_dropped_slot():
     # A revision may drop a slot while leaving its layers entry behind — the
     # spec must fail validation readably, not crash compose with a KeyError.
-    direction = _direction(archetype="full_bleed_art",
+    direction = _direction(archetype="probe_scene",
                            art_prompts={"background": "a moody coast, oil"},
                            texture=True)
-    spec = build_spec(direction, _brief(), ARCHETYPES["full_bleed_art"])
+    spec = build_spec(direction, _brief(), ARCHETYPES["probe_scene"])
     broken = spec.model_dump()
     broken["art"] = [a for a in broken["art"] if a["id"] != "texture"]
     with pytest.raises(ValidationError, match="texture"):
@@ -553,9 +553,9 @@ def test_coverspec_rejects_a_layers_reference_to_a_dropped_slot():
 
 
 def test_coverspec_rejects_a_layers_reference_to_a_missing_scrim():
-    direction = _direction(archetype="full_bleed_art",
+    direction = _direction(archetype="probe_scene",
                            art_prompts={"background": "a moody coast, oil"})
-    spec = build_spec(direction, _brief(), ARCHETYPES["full_bleed_art"])
+    spec = build_spec(direction, _brief(), ARCHETYPES["probe_scene"])
     broken = spec.model_dump()
     broken["scrims"] = broken["scrims"][:1]     # layers still names scrim:1
     with pytest.raises(ValidationError, match="scrim"):
@@ -565,9 +565,9 @@ def test_coverspec_rejects_a_layers_reference_to_a_missing_scrim():
 # -- build_spec threads the v2 BODY wave's new archetype-only fields --------
 
 def test_build_spec_woven_emblem_carries_procedural_from_the_archetype():
-    archetype = ARCHETYPES["woven_emblem"]
+    archetype = ARCHETYPES["probe_ornament"]
     direction = _direction(
-        archetype="woven_emblem",
+        archetype="probe_ornament",
         art_prompts={"corner_vine": "a vine", "emblem": "a phoenix",
                     "weave": "a ribbon"})
     spec = build_spec(direction, _brief(), archetype)
@@ -996,13 +996,13 @@ def test_cover_spec_axis_x_is_inert_but_validated_without_a_rail_axis():
 
 
 def test_build_spec_copies_the_archetype_axis_declaration_verbatim():
-    archetype = ARCHETYPES["big_type"].model_copy(
+    archetype = ARCHETYPES["probe_typographic"].model_copy(
         update={"axis": "left", "axis_x": 0.1})
-    spec = build_spec(_direction(archetype="big_type"), _brief(), archetype)
+    spec = build_spec(_direction(archetype="probe_typographic"), _brief(), archetype)
     assert spec.axis == "left" and spec.axis_x == 0.1
     # And the shipped (un-retrofitted) archetype stays pre-wave: None.
-    unretrofitted = build_spec(_direction(archetype="big_type"), _brief(),
-                               ARCHETYPES["big_type"])
+    unretrofitted = build_spec(_direction(archetype="probe_typographic"), _brief(),
+                               ARCHETYPES["probe_typographic"])
     assert unretrofitted.axis is None and unretrofitted.axis_x is None
 
 
@@ -1029,8 +1029,8 @@ def test_effects_default_empty_on_both_slot_kinds():
     # The pre-wave spec shape: no stack anywhere, the fold never fires,
     # compose stays on the byte-identical legacy path.
     assert ArtSlot(id="focal").effects == []
-    spec = build_spec(_direction(archetype="full_bleed_art"), _brief(),
-                      ARCHETYPES["full_bleed_art"])
+    spec = build_spec(_direction(archetype="probe_scene"), _brief(),
+                      ARCHETYPES["probe_scene"])
     assert all(t.effects == [] for t in spec.text)
 
 

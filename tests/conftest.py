@@ -101,3 +101,16 @@ def _forget_imaging_capabilities():
     imaging.reset_capability_cache()
     yield
     imaging.reset_capability_cache()
+
+
+# Probe archetypes for the cover engine — see tests/cover_probes.py for what
+# they are and why the registry is mutated in place rather than rebound.
+# conftest is imported before pytest puts the test directory on sys.path, so
+# this file has to put it there itself; test modules collected afterwards
+# import `cover_probes` normally.
+if str(Path(__file__).parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).parent))
+
+from cover_probes import register_probe_archetypes  # noqa: E402
+
+register_probe_archetypes()

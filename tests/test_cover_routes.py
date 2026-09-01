@@ -51,11 +51,11 @@ def _palette(**overrides) -> Palette:
     return Palette(**data)
 
 
-_PROMPTS = {"big_type": {},
-           "full_bleed_art": {"background": "A lonely lighthouse at dusk, oil painting."}}
+_PROMPTS = {"probe_typographic": {},
+           "probe_scene": {"background": "A lonely lighthouse at dusk, oil painting."}}
 
 
-def _direction(archetype: str = "big_type", **overrides) -> Direction:
+def _direction(archetype: str = "probe_typographic", **overrides) -> Direction:
     data = dict(concept_name=f"Concept ({archetype})", rationale="A test concept.",
                archetype=archetype, palette=_palette(),
                title_font="Playfair Display", author_font="Spectral",
@@ -241,7 +241,7 @@ def test_the_right_key_gets_past_the_gate(monkeypatch, tmp_path):
 def test_create_poll_and_download_happy_path(monkeypatch, tmp_path):
     app = _app(monkeypatch, tmp_path)
     _bypass_provider_and_image_client(monkeypatch)
-    _fake_direction_call(monkeypatch, [_direction("big_type")])
+    _fake_direction_call(monkeypatch, [_direction("probe_typographic")])
     _fake_render_chain(monkeypatch)
     headers = {"X-Cover-Key": COVER_KEY}
 
@@ -267,7 +267,7 @@ def test_create_poll_and_download_happy_path(monkeypatch, tmp_path):
         spec_dl = client.get(f"/api/cover/jobs/{job_id}/file/spec.json?concept=0",
                              headers=headers)
         assert spec_dl.status_code == 200
-        assert spec_dl.json()["archetype"] == "big_type"
+        assert spec_dl.json()["archetype"] == "probe_typographic"
 
         listing = client.get("/api/cover/jobs", headers=headers)
         assert listing.status_code == 200
@@ -302,7 +302,7 @@ def test_multipart_create_reads_the_whole_book_and_stores_only_the_sample(
     def fake_assign(brief, provider, *, n, manuscript="", **kw):
         received["manuscript"] = manuscript
         return DirectorResult(
-            assignments=[ConceptAssignment(direction=_direction("big_type"),
+            assignments=[ConceptAssignment(direction=_direction("probe_typographic"),
                                            execution_notes="n",
                                            done_when="d")],
             reading="r", model="m", cost=0.0, words_read=100, sliced=False)
@@ -375,7 +375,7 @@ def test_bad_brief_json_is_400(monkeypatch, tmp_path):
 def test_file_endpoint_rejects_path_traversal(monkeypatch, tmp_path):
     app = _app(monkeypatch, tmp_path)
     _bypass_provider_and_image_client(monkeypatch)
-    _fake_direction_call(monkeypatch, [_direction("big_type")])
+    _fake_direction_call(monkeypatch, [_direction("probe_typographic")])
     _fake_render_chain(monkeypatch)
     headers = {"X-Cover-Key": COVER_KEY}
 
@@ -415,7 +415,7 @@ def test_file_endpoint_rejects_path_traversal(monkeypatch, tmp_path):
 def test_file_endpoint_404s_for_a_name_that_is_not_there(monkeypatch, tmp_path):
     app = _app(monkeypatch, tmp_path)
     _bypass_provider_and_image_client(monkeypatch)
-    _fake_direction_call(monkeypatch, [_direction("big_type")])
+    _fake_direction_call(monkeypatch, [_direction("probe_typographic")])
     _fake_render_chain(monkeypatch)
     headers = {"X-Cover-Key": COVER_KEY}
     with TestClient(app) as client:
@@ -439,7 +439,7 @@ def test_revise_on_a_non_ready_concept_is_409(monkeypatch, tmp_path):
     # need to run the whole async pipeline to set this state up.
     job = cover_pipeline.create_job(
         tmp_path, Brief(title="T", author="A", genre="literary", concepts=1))
-    spec = build_spec(_direction("big_type"), job.brief, ARCHETYPES["big_type"])
+    spec = build_spec(_direction("probe_typographic"), job.brief, ARCHETYPES["probe_typographic"])
     job.concepts = [ConceptState(spec=spec, status="painting")]
     job.status = "working"
     cover_pipeline._write_state(tmp_path, job)
@@ -467,7 +467,7 @@ def test_revise_on_an_out_of_range_concept_is_404(monkeypatch, tmp_path):
     headers = {"X-Cover-Key": COVER_KEY}
     job = cover_pipeline.create_job(
         tmp_path, Brief(title="T", author="A", genre="literary", concepts=1))
-    spec = build_spec(_direction("big_type"), job.brief, ARCHETYPES["big_type"])
+    spec = build_spec(_direction("probe_typographic"), job.brief, ARCHETYPES["probe_typographic"])
     job.concepts = [ConceptState(spec=spec, status="ready", renders=["renders/v1_c0.png"])]
     job.status = "ready"
     cover_pipeline._write_state(tmp_path, job)
@@ -495,7 +495,7 @@ def test_revise_on_a_ready_concept_is_accepted_and_reaches_ready_again(
 
     job = cover_pipeline.create_job(
         tmp_path, Brief(title="T", author="A", genre="literary", concepts=1))
-    spec = build_spec(_direction("big_type"), job.brief, ARCHETYPES["big_type"])
+    spec = build_spec(_direction("probe_typographic"), job.brief, ARCHETYPES["probe_typographic"])
     job.concepts = [ConceptState(spec=spec, status="ready", renders=["renders/v1_c0.png"])]
     job.status = "ready"
     cover_pipeline._write_state(tmp_path, job)
@@ -519,7 +519,7 @@ def test_job_creation_rate_limit_429(monkeypatch, tmp_path):
     monkeypatch.setattr(quest_site, "COVER_JOB_IP_LIMIT", 1)
     app = _app(monkeypatch, tmp_path)
     _bypass_provider_and_image_client(monkeypatch)
-    _fake_direction_call(monkeypatch, [_direction("big_type")])
+    _fake_direction_call(monkeypatch, [_direction("probe_typographic")])
     _fake_render_chain(monkeypatch)
     headers = {"X-Cover-Key": COVER_KEY}
 
@@ -540,7 +540,7 @@ def test_revision_rate_limit_429(monkeypatch, tmp_path):
 
     job = cover_pipeline.create_job(
         tmp_path, Brief(title="T", author="A", genre="literary", concepts=1))
-    spec = build_spec(_direction("big_type"), job.brief, ARCHETYPES["big_type"])
+    spec = build_spec(_direction("probe_typographic"), job.brief, ARCHETYPES["probe_typographic"])
     job.concepts = [ConceptState(spec=spec, status="ready", renders=["renders/v1_c0.png"])]
     job.status = "ready"
     cover_pipeline._write_state(tmp_path, job)
@@ -777,7 +777,7 @@ def test_a_revision_reuses_the_lane_its_job_was_started_on(monkeypatch,
     job = cover_pipeline.create_job(
         tmp_path, Brief(title="T", author="A", genre="literary", concepts=1),
         anthropic_lane="subscription")
-    spec = build_spec(_direction("big_type"), job.brief, ARCHETYPES["big_type"])
+    spec = build_spec(_direction("probe_typographic"), job.brief, ARCHETYPES["probe_typographic"])
     job.concepts = [ConceptState(spec=spec, status="ready",
                                  renders=["renders/v1_c0.png"])]
     job.status = "ready"
@@ -803,7 +803,7 @@ def test_a_revision_body_can_override_the_stored_lane(monkeypatch, tmp_path):
     job = cover_pipeline.create_job(
         tmp_path, Brief(title="T", author="A", genre="literary", concepts=1),
         anthropic_lane="subscription")
-    spec = build_spec(_direction("big_type"), job.brief, ARCHETYPES["big_type"])
+    spec = build_spec(_direction("probe_typographic"), job.brief, ARCHETYPES["probe_typographic"])
     job.concepts = [ConceptState(spec=spec, status="ready",
                                  renders=["renders/v1_c0.png"])]
     job.status = "ready"
@@ -872,7 +872,7 @@ def _tier_over_http(monkeypatch, tmp_path, form: dict) -> tuple[list[str], dict]
     the budget and the price."""
     app = _app(monkeypatch, tmp_path)
     _bypass_provider_and_image_client(monkeypatch)
-    _fake_direction_call(monkeypatch, [_direction("full_bleed_art")])
+    _fake_direction_call(monkeypatch, [_direction("probe_scene")])
     resolutions: list[str] = []
     _fake_render_chain(monkeypatch, tiers=resolutions)
 
@@ -953,7 +953,7 @@ def test_a_revision_cannot_change_the_tier(monkeypatch, tmp_path):
     job = cover_pipeline.create_job(
         tmp_path, Brief(title="T", author="A", genre="literary", concepts=1),
         image_quality="draft")
-    spec = build_spec(_direction("big_type"), job.brief, ARCHETYPES["big_type"])
+    spec = build_spec(_direction("probe_typographic"), job.brief, ARCHETYPES["probe_typographic"])
     job.concepts = [ConceptState(spec=spec, status="ready",
                                  renders=["renders/v1_c0.png"])]
     job.status = "ready"

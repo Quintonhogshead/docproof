@@ -48,7 +48,7 @@ def _brief(**overrides) -> Brief:
     return Brief(**data)
 
 
-def _spec(archetype: str = "cutout_sandwich"):
+def _spec(archetype: str = "probe_sandwich"):
     """cutout_sandwich: two generatable slots (background + focal), the
     natural staged-plan shape."""
     palette = Palette(background="#101010", primary="#f5f1e8",
@@ -245,7 +245,7 @@ def test_judge_lines_carry_light_and_unify():
 
 def test_plan_composition_happy_path():
     client = FakePlannerClient(_once(_message(_plan_reply_json())))
-    plan = plan_composition(_brief(), _spec(), ARCHETYPES["cutout_sandwich"],
+    plan = plan_composition(_brief(), _spec(), ARCHETYPES["probe_sandwich"],
                             "OPENING SAMPLE: fog on the water.", client)
 
     assert isinstance(plan, CompositionPlan)
@@ -288,7 +288,7 @@ def test_plan_composition_enforces_suffix_and_repairs_ranges():
     raw["generation_order"] = ["background", "background", "focal"]
     client = FakePlannerClient(_once(_message(json.dumps(raw))))
 
-    plan = plan_composition(_brief(), _spec(), ARCHETYPES["cutout_sandwich"],
+    plan = plan_composition(_brief(), _spec(), ARCHETYPES["probe_sandwich"],
                             "", client)
     assert all(p.prompt.endswith(SUFFIX) for p in plan.prompts)
     assert plan.horizon_y == 1.0
@@ -298,7 +298,7 @@ def test_plan_composition_enforces_suffix_and_repairs_ranges():
 def test_plan_composition_falls_back_on_model_not_found_only():
     client = FakePlannerClient(_first_call_raises_then(
         _model_not_found(), _message(_plan_reply_json())))
-    plan = plan_composition(_brief(), _spec(), ARCHETYPES["cutout_sandwich"],
+    plan = plan_composition(_brief(), _spec(), ARCHETYPES["probe_sandwich"],
                             "", client)
     assert [c["model"] for c in client.calls] == [PLANNER_MODEL,
                                                   PLANNER_FALLBACK_MODEL]
@@ -311,7 +311,7 @@ def test_plan_composition_falls_back_on_model_not_found_only():
 def test_plan_composition_does_not_fall_back_on_other_errors():
     client = FakePlannerClient(_once(_bad_request()))
     with pytest.raises(PlannerError, match="planning call failed"):
-        plan_composition(_brief(), _spec(), ARCHETYPES["cutout_sandwich"],
+        plan_composition(_brief(), _spec(), ARCHETYPES["probe_sandwich"],
                          "", client)
     assert len(client.calls) == 1                  # no fallback, no retry
 
@@ -319,7 +319,7 @@ def test_plan_composition_does_not_fall_back_on_other_errors():
 def test_plan_composition_retries_a_transient_failure_once():
     client = FakePlannerClient(_first_call_raises_then(
         _rate_limited(), _message(_plan_reply_json())))
-    plan = plan_composition(_brief(), _spec(), ARCHETYPES["cutout_sandwich"],
+    plan = plan_composition(_brief(), _spec(), ARCHETYPES["probe_sandwich"],
                             "", client)
     assert isinstance(plan, CompositionPlan)
     assert [c["model"] for c in client.calls] == [PLANNER_MODEL, PLANNER_MODEL]
@@ -335,7 +335,7 @@ def test_plan_composition_retries_a_transient_failure_once():
 def test_plan_composition_bad_replies_raise_planner_error(message, match):
     client = FakePlannerClient(_once(message))
     with pytest.raises(PlannerError, match=match):
-        plan_composition(_brief(), _spec(), ARCHETYPES["cutout_sandwich"],
+        plan_composition(_brief(), _spec(), ARCHETYPES["probe_sandwich"],
                          "", client)
 
 

@@ -1,3 +1,11 @@
+# TEST FIXTURE — not shipped content.
+# MASK-FORWARD: art clipped into the title's own glyphs (mask.from_text) with an art_fill title — the shape for the text-mask half of the mask vocabulary.
+#
+# Structurally derived from the retired `title_window` template, so every
+# engine test that used to lean on that shipped archetype exercises the
+# same shape without depending on what happens to be on the shelf. Edit
+# this freely to serve a test; it ships to no one.
+# ---------------------------------------------------------------------
 # Mask-forward reference template #1 (deep-stack wave, §15.13 part 3):
 # the "photo-in-the-letters" convention — a flat, confident color field
 # with the generated art visible ONLY through the title's own letterforms.
@@ -26,7 +34,7 @@
 # scrim 0.85; the same art on a cream field scored 7.22 with scrims at
 # 0.0. The direction call picks the palette, so the direction call is
 # where the contract has to be stated.
-name: title_window
+name: probe_glyphmask
 genres: [literary, memoir_biography, nonfiction]
 describe: >-
   A huge windowed title over a flat color field: the generated art is

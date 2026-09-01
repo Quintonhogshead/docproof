@@ -1,3 +1,11 @@
+# TEST FIXTURE — not shipped content.
+# THE EFFECTS-RACK SHAPE: corners, scatter, silhouette treatment, snap and notch_for all in one template, so the rack has a home that is not shipped content.
+#
+# Structurally derived from the retired `woven_emblem` template, so every
+# engine test that used to lean on that shipped archetype exercises the
+# same shape without depending on what happens to be on the shelf. Edit
+# this freely to serve a test; it ships to no one.
+# ---------------------------------------------------------------------
 # v2 "BODY" wave flagship: built directly from the owner's 18-cover
 # reference-DNA analysis (docs/cover_designer_spec.md's companion beta
 # review, 2026-08-29), not one named bestseller — it encodes ALL eight
@@ -18,7 +26,7 @@
 #  8. thin inset rule frame + a restrained series/"a novel" tag
 # genres: romantasy's fantasy/romance seam, plus literary and historical —
 # untagged would flood every genre's enumeration (§5.3).
-name: woven_emblem
+name: probe_ornament
 genres: [fantasy, romance, literary, historical]
 describe: >-
   A flat confident ground, thin engraved rule frame, and mirrored corner

@@ -1,9 +1,17 @@
+# TEST FIXTURE — not shipped content.
+# A designed title effect stack (a tight shadow under a wide one) and NO recipe — the shape for layer-style tests that must not have finishing layers on top.
+#
+# Structurally derived from the retired `thriller_bigtype_silhouette` template, so every
+# engine test that used to lean on that shipped archetype exercises the
+# same shape without depending on what happens to be on the shelf. Edit
+# this freely to serve a test; it ships to no one.
+# ---------------------------------------------------------------------
 # Research: BookCoverZone ("What Makes A Thriller Cover Sell In 2026"),
 # CreativIndieCovers, and Rocking Book Covers all converge on the same
 # rules, including a cited "silhouettes crush faces 3:1 in conversion rate"
 # claim. Confidence: high (docs/cover_template_research.md #8) — arguably
 # the single most locked-in convention in the whole research pass.
-name: thriller_bigtype_silhouette
+name: probe_typestack
 genres: [mystery_thriller]
 describe: >-
   Author name banner huge across the top, an even huger tight-tracked title

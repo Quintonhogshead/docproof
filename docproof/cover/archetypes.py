@@ -291,6 +291,10 @@ class ArchetypeMask(BaseModel):
     luminance_of: str = ""
     from_text: str = ""
     invert: bool = False
+    # Mirrors docproof.cover.model.MaskSpec.feather exactly: a Gaussian blur
+    # of the RESOLVED mask, as a fraction of canvas height. The one knob
+    # that softens the hard 50%-threshold `from_layer` stencil.
+    feather: float = Field(default=0.0, ge=0.0, le=0.25)
 
     @field_validator("from_layer", "luminance_of")
     @classmethod
@@ -319,10 +323,40 @@ class ArchetypeArt(BaseModel):
 
     id: str                                     # any slug matching _SLOT_ID_RE
     generatable: bool
+    # Free-text documentation of what this slot IS for, structurally
+    # ("focal_subject", "far_tier", "corner_fill"). Never read by the engine;
+    # it exists so a template can name its slots for their ROLE rather than
+    # for whatever noun the first book to use it happened to put there.
+    role: str = ""
+    # The one-shot contract (paired with `cut_edge` below). The plate does
+    # not exist when a template is authored, so the template cannot know
+    # which edge the generator will sever a stem on — it has to DICTATE it.
+    # This is a sentence carrying exactly one `{subject}` hole; the
+    # art-direction call fills the hole with a noun and nothing else, and
+    # pipeline._assemble_prompt expands the frame (plus the `cut_edge`
+    # clause) around it. "" keeps the pre-existing behaviour: the direction's
+    # prompt is used verbatim.
+    prompt_frame: str = ""
+    # Which edge of its own frame this plate's severed end must sit on, so
+    # the fixed `anchor`/`offset` below can carry that cut off the canvas.
+    # Expanded into an explicit instruction appended to the prompt. "" = the
+    # slot has no severed end to place (a mat, a particle field, a loose
+    # object).
+    cut_edge: Literal["", "top", "bottom", "left", "right", "top_left",
+                      "top_right", "bottom_left", "bottom_right"] = ""
+    # Mirrors docproof.cover.model.ArtSlot.mirror exactly: flip the plate
+    # horizontally before fit and placement, so a severed stem that points
+    # into the frame can be turned to run out of it.
+    mirror: bool = False
     fit: Literal["cover", "contain"] = "cover"
     transparent: bool = False
     opacity: float = Field(default=1.0, ge=0.0, le=1.0)
-    blend: Literal["normal", "multiply", "overlay", "soft_light"] = "normal"
+    # The FULL model.BLEND_MODES table, matching ArtSlot.blend exactly. This
+    # used to stop at soft_light, which meant a template could not declare a
+    # light-emitting layer at all — a glow or a drifting ember field had to
+    # be patched onto the built spec afterwards, outside the template.
+    blend: Literal["normal", "multiply", "overlay", "soft_light", "screen",
+                   "add", "lighten", "darken", "color_dodge"] = "normal"
     # Placement defaults for contain-fit slots (a full-canvas cutout buries
     # the title it was meant to overlap — the archetype pins where the
     # figure sits; a revision may still move it). Same semantics as
@@ -398,6 +432,20 @@ class ArchetypeArt(BaseModel):
     def _scatter_bounds(cls, value: int) -> int:
         return _scatter_range(value)
 
+    @field_validator("prompt_frame")
+    @classmethod
+    def _frame_has_subject(cls, value: str) -> str:
+        """A frame without the hole is not a frame — it would silently
+        discard whatever noun the direction supplied and generate the same
+        plate for every book, which is exactly the failure this field
+        exists to prevent."""
+        if value and "{subject}" not in value:
+            raise ValueError(
+                "prompt_frame must contain the literal '{subject}' "
+                "placeholder — that is where the art-direction call's noun "
+                "goes")
+        return value
+
     @field_validator("texture_file")
     @classmethod
     def _known_texture(cls, value: str) -> str:
@@ -441,6 +489,81 @@ class ArchetypeArt(BaseModel):
         return self
 
 
+class ArchetypeAdjust(BaseModel):
+    """One adjustment layer a template bakes in — mirrors
+    docproof.cover.model.AdjustLayer field for field, defaults included, and
+    build_spec passes each straight into a real AdjustLayer.
+
+    These are the six-to-ten adjustment layers of a real cover PSD: the
+    grade that quiets a generated ground, the masked haze that pushes a far
+    tier back, the gradient map that puts a dozen separately-lit plates on
+    one tonal spine, the feathered wash that makes a foot legible. Before
+    this model existed a template could not declare a single one of them —
+    only the closed `recipes` shelf could emit adjust layers — so any
+    template whose look genuinely depended on them (which is any template
+    that assembles more than three plates) had to be finished by hand after
+    the spec was built, outside the template, where no art-direction call
+    could reach it.
+
+    Per-op parameters are FLAT fields, exactly as on AdjustLayer, and
+    fields the chosen `op` never reads are validated but inert."""
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    op: Literal["grade", "gradient_map", "color_wash", "vignette", "bloom",
+                "blur"]
+    opacity: float = Field(default=1.0, ge=0.0, le=1.0)
+    blend: Literal["normal", "multiply", "overlay", "soft_light", "screen",
+                   "add", "lighten", "darken", "color_dodge"] = "normal"
+    mask: ArchetypeMask | None = None
+    brightness: float = Field(default=0.0, ge=-1.0, le=1.0)
+    contrast: float = Field(default=0.0, ge=-1.0, le=1.0)
+    saturation: float = Field(default=0.0, ge=-1.0, le=1.0)
+    temperature: float = Field(default=0.0, ge=-1.0, le=1.0)
+    stops: list[str] = Field(default_factory=list)
+    color: str = ""
+    strength: float = Field(default=0.5, ge=0.0, le=1.0)
+    radius: float = Field(default=0.02, ge=0.0, le=0.25)
+    threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+
+    @field_validator("id")
+    @classmethod
+    def _valid_id(cls, value: str) -> str:
+        _validate_slot_id(value)
+        if value.startswith(_FX_PREFIX):
+            raise ValueError(
+                f"{value!r}: the {_FX_PREFIX!r} prefix is reserved for "
+                f"recipe-expanded finishing layers (§15.6) — a hand-authored "
+                f"archetype adjust layer may not use it")
+        return value
+
+    @field_validator("stops")
+    @classmethod
+    def _valid_stops(cls, value: list[str]) -> list[str]:
+        if len(value) not in (0, 2, 3):
+            raise ValueError(
+                f"stops must have 2 or 3 entries (or be empty when unused), "
+                f"got {len(value)}")
+        return [_role_or_hex(stop) for stop in value]
+
+    @field_validator("color")
+    @classmethod
+    def _valid_color(cls, value: str) -> str:
+        return _role_or_hex(value) if value else value
+
+    @model_validator(mode="after")
+    def _op_requirements(self) -> ArchetypeAdjust:
+        """Mirrors AdjustLayer._op_requirements: a gradient_map with no
+        stops has no ramp to map through, so it fails at LOAD time rather
+        than rendering something invented."""
+        if self.op == "gradient_map" and not self.stops:
+            raise ValueError(
+                f"adjust layer {self.id!r} is a gradient_map with no stops "
+                f"— give it 2 or 3 (role names or #rrggbb hexes, dark to "
+                f"light)")
+        return self
+
+
 class ArchetypeScrim(BaseModel):
     """One default scrim. `zone` is deliberately absent here (as in the
     runtime ScrimSpec, absent means "derived from the protected TextSlot") —
@@ -463,6 +586,14 @@ class ArchetypeText(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: Literal["title", "subtitle", "author", "series"]
+    # Which of the direction's TWO fonts this slot wears. "" — the default,
+    # and every template that predates the field — keeps the original rule:
+    # the title slot gets title_font, every other slot gets author_font.
+    # Naming a role overrides that, which is the only way a template can put
+    # the author's name in the display face while the tagline and the credit
+    # line stay in the supporting one — a convention half the shelf uses and
+    # none of them could express.
+    font_role: Literal["", "title", "author"] = ""
     zone: ArchetypeZone
     case: Literal["upper", "title", "as_is"] = "as_is"
     tracking: float = 0.0
@@ -520,6 +651,10 @@ class Archetype(BaseModel):
     describe: str = Field(min_length=1)
     composition_note: str = Field(min_length=1)
     art: list[ArchetypeArt] = Field(min_length=1)
+    # Adjustment layers this template bakes in (see ArchetypeAdjust).
+    # Defaulted empty so every template that predates the field validates
+    # and renders byte-identically.
+    adjust: list[ArchetypeAdjust] = Field(default_factory=list)
     scrims: list[ArchetypeScrim] = Field(default_factory=list)
     text: list[ArchetypeText] = Field(min_length=1)
     layers: list[str] = Field(min_length=1)
@@ -542,6 +677,17 @@ class Archetype(BaseModel):
     # finishing at all: the no-recipe path renders byte-identical to
     # pre-wave pixels, which is §15.0 constraint 2 for this field.
     recipe: str = ""
+    # Scales every value the chosen recipe's own finishing layers carry —
+    # adjust strengths and art-layer opacities alike. 1.0 (the default, and
+    # every template that predates the field) applies the shelf recipe
+    # exactly as written. A shelf recipe is tuned for the kind of cover it
+    # was named for, and a template that assembles a dozen separately-lit
+    # plates usually wants a fraction of it: dark_academia at full strength
+    # cooks such a collage into one sepia mass, while at 0.3 it still
+    # supplies the vignette, dust and paper tooth that make the thing feel
+    # printed. Dialling the shelf entry itself is not an option — other
+    # templates share it.
+    recipe_strength: float = Field(default=1.0, ge=0.0, le=1.0)
 
     @field_validator("recipe")
     @classmethod
@@ -565,6 +711,19 @@ class Archetype(BaseModel):
         text_ids = [t.id for t in self.text]
         if len(set(text_ids)) != len(text_ids):
             raise ValueError(f"{self.name}: duplicate text slot id in {text_ids}")
+        # Adjust layers share the art-slot id namespace, exactly as they do
+        # on CoverSpec (§15.3), so a `layers` entry naming one is never
+        # ambiguous about what it means.
+        adjust_ids = [a.id for a in self.adjust]
+        if len(set(adjust_ids)) != len(adjust_ids):
+            raise ValueError(
+                f"{self.name}: duplicate adjust layer id in {adjust_ids}")
+        clash = sorted(set(adjust_ids) & set(art_ids))
+        if clash:
+            raise ValueError(
+                f"{self.name}: adjust layer id(s) {clash} collide with an "
+                f"art slot of the same id — the two kinds share one "
+                f"namespace")
         return self
 
     @model_validator(mode="after")
@@ -588,6 +747,7 @@ class Archetype(BaseModel):
         of silently never drawing."""
         art_ids = {a.id for a in self.art}
         text_ids = {t.id for t in self.text}
+        adjust_ids = {a.id for a in self.adjust}
         n_scrims = len(self.scrims)
         for ref in self.layers:
             if ref.startswith("scrim:"):
@@ -596,10 +756,65 @@ class Archetype(BaseModel):
                     raise ValueError(
                         f"{self.name}: layers entry {ref!r} does not resolve "
                         f"— only {n_scrims} scrim(s) defined")
-            elif ref not in art_ids and ref not in text_ids:
+            elif (ref not in art_ids and ref not in text_ids
+                  and ref not in adjust_ids):
                 raise ValueError(
                     f"{self.name}: layers entry {ref!r} matches no art slot, "
-                    f"text slot, or scrim index")
+                    f"adjust layer, text slot, or scrim index")
+        # Every declared adjust layer must actually be drawn: an adjust
+        # layer absent from `layers` is silently inert, which is exactly the
+        # kind of three-steps-later surprise this module validates against.
+        drawn = set(self.layers)
+        orphans = sorted(adjust_ids - drawn)
+        if orphans:
+            raise ValueError(
+                f"{self.name}: adjust layer(s) {orphans} are declared but "
+                f"never appear in `layers`, so they would never be drawn")
+        return self
+
+    @model_validator(mode="after")
+    def _adjust_masks_resolve(self) -> Archetype:
+        """The adjust-layer twin of _art_masks_resolve: an adjust layer's
+        mask obeys the same rules an art slot's does — `from_layer` must
+        name a real art slot drawn EARLIER in `layers` (a mask can only clip
+        to pixels already positioned), `luminance_of`/`from_text` need
+        existence only."""
+        art_ids = {a.id for a in self.art}
+        text_ids = {t.id for t in self.text}
+        first_position: dict[str, int] = {}
+        for i, ref in enumerate(self.layers):
+            if ref not in first_position:
+                first_position[ref] = i
+        for layer in self.adjust:
+            mask = layer.mask
+            if mask is None:
+                continue
+            if mask.from_layer:
+                if mask.from_layer not in art_ids:
+                    raise ValueError(
+                        f"{self.name}: adjust layer {layer.id!r} has "
+                        f"mask.from_layer={mask.from_layer!r}, which is not "
+                        f"one of this archetype's art slots "
+                        f"({', '.join(sorted(art_ids))})")
+                this_pos = first_position.get(layer.id)
+                ref_pos = first_position.get(mask.from_layer)
+                if this_pos is None or ref_pos is None or ref_pos >= this_pos:
+                    raise ValueError(
+                        f"{self.name}: adjust layer {layer.id!r}'s mask."
+                        f"from_layer={mask.from_layer!r} must appear earlier "
+                        f"in `layers` than {layer.id!r} itself")
+            if mask.luminance_of and mask.luminance_of not in art_ids:
+                raise ValueError(
+                    f"{self.name}: adjust layer {layer.id!r} has "
+                    f"mask.luminance_of={mask.luminance_of!r}, which is not "
+                    f"one of this archetype's art slots "
+                    f"({', '.join(sorted(art_ids))})")
+            if mask.from_text and mask.from_text not in text_ids:
+                raise ValueError(
+                    f"{self.name}: adjust layer {layer.id!r} has "
+                    f"mask.from_text={mask.from_text!r}, which is not one of "
+                    f"this archetype's text slots "
+                    f"({', '.join(sorted(text_ids))})")
         return self
 
     @model_validator(mode="after")
@@ -834,6 +1049,7 @@ def describe_archetypes(genre: str | None = None) -> str:
 
 
 __all__ = ["ARCHETYPES", "ARCHETYPES_DIR", "SUBJECT_KEYS", "Archetype",
+          "ArchetypeAdjust",
           "ArchetypeArt", "ArchetypeEffect", "ArchetypeError",
           "ArchetypeGradientMask", "ArchetypeMask",
           "ArchetypeScrim", "ArchetypeShadow", "ArchetypeStroke",

@@ -41,7 +41,7 @@ def _brief(**overrides) -> Brief:
     return Brief(**data)
 
 
-def _direction(archetype="full_bleed_art", prompts=None) -> dict:
+def _direction(archetype="probe_scene", prompts=None) -> dict:
     return {
         "concept_name": "The Piece", "rationale": "The book's own key image.",
         "archetype": archetype,
@@ -122,7 +122,7 @@ def test_the_brief_and_the_shelves_reach_the_system_prompt():
     assign_concepts(_brief(mood="elegiac", avoid="no swords"), provider, n=1)
 
     system = provider.seen["system"]
-    assert "full_bleed_art" in system            # the archetype shelf
+    assert "probe_scene" in system            # the archetype shelf
     assert "Libre Caslon Display" in system      # the font shelf
     assert "quiet_literary" in system            # the recipe shelf
     assert "ART LAYERS ONLY" in system

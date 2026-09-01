@@ -1,0 +1,507 @@
+# =============================================================================
+# ARCHETYPE ONE — romantasy_organic
+# =============================================================================
+#
+# Reference DNA: the contemporary romantasy trade paperback — Devney Perry's
+# RITES OF THE STARLING, the wider Bloom/Entangled shelf. A flat dark cloth
+# ground; one vertical metal object hanging on the centre axis; a painted
+# organic tangle growing around it; and a huge stone-white display title that
+# the tangle grows BOTH BEHIND AND IN FRONT OF, so the type sits inside the
+# arrangement rather than on top of it.
+#
+# This template is written to be ONE-SHOT. Everything that took six revision
+# rounds to get right on the first cover built from it is fixed here and is
+# never re-decided per book: the layer order, the anchors, the overshoot, the
+# effect stacks, the finishing strength, the foot wash, the scrim kinds, the
+# occlusion budget. The art-direction call chooses TEN NOUNS, five palette
+# hexes, two fonts and a tagline. Nothing else.
+#
+# -----------------------------------------------------------------------------
+# THE FIVE RULES THIS TEMPLATE ENCODES
+# -----------------------------------------------------------------------------
+#
+# 1. SEVERED ENDS MUST LEAVE THE FRAME, AND OVERSHOOT WHEN THEY DO.
+#    Every plate here is a cutout of something that grows or hangs, so each
+#    one has a cut stem, root, chain or ribbon somewhere on its own edge. That
+#    edge must be flush with the trim or past it — a branch that starts and
+#    stops in mid-air inside the cover reads as a mistake, the same way a
+#    standing figure with no ground under them does.
+#
+#    And grazing is not bleeding. Every generated plate leaves a small
+#    transparent margin inside its own frame, so a plate placed flush with the
+#    trim still stops its ink 15-35px short. Each `offset` below therefore
+#    pushes the cut edge WELL past the trim (0.06 of the canvas ~= 96px across,
+#    153px down). Losing a couple of inches of stem costs nothing; undershooting
+#    costs the whole illusion.
+#
+#    `anchor` is chosen from WHERE THE CUT IS on that plate, never from where
+#    the object would look nicest. Composition is steered with `scale`.
+#
+# 2. A BLANK BACKGROUND IS UNACCEPTABLE. There is always a texture mat behind
+#    everything — the reference reads as a photographed case-bound book. The
+#    mat is a GENERATED plate, not a procedural gradient with a texture tile
+#    over it: on a near-black field a tile is invisible at any opacity that
+#    doesn't read as banding, and a gradient behind a cutout collage is still
+#    a blank.
+#
+# 3. REPEATED PARTICLES MUST BE DIFFERENT ARTEFACTS. `scatter` stamps ONE
+#    plate N times, and a dozen identical copies of one blob reads as a
+#    rendering defect, not as falling matter. The particle field is its own
+#    whole full-frame plate, at the BOTTOM of the stack and fully opaque —
+#    behind the arrangement it reads as depth; in front of it, its own dust
+#    veils whatever it crosses.
+#
+# 4. NEVER `photo_soft` ON THIS TEMPLATE. It is a DUOTONE — it greyscales a
+#    plate and maps it onto the background->primary ramp — so across ten
+#    separately-lit plates it flattens green leaves, crimson blooms and brass
+#    metal into one sepia mass. This convention lives on the plates keeping
+#    their own colour against a near-monochrome ground.
+#
+# 5. NEVER `gradient_up`/`gradient_down` AS A PROTECTING SCRIM HERE. Those
+#    kinds extend a SOLID `strength` fill from their rect to the nearest canvas
+#    edge across the rect's full width. Protecting a credit line that is not
+#    at the very bottom paints a full-height slab with hard vertical edges at
+#    the zone's padded x-bounds — it reads as two bars running down the cover.
+#    Use `halo` (soft, unclipped) or `panel` (clipped to its own rect).
+#
+# -----------------------------------------------------------------------------
+# ROLES, NOT NOUNS
+# -----------------------------------------------------------------------------
+#
+# The slots are roles. The art-direction call says what each role IS for this
+# book; the template already knows where it goes, how big it is, which edge it
+# is cut on, and what it is lit like. The first cover built from this template
+# filled them: hanging iron lantern / briar canes / wild roses / a brass key on
+# a ribbon / rose petals and embers. A second book fills them differently and
+# lands in the same composition.
+#
+#   mat            the ground the whole cover is printed on
+#   fall           the particle field, drifting behind everything
+#   veil_back      the pale far tier, pushed back by `haze_back`
+#   spine          what rises from the bottom edge and branches
+#   cluster_left   the upper-left foliage mass
+#   cluster_right  the upper-right bloom mass
+#   hero           THE FOCAL SUBJECT — the vertical object on the centre axis
+#   sweep_front    the front tier's long diagonal, crossing the type
+#   charm          the small hanging thing that crosses the title's first line
+#   bloom_front    the big front-tier flower at the lower left
+#   drift_front    the small front-tier fill for the lower right
+#   foot           what rises from the bottom in FRONT of the type
+#
+# -----------------------------------------------------------------------------
+# ENGINE SUPPORT THIS FILE REQUIRES  (all eight landed)
+# -----------------------------------------------------------------------------
+#
+#   a) `adjust:` on Archetype, and adjust ids addressable from `layers`.
+#      THE BIG ONE. The five adjust layers below are load-bearing, and until
+#      this landed only the closed recipe shelf could emit any adjust layer
+#      at all — so they had to be patched onto the built spec by hand.
+#   b) `blend:` on an art slot widened to the full model.BLEND_MODES table.
+#      `screen` is not optional here; two layers emit light.
+#   c) `cut_edge:` + `prompt_frame:` on an art slot (see below).
+#   d) `mirror:` on an art slot — a plain horizontal flip.
+#   e) `feather:` on a mask — a Gaussian blur of the resolved mask.
+#   f) `series` on Brief, so the credit line has a source.
+#   g) `recipe_strength:` so a shelf recipe can be dialled back per template.
+#   h) `font_role:` on a text slot, so the author's name can wear the display
+#      face while the tagline and credit line stay in the supporting serif.
+#
+# `prompt_frame` is what actually makes the one-shot work. The plate does not
+# exist when this template is written, so the template cannot know which edge
+# its cut will land on — it has to DICTATE it. Each frame is a sentence with
+# one `{subject}` hole; the director fills the hole, and the engine appends the
+# frame plus the `cut_edge` clause to the prompt. The fixed anchor below is
+# then always correct, with no per-book placement judgement.
+#
+# -----------------------------------------------------------------------------
+name: romantasy_organic
+genres: [fantasy, romance]
+axis: center
+recipe: dark_academia
+recipe_strength: 0.30          # (g) dark_academia at full strength cooks a
+                                # ten-plate collage sepia; it is wanted here
+                                # only for its vignette, dust and paper tooth
+describe: >-
+  A dark cloth ground with one hanging metal object on the centre axis and a
+  painted organic tangle growing around it — mass behind a huge stone-white
+  display title, and more of the same tangle drawn in FRONT of it, casting
+  shadows onto the letterforms. Tagline top-left, credit line and author at
+  the foot over a feathered wash.
+composition_note: >-
+  Painted in rich photorealistic botanical-illustration style, lit softly from
+  the upper left with warm lamplight — deep shadow side, restrained specular
+  highlights. No scene, no horizon, no sky, no landscape, no figures or faces,
+  no vignette, no cast shadow on any surface.
+
+# =============================================================================
+art:
+# -- ground band --------------------------------------------------------------
+  - id: mat
+    role: ground
+    generatable: true
+    procedural: gradient       # $0 fallback only; this slot is meant to be painted
+    fit: cover
+    prompt_frame: >-
+      A full-frame straight-on photograph of {subject}, catching a low raking
+      light so any pattern reads as pressure in the material rather than
+      printed ink. Darkest at the corners, lifting to a slightly warmer tone
+      toward the centre. Nothing lying on it.
+    # e.g. subject = "dark oxblood bookbinding cloth stretched over board with
+    # a damask lattice embossed into it"
+
+  - id: fall
+    role: particles
+    # Rule 3. Bottom of the stack, fully opaque, cover-fit so its own edges are
+    # always outside the trim. No `scatter`, ever.
+    generatable: true
+    transparent: true
+    fit: cover
+    prompt_frame: >-
+      A full-frame scattering of {subject} drifting through empty air at many
+      different sizes and angles, some sharp and near, some small and far.
+      Irregular and sparse, no two pieces alike, denser toward one corner and
+      thinning out across the frame, with large empty gaps.
+
+  - id: tooth
+    # A whisper of cloth grain over the mat. The mat carries the real pattern;
+    # a second one only fights it.
+    generatable: false
+    fit: cover
+    texture_file: canvas_weave
+    texture_fit: tile
+    opacity: 0.08
+    blend: multiply
+
+  - id: keylight
+    # The hero's own light falling on the ground behind it — the only reason
+    # the centre of the field is brighter than its corners before the recipe's
+    # vignette closes the edges down.
+    generatable: false
+    fit: cover
+    procedural: radial_glow
+    opacity: 0.30
+    blend: screen              # (b)
+
+# -- behind-the-type tier -----------------------------------------------------
+  - id: veil_back
+    role: far_tier
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: top              # (c)
+    anchor: [0.50, 0.00]
+    offset: [0.00, -0.06]      # rule 1: overshoot, don't graze
+    scale: 0.70
+    opacity: 0.60
+    prompt_frame: >-
+      A wide fan of {subject}, spreading downward and outward like a canopy
+      across the top of the frame.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.014, alpha: 0.40}
+
+  - id: spine
+    role: structure
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: bottom
+    anchor: [0.50, 1.00]
+    offset: [0.00, 0.06]
+    scale: 0.80
+    prompt_frame: >-
+      {subject}, climbing upward from the bottom of the frame and branching
+      into three main limbs.
+    effects:
+      - {kind: drop_shadow, dy: 0.008, blur: 0.012, alpha: 0.50}
+
+  - id: cluster_left
+    role: foliage
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: top
+    anchor: [0.00, 0.00]
+    offset: [-0.06, -0.06]
+    scale: 0.50
+    prompt_frame: >-
+      A loose spray of {subject} on thin whipping stems scattered across the
+      frame at varied angles.
+    effects:
+      - {kind: drop_shadow, dy: 0.005, blur: 0.010, alpha: 0.45}
+
+  - id: cluster_right
+    role: blooms
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: top
+    anchor: [1.00, 0.00]
+    offset: [0.06, -0.06]
+    scale: 0.48
+    prompt_frame: >-
+      A cluster of {subject}, some fully open and some half open, arranged
+      loosely across the frame at different sizes and angles.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.012, alpha: 0.50}
+
+  - id: hero
+    role: focal_subject
+    # THE FOCAL SUBJECT, and it must stay the loudest thing in the frame:
+    # brightest value, highest local contrast, most detail. Drawn AFTER the
+    # foliage for exactly that reason — under it, the first build buried the
+    # lantern beneath the flower cluster and the cover had no subject at all.
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: top              # it HANGS: the chain/cord leaves through the top
+    anchor: [0.50, 0.00]
+    scale: 0.55
+    prompt_frame: >-
+      {subject}, suspended from a chain or cord that rises straight up and out
+      of the top of the frame, hanging still and dead vertical.
+    effects:
+      - {kind: drop_shadow, dy: 0.007, blur: 0.011, alpha: 0.55}
+      - {kind: outer_glow, blur: 0.030, alpha: 0.35}
+
+# -- FRONT TIER: the sandwich, drawn AFTER the title --------------------------
+#
+# This is the defining move of the archetype and the reason it is not a retune
+# of anything else on the shelf. Each of these carries its own drop shadow —
+# the shadow falling onto the letterforms IS the depth illusion; without it a
+# front plate reads as a sticker.
+#
+# THE OCCLUSION BUDGET IS NOT NEGOTIABLE. The composer demotes a front plate
+# BELOW the title the moment it buries more than half of any single glyph
+# (or more than 8% of the title's total ink, for a plate later in z-order),
+# and a demoted plate silently cancels the whole archetype. So: small, and
+# pinned near a margin. Aim for the front tier to cross the type in two or
+# three places — much less and the sandwich doesn't register, much more and
+# the title stops being a title.
+#
+  - id: sweep_front
+    role: front_diagonal
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: bottom_left
+    anchor: [0.00, 1.00]
+    offset: [-0.06, 0.06]
+    scale: 0.55
+    prompt_frame: >-
+      A single arching stem carrying {subject}, sweeping diagonally across the
+      frame from lower left to upper right; crisply lit and sharply focused.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.010, alpha: 0.60}
+
+  - id: charm
+    role: hanging_accent
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: top
+    anchor: [0.84, 0.00]
+    scale: 0.42
+    prompt_frame: >-
+      {subject}, hanging dead straight from a cord or ribbon that rises up and
+      out of the top of the frame.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.009, alpha: 0.60}
+
+  - id: bloom_front
+    role: front_feature
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: left
+    mirror: true               # (d) so the cut stem runs OUT through the left
+    anchor: [0.00, 0.70]       # trim instead of pointing back into the frame
+    offset: [-0.08, 0.00]
+    scale: 0.32
+    prompt_frame: >-
+      One very large single {subject} seen slightly from the side, with a short
+      cut stem; crisply lit and sharply focused.
+    effects:
+      - {kind: drop_shadow, dy: 0.007, blur: 0.012, alpha: 0.55}
+
+  - id: drift_front
+    role: corner_fill
+    # The lower right is this composition's one structurally dead corner.
+    # Loose fallen matter, never another feature — nothing here should compete
+    # with `spine`/`foot` at centre. Pushed past the right trim so it reads as
+    # continuing off the page, not as a posy set neatly inside it.
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: right
+    anchor: [1.00, 0.86]
+    offset: [0.04, 0.00]
+    scale: 0.26
+    prompt_frame: >-
+      Three or four fallen {subject} lying loosely overlapped, curled and
+      slightly bruised at the edges, one turned to show its paler underside.
+      No stem, no leaves, no whole flower — only the loose pieces.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.011, alpha: 0.50}
+
+  - id: foot
+    role: front_base
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: bottom
+    anchor: [0.50, 1.00]
+    offset: [0.00, 0.06]
+    scale: 0.50
+    prompt_frame: >-
+      Three stems of {subject} rising from the bottom of the frame, fanning
+      slightly apart as they rise.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.011, alpha: 0.50}
+
+# =============================================================================
+# ADJUST LAYERS  — (a); currently unreachable from any template
+# =============================================================================
+# These are the six adjustment layers of a real cover PSD: what turns eleven
+# separately-generated plates into one photograph. Without them this archetype
+# is a pile of cutouts.
+adjust:
+  - id: mat_grade
+    # A generated cloth plate comes back as a bright, saturated PHOTOGRAPH of
+    # cloth, not as a ground. This sits directly on it, before any art, so the
+    # whole cover is built on a quiet field.
+    op: grade
+    brightness: -0.22
+    saturation: -0.30
+    contrast: 0.06
+
+  - id: haze_back
+    # Aerial perspective: the far tier fades and desaturates so it sits behind
+    # the arrangement rather than in it.
+    op: grade
+    brightness: 0.05
+    contrast: -0.25
+    saturation: -0.35
+    opacity: 0.90
+    mask: {from_layer: veil_back, feather: 0.02}      # (e)
+
+  - id: tonal_spine
+    # One shared colour spine under the whole collage.
+    op: gradient_map
+    stops: [background, primary, text]
+    opacity: 0.14
+    blend: soft_light
+
+  - id: hero_bloom
+    # Glow on the hero's own light source and on the white type.
+    op: bloom
+    threshold: 0.86
+    radius: 0.022
+    strength: 0.32
+
+  - id: foot_wash
+    # A feathered black wash over the lower third, fading out upward, so the
+    # credit line and author sit on something quiet. `color_wash` composites a
+    # solid fill AS a layer; the linear gradient mask (angle 90 = top
+    # transparent -> bottom opaque, held fully clear until `start`) is the
+    # feather. This is what took the credit line from 13.5 to 18.2 contrast
+    # and the author from 8.5 to 15.5.
+    op: color_wash
+    color: "#000000"
+    blend: normal
+    opacity: 0.62
+    mask:
+      gradient: {kind: linear, angle: 90.0, start: 0.58, end: 1.0}
+
+# =============================================================================
+scrims:
+  # All halo, per rule 5. The title's starts inert and reactive — the
+  # legibility autopilot raises it only if the measured contrast actually
+  # fails — while the other two are always-on atmosphere.
+  - {kind: halo, protects: title, strength: 0.14}
+  - {kind: halo, protects: author, strength: 0.16}
+  - {kind: halo, protects: subtitle, strength: 0.30}
+
+# =============================================================================
+text:
+  - id: subtitle
+    # The tagline, top-left. It sits over foliage, so it carries its own
+    # shadow as well as a halo — at 0.018 with neither it measured 4.56, a
+    # hair over the floor and genuinely hard to read.
+    zone: {x: 0.085, y: 0.110, w: 0.52, h: 0.065}
+    case: as_is
+    align: left
+    valign: top
+    tracking: 20
+    max_lines: 2
+    optional: true
+    size_min: 0.018
+    size_max: 0.027
+    effects:
+      - {kind: drop_shadow, dy: 0.0035, blur: 0.007, alpha: 0.75}
+
+  - id: title
+    zone: {x: 0.045, y: 0.315, w: 0.91, h: 0.305}
+    case: upper
+    tracking: 0
+    max_lines: 3
+    size_min: 0.055
+    size_max: 0.155
+    effects:
+      # A tight dark contact shadow under a wide soft one — the pro type move.
+      - {kind: drop_shadow, dy: 0.003, blur: 0.004, alpha: 0.70}
+      - {kind: drop_shadow, dy: 0.013, blur: 0.030, alpha: 0.38}
+      # soft_light, NOT multiply: a stone plate at multiply/0.32 pulled a bone
+      # title down to 75% brightness and made the type read translucent.
+      - {kind: texture_overlay, texture_file: marble, blend: soft_light, opacity: 0.30}
+
+  - id: series
+    # (f) needs Brief.series; the credit line has no source today.
+    zone: {x: 0.10, y: 0.862, w: 0.80, h: 0.030}
+    case: upper
+    tracking: 70
+    max_lines: 1
+    optional: true
+    size_min: 0.012
+    size_max: 0.019
+
+  - id: author
+    font_role: title           # the author's name wears the display face,
+                                # as on the reference cover; the tagline and
+                                # credit line stay in the supporting serif
+    zone: {x: 0.10, y: 0.898, w: 0.80, h: 0.062}
+    case: upper
+    tracking: 45
+    max_lines: 1
+    size_min: 0.028
+    size_max: 0.055
+
+# =============================================================================
+# Z-ORDER, bottom first. The two things that are easy to get wrong and fatal:
+# `fall` is at the BOTTOM (rule 3), and `hero` is drawn AFTER all the foliage.
+layers: [mat, fall, mat_grade, tooth, keylight,
+        veil_back, haze_back, spine, cluster_left, cluster_right, hero,
+        "scrim:0", "scrim:2", subtitle, title,
+        sweep_front, charm, bloom_front, drift_front, foot,
+        foot_wash, "scrim:1", series, author,
+        tonal_spine, hero_bloom]
+
+# =============================================================================
+# WHAT THE DIRECTOR STILL CHOOSES, AND NOTHING ELSE
+# =============================================================================
+#   * eleven `{subject}` fills, one per generatable slot
+#   * five palette hexes (background / primary / accent / text)
+#     — take `text` to true white; the finishing stack costs the type ~25%
+#       brightness on its way down, and a bone title lands grey
+#   * title_font and author_font
+#   * the tagline
+#
+# It does NOT choose: placement, scale, blend, opacity, masks, adjust layers,
+# effects, scrim kinds, recipe strength, or layer order. That is the whole
+# point — those are what six revision rounds bought, and they are spent here
+# once so that they never have to be spent again per book.
+#
+# HONEST SCOPE: the skeleton is "one hanging vertical object + organic tangle
+# + falling matter". It fits romantasy, gothic and dark historical. It does not
+# fit a thriller, a memoir or a nonfiction title, and it should not be stretched
+# to. The occlusion result is also the one genuinely stochastic part: the guard
+# can tell you the front tier covers too much, but not that it lands boringly.

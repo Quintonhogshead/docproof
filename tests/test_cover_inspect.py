@@ -21,14 +21,14 @@ CANVAS = (400, 640)
 
 def _spec():
     direction = Direction(
-        concept_name="Inspect", rationale="r.", archetype="big_type",
+        concept_name="Inspect", rationale="r.", archetype="probe_typographic",
         palette=Palette(background="#101820", primary="#f5f1e8",
                         accent="#c9a227", text="#f5f1e8", scrim="#000000"),
         title_font="Playfair Display", author_font="Spectral",
         art_prompts={}, texture=False)
     brief = Brief(title="The Lighthouse", author="J. R. Vance",
                   genre="literary")
-    return build_spec(direction, brief, ARCHETYPES["big_type"])
+    return build_spec(direction, brief, ARCHETYPES["probe_typographic"])
 
 
 # ---------------------------------------------------------------- ruled_crop
