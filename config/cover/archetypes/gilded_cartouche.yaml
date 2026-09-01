@@ -50,13 +50,32 @@
 #    highest-chroma note in the top third and the reason the eye starts at the
 #    top of the cover. Sever it and you have a stick again.
 #
-# 3. SYMMETRY IN THE ARCHITECTURE, ASYMMETRY IN THE GROWTH. `architecture`,
-#    `cartouche` and `gilt_front` are prompted bilaterally symmetric about the
-#    centre axis. `cluster_left` and `cluster_right` are deliberately NOT: two
-#    different scales, two different heights, two different counts. Make both
-#    halves symmetric and you have a coat of arms — flat, corporate, dead.
-#    Make neither symmetric and the emblem stops being an emblem. The tension
-#    between a rigid frame and unruly matter growing over it IS the genre.
+# 3. THE WHOLE COMPOSITION IS BILATERALLY SYMMETRIC. Not the architecture
+#    alone — EVERYTHING. `architecture`, `cartouche`, `relic`, `gilt_front`
+#    and `runoff` are each prompted symmetric about their own centre line, and
+#    the two flanking clusters carry EQUAL MASS AT EQUAL HEIGHT AND EQUAL
+#    SCALE: same anchor y, same scale, same offset magnitude, same count in
+#    the frame text. The template's own numbers enforce it, so it cannot be
+#    lost to art direction.
+#
+#    This corrects the rule's first draft, which said the opposite — symmetry
+#    in the architecture, asymmetry in the growth, two different scales at two
+#    different heights — on the theory that a rigid frame with unruly matter
+#    growing over it was the genre. It is not what the shelf actually does,
+#    and the first build proved it: one flank climbing higher and larger than
+#    the other turned the emblem into a still life with a lean, and the eye
+#    went to the heavier corner instead of down the centre axis. The whole
+#    argument this template makes — that the book is a ceremonial object worth
+#    owning — is carried by symmetry. An altarpiece is symmetric. A coat of
+#    arms is symmetric. A shrine is symmetric. Break the axis and you have
+#    thrown the argument away.
+#
+#    THE ASYMMETRY LIVES IN THE DETAIL, NOT IN THE PLACEMENT. The two flanks
+#    are separate slots, and separate nouns, precisely so the matched masses
+#    are not a photocopy of each other: different individual forms, different
+#    angles, different states, inside two silhouettes of the same size sitting
+#    at the same height. Symmetric mass, asymmetric contents. Mirror one plate
+#    into both corners instead and the cover reads as a printing error.
 #
 # 4. THE TITLE IS THE ARTWORK, NOT A LABEL ON IT. Four interlocking lines
 #    across ~0.45 of frame height in `justify_stack`, gilded by a
@@ -99,8 +118,9 @@
 #   motes          fine suspended matter, drifting low in the stack
 #   architecture   the far tier: tall repeated verticals rising behind, symmetric
 #   cartouche      THE ENCLOSURE — one dark ornate closed frame, symmetric
-#   cluster_left   large rounded forms, the taller/larger flank
-#   cluster_right  large rounded forms, the lower/smaller flank
+#   cluster_left   large rounded forms, the left flank
+#   cluster_right  large rounded forms, the right flank — SAME mass, SAME
+#                  height, SAME scale, different contents
 #   relic          THE VERTICAL — one long rigid object, whole, centre axis,
 #                  ornate at the head and quiet down the shaft
 #   gilt_front     front-tier metallic ornament, lower corners, symmetric pair
@@ -140,10 +160,10 @@ recipe_strength: 0.30          # the emblem supplies its own vignette in
                                # strength the shelf recipe cooks ten
                                # separately-lit plates into one sepia mass
 describe: >-
-  A near-black figured slab lit from within by bright branching veins, with
-  one long ornate relic standing whole on the centre axis inside a carved
-  symmetric enclosure, large rounded growth crowding in from both sides at
-  different heights, and an enormous gilded four-line display title stacked
+  A rigorously symmetric near-black figured slab lit from within by bright
+  branching veins, with one long ornate relic standing whole on the centre
+  axis inside a carved symmetric enclosure, matched masses of large rounded
+  growth crowding in from both sides at the same height, and an enormous gilded four-line display title stacked
   down the relic's shaft with the gilding physically running off the
   letterforms. Metallic ornament curls into the lower corners in FRONT of the
   type; credit line and author at the foot over a feathered wash.
@@ -258,15 +278,15 @@ art:
 
 # -- the growth, asymmetric by construction -----------------------------------
   - id: cluster_left
-    role: cluster_major
+    role: cluster
     generatable: true
     transparent: true
     fit: contain
     place_by: ink
     cut_edge: left
-    anchor: [0.00, 0.26]
-    offset: [-0.095, 0.00]
-    scale: 0.52
+    anchor: [0.00, 0.24]
+    offset: [-0.09, 0.00]
+    scale: 0.56
     prompt_frame: >-
       A crowded cluster of {subject} — six or seven large rounded forms at
       different sizes and angles and in different states, some fully opened
@@ -276,22 +296,24 @@ art:
       - {kind: drop_shadow, dy: 0.007, blur: 0.014, alpha: 0.52}
 
   - id: cluster_right
-    role: cluster_minor
-    # Rule 3: a different SIZE and a different HEIGHT from cluster_left, on
-    # purpose. Matching them makes a laurel medal.
+    role: cluster
+    # Rule 3: EVERY placement number here is cluster_left's, mirrored — same
+    # anchor y, same scale, same offset magnitude, same count in the frame
+    # below. Only the noun differs. Drifting any of these apart is how the
+    # first build lost its axis.
     generatable: true
     transparent: true
     fit: contain
     place_by: ink
     cut_edge: right
-    anchor: [1.00, 0.14]
-    offset: [0.095, 0.00]
-    scale: 0.44
+    anchor: [1.00, 0.24]
+    offset: [0.09, 0.00]
+    scale: 0.56
     prompt_frame: >-
-      A looser cluster of {subject} — four or five large rounded forms at
-      different sizes and angles, spaced apart rather than packed, each one
-      turned a different way so the group reads as one mass with air moving
-      through it.
+      A crowded cluster of {subject} — six or seven large rounded forms at
+      different sizes and angles and in different states, some fully opened
+      out and some still closed, packed so they overlap into one mass with
+      smaller ones filling the gaps between the big ones, and no two alike.
     effects:
       - {kind: drop_shadow, dy: 0.007, blur: 0.014, alpha: 0.52}
 
@@ -592,8 +614,11 @@ casting: >-
 
   cluster_left and cluster_right — TWO DIFFERENT KINDS of large rounded form
   from the book's own world, not two sizes of one. Blooms and fruit; floats
-  and buoys; skulls and lanterns. Both are rendered in the FIELD's hue, never
-  their own natural colour (rule 7).
+  and buoys; skulls and lanterns. The template sets them at identical scale
+  and identical height, so pick two things of COMPARABLE BULK — a cluster of
+  skulls balances a cluster of lanterns, but a cluster of skulls against a
+  cluster of seed pods leaves one flank looking starved (rule 3). Both are
+  rendered in the FIELD's hue, never their own natural colour (rule 7).
 
 
   motes — WHAT THE AIR IS FULL OF. Embers, pollen, dust, snow, spores, ash,
