@@ -354,14 +354,15 @@ def test_direction_rejects_unregistered_author_font():
 
 
 def test_direction_requires_every_field_with_no_default():
-    # `recipe` (§15.6), `type_move`, `emphasis_word` and `title_breaks`
-    # (§15.12) are the deliberate exceptions: "" / [] (none) is a real,
-    # common answer for each, and defaulting them keeps every archived
-    # direction and every pre-wave caller valid — the wire still REQUIRES
-    # them (strict_json_schema promotes defaulted fields into `required`),
-    # so the model must answer even though Python code may omit them.
+    # `recipe` (§15.6), `type_move`/`emphasis_word`/`title_breaks` (§15.12)
+    # and `token_layout` (§19.2) are the deliberate exceptions: "" / [] (none)
+    # is a real, common answer for each, and defaulting them keeps every
+    # archived direction and every pre-wave caller valid — the wire still
+    # REQUIRES them (strict_json_schema promotes defaulted fields into
+    # `required`), so the model must answer even though Python code may omit
+    # them.
     defaulted = {"recipe": "", "type_move": "", "emphasis_word": "",
-                 "title_breaks": []}
+                 "title_breaks": [], "token_layout": ""}
     full = _direction().model_dump()
     for key in full:
         partial = {k: v for k, v in full.items() if k != key}
@@ -1174,3 +1175,60 @@ def test_type_move_slot_survives_the_dump_validate_round_trip():
                      emphasis=[1], emphasis_style="larger")
     again = TextSlot.model_validate(slot.model_dump())
     assert again == slot
+
+# -- token layouts (§19.2) ----------------------------------------------------
+
+def _luminary_archetype():
+    """The shipped archetype that actually declares a token pair."""
+    from docproof.cover.archetypes import ARCHETYPES
+    return ARCHETYPES["portrait_luminary"]
+
+
+def test_token_layout_moves_both_tokens_and_nothing_else():
+    from docproof.cover.model import TOKEN_LAYOUTS
+    archetype = _luminary_archetype()
+    brief = _brief()
+    prompts = [{"slot": s.id, "prompt": f"a {s.id}"}
+               for s in archetype.art if s.generatable]
+    base = build_spec(_direction(archetype=archetype.name, art_prompts=prompts),
+                      brief, archetype)
+    moved = build_spec(
+        _direction(archetype=archetype.name, art_prompts=prompts,
+                   token_layout="far_low_right"), brief, archetype)
+    want = TOKEN_LAYOUTS["far_low_right"]
+    by_id = {s.id: s for s in moved.art}
+    for slot_id, anchor in want.items():
+        assert tuple(by_id[slot_id].anchor) == anchor
+    # Everything that is not a token is untouched — the template still owns
+    # every other placement, and scale/opacity even on the tokens themselves.
+    base_by_id = {s.id: s for s in base.art}
+    for slot in moved.art:
+        if slot.id in want:
+            assert slot.scale == base_by_id[slot.id].scale
+            continue
+        assert slot.anchor == base_by_id[slot.id].anchor
+
+
+def test_every_token_layout_keeps_the_diagonal():
+    """Opposite sides and different heights are the arrangement; a layout
+    that stacked the pair would be a different composition, not a variation."""
+    from docproof.cover.model import TOKEN_LAYOUTS
+    for name, layout in TOKEN_LAYOUTS.items():
+        far, near = layout["token_far"], layout["token_near"]
+        assert (far[0] - 0.5) * (near[0] - 0.5) < 0, f"{name}: same side"
+        assert abs(far[1] - near[1]) >= 0.15, f"{name}: same height"
+
+
+def test_token_layout_on_an_archetype_without_tokens_is_dropped():
+    """The §6.1 surplus-prompt precedent: inapplicable, not fatal."""
+    from docproof.cover.archetypes import ARCHETYPES
+    other = ARCHETYPES["romantasy_organic"]
+    prompts = [{"slot": s.id, "prompt": f"a {s.id}"}
+               for s in other.art if s.generatable]
+    spec = build_spec(
+        _direction(archetype=other.name, art_prompts=prompts,
+                   token_layout="far_high_right"), _brief(), other)
+    by_id = {s.id: s for s in other.art}
+    for slot in spec.art:
+        if slot.id in by_id:
+            assert slot.anchor == by_id[slot.id].anchor
