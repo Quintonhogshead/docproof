@@ -81,6 +81,36 @@ def luminance_band(rgb_img: Image.Image) -> Image.Image:
     return Image.blend(mixed, b_lin, 0.0722)
 
 
+def lightness_band(rgb_img: Image.Image) -> Image.Image:
+    """An 'L' image whose value at each pixel is how light that pixel LOOKS —
+    the WCAG channel weights applied to the gamma-encoded values, with no
+    trip through linear space.
+
+    Two different questions need two different answers, and conflating them
+    was a real bug. `luminance_band` above answers "how much light is this?",
+    which is what a contrast ratio needs and what the legibility autopilot
+    must keep using. This answers "how light does this look?", which is what
+    any tone MAPPING needs — a duotone ramp, a posterize bucket.
+
+    The difference is not academic at the dark end, where linear luminance is
+    savagely compressed. A low-key plate living between sRGB 10 and 60 (a
+    night interior, a dark table, deep water — exactly the plates a duotone
+    is reached for) spans linear luminance 1 to 17 out of 255: a ~6%-wide
+    slice of a 256-step ramp, so the plate's tones collapse onto effectively
+    one colour and the treatment returns a flat rectangle. Here the same
+    plate spans 10 to 60 — its own full range, because for a neutral pixel
+    this function is the identity.
+
+    Deliberately NOT `luminance_band(...).point(srgb_encode)`, which was the
+    first fix and is worse: `luminance_band` quantises to 8 bits while still
+    in linear space, so dark detail is already destroyed before any re-encode
+    can spread it back out (64 distinct input tones came back as 17). Doing
+    the weighting on the encoded values keeps every tone the input had."""
+    r, g, b = rgb_img.split()[:3]
+    mixed = Image.blend(r, g, 0.7152 / (0.2126 + 0.7152))
+    return Image.blend(mixed, b, 0.0722)
+
+
 # -- the blend-mode table (§15.1) ---------------------------------------------
 
 def _color_dodge(base_rgb: Image.Image, source_rgb: Image.Image) -> Image.Image:
@@ -721,6 +751,6 @@ def apply_effect_stack(layer: Image.Image, effects, palette: Palette,
 __all__ = [
     "BLEND_TABLE", "MASK_SCALE", "TEMPERATURE_MAX_SHIFT",
     "apply_adjust", "apply_effect_stack", "apply_mask", "blend_rgb",
-    "composite_layer", "gradient_mask", "luminance_band", "resolve_mask",
-    "srgb_to_linear",
+    "composite_layer", "gradient_mask", "lightness_band",
+    "luminance_band", "resolve_mask", "srgb_to_linear",
 ]

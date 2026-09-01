@@ -31,25 +31,21 @@ directly on this module (`monkeypatch.setattr(pipeline, "run_directions",
 fake)`); a lazy import inside a function body would re-import the real thing
 on every call and silently ignore the patch. Before those modules land, the
 callable placeholders are `None` and calling one raises a clear TypeError
-rather than doing the wrong thing quietly. docproof.cover.reality is the one
-sibling NOT guarded this way — it was built in the same pass as this file,
-by the same hand, so there is no window where it doesn't exist yet; it is
-imported plainly, which still leaves it monkeypatchable on this module for
-the same reason (`monkeypatch.setattr(pipeline, "distill_reality", fake)`).
+rather than doing the wrong thing quietly. The same guard now covers
+docproof.cover.director (the call that reads the book) and
+docproof.cover.atelier (the agents that build from it), which are the two
+seams every run_job test patches.
 
-Providers (below) bundles one Provider per model role — direction, revision,
-reality — because the BRAIN wave (2026-08-29) pins each to its own model
-(docproof.cover.direction.DIRECTION_MODEL/REVISION_MODEL,
-docproof.cover.reality.REALITY_MODEL). It is built once per request in
-app/routes/cover.py and threaded through run_job/run_revision unchanged;
-docproof.cover.critique's vision call is deliberately NOT a fourth field
-here — it goes through the raw `anthropic` SDK, not the Provider protocol
-(see critique.py's own module docstring), so its client is threaded
-separately as `critique_client`.
+Providers (below) bundles one Provider per model role — director and
+revision — because each is pinned to its own model
+(docproof.cover.director.DIRECTOR_MODEL,
+docproof.cover.direction.REVISION_MODEL). It is built once per request in
+app/routes/cover.py and threaded through run_job/run_revision unchanged.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import secrets
@@ -74,7 +70,6 @@ from .model import (FX_PREFIX, AdjustLayer, ArtSlot, Brief, ConceptState,
 # _apply_plan_to_spec below) can never drift from how a direction's own
 # recipe pick expands.
 from .model import _expand_recipe
-from .reality import RealitySheetError, RealityResult, distill_reality
 
 log = logging.getLogger("docproof.cover.pipeline")
 
@@ -97,13 +92,19 @@ except ImportError:                                        # pragma: no cover
     compose = save_renders = None                            # type: ignore[assignment]
 
 try:
-    from .critique import CritiqueError, CritiqueResult, run_critique
+    from .atelier import Budget, ConceptOutcome, build_concept
 except ImportError:                                        # pragma: no cover
-    class CritiqueError(Exception):
-        """Placeholder until docproof.cover.critique lands."""
+    Budget = ConceptOutcome = None                           # type: ignore[assignment]
+    build_concept = None                                     # type: ignore[assignment]
 
-    CritiqueResult = None                                    # type: ignore[assignment]
-    run_critique = None                                      # type: ignore[assignment]
+try:
+    from .director import DirectorError, DirectorResult, assign_concepts
+except ImportError:                                        # pragma: no cover
+    class DirectorError(Exception):
+        """Placeholder until docproof.cover.director lands."""
+
+    DirectorResult = None                                    # type: ignore[assignment]
+    assign_concepts = None                                   # type: ignore[assignment]
 
 try:
     from .imaging import (CUTOUT_SUFFIX, IMAGE_COST, NEGATIVE_SUFFIX,
@@ -136,32 +137,33 @@ except ImportError:                                        # pragma: no cover
 
 JOB_MANIFEST = "job.json"
 MANUSCRIPT_SAMPLE_NAME = "manuscript_sample.txt"
-REALITY_SHEET_NAME = "reality.json"
+# The director's output: what it understood the book to be, plus one
+# assignment per concept. The only thing kept from the read (run_job).
+ASSIGNMENTS_NAME = "assignments.json"
 ASSETS_DIR = "assets"
 RENDERS_DIR = "renders"
 
-# The iterating judge loop's round cap (§6.3, iterated — BRAIN wave): a
-# "round" is one critique CALL, so this bounds judge spend, not revision
-# spend — see _critique_and_revise's own docstring for exactly where the
-# cap gates a revision versus just a critique.
-MAX_CRITIQUE_ROUNDS = 4
+# The reality sheet's file name, kept so an ARCHIVED job written before the
+# director existed still round-trips; nothing writes one any more.
+REALITY_SHEET_NAME = "reality.json"
 
 
 @dataclass(frozen=True)
 class Providers:
-    """One Provider per model role: the frontier model for art direction,
-    the workhorse model for revision (both human-triggered and the
-    auto-critique loop), and the workhorse model for manuscript
-    distillation. Three separate instances, not one shared Provider, because
-    each role is pinned to its OWN model id
-    (docproof.cover.direction.DIRECTION_MODEL/REVISION_MODEL,
-    docproof.cover.reality.REALITY_MODEL) — see this module's own docstring
-    for why critique isn't a fourth field here. Built once per request in
-    app/routes/cover.py and threaded through run_job/run_revision
-    unchanged."""
+    """One Provider per model role: the frontier model that reads the book
+    and assigns the concepts (docproof.cover.director.DIRECTOR_MODEL), and
+    the workhorse model that edits a spec from a person's revision notes
+    (docproof.cover.direction.REVISION_MODEL). Two separate instances, not
+    one shared Provider, because each role is pinned to its OWN model id.
+    Built once per request in app/routes/cover.py and threaded through
+    run_job/run_revision unchanged.
+
+    `reality` remains as an accepted keyword so existing callers keep
+    working; nothing reads it. The sample-distillation role it named died
+    with the sample: the director reads the whole book now."""
     direction: Provider
     revision: Provider
-    reality: Provider
+    reality: Provider | None = None
 
 # One job's image generations run bounded by this — network-bound SDK calls,
 # not memory-bound, so 2 in flight is about latency, not the 512MB box (§7.4).
@@ -385,6 +387,16 @@ async def _commit_concept(root: str | Path, job_id: str, index: int,
 
 
 # -- manuscript handling (§8.1) ------------------------------------------------
+
+def read_manuscript(path: str | Path) -> str:
+    """The manuscript's full text, for the director to read.
+
+    Read and returned, never written down: run_job takes the text as an
+    argument and only the ASSIGNMENTS reach disk. This is the whole of Cover
+    Studio's manuscript-storage policy, and it is one function so it stays
+    that way."""
+    return read_sample_source(path).text
+
 
 def _read_sample(root: str | Path, job_id: str) -> str:
     """The persisted grounding sample, re-read from disk rather than carried
@@ -971,367 +983,164 @@ async def _generate_planned(plan: CompositionPlan, spec: CoverSpec,
     return rows
 
 
-# -- critique pass (§6.3, iterated — BRAIN wave) -------------------------------
+# -- the atelier: one agent per concept (replaces the §6.3 critique loop) ------
+#
+# The fixed critique-and-revise loop that used to live here — a vision judge,
+# a Sonnet reviser, up to four rounds — is gone (owner, 2026-08-31). It could
+# only ever ask its questions in the order it was written to ask them, so it
+# reported defects it had no move for and spent its rounds on wall-clock
+# pressure rather than on the cover being right. docproof.cover.atelier is
+# the replacement: an agent per concept, holding the composer's own verbs,
+# planning before it spends and iterating for free until it calls finish.
+#
+# What stayed: imaging.generate and compose are still the ONLY paths to a
+# pixel and to a composite — the agent reaches them through atelier's tools,
+# which price every roll from the same tier they rolled at, exactly as
+# _generate_art_slot does for run_revision.
+#
+# What this DID orphan: the §15.16 composition planner no longer runs on a
+# new job. It was the pre-flight that made several independent generations
+# into one planned composition, and an agent that reads the archetype, argues
+# itself into a prompt and looks at what came back is doing that job with its
+# eyes open. planner.py stays for run_revision's replan path (§15.16's
+# mid-flight use), and COVER_PLANNER now gates only that.
 
-def _thumb_path(png_path: Path) -> Path:
-    """The 100px shelf/search thumbnail save_renders wrote right next to
-    this render (BRAIN v2.1 — compose.save_renders's own `_thumb100.png`
-    naming: `renders/v{version}_c{concept}.png` ->
-    `renders/v{version}_c{concept}_thumb100.png`), computed rather than
-    threaded through as a second return value, since it is a pure function
-    of the path save_renders already gave back."""
-    return png_path.with_name(f"{png_path.stem}_thumb100{png_path.suffix}")
+async def _build_concept(root: str | Path, job_id: str, index: int,
+                         image_client: Any, sem: asyncio.Semaphore) -> None:
+    """One concept's whole life: hand its assignment to an agent and record
+    what the agent produced.
 
-
-def _run_critique_safely(job_id: str, index: int, spec: CoverSpec, brief: Brief,
-                         png_path: Path, critique_client: Any,
-                         ledger_rows: list[dict], warnings: Sequence[str],
-                         round_n: int) -> CritiqueResult | None:
-    """run_critique, with §6.3's "a critique failure must never block a
-    cover" contract enforced in exactly one place: a CritiqueError here is
-    logged and turned into a $0 ledger note, never raised further. Returns
-    None on failure (as opposed to a CritiqueResult with passes=True) so the
-    caller can tell "no verdict was reached" apart from "the verdict was a
-    pass" — the two must not be conflated into ready for the same reason.
-
-    `warnings` (the composer's own RenderReport.warnings for THIS render) is
-    threaded straight through to run_critique as `composer_warnings`, which
-    labels them into the call's summary — see that module's own docstring.
-    `round_n` (1-based) is folded into every ledger row's `detail` so a job
-    that iterated several rounds reads as a sequence, not a blur — see
-    _critique_and_revise, the only caller.
-
-    The 100px thumbnail (BRAIN v2.1) is read separately from the render, and
-    its own OSError is swallowed to None rather than joining the render's —
-    a missing thumbnail (an old job, a save_renders fake in a test that only
-    writes the primary PNG) must degrade run_critique to one image, never
-    turn into a "the critique call failed" ledger note the way a genuinely
-    unreadable RENDER does.
-
-    Called directly, not via asyncio.to_thread: run_directions and
-    revise_spec (both synchronous network calls, same as this one) are
-    already called directly elsewhere in this module — §7.4 only calls out
-    image generation and composition as needing thread-offload, and this
-    stays consistent with the pattern already shipped for the other two
-    model calls."""
-    try:
-        png_bytes = png_path.read_bytes()
-        try:
-            thumb_bytes: bytes | None = _thumb_path(png_path).read_bytes()
-        except OSError:
-            thumb_bytes = None
-        verdict = run_critique(png_bytes, thumb_bytes, spec, brief,
-                               critique_client, composer_warnings=warnings)
-    except (CritiqueError, OSError) as e:
-        log.warning("Cover job %s concept %d round %d: critique call "
-                   "failed, shipping as composed: %s", job_id, index,
-                   round_n, e)
-        ledger_rows.append({
-            "kind": "critique", "concept": index,
-            "detail": (f"concept {index} round {round_n}: critique call "
-                      f"failed ({e}); shipped as composed"),
-            "usd": 0.0})
-        return None
-    ledger_rows.append({
-        "kind": "critique", "concept": index,
-        "detail": (f"concept {index} round {round_n}: passed" if verdict.passes
-                  else f"concept {index} round {round_n}: flagged "
-                       f"{len(verdict.tells)} tell(s)"),
-        "usd": verdict.cost or 0.0})
-    return verdict
-
-
-async def _critique_and_revise(job_id: str, index: int, spec: CoverSpec,
-                               brief: Brief, d: Path, providers: Providers,
-                               critique_client: Any, image_client: Any,
-                               sem: asyncio.Semaphore, report: RenderReport,
-                               renders: list[str], *, tier: str,
-                               plan_lines: Sequence[str] = ()
-                               ) -> tuple[CoverSpec, RenderReport, list[str], list[dict]]:
-    """§6.3, ITERATED (BRAIN wave, 2026-08-29): the owner's beta verdict was
-    that a single critique-then-revise round left the judge merely
-    reporting problems instead of actually fixing them — invisible-to-the-
-    user iteration was the fix. Loop up to MAX_CRITIQUE_ROUNDS rounds; a
-    "round" is one CRITIQUE CALL, so the cap bounds judge spend, not
-    revision spend: a critique that still fails on the very last permitted
-    round ships with its tells as leftover warnings rather than buying one
-    more revision nothing will ever re-check (the `round_n ==
-    MAX_CRITIQUE_ROUNDS` guard below is exactly that gate) — a 4-round cap
-    therefore means at most 4 critique calls and at most 3 revisions.
-
-    Three things stop the loop before the cap: the critique call itself
-    failing (verdict is None — §6.3's "must never block a cover", unchanged
-    from v1), a genuine pass, or a revision that comes back IDENTICAL to
-    the spec it started from (_dump_equal_ignoring_bookkeeping — the model
-    had nothing left to give, and looping further would only spend money to
-    relearn that; noted in the ledger, not recomposed) AND did not also
-    trigger an art repaint this round (see below — a repaint changes real
-    pixels on disk without changing the spec's `asset` string at all, so
-    the identical-spec check is blind to it on purpose and must not be the
-    thing that stops the loop when one just happened). A RevisionError is
-    equally non-fatal: logged, ledgered, and the concept ships with
-    whatever it already has.
-
-    Every round's critique call, and every revision it triggers, gets its
-    own ledger row (round-numbered — see _run_critique_safely). Every
-    revision that actually recomposes also gets a compact, CODE-COMPUTED
-    notes_log entry naming what changed (diff_spec_fields, a pure function
-    diffing the validated spec models themselves — never the model's own
-    prose) as a SEPARATE "[auto-critique r{n} changed] ..." entry right
-    after the "[auto-critique r{n}] <the note that was applied>" entry —
-    "revising did nothing" is visibly impossible this way, since the log
-    itself measures the effect rather than repeating the request.
-
-    allow_new_art is always False for every auto round — the code-level
-    backstop below holds regardless of what the model wrote, the same
-    restore-the-prior-asset behavior v1 had. The ONE exception (BRAIN
-    v2.1): a slot the JUDGE names in CritiqueResult.art_defects — a
-    generation defect a design-only revision can never fix — may repaint,
-    at most 2 slots and at most once per concept for the whole job
-    (`repaint_used` below), through the same _generate_art_slot path a
-    fresh concept's own art uses; `image_client`/`sem`/`tier` exist on this
-    function's signature for exactly that one path — a repaint is one of
-    this job's generations like any other, so it rolls and prices at the
-    job's own tier rather than quietly buying a full-price re-roll on a
-    draft job.
-
-    Returns (spec, report, renders, ledger_rows) — all three of the first
-    unchanged from what was passed in unless at least one round actually
-    revised and recomposed. Human-triggered run_revision never calls this
-    (§6.3: "the human is the critic there") — it gains the same
-    diff_spec_fields note on its own path instead, and never repaints on
-    its own initiative."""
-    ledger_rows: list[dict] = []
-    verdict: CritiqueResult | None = None
-    repaint_used = False
-
-    for round_n in range(1, MAX_CRITIQUE_ROUNDS + 1):
-        # Adjustments ride along with the warnings (§15.10): the judge's
-        # "near-miss alignment survived" tell is only checkable against
-        # what the snap pass actually moved. `plan_lines` (§15.16 —
-        # CompositionPlan.judge_lines: the plan's lighting contract and
-        # unify bind) ride the same channel, so plan-vs-render drift is a
-        # nameable tell; empty on every unplanned run, which leaves this
-        # call byte-identical to its pre-planner shape.
-        verdict = _run_critique_safely(
-            job_id, index, spec, brief, d / renders[-1], critique_client,
-            ledger_rows,
-            [*plan_lines, *report.warnings, *report.adjustments], round_n)
-        if verdict is None or verdict.passes:
-            break
-        if round_n == MAX_CRITIQUE_ROUNDS:
-            break         # no budget left to judge one more revision
-
-        try:
-            result = revise_spec(spec, verdict.notes, providers.revision)
-        except RevisionError as e:
-            log.warning("Cover job %s concept %d: auto-critique revision "
-                       "failed on round %d, shipping the last composition: "
-                       "%s", job_id, index, round_n, e)
-            ledger_rows.append({
-                "kind": "revision", "concept": index,
-                "detail": (f"concept {index} round {round_n}: auto-critique "
-                          f"revision failed ({e}); shipped the last "
-                          f"composition"),
-                "usd": 0.0})
-            break
-
-        # revise_spec appends `notes` verbatim as the last notes_log entry
-        # (see its own docstring); swap that one entry for the prefixed,
-        # round-numbered form rather than appending a second copy of it.
-        revised = result.spec.model_copy(update={
-            "notes_log": [*result.spec.notes_log[:-1],
-                         f"[auto-critique r{round_n}] {verdict.notes}"]})
-
-        # The code-level allow_new_art=False backstop the docstring
-        # promises: whatever the revision model wrote, an auto round may
-        # never leave a generated slot assetless — revise_spec clears
-        # `asset` when a prompt changes (the regenerate signal), and
-        # recomposing without restoring it would render that layer blank.
-        # Auto rounds never repaint; put the prior art straight back, like
-        # run_revision's own allow_new_art=False branch does.
-        prior_assets = {slot.id: slot.asset for slot in spec.art}
-        restored = False
-        for slot in revised.art:
-            if slot.prompt and not slot.asset and prior_assets.get(slot.id, ""):
-                slot.asset = prior_assets[slot.id]
-                restored = True
-        if restored:
-            ledger_rows.append({
-                "kind": "revision", "concept": index,
-                "detail": (f"concept {index} round {round_n}: the "
-                          f"auto-critique revision asked for new art; kept "
-                          f"the existing art (auto rounds never repaint)"),
-                "usd": 0.0})
-
-        # BRAIN v2.1's one-repaint escape hatch: a design-only revision can
-        # never fix a defective GENERATED image (a surreal blob, an eye
-        # baked into a lighthouse lantern). When the verdict named
-        # art_defects and this concept hasn't spent its one repaint yet,
-        # clear up to 2 of those flagged slots' assets and repaint them for
-        # real, through the same _generate_art_slot path a fresh concept's
-        # own art uses — the same prompt, or the one the revision above
-        # just rewrote if it touched that slot (regeneration re-rolls the
-        # image either way). A hallucinated or non-generatable slot id is
-        # dropped rather than raised, same tolerance direction._validate_
-        # direction gives a stray art_prompts entry. This deliberately runs
-        # AFTER the restore-backstop above and re-clears regardless of what
-        # it just restored — simpler than teaching that loop about
-        # art_defects, and the net effect (a fresh paint) is the same.
-        repainted = False
-        if verdict.art_defects and not repaint_used:
-            slot_map = {s.id: s for s in revised.art}
-            eligible = [sid for sid in verdict.art_defects
-                       if (s := slot_map.get(sid)) is not None and s.prompt]
-            flagged = eligible[:2]
-            if flagged:
-                archetype = ARCHETYPES[revised.archetype]
-                for sid in flagged:
-                    slot_map[sid].asset = ""
-                for slot_rows in await asyncio.gather(*(
-                        _generate_art_slot(image_client, sem, d, index,
-                                           slot_map[sid], archetype, tier=tier)
-                        for sid in flagged)):
-                    ledger_rows.extend(slot_rows)
-                for sid in flagged:
-                    ledger_rows.append({
-                        "kind": "image", "concept": index,
-                        "detail": (f"concept {index} slot {sid} repainted "
-                                  f"on judge's flag"),
-                        "usd": 0.0})
-                repaint_used = True
-                repainted = True
-
-        # A repaint changes real pixels on disk without changing the spec's
-        # `asset` STRING at all (_generate_art_slot writes to a fixed,
-        # deterministic path per slot — see its own docstring), so the
-        # identical-spec check below is blind to it by construction; a
-        # repaint this round must never let that check be the thing that
-        # stops the loop, or the fresh paint would ship uncritiqued.
-        if not repainted and _dump_equal_ignoring_bookkeeping(spec, revised):
-            ledger_rows.append({
-                "kind": "revision", "concept": index,
-                "detail": (f"concept {index} round {round_n}: the revision "
-                          f"produced an identical spec; stopped (the model "
-                          f"has nothing more to give)"),
-                "usd": result.cost or 0.0})
-            break
-
-        diff_note = diff_spec_fields(spec, revised) or "(no field-level change detected)"
-        revised = revised.model_copy(update={
-            "notes_log": [*revised.notes_log,
-                         f"[auto-critique r{round_n} changed] {diff_note}"]})
-
-        ledger_rows.append({
-            "kind": "revision", "concept": index,
-            "detail": f"concept {index} round {round_n}: auto-critique revision",
-            "usd": result.cost or 0.0})
-
-        new_report, new_renders = await _render(revised, d, index)
-        renders = [*renders, *new_renders]
-        spec, report = revised, new_report
-        # loop continues: round_n + 1 critiques THIS round's recomposed render
-
-    if verdict is not None and verdict.tells:
-        report = report.model_copy(
-            update={"warnings": [*report.warnings, *verdict.tells]})
-
-    return spec, report, renders, ledger_rows
-
-
-# -- run_job: directing, then per-concept painting/composing (§8) -------------
-
-async def _paint_and_compose(root: str | Path, job_id: str, index: int,
-                             providers: Providers, image_client: Any,
-                             critique_client: Any,
-                             sem: asyncio.Semaphore) -> None:
-    """One concept's whole life after directing: painting -> composing ->
-    critique (§6.3) -> ready, or error. A failure here (an ImagingError, or
-    anything else) is caught and recorded on THIS concept alone — siblings
-    are unaffected, because this catches everything and returns normally, so
-    run_job's serial loop simply moves on to the next concept (§8). That was
-    true when concepts ran under one gather and is true now that they run one
-    at a time; the isolation lives in this try/except, never in the call
-    shape above it."""
+    A failure here is caught and recorded on THIS concept alone — siblings
+    are unaffected, because this catches everything and returns normally.
+    That isolation is what makes the concurrent fan-out in run_job safe, and
+    it is the same guarantee _paint_and_compose gave when concepts ran one at
+    a time."""
     job = load_job(root, job_id)
     if job is None or index >= len(job.concepts):
         return
-    brief = job.brief
-    # Read off the job once, here, and threaded down through every path that
-    # can generate: one resolution for the whole concept, from its first
-    # paint to any repaint the judge triggers.
-    tier = _image_tier(job)
     concept = job.concepts[index]
+    assignment = _load_assignment(root, job_id, index)
     try:
         concept.status = "painting"
         await _commit_concept(root, job_id, index, concept)
 
-        spec = concept.spec
-        archetype = ARCHETYPES[spec.archetype]
         d = job_dir(root, job_id)
         (d / ASSETS_DIR).mkdir(parents=True, exist_ok=True)
+        tier = _image_tier(job)
 
-        # §15.16: the composition planner, gated behind COVER_PLANNER — off
-        # (the default) means the spontaneous path below, byte-for-byte,
-        # zero planner calls. A plan (or its failure note) and the
-        # plan-edited spec are committed BEFORE painting starts, keeping
-        # job.json the truth after every step; a planning failure paints
-        # spontaneously, per §15.16's never-block-a-cover guarantee.
-        plan: CompositionPlan | None = None
-        if _planner_enabled() and plan_composition is not None:
-            plan_rows: list[dict] = []
-            plan = _plan_concept(root, job_id, index, brief, spec, archetype,
-                                 critique_client, plan_rows)
-            if plan is not None:
-                spec = _apply_plan_to_spec(spec, plan, job_id, index, plan_rows)
-                concept.spec = spec
-            await _commit_concept(root, job_id, index, concept, plan_rows)
+        outcome: ConceptOutcome = await build_concept(
+            job_dir=d, index=index, brief=job.brief, assignment=assignment,
+            spec=concept.spec, image_client=image_client,
+            assemble_prompt=_assemble_prompt, save_renders=save_renders,
+            sem=sem, budget=Budget(max_usd=_concept_art_budget(tier)))
 
-        ledger_rows: list[dict] = []
-        if plan is not None:
-            ledger_rows.extend(await _generate_planned(
-                plan, spec, image_client, critique_client, sem, d, index,
-                archetype, tier=tier))
+        job = load_job(root, job_id)
+        if job is None or index >= len(job.concepts):        # pragma: no cover
+            return
+        concept = job.concepts[index]
+        concept.spec = outcome.spec
+        concept.report = outcome.report
+        concept.renders = [*concept.renders, *outcome.renders]
+        rows = list(outcome.ledger)
+        if outcome.summary:
+            rows.append({"kind": "atelier", "concept": index,
+                         "detail": f"concept {index}: {outcome.summary}",
+                         "usd": 0.0})
+        if outcome.error and not outcome.renders:
+            concept.status = "error"
+            concept.error = outcome.error
         else:
-            # All of one concept's generations in flight together — the
-            # per-job semaphore (not this gather) is what bounds actual
-            # concurrency, so awaiting them one by one would just serialize
-            # what the semaphore already meters (11 of 15 archetypes declare
-            # 2+ generatable slots).
-            gen_slots = [s for s in spec.art if s.prompt and not s.asset]
-            for rows in await asyncio.gather(*(
-                    _generate_art_slot(image_client, sem, d, index, s,
-                                       archetype, tier=tier)
-                    for s in gen_slots)):
-                ledger_rows.extend(rows)
-
-        concept.status = "composing"
-        await _commit_concept(root, job_id, index, concept, ledger_rows)
-
-        report, renders = await _render(spec, d, index)
-        spec, report, renders, critique_rows = await _critique_and_revise(
-            job_id, index, spec, brief, d, providers, critique_client,
-            image_client, sem, report, renders, tier=tier,
-            plan_lines=plan.judge_lines() if plan is not None else ())
-
-        concept.spec = spec
-        concept.status = "ready"
-        concept.report = report
-        concept.renders = [*concept.renders, *renders]
-        await _commit_concept(root, job_id, index, concept, critique_rows)
+            concept.status = "ready"
+            if outcome.error:
+                # A cover that exists but whose builder never called finish
+                # is still a cover; say so in the ledger rather than throwing
+                # away work the person paid for.
+                concept.error = None
+                rows.append({"kind": "atelier", "concept": index,
+                             "detail": f"concept {index}: {outcome.error}",
+                             "usd": 0.0})
+        await _commit_concept(root, job_id, index, concept, rows)
     except Exception as e:  # noqa: BLE001 - one concept's failure must not kill siblings
+        job = load_job(root, job_id)
+        if job is None or index >= len(job.concepts):        # pragma: no cover
+            return
+        concept = job.concepts[index]
         concept.status = "error"
         concept.error = f"This concept could not be finished: {e}"
         await _commit_concept(root, job_id, index, concept)
         log.warning("Cover job %s concept %d failed: %s", job_id, index, e)
 
 
+def _concept_art_budget(tier: str) -> float:
+    """One concept's art allowance. A draft job buys the same NUMBER of
+    generations as a full one, so the dollar ceiling scales with the tier the
+    job rolls at rather than being one flat number that means twelve rolls on
+    one job and seven on another."""
+    from .atelier import MAX_GENERATIONS
+    return round(MAX_GENERATIONS * IMAGE_COST.get(tier, IMAGE_COST["2K"]), 2)
+
+
+def assignments_path(root: str | Path, job_id: str) -> Path:
+    return job_dir(root, job_id) / ASSIGNMENTS_NAME
+
+
+def _load_assignment(root: str | Path, job_id: str, index: int):
+    """This concept's assignment, or a stand-in built from its own spec.
+
+    The stand-in matters: a job created before assignments existed, or one
+    whose director record was lost, must still be buildable — the agent then
+    works from the spec alone with generic notes, which is worse than a real
+    assignment and better than a dead concept."""
+    from .director import ConceptAssignment
+
+    try:
+        raw = json.loads(
+            assignments_path(root, job_id).read_text(encoding="utf-8"))
+        return ConceptAssignment.model_validate(raw["concepts"][index])
+    except (OSError, ValueError, KeyError, IndexError, ValidationError):
+        job = load_job(root, job_id)
+        spec = job.concepts[index].spec if job else None
+        from .model import Direction, Palette
+        direction = Direction(
+            concept_name=f"concept {index}", rationale="",
+            archetype=spec.archetype if spec else "big_type",
+            palette=spec.palette if spec else Palette(
+                background="#ffffff", primary="#000000", accent="#000000",
+                text="#000000", scrim="#000000"),
+            title_font="Spectral", author_font="Spectral", art_prompts=[])
+        return ConceptAssignment(
+            direction=direction,
+            execution_notes="No director notes reached this concept — read "
+                            "the spec and the archetype and work out the "
+                            "traps yourself.",
+            done_when="The cover reads at thumbnail size, the report shows "
+                      "no autopilot intervention, and the art belongs to "
+                      "this book.")
+
+
+# -- run_job: the director reads the book, then N agents build (§8) ------------
+
 async def run_job(root: str | Path, job_id: str, providers: Providers,
-                  image_client: Any, critique_client: Any) -> None:
-    """The whole job flow (§8): distill a reality sheet from the manuscript
-    sample when there is one, one direction call, a CoverSpec built per
-    concept, then every concept painted and composed independently and ONE
-    AT A TIME (see the loop's own comment for why serial). Meant to run as a detached background task — register it with
+                  image_client: Any, critique_client: Any = None, *,
+                  manuscript: str = "") -> None:
+    """The whole job flow (§8), in two acts.
+
+    ONE director call reads the manuscript — the whole book, not a sample —
+    and assigns every concept its design, the traps that design sets, and
+    what finished looks like for it (docproof.cover.director). Then N agents
+    build those assignments concurrently, each holding the composer's own
+    verbs and stopping when it judges its cover done
+    (docproof.cover.atelier).
+
+    `manuscript` is the book's text, passed in by the caller and never
+    written to disk: the route reads the upload, hands it here, and only the
+    ASSIGNMENTS are persisted. Cover Studio has never stored a manuscript.
+
+    `critique_client` is accepted and ignored — the §6.3 critique loop it fed
+    is gone. It stays in the signature so app/routes/cover.py, the Mac
+    shells and any pinned caller keep working through the change.
+
+    Meant to run as a detached background task — register it with
     register_task right after creating it, so an interrupted run is
     detectable rather than a poll that hangs forever."""
     job = load_job(root, job_id)
@@ -1339,45 +1148,16 @@ async def run_job(root: str | Path, job_id: str, providers: Providers,
         log.warning("run_job: cover job %s vanished before it could start", job_id)
         return
 
-    # Reality-sheet distillation (docproof.cover.reality, BRAIN wave): ONCE
-    # per job, before directing, so every concept's direction call reads the
-    # SAME curated sheet rather than each re-reading raw prose. Runs only
-    # when there is a sample to distill; `sample` is reassigned to the
-    # rendered sheet on success so run_directions below receives it as its
-    # ordinary manuscript_sample argument — same parameter, no signature
-    # change there (see direction.py's _sample_rule docstring). A
-    # distillation failure is deliberately non-fatal: falls back to the raw
-    # sample, exactly what every job did before this module existed, logged
-    # and ledgered rather than ever blocking the job on it.
-    sample = _read_sample(root, job_id)
-    if sample:
-        try:
-            reality_result: RealityResult = distill_reality(
-                sample, providers.reality)
-        except RealitySheetError as e:
-            log.warning("Cover job %s: reality-sheet distillation failed; "
-                       "falling back to the raw manuscript sample: %s",
-                       job_id, e)
-            job.ledger.append({
-                "kind": "reality",
-                "detail": (f"reality-sheet distillation failed ({e}); used "
-                          f"the raw manuscript sample instead"),
-                "usd": 0.0})
-        else:
-            sample = reality_result.rendered
-            (job_dir(root, job_id) / REALITY_SHEET_NAME).write_text(
-                reality_result.sheet.model_dump_json(indent=2),
-                encoding="utf-8")
-            job.ledger.append({
-                "kind": "reality",
-                "detail": f"distilled a reality sheet via {reality_result.model}",
-                "usd": reality_result.cost or 0.0})
-
+    # The director reads the book. Falls back to the stored sample only when
+    # no manuscript reached this call at all (a replayed job, a caller that
+    # predates the argument) — a sample is a worse brief than a book, and the
+    # ledger says which one this job got.
+    text = manuscript or _read_sample(root, job_id)
     try:
-        result: DirectionResult = run_directions(
+        result: DirectorResult = assign_concepts(
             job.brief, providers.direction, n=job.brief.concepts,
-            manuscript_sample=sample)
-    except DirectionError as e:
+            manuscript=text)
+    except DirectorError as e:
         job.status, job.error = "error", str(e)
         _write_state(root, job)
         return
@@ -1388,11 +1168,22 @@ async def run_job(root: str | Path, job_id: str, providers: Providers,
         _write_state(root, job)
         return
 
+    # The assignments are the one thing from the read that is kept. They are
+    # what every agent is briefed from, what a retry replays, and the only
+    # record of what the director understood the book to be.
+    assignments_path(root, job_id).write_text(
+        json.dumps({"reading": result.reading,
+                    "concepts": [a.model_dump(mode="json")
+                                 for a in result.assignments]}, indent=2),
+        encoding="utf-8")
+
     try:
         job.concepts = [
-            ConceptState(spec=build_spec(d, job.brief, ARCHETYPES[d.archetype]),
-                        status="queued")
-            for d in result.directions]
+            ConceptState(
+                spec=build_spec(a.direction, job.brief,
+                                ARCHETYPES[a.direction.archetype]),
+                status="queued")
+            for a in result.assignments]
     except Exception as e:  # noqa: BLE001 - a bad archetype must fail visibly
         # Without this guard a build_spec validation error dies inside a
         # detached task, the job never leaves "directing", and the next poll
@@ -1404,58 +1195,35 @@ async def run_job(root: str | Path, job_id: str, providers: Providers,
                      f"archetype: {e}")
         _write_state(root, job)
         return
+
     job.status = "working"
-    job.ledger.append({"kind": "direction",
-                       "detail": f"{len(result.directions)} concepts via {result.model}",
-                       "usd": result.cost or 0.0})
-    # A generatable slot with no prompt ships as a blank layer — legal (a
-    # direction may lean procedural on purpose) but worth saying out loud:
-    # the first live v2 batch shipped EVERY cover artless because the
-    # direction's prompts named slots that don't exist and were dropped.
-    for i, concept in enumerate(job.concepts):
-        archetype = ARCHETYPES[concept.spec.archetype]
-        generatable = {a.id for a in archetype.art if a.generatable}
-        promptless = sorted(
-            s.id for s in concept.spec.art
-            if s.id in generatable and not s.prompt and not s.procedural)
-        if promptless:
-            job.ledger.append({
-                "kind": "direction", "concept": i,
-                "detail": (f"concept {i}: no art prompt reached "
-                          f"{', '.join(promptless)} — those layers render "
-                          f"empty"),
-                "usd": 0.0})
+    read = (f"{result.words_read:,} words"
+            + (" (sliced across the book)" if result.sliced else " — the whole book")
+            if text else "no manuscript")
+    job.ledger.append({
+        "kind": "director",
+        "detail": (f"{len(result.assignments)} concepts assigned via "
+                   f"{result.model}, from {read}"),
+        "usd": result.cost or 0.0})
     _write_state(root, job)
 
-    # ONE CONCEPT AT A TIME (owner, 2026-08-31: "the designer should make each
-    # one independently, one at a time, so it isn't trying to make 5 covers at
-    # the same time — these take a while to make well"). This used to be an
-    # asyncio.gather over every concept, and the covers were worse for it in
-    # two ways that only show up at N>1:
+    # CONCURRENTLY, one agent per concept. This reverses the 2026-08-31
+    # "one concept at a time" decision, and the reason it is safe now is that
+    # the thing serialisation was protecting no longer exists: concepts used
+    # to interleave through one image semaphore while a shared judge loop and
+    # staged reviews waited on each other's generations. An atelier session
+    # is its own reasoning process holding its own budget, and the per-job
+    # semaphore still bounds how many generations are actually in flight —
+    # so N agents cost about as long as one, which is what the owner saw
+    # building the six Longsword covers by hand.
     #
-    #  - The planner, the stage reviews and the judge are reasoning calls with
-    #    real latency. Five concepts in flight meant five plans, five staged
-    #    builds and five critique loops interleaving through one per-job image
-    #    semaphore, so every concept's stage review waited behind other
-    #    concepts' generations — a review that is supposed to look at the plate
-    #    it was just handed, made to wait, and a judge loop that ran out of its
-    #    round cap on wall-clock pressure rather than on the cover being right.
-    #  - A designer does not paint five covers simultaneously. Serial is also
-    #    what makes the job legible while it runs: concept 0 goes ready, then
-    #    concept 1, so the first finished cover is on screen (and revisable)
-    #    while the rest are still being made, instead of five bars crawling
-    #    together and everything landing at once.
-    #
-    # Concurrency INSIDE a concept is untouched — a plan's stage still paints
-    # its slots together under `sem`. The cost is wall-clock: an N-concept job
-    # now takes about N times one concept, which is the trade the owner asked
-    # for. Per-concept isolation is unchanged and does not depend on the
-    # gather: _paint_and_compose catches everything and records the failure on
-    # its own concept, so a concept that dies still leaves its siblings to run.
+    # Per-concept isolation does not depend on the fan-out: _build_concept
+    # catches everything and records the failure on its own concept, so a
+    # concept that dies still leaves its siblings to finish.
     sem = _image_semaphore(job_id)
-    for i in range(len(job.concepts)):
-        await _paint_and_compose(root, job_id, i, providers, image_client,
-                                 critique_client, sem)
+    await asyncio.gather(*(
+        _build_concept(root, job_id, i, image_client, sem)
+        for i in range(len(job.concepts))))
 
     job = load_job(root, job_id)
     if job is not None:
@@ -1618,9 +1386,10 @@ async def run_revision(root: str | Path, job_id: str, concept_index: int,
 __all__ = [
     "ASSETS_DIR", "DRAFT_RESOLUTION", "IMAGE_CONCURRENCY", "IMAGE_QUALITIES",
     "IMAGE_RESOLUTION", "JOB_MANIFEST",
-    "MANUSCRIPT_SAMPLE_NAME", "MAX_CRITIQUE_ROUNDS", "REALITY_SHEET_NAME",
-    "RENDERS_DIR", "Providers",
+    "ASSIGNMENTS_NAME", "MANUSCRIPT_SAMPLE_NAME", "REALITY_SHEET_NAME",
+    "RENDERS_DIR", "Providers", "assignments_path",
     "check_interrupted", "create_job", "default_root", "diff_spec_fields",
     "is_job_alive", "job_dir", "list_jobs", "load_job", "new_job_id",
+    "read_manuscript",
     "plan_path", "register_task", "run_job", "run_revision", "total_usd",
 ]

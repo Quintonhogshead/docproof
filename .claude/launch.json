@@ -12,6 +12,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8765", "--directory", "app/static/canvas"],
       "port": 8765
+    },
+    {
+      "name": "cover-canvas",
+      "runtimeExecutable": "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.venv/bin/python",
+      "runtimeArgs": ["tools/canvas_server.py", "--port", "8791"],
+      "port": 8791
     }
   ]
 }

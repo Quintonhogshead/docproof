@@ -50,6 +50,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from docproof import agent_lane
 from docproof.cover import doctrine
 
 from . import ops as canvas_ops
@@ -106,30 +107,18 @@ LOOK_LADDER: tuple[tuple[int, int], ...] = (
 GRID_STEP = 0.1
 GRID_THIRDS = (1 / 3, 2 / 3)
 
-_INSTALL_HINT = (
-    "The canvas assistant needs the Claude Agent SDK, which is not installed "
-    "in this environment — install it with `pip install claude-agent-sdk` "
-    "(and the Claude Code CLI it drives) and reopen the canvas.")
+_SUBJECT = "The canvas assistant"
+_REOPEN = "reopen the canvas"
 
-_LOGIN_HINT = (
-    "The canvas assistant runs on your Claude subscription and this machine "
-    "is not logged in — run `claude setup-token` in a terminal and set "
-    "CLAUDE_CODE_OAUTH_TOKEN, or run `claude` once to sign in, then reopen "
-    "the canvas.")
+_INSTALL_HINT = agent_lane.install_hint(_SUBJECT, _REOPEN)
+_LOGIN_HINT = agent_lane.login_hint(_SUBJECT, _REOPEN)
+_CLI_HINT = agent_lane.cli_hint(_SUBJECT, _REOPEN)
 
-_CLI_HINT = (
-    "The canvas assistant could not find the Claude Code CLI it drives — "
-    "install it (`npm install -g @anthropic-ai/claude-code`) and reopen the "
-    "canvas.")
-
-
-class AssistantUnavailable(RuntimeError):
-    """The AI box cannot run here, with a sentence saying what to do.
-
-    Always a human sentence naming the missing piece and the command that
-    fixes it: this text is rendered straight into the AI box, where "no
-    module named claude_agent_sdk" would be a dead end for the person the
-    canvas was built for."""
+# The AI box's name for the shared lane's refusal (docproof.agent_lane): an
+# ALIAS, not a subclass, so a lane failure raised anywhere still arrives at
+# this module's own `except AssistantUnavailable` and at the routes that
+# render it into the chat panel.
+AssistantUnavailable = agent_lane.AgentLaneUnavailable
 
 
 @dataclass
@@ -1182,60 +1171,24 @@ def _round(value: Any) -> Any:
 
 # -- the SDK seam -------------------------------------------------------------
 
+# The lane plumbing lives in docproof.agent_lane, shared with the cover
+# atelier — above all `child_env`, the billing fence, which must have exactly
+# one implementation. Bound as module-level names so a test can still swap
+# them and so every call below resolves through this module's globals.
 def _sdk() -> Any:
-    """The agent SDK, or the sentence that says how to get it.
-
-    Imported through importlib at CALL time, never at module import: the
-    canvas server must start, and its routes must import, on a machine that
-    has no assistant installed — the AI box is the only thing that should
-    fail there, and it should fail into the chat panel."""
-    try:
-        return importlib.import_module("claude_agent_sdk")
-    except ImportError as e:
-        raise AssistantUnavailable(_INSTALL_HINT) from e
+    return agent_lane.sdk(_INSTALL_HINT)
 
 
 def _require_login() -> None:
-    """Refuse before spawning anything if this machine has no Claude login.
-
-    Checked here rather than left to the CLI because the CLI's own failure
-    for this is a subprocess exit nobody in the AI box can act on. The three
-    places a login can live are the token env var (the Galley pattern), the
-    credentials file, and the CLI's own config — any one of them is enough,
-    and the check is deliberately generous: a false "you are logged in" costs
-    one clear error from the CLI, a false "you are not" costs the feature."""
-    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
-        return
-    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
-    base = Path(config_dir) if config_dir else Path.home() / ".claude"
-    if (base / ".credentials.json").exists():
-        return
-    legacy = Path(config_dir) / ".claude.json" if config_dir \
-        else Path.home() / ".claude.json"
-    if legacy.exists():
-        return
-    raise AssistantUnavailable(_LOGIN_HINT)
+    agent_lane.require_login(_LOGIN_HINT)
 
 
 def _child_env() -> dict[str, str]:
-    """The billing guard: the spawned CLI must run on the subscription.
-
-    ClaudeAgentOptions.env is MERGED over the parent's environment by the
-    transport (it cannot delete a key), and the CLI reads ANTHROPIC_API_KEY
-    with JavaScript truthiness — so blanking it to "" is how you actually make
-    it absent, and the SDK's own auth probing treats the empty string as
-    unset. This matters more than it looks: DocProof holds image-generation
-    keys in the same process, and a key that leaks into this child turns a
-    $0 subscription turn into a metered API bill without any visible symptom.
-
-    CLAUDE_CODE_OAUTH_TOKEN is deliberately left alone — it is the credential
-    this is supposed to run on."""
-    return {"ANTHROPIC_API_KEY": ""}
+    return agent_lane.child_env()
 
 
 def _sdk_tools(sdk: Any, specs: list[_ToolSpec]) -> list[Any]:
-    """The specs, wrapped as SDK tool objects."""
-    return [sdk.tool(s.name, s.description, s.schema)(s.handler) for s in specs]
+    return agent_lane.sdk_tools(sdk, specs)
 
 
 def _options(sdk: Any, session: _Session, model: str) -> Any:

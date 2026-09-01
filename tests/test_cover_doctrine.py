@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from docproof.canvas import assistant
-from docproof.cover import critique, direction, doctrine, planner
+from docproof.cover import atelier, direction, doctrine, planner
 
 # Rule 2 is the cardinal one (§15.23) and the reason the whole module
 # exists: it must reach every surface, so it doubles as the marker that a
@@ -89,8 +89,10 @@ def test_the_stage_review_prompt_carries_the_doctrine():
     assert doctrine.render("plan") in planner._review_system_prompt()
 
 
-def test_the_judge_prompt_carries_the_doctrine():
-    assert doctrine.render("critique") in critique._system_prompt()
+def test_the_building_agents_prompt_carries_the_doctrine():
+    """The agent that plans, buys and judges one cover -- the surface that
+    replaced the fixed critique loop."""
+    assert doctrine.render("atelier") in atelier._system_prompt()
 
 
 def test_the_canvas_assistant_prompt_carries_the_doctrine():
@@ -102,8 +104,12 @@ def test_the_conduct_rules_stay_out_of_the_one_shot_calls():
     ("measure before you move", "fewest ops"). Shipping them to a one-shot
     call with no tools would be instructions the model cannot follow, which
     is how a prompt teaches a model to answer loosely."""
-    conduct = [r for r in doctrine.RULES if r.surfaces == ("canvas",)]
+    conduct = [r for r in doctrine.RULES
+               if r.surfaces == ("atelier", "canvas")]
     assert conduct, "the conduct rules were re-tagged; re-check this test"
     for rule in conduct:
-        for surface in ("direction", "plan", "critique"):
+        for surface in ("direction", "plan"):
             assert rule.text not in doctrine.render(surface)
+        # ...but they DO reach the two tool-using surfaces, which can obey them
+        for surface in ("atelier", "canvas"):
+            assert rule.text in doctrine.render(surface)

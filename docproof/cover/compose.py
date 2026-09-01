@@ -28,6 +28,7 @@ import colorsys
 import logging
 import math
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -46,6 +47,7 @@ from .archetypes import zone_px
 from .effects import (apply_adjust, apply_effect_stack, apply_mask,
                       resolve_mask,
                       composite_layer as _composite_layer,
+                      lightness_band as _lightness_band,
                       luminance_band as _luminance_band,
                       srgb_to_linear as _srgb_to_linear)
 from .imaging import has_real_alpha
@@ -145,6 +147,19 @@ _DEAD_BAND_SAMPLE_HEIGHT = 640        # downsample rows before scanning — a
                                       # module's existing downsample-for-cost
                                       # discipline (_grain_layer et al.)
 _DEAD_BAND_ROW_STDDEV_THRESHOLD = 0.020   # of 0..1 relative luminance
+# ...and how much a row's MEAN may differ from its neighbours' before the row
+# counts as alive regardless of how flat it is in itself (fixed 2026-08-31).
+#
+# Within-row stddev alone measures the wrong axis. A full-bleed horizontal
+# rule — the most ordinary way to put structure into an empty stretch — is
+# perfectly uniform ACROSS its own row, so it scored as flat as the emptiness
+# it was drawn to break, and a cover could not improve this metric by adding
+# exactly the thing the warning was asking for. (Worse: it made its own row
+# flatter than a textured one, so drawing rules could raise the number.) A
+# horizontal edge is a jump between adjacent rows, so that is where it has to
+# be looked for. A gradient moves its mean by a hair per row and stays dead,
+# which is the behaviour this metric already had and wants to keep.
+_DEAD_BAND_ROW_DELTA_THRESHOLD = 0.020    # of 0..1 relative luminance
 _DEAD_BAND_WARN_FRACTION = 0.28
 
 
@@ -1178,10 +1193,108 @@ def _occlusion_fraction(ink_mask: Image.Image, art_alpha: Image.Image) -> float:
     return ImageStat.Stat(covered).sum[0] / ink_total
 
 
+# Per-glyph occlusion (fixed 2026-08-31). The whole-word ratio above is the
+# right question for "is this text crowded"; it is the WRONG question for "is
+# this text still readable," and a live render proved the gap: a cutout
+# crested the baseline of a title and the report said 16.3% occlusion —
+# comfortably inside the 30% limit — while the O was 100% buried and the R
+# 44%, so the cover shipped reading "LONGSW RD". A word can lose a sixth of
+# its total ink and still lose an entire letter, because a letter is only
+# about a tenth of the word.
+#
+# The governing fact from that render: at a normal display weight, ANY
+# bottom-edge overlap destroys a round letter, whose whole identity is its
+# bowl. So the per-glyph limit is not a scaled version of the whole-word one
+# — half a letter gone is already an unreadable letter, whatever the word
+# around it measures.
+_GLYPH_OCCLUSION_THRESHOLD = 0.50
+
+# Ink below this is antialiasing, not a glyph. Projecting without a threshold
+# merges neighbouring letters through their own soft edges, which would hand
+# the measurement back exactly the blind spot it exists to close.
+_GLYPH_INK_FLOOR = 32
+
+
+def _runs(projection: Sequence[int]) -> list[tuple[int, int]]:
+    """Contiguous (start, end-exclusive) runs of truth in a 0/1 projection."""
+    runs: list[tuple[int, int]] = []
+    start = None
+    for i, v in enumerate(projection):
+        if v and start is None:
+            start = i
+        elif not v and start is not None:
+            runs.append((start, i))
+            start = None
+    if start is not None:
+        runs.append((start, len(projection)))
+    return runs
+
+
+def _glyph_boxes(ink_mask: Image.Image) -> list[tuple[int, int, int, int]]:
+    """`ink_mask` cut into one box per glyph: row runs first (the lines), then
+    column runs inside each line (the letters).
+
+    Pillow has no connected-components, and it does not need one here —
+    set type on a horizontal baseline separates into columns with no ink
+    between them, which is what a projection finds for free in C. Two glyphs
+    that genuinely touch (a tight kern, a ligature) come back as one box,
+    which is the safe direction to be wrong in: a merged pair measures as a
+    bigger unit and is therefore harder, not easier, to declare buried.
+
+    Returns [] for an empty mask, so every caller's max() needs a default."""
+    solid = ink_mask.point(lambda v: 255 if v >= _GLYPH_INK_FLOOR else 0)
+    _, rows = solid.getprojection()
+    boxes: list[tuple[int, int, int, int]] = []
+    for top, bottom in _runs(rows):
+        line = solid.crop((0, top, solid.width, bottom))
+        cols, _ = line.getprojection()
+        for left, right in _runs(cols):
+            boxes.append((left, top, right, bottom))
+    return boxes
+
+
+def _worst_glyph_occlusion(ink_mask: Image.Image, art_alpha: Image.Image,
+                           boxes: Sequence[tuple[int, int, int, int]]) -> float:
+    """The most-buried single glyph's occlusion fraction — the number that
+    decides whether a word is still a word. `boxes` comes from _glyph_boxes
+    and is computed ONCE per text slot by the caller: the glyphs do not move
+    when the art does, and recomputing them per search candidate would pay
+    for the same projection six times."""
+    worst = 0.0
+    for box in boxes:
+        ink = ink_mask.crop(box)
+        total = ImageStat.Stat(ink).sum[0]
+        if total <= 0:
+            continue
+        covered = ImageChops.multiply(ink, art_alpha.crop(box))
+        worst = max(worst, ImageStat.Stat(covered).sum[0] / total)
+    return worst
+
+
+def _occlusion_severity(whole: float, worst_glyph: float,
+                        limit: float = _OCCLUSION_THRESHOLD) -> float:
+    """The two limits as one comparable number: 1.0 is exactly at the limit,
+    over 1.0 is a violation, and whichever limit is closer to breaking is the
+    one that speaks. Lets a search rank candidates by "how bad" without
+    having to decide up front which kind of bad it is looking for.
+
+    `limit` is the caller's own whole-word threshold, because the three
+    guards that ask this question tolerate very different amounts of overlap
+    (30% for a sandwich that is SUPPOSED to overlap, 8% for incidental
+    contact, 4% for something nudged into a line gap). The per-glyph limit
+    is deliberately NOT scaled with it: a half-buried letter is an
+    unreadable letter whichever guard is asking. On the tight guards the
+    glyph term will rarely be the one that binds — one letter of nine gone
+    is already ~11% of the word — which is exactly right. The blind spot
+    this closes lives at the loose end, where a word can lose a whole letter
+    and still measure 15%.""" 
+    return max(whole / limit, worst_glyph / _GLYPH_OCCLUSION_THRESHOLD)
+
+
 def _place_contain_clear_of_text(source: Image.Image, canvas: tuple[int, int],
                                  slot: ArtSlot, palette: Palette, has_alpha: bool,
                                  text_slot: TextSlot
-                                 ) -> tuple[Image.Image, float, bool]:
+                                 ) -> tuple[Image.Image, float, float, bool]:
     """The title occlusion guard's search (fix 2, v2.1 BODY-fix wave):
     `slot`'s normal contain-fit placement at its own declared anchor, if
     that already covers at most _OCCLUSION_THRESHOLD of `text_slot`'s
@@ -1191,8 +1304,12 @@ def _place_contain_clear_of_text(source: Image.Image, canvas: tuple[int, int],
     _fit_contain reads one) and take the first that clears the threshold.
 
     Returns (the UNTREATED placed image at the winning anchor, its
-    occlusion fraction, whether every offset still failed — the caller's
-    cue to degrade to drawing this art BELOW the text instead, per §5.2.3).
+    whole-word occlusion fraction, its WORST SINGLE GLYPH's occlusion
+    fraction, whether every offset still failed — the caller's cue to
+    degrade to drawing this art BELOW the text instead, per §5.2.3). Both
+    fractions come back because either one can be the reason a placement was
+    rejected, and a warning that quotes the wrong one sends a reader
+    looking for a crowding problem that is really a buried letter.
     Measurement itself happens against each candidate's TREATED alpha (a
     throwaway copy) because silhouette's hard threshold and sticker's
     dilation both reshape alpha — scoring the untreated candidate could
@@ -1204,25 +1321,37 @@ def _place_contain_clear_of_text(source: Image.Image, canvas: tuple[int, int],
     actually applied for real — never twice."""
     fit = typeset.fit_text(text_slot, canvas)
     ink_mask = typeset.text_mask(text_slot, fit, canvas)
+    # Once, not per candidate: the glyphs do not move when the art does.
+    boxes = _glyph_boxes(ink_mask)
 
-    def measure(anchor: tuple[float, float]) -> tuple[Image.Image, float]:
+    def measure(anchor: tuple[float, float]
+                ) -> tuple[Image.Image, float, float]:
         placed = _fit_contain(source, canvas, anchor, slot.scale, slot.offset)
         treated, _warning = _apply_treatment(placed, slot.treatment, palette,
                                              slot.id, has_alpha)
-        return placed, _occlusion_fraction(ink_mask, treated.getchannel("A"))
+        alpha = treated.getchannel("A")
+        return (placed, _occlusion_fraction(ink_mask, alpha),
+                _worst_glyph_occlusion(ink_mask, alpha, boxes))
 
     ax, ay = slot.anchor
-    best_img, best_ratio = measure((ax, ay))
-    if best_ratio <= _OCCLUSION_THRESHOLD:
-        return best_img, best_ratio, False
+    best_img, best_ratio, best_glyph = measure((ax, ay))
+    if _occlusion_severity(best_ratio, best_glyph) <= 1.0:
+        return best_img, best_ratio, best_glyph, False
 
     for dx in _OCCLUSION_ANCHOR_OFFSETS:
-        trial_img, trial_ratio = measure((min(1.0, max(0.0, ax + dx)), ay))
-        if trial_ratio <= _OCCLUSION_THRESHOLD:
-            return trial_img, trial_ratio, False
-        if trial_ratio < best_ratio:
-            best_img, best_ratio = trial_img, trial_ratio
-    return best_img, best_ratio, True
+        trial_img, trial_ratio, trial_glyph = measure(
+            (min(1.0, max(0.0, ax + dx)), ay))
+        if _occlusion_severity(trial_ratio, trial_glyph) <= 1.0:
+            return trial_img, trial_ratio, trial_glyph, False
+        # Ranked by SEVERITY, not by the whole-word ratio: an offset that
+        # spreads the same total ink loss across many letters instead of
+        # eating one whole is genuinely better, and ranking on the word
+        # alone could not see the difference.
+        if (_occlusion_severity(trial_ratio, trial_glyph)
+                < _occlusion_severity(best_ratio, best_glyph)):
+            best_img, best_ratio, best_glyph = (trial_img, trial_ratio,
+                                                trial_glyph)
+    return best_img, best_ratio, best_glyph, True
 
 
 def _place_contain_at_center(source: Image.Image, canvas: tuple[int, int],
@@ -1297,23 +1426,30 @@ def _snap_to_line_gap(source: Image.Image, canvas: tuple[int, int],
                                                           # zone's own top
 
     ink_mask = typeset.text_mask(text_slot, fit, canvas)
+    boxes = _glyph_boxes(ink_mask)
 
-    def measure(center_y: float) -> tuple[Image.Image, float]:
+    def measure(center_y: float) -> tuple[Image.Image, float, float]:
         placed = _place_contain_at_center(source, canvas, slot.scale,
                                           tuple(slot.offset), (cx, center_y))
         treated, _warning = _apply_treatment(placed, slot.treatment, palette,
                                              slot.id, has_alpha)
-        return placed, _occlusion_fraction(ink_mask, treated.getchannel("A"))
+        alpha = treated.getchannel("A")
+        return (placed, _occlusion_fraction(ink_mask, alpha),
+                _worst_glyph_occlusion(ink_mask, alpha, boxes))
 
-    best_img, best_ratio = measure(cy)
-    if best_ratio <= _LINE_GAP_CONTACT_THRESHOLD:
+    def severity(whole: float, glyph: float) -> float:
+        return _occlusion_severity(whole, glyph, _LINE_GAP_CONTACT_THRESHOLD)
+
+    best_img, best_ratio, best_glyph = measure(cy)
+    if severity(best_ratio, best_glyph) <= 1.0:
         return best_img, best_ratio, None
 
     for frac in _LINE_GAP_NUDGE_FRACTIONS:
-        trial_img, trial_ratio = measure(cy + frac * ch)
-        if trial_ratio < best_ratio:
-            best_img, best_ratio = trial_img, trial_ratio
-        if trial_ratio <= _LINE_GAP_CONTACT_THRESHOLD:
+        trial_img, trial_ratio, trial_glyph = measure(cy + frac * ch)
+        if severity(trial_ratio, trial_glyph) < severity(best_ratio, best_glyph):
+            best_img, best_ratio, best_glyph = (trial_img, trial_ratio,
+                                                trial_glyph)
+        if severity(trial_ratio, trial_glyph) <= 1.0:
             return trial_img, trial_ratio, None
 
     warning = (
@@ -1470,23 +1606,41 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
             if snap_warning:
                 warnings.append(snap_warning)
         elif slot.fit == "contain" and sandwich_text is not None:
-            img, ratio, degrade = _place_contain_clear_of_text(
+            img, ratio, glyph_ratio, degrade = _place_contain_clear_of_text(
                 source, canvas, slot, palette, has_alpha, sandwich_text)
             key = f"{sandwich_text.id}<-{slot.id}"
             sandwich_pairs.add((sandwich_text.id, slot.id))
             if degrade:
                 layers_out[i - 1], layers_out[i] = layers_out[i], layers_out[i - 1]
+                # Name the limit that actually broke. A buried LETTER and a
+                # crowded WORD are different defects with different fixes,
+                # and quoting the word's number for a letter's problem sends
+                # a reader (or an agent) looking in the wrong place.
+                if (glyph_ratio / _GLYPH_OCCLUSION_THRESHOLD
+                        > ratio / _OCCLUSION_THRESHOLD):
+                    why = (f"buried one whole letter of "
+                           f"'{sandwich_text.id}' ({glyph_ratio:.0%} of a "
+                           f"single glyph, over the "
+                           f"{_GLYPH_OCCLUSION_THRESHOLD:.0%} limit; the "
+                           f"word as a whole was only {ratio:.0%})")
+                else:
+                    why = (f"still covered {ratio:.0%} of "
+                           f"'{sandwich_text.id}''s ink (over the "
+                           f"{_OCCLUSION_THRESHOLD:.0%} limit)")
                 warnings.append(
                     f"{slot.id}: even after searching anchor offsets, it "
-                    f"still covered {ratio:.0%} of '{sandwich_text.id}''s "
-                    f"ink (over the {_OCCLUSION_THRESHOLD:.0%} limit); drew "
-                    f"'{sandwich_text.id}' on top of it instead of "
-                    f"underneath.")
+                    f"{why}; drew '{sandwich_text.id}' on top of it instead "
+                    f"of underneath.")
                 occlusion[key] = 0.0   # text now draws on top — the
                                       # composited cover carries none of
                                       # this pair's occlusion any more
+                occlusion[f"{key}#glyph"] = 0.0
             else:
                 occlusion[key] = ratio
+                # Reported even when it passed: an agent tuning a sandwich
+                # needs to see how close the worst letter came, not only
+                # that the word survived.
+                occlusion[f"{key}#glyph"] = glyph_ratio
         else:
             if slot.corners and not has_alpha:
                 warnings.append(
@@ -1643,9 +1797,27 @@ def _apply_text_contact_guard(positioned: dict[str, Image.Image],
             fit = typeset.fit_text(slot, canvas)
             text_ink[layer.ref] = (typeset.text_mask(slot, fit, canvas), i)
 
+    # One projection per text slot, reused by every candidate of every art
+    # slot below (_glyph_boxes' own note: the glyphs never move here).
+    glyph_boxes = {tid: _glyph_boxes(mask) for tid, (mask, _i) in text_ink.items()}
+
     def measure_all(img: Image.Image, tids: list[str]) -> dict[str, float]:
+        """Each text slot's occlusion as a SEVERITY-equivalent fraction: the
+        whole-word ratio, or whatever whole-word ratio would be as bad as the
+        worst single glyph, whichever is worse. Reported on the whole-word
+        scale so the number in RenderReport.occlusion and in the warning text
+        still means what it always meant, while a buried letter can no longer
+        hide behind eight intact ones."""
         alpha = img.getchannel("A")
-        return {tid: _occlusion_fraction(text_ink[tid][0], alpha) for tid in tids}
+        out: dict[str, float] = {}
+        for tid in tids:
+            mask = text_ink[tid][0]
+            whole = _occlusion_fraction(mask, alpha)
+            glyph = _worst_glyph_occlusion(mask, alpha, glyph_boxes[tid])
+            out[tid] = max(whole, _occlusion_severity(
+                whole, glyph, _TEXT_ART_CONTACT_THRESHOLD)
+                * _TEXT_ART_CONTACT_THRESHOLD)
+        return out
 
     moves: list[tuple[str, str]] = []   # (art_id, move-before-this-text-id)
     for i, layer in enumerate(layers_out):
@@ -2741,19 +2913,29 @@ def _dilate_mask(mask: Image.Image, px: float) -> Image.Image:
 
 def _duotone(img: Image.Image, palette: Palette,
             ink: tuple[int, int, int] | None = None) -> Image.Image:
-    """Map every pixel's WCAG luminance onto a straight-line ramp between
-    palette.background (darkest) and `ink` (lightest — defaults to
-    palette.primary, the normal §7.4a rule), reusing the same
-    _luminance_band the legibility autopilot already computes — the same
-    measurement, put to a different use. Alpha passes through untouched, so
+    """Map every pixel's PERCEPTUAL lightness onto a straight-line ramp
+    between palette.background (darkest) and `ink` (lightest — defaults to
+    palette.primary, the normal §7.4a rule). Alpha passes through untouched, so
     a transparent cutout stays exactly as transparent after its RGB is
     remapped. Every OPAQUE output pixel's color lies exactly on that
     256-step line (never off it), which is the "duotone output contains
     only ramp colors" guarantee §7.4a's test list asks for — `ink` only
     changes WHICH ramp, never that guarantee. (`ink` is the art-vs-ground
     contrast floor's escalation, v2.1 BODY-fix wave — see
-    _apply_art_contrast_floor.)"""
-    lum = _luminance_band(img)
+    _apply_art_contrast_floor.)
+
+    RAMP POSITION IS PERCEPTUAL, NOT PHYSICAL (fixed 2026-08-31). This used
+    to read _luminance_band — WCAG relative luminance, the legibility
+    autopilot's own measurement — on the reasoning that one measurement
+    serving two purposes was a virtue. It was a bug: linear luminance is
+    savagely compressed at the dark end, so a low-key plate (sRGB 10-60 — a
+    night interior, deep water, exactly what a duotone is reached for)
+    landed inside a ~6%-wide slice of the 256-step ramp and came back a flat
+    rectangle. _lightness_band asks the same question of the gamma-encoded
+    values instead, which is what a tone MAPPING wants. The autopilot still
+    measures with _luminance_band; contrast math is the one place linear is
+    right."""
+    lum = _lightness_band(img)
     bg = ImageColor.getrgb(palette.background)
     fg = ink if ink is not None else ImageColor.getrgb(palette.primary)
     bands = []
@@ -2792,8 +2974,12 @@ def _posterize(img: Image.Image, palette: Palette) -> Image.Image:
     _POSTERIZE_LEVELS distinct RGB triples ever appear in the opaque output,
     and every one of them is a real palette color — "posterize output
     contains only palette colors" from the test list, by construction
-    rather than by measurement."""
-    lum = _luminance_band(img)
+    rather than by measurement.
+
+    Buckets on PERCEPTUAL lightness for _duotone's reason above: bucketing a
+    low-key plate on linear luminance dropped every pixel into band 0 and
+    returned one flat colour."""
+    lum = _lightness_band(img)
     roles = ("background", "primary", "accent", "text")
     palette_colors = [ImageColor.getrgb(palette.get(r)) for r in roles]
     edges = [i * 256 // _POSTERIZE_LEVELS for i in range(_POSTERIZE_LEVELS + 1)]
@@ -3354,8 +3540,8 @@ def _zone_stats(img: Image.Image, rect: tuple[int, int, int, int],
 # emptiness can be judged by a number, not eyeballed off a thumbnail.
 
 def _dead_band_frac(image: Image.Image) -> tuple[float, int, int]:
-    """The tallest contiguous run of near-flat rows (per-row relative-
-    luminance stddev under _DEAD_BAND_ROW_STDDEV_THRESHOLD), as a fraction
+    """The tallest contiguous run of DEAD rows — flat across themselves AND
+    flat against their neighbours (see `alive` below) — as a fraction
     of canvas height, plus its own (top, bottom) row bounds in the ORIGINAL
     image's px — the composer's one full-canvas, post-composite read of
     "how much of this cover is doing nothing." `image` is the FINAL
@@ -3376,12 +3562,32 @@ def _dead_band_frac(image: Image.Image) -> tuple[float, int, int]:
     if (sample_w, sample_h) != (cw, ch):
         band = band.resize((sample_w, sample_h), Image.Resampling.BILINEAR)
 
+    stats = []
+    for y in range(sample_h):
+        row = ImageStat.Stat(band.crop((0, y, sample_w, y + 1)))
+        stats.append((row.stddev[0] / 255.0, row.mean[0] / 255.0))
+
+    def alive(y: int) -> bool:
+        """Whether row `y` has anything in it — measured on BOTH axes.
+
+        Across the row: its own stddev, the original test, which catches
+        glyphs, art edges and ornament. Between rows: how far its mean sits
+        from its neighbours', which catches a horizontal edge — a full-bleed
+        rule, a hard seam, the top of a band of colour — that is invisible to
+        the first test precisely because it is uniform."""
+        stddev, mean = stats[y]
+        if stddev >= _DEAD_BAND_ROW_STDDEV_THRESHOLD:
+            return True
+        for neighbour in (y - 1, y + 1):
+            if 0 <= neighbour < sample_h:
+                if abs(mean - stats[neighbour][1]) >= _DEAD_BAND_ROW_DELTA_THRESHOLD:
+                    return True
+        return False
+
     best_len, best_top = 0, 0
     run_len, run_top = 0, 0
     for y in range(sample_h):
-        row = band.crop((0, y, sample_w, y + 1))
-        row_stddev = ImageStat.Stat(row).stddev[0] / 255.0
-        if row_stddev < _DEAD_BAND_ROW_STDDEV_THRESHOLD:
+        if not alive(y):
             if run_len == 0:
                 run_top = y
             run_len += 1

@@ -6,7 +6,7 @@ function (`subscription._sdk`) and every test replaces it with a scripted
 fake, the same discipline tests/test_canvas_assistant.py keeps.
 
 The strongest tests in this file do not poke at the shim at all: they call
-the REAL direction.py / critique.py entry points with a subscription object
+the REAL direction.py entry points with a subscription object
 in the provider/client slot and assert those modules parse the reply. That is
 the only way to prove the stand-ins satisfy the interfaces their call sites
 actually use, rather than the interfaces this module imagines they use.
@@ -29,7 +29,6 @@ from PIL import Image
 
 from docproof.cover import subscription
 from docproof.cover.archetypes import ARCHETYPES
-from docproof.cover.critique import CritiqueError, run_critique
 from docproof.cover.direction import (DirectionError, revise_spec,
                                       run_directions)
 from docproof.cover.model import Brief, Direction, Palette, build_spec
@@ -327,23 +326,44 @@ def test_a_synchronous_call_works_from_inside_a_running_event_loop(monkeypatch):
     assert asyncio.run(on_the_loop()).directions[0].concept_name == "Cold Light"
 
 
-# -- the anthropic-client shim, through the real critique call ----------------
+# -- the anthropic-client shim ------------------------------------------------
+#
+# These used to drive the shim through critique.run_critique, which was the
+# only vision caller in the package. That module is gone (its loop was
+# replaced by docproof.cover.atelier), so the shim is exercised DIRECTLY
+# here: the contracts under test were always the shim's own -- image blocks
+# survive the crossing, the model id rides the call, and the child never sees
+# an API key -- and driving them through a caller only ever obscured that.
+# docproof.cover.planner.review_stage is the remaining in-package caller with
+# this exact shape.
 
-def test_run_critique_parses_a_subscription_reply(monkeypatch):
+def _stream(client, **overrides):
+    params = dict(model="claude-sonnet-5", max_tokens=8000, system="s",
+                  messages=[{"role": "user", "content": "judge this"}])
+    params.update(overrides)
+    with client.messages.stream(**params) as stream:
+        return stream.get_final_message()
+
+
+def test_the_shim_parses_a_subscription_reply(monkeypatch):
     client = _client(monkeypatch, _CRITIQUE_REPLY)
-    verdict = run_critique(_png(), _png(20, 30), _spec(), _brief(), client)
-    assert verdict.passes is False
-    assert verdict.tells == ["The author line disappears into the ground."]
-    assert verdict.notes == "Lift the author line onto the scrim."
-    assert verdict.cost == 0.0
+    message = _stream(client)
+    assert message.stop_reason == "end_turn"
+    assert json.loads(message.content[0].text) == _CRITIQUE_REPLY
 
 
-def test_both_critique_images_reach_the_turn_as_image_blocks(monkeypatch):
-    # The render AND the 100px shelf thumbnail: the judge's whole reason for
-    # the second image is legibility at the size a reader meets the cover.
+def test_image_blocks_reach_the_turn_intact(monkeypatch):
+    """The whole reason this shim exists rather than a text-only Provider:
+    a vision call's images have to cross into the CLI turn as images."""
     seen = {}
     client = _client(monkeypatch, _CRITIQUE_REPLY, seen=seen)
-    run_critique(_png(), _png(20, 30), _spec(), _brief(), client)
+    _stream(client, messages=[{"role": "user", "content": [
+        {"type": "text", "text": "judge this at shelf/search-thumbnail size"},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                     "data": base64.b64encode(_png()).decode()}},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                     "data": base64.b64encode(_png(20, 30)).decode()}},
+    ]}])
     content = seen["prompt"][0]["message"]["content"]
     images = [b for b in content if b["type"] == "image"]
     assert len(images) == 2
@@ -354,33 +374,31 @@ def test_both_critique_images_reach_the_turn_as_image_blocks(monkeypatch):
                for b in content if b["type"] == "text")
 
 
-def test_a_critique_with_no_thumbnail_sends_the_one_image(monkeypatch):
+def test_a_single_image_turn_crosses_as_one_image(monkeypatch):
     seen = {}
     client = _client(monkeypatch, _CRITIQUE_REPLY, seen=seen)
-    run_critique(_png(), None, _spec(), _brief(), client)
+    _stream(client, messages=[{"role": "user", "content": [
+        {"type": "text", "text": "judge this"},
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                     "data": base64.b64encode(_png()).decode()}},
+    ]}])
     content = seen["prompt"][0]["message"]["content"]
     assert len([b for b in content if b["type"] == "image"]) == 1
 
 
-def test_the_critique_model_id_rides_the_call(monkeypatch):
+def test_the_model_id_rides_the_call(monkeypatch):
     seen = {}
     client = _client(monkeypatch, _CRITIQUE_REPLY, seen=seen)
-    run_critique(_png(), None, _spec(), _brief(), client, model="claude-opus-5")
+    _stream(client, model="claude-opus-5")
     assert seen["options"].model == "claude-opus-5"
 
 
-def test_the_critique_child_never_sees_an_api_key(monkeypatch):
+def test_the_shim_child_never_sees_an_api_key(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-a-real-key")
     seen = {}
     client = _client(monkeypatch, _CRITIQUE_REPLY, seen=seen)
-    run_critique(_png(), None, _spec(), _brief(), client)
+    _stream(client)
     assert seen["options"].env == {"ANTHROPIC_API_KEY": ""}
-
-
-def test_a_junk_critique_reply_is_a_readable_critique_error(monkeypatch):
-    client = _client(monkeypatch, "no thanks")
-    with pytest.raises(CritiqueError, match="no JSON object"):
-        run_critique(_png(), None, _spec(), _brief(), client)
 
 
 def test_the_shim_reads_a_cached_system_prompt_block_list(monkeypatch):
