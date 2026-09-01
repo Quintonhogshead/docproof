@@ -3,7 +3,9 @@
 New-wave findings enter through the same earliest-wins arbitration DocProof's
 validator uses: the earliest finding to claim a span keeps it, so a later wave can
 *add* findings but can never destabilize wave one. A finding that loses a span is
-not deleted — it routes to the query channel, where the author still sees it.
+not deleted — it routes to the query channel, where the author still sees it —
+unless it is the SAME edit the winner already makes (a later wave re-finding
+wave one's typo), which is a duplicate: recorded as merged, never a query.
 
 Genuine disputes among later-wave findings go to a panel via
 :func:`docproof.judges.screen` with a fixed spec; every ruling is recorded as a
@@ -36,8 +38,27 @@ class AdjudicationResult:
     verdicts: list[Verdict] = field(default_factory=list)
 
 
+# A finding with no provenance has no wave to claim. It is treated as the
+# LATEST wave, never the earliest: it loses ties to anything that can say where
+# it came from, and it is screened like any late arrival. (Ranking it as wave 0
+# let an unattributed finding outrank wave one and skip the panel.)
+_UNKNOWN_WAVE = 1 << 30
+
+
 def _wave_of(f: GFinding) -> int:
+    return f.provenance.wave if f.provenance else _UNKNOWN_WAVE
+
+
+def _recorded_wave(f: GFinding) -> int:
+    """The wave a Verdict records: the real one, or 0 for "unknown"."""
+
     return f.provenance.wave if f.provenance else 0
+
+
+def _same_edit(a: GFinding, b: GFinding) -> bool:
+    """Do two findings make the identical edit — same span, find, and replace?"""
+
+    return (a.span == b.span and a.find == b.find and a.replace == b.replace)
 
 
 def _overlaps(a: Span, b: Span) -> bool:
@@ -62,33 +83,48 @@ def arbitrate(findings: list[GFinding]) -> AdjudicationResult:
     """Earliest-wins span arbitration across waves.
 
     Findings are ordered by wave, then by their position in the input, so wave one
-    claims its spans before any later wave. A finding overlapping an already-claimed
-    span in the same paragraph loses and routes to the query channel with a verdict
-    naming the winner.
+    claims its spans before any later wave (a finding with no provenance sorts
+    last). A finding overlapping an already-claimed span in the same paragraph
+    loses and routes to the query channel with a verdict naming the winner —
+    unless it is identical to the winner (same span, find, and replace), in
+    which case it is a re-find of the same error, recorded as a ``downgrade``
+    (merged into the winner) and NOT sent to the author as a query.
     """
 
     order = sorted(range(len(findings)), key=lambda i: (_wave_of(findings[i]), i))
-    accepted: dict[str, list[tuple[Span, str]]] = {}
+    accepted: dict[str, list[tuple[Span, GFinding]]] = {}
     result = AdjudicationResult()
 
     for i in order:
         f = findings[i]
         claims = accepted.setdefault(f.span.para_id, [])
         winner = next(
-            (wid for span, wid in claims if _overlaps(f.span, span)), None
+            (w for span, w in claims if _overlaps(f.span, span)), None
         )
         if winner is None:
-            claims.append((f.span, f.id))
+            claims.append((f.span, f))
             result.kept.append(f)
+        elif _same_edit(f, winner):
+            wave = _recorded_wave(f)
+            label = f"wave {wave} re-find" if wave else "re-find"
+            result.verdicts.append(
+                Verdict(
+                    finding_id=f.id,
+                    ruling="downgrade",
+                    reason=f"duplicate of {winner.id} ({label})",
+                    judge="arbitrator",
+                    wave=wave,
+                )
+            )
         else:
             result.queries.append(f)
             result.verdicts.append(
                 Verdict(
                     finding_id=f.id,
                     ruling="query",
-                    reason=f"overlaps earlier finding {winner}; routed to query",
+                    reason=f"overlaps earlier finding {winner.id}; routed to query",
                     judge="arbitrator",
-                    wave=_wave_of(f),
+                    wave=_recorded_wave(f),
                 )
             )
     return result
@@ -128,9 +164,11 @@ def screen_disputes(
     """Screen later-wave findings through the panel; return verdicts + rejects.
 
     Only findings from waves after the first are screened — the panel can never
-    withhold a wave-one finding. Each finding the judge will not vouch for yields a
-    ``reject`` verdict (routed to the query channel by the caller); every finding
-    it keeps yields a ``keep`` verdict. Returns ``(verdicts, rejected_ids)``.
+    withhold a wave-one finding; a finding with no provenance is screened (it
+    cannot prove it was wave one). Each finding the judge will not vouch for
+    yields a ``reject`` verdict (routed to the query channel by the caller);
+    every finding it keeps yields a ``keep`` verdict. Returns
+    ``(verdicts, rejected_ids)``.
     """
 
     screenable = [f for f in findings if _wave_of(f) > 1]
@@ -156,7 +194,7 @@ def screen_disputes(
                     ruling="reject",
                     reason=withheld_reason.get(f.id, spec.withhold_note),
                     judge=f"panel:{spec.key}",
-                    wave=_wave_of(f),
+                    wave=_recorded_wave(f),
                 )
             )
         else:
@@ -166,7 +204,7 @@ def screen_disputes(
                     ruling="keep",
                     reason="",
                     judge=f"panel:{spec.key}",
-                    wave=_wave_of(f),
+                    wave=_recorded_wave(f),
                 )
             )
     return verdicts, withheld_ids

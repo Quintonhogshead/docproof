@@ -17,8 +17,9 @@ not stricter judges.
 - Input is the ALREADY-PROOFREAD text. Two-stage order is the clobbering fix:
   nothing mechanical is left to fold into a rephrase. Never fly on raw text.
 - Headings excluded structurally. Dialogue spans protected at the filter.
-- Posture set from the profile's genre (lenient default; literary/memoir
-  runs closer to strict).
+- Posture set from the profile's genre (`flights.posture`; lenient is the
+  house default — the lane offers, the author decides; literary/memoir and
+  academic packs set strict).
 
 ## Procedure
 
@@ -33,9 +34,19 @@ not stricter judges.
      every subagent explicitly that it MUST WRITE its findings to the
      output file and that a reply without the file is a failed task —
      on the Purpura beta ~20% of subagents narrated their findings into
-     the chat reply instead and the rows were lost. Then
-     `flights --judge-only` (or import-findings) to run the paid judge over
-     the union.
+     the chat reply instead and the rows were lost. Then feed the union in
+     as proposals: `docproof galley flights IN --models "" --external-
+     proposals P.json` (`--models ""` = no API proposer; each row carries
+     `para_id`, `quote`, `replacement`, `rationale`, optionally
+     `model`/`lens`) — the rows ride the same deterministic filters and
+     clustering as an API flight, then the judge rules. The judge is the
+     paid step (default `gpt-5.6-luna`, from `flights.judge_model` when the
+     config names one; a Claude model named with `--judge-model` BILLS via
+     the API). To keep the judge at $0 too, add `--propose-only` and run
+     `export-judgments` → a session subagent rules → `import-judgments`.
+     Every `flights` call takes `--approval approval.json` and `--budget N`;
+     it refuses (exit 5) when a model it would call is outside the approved
+     set or the projection exceeds the cap.
 2. **Union → clusters.** Per-paragraph transitive span-overlap merge.
    Agreement (distinct flights on a span) is a SIGNAL, never a filter — no
    cluster is dropped for being single-source.

@@ -142,3 +142,118 @@ def test_certify_finished_walk_fails_only_on_a_high_severity_residual(tmp_path):
         "residuals": [{"para_id": "p1", "severity": "high", "quote": "q",
                        "problem": "p", "suggestion": "s"}]}), encoding="utf-8")
     assert _certify_finished_walk(tmp_path).status == "fail"
+
+
+# --- P0 fixes: anchor-located context, deletions, a result that says it ran --
+
+def test_applied_edits_keeps_a_pure_deletion(tmp_path):
+    (tmp_path / "findings.json").write_text(json.dumps({"findings": [
+        {"para_id": "p1", "original_text": " very", "corrected_text": "",
+         "status": "validated"},                            # a pure deletion
+        {"para_id": "p2", "original_text": "", "corrected_text": ",",
+         "status": "validated"},                            # a pure insertion
+        {"para_id": "p3", "original_text": "", "corrected_text": "",
+         "status": "validated"},                            # nothing on either side
+    ]}), encoding="utf-8")
+    assert [e["para_id"] for e in verify.applied_edits(tmp_path)] == ["p1", "p2"]
+
+
+def test_finished_context_locates_the_sentence_by_anchor_not_by_text():
+    """A minimal-diff row whose corrected_text is ',' must land on ITS
+    sentence — text.find(',') finds the first sentence with a comma."""
+    original = {"p1": "First, we sat. Then we ate quest here. Last, we left."}
+    accepted = {"p1": "First, we sat. Then, we ate quest here. Last, we left."}
+    edit = {"para_id": "p1", "original_text": "", "corrected_text": ",",
+            "anchor": {"start": 19, "end": 19, "delete_text": "",
+                       "insert_text": ","}}
+    before, after = verify._finished_context(edit, 19, original, accepted)
+    assert before == "Then we ate quest here."
+    assert after == "Then, we ate quest here."
+
+
+def test_finished_context_shifts_later_edits_by_earlier_ones_in_the_paragraph():
+    original = {"p1": "aa bb cc. dd ee ff."}
+    accepted = {"p1": "aaaa bb cc. dd ee."}
+    edits = [
+        {"para_id": "p1", "original_text": "aa", "corrected_text": "aaaa",
+         "anchor": {"start": 0, "end": 2, "delete_text": "aa",
+                    "insert_text": "aaaa"}},
+        {"para_id": "p1", "original_text": "dd ee ff", "corrected_text": "dd ee",
+         "anchor": {"start": 15, "end": 18, "delete_text": " ff",
+                    "insert_text": ""}},
+    ]
+    starts = verify._accepted_starts(edits)
+    assert starts == [0, 17]
+    before, after = verify._finished_context(edits[1], starts[1], original, accepted)
+    assert (before, after) == ("dd ee ff.", "dd ee.")
+
+
+def test_finished_context_hunts_nearby_when_the_paragraph_drifted():
+    """An untracked change shifted the paragraph: the arithmetic offset misses,
+    the inserted text is found at the nearest occurrence instead."""
+    original = {"p1": "One thing. Two thing here. Three."}
+    accepted = {"p1": "One BIG thing. Two things here. Three."}
+    edit = {"para_id": "p1", "original_text": "thing here",
+            "corrected_text": "things here",
+            "anchor": {"start": 15, "end": 20, "delete_text": "thing",
+                       "insert_text": "things"}}
+    before, after = verify._finished_context(edit, 15, original, accepted)
+    assert (before, after) == ("Two thing here.", "Two things here.")
+
+
+def test_finished_context_falls_back_to_text_search_without_an_anchor():
+    accepted = {"p1": "I paid. I ate quest here."}
+    edit = {"para_id": "p1", "original_text": "queso", "corrected_text": "quest"}
+    before, after = verify._finished_context(edit, None, {}, accepted)
+    assert (before, after) == ("queso", "I ate quest here.")
+
+
+def test_finished_context_composes_the_after_sentence_without_an_accepted_view():
+    original = {"p1": "One. Two thing here. Three."}
+    edit = {"para_id": "p1", "original_text": "thing", "corrected_text": "things",
+            "anchor": {"start": 9, "end": 14, "delete_text": "thing",
+                       "insert_text": "things"}}
+    before, after = verify._finished_context(edit, None, original, {})
+    assert (before, after) == ("Two thing here.", "Two things here.")
+
+
+def test_verify_changes_presents_the_before_after_pair_and_reads_deletions():
+    original = {"p1": "She was very, very tired. Then she slept."}
+    accepted = {"p1": "She was very tired. Then she slept."}
+    edits = [{"para_id": "p1", "original_text": ", very", "corrected_text": "",
+              "error_type": "repetition",
+              "anchor": {"start": 12, "end": 18, "delete_text": ", very",
+                         "insert_text": ""}}]
+    prov = _Provider({"problems": []})
+    verify.verify_changes(edits, accepted, prov, "m", Usage(), original=original)
+    user = prov.calls[0]["user"]
+    assert "before: She was very, very tired." in user
+    assert "now reads: She was very tired." in user
+    assert "edit: ', very' -> ''" in user
+
+
+def test_verify_run_with_no_deliverable_reports_it_did_not_run(tmp_path):
+    (tmp_path / "findings.json").write_text(json.dumps({"findings": [
+        {"para_id": "p1", "original_text": "a", "corrected_text": "b",
+         "status": "validated"}]}), encoding="utf-8")
+    prov = _Provider({"problems": []}, {"findings": []})
+    result = verify.verify_run(tmp_path, prov, "m", Usage())
+    assert result.ran_changes is False and result.ran_walk is False
+    assert "no accepted text" in result.reason
+    assert prov.calls == []                     # nothing was read, nothing spent
+    problems, residuals = result                # the old tuple shape still works
+    assert (problems, residuals) == ([], [])
+
+
+def test_verify_run_on_a_real_deliverable_reports_both_gates_ran(tmp_path):
+    import shutil
+    from pathlib import Path
+    fixture = Path(__file__).parent / "fixtures" / "tiny_novel.docx"
+    shutil.copy(fixture, tmp_path / "book.docx")
+    (tmp_path / "findings.json").write_text(json.dumps({"findings": []}),
+                                            encoding="utf-8")
+    prov = _Provider(*([{"findings": []}] * 50))
+    result = verify.verify_run(tmp_path, prov, "m", Usage(), run_changes=False)
+    assert result.ran_changes is False and result.ran_walk is True
+    assert result.reason == ""
+    assert prov.calls                           # the walk actually read the text

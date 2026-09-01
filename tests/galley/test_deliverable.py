@@ -269,3 +269,81 @@ def test_build_manuscript_deliverable_with_nothing_kept_still_writes_a_document(
         result, ms, source_path=FIXTURE, cfg=_lean_cfg(), out_dir=out)
     assert deliverable.outputs.reviewed_path.is_file()
     assert deliverable.dropped == []
+
+
+# ---------------------------------------------------------------------------
+# the rebuild marker, and a refused build leaving no manuscript behind
+# ---------------------------------------------------------------------------
+
+
+def test_build_manuscript_deliverable_stamps_the_rebuild_marker(tmp_path):
+    import json
+    from galley.deliverable import REBUILD_MARKER, _STAGING
+    ms = _fixture_manuscript()
+    edit = GFinding(
+        id="g-1", error_type="spelling",
+        span=Span(TEH_PARA, TEH_START, TEH_START + 3),
+        find="teh", replace="the",
+        provenance=Provenance("docproof_ladder", 1, "fake-model", 0.0),
+    )
+    out = tmp_path / "run"
+    deliverable = build_manuscript_deliverable(
+        AdjudicationResult(kept=[edit], queries=[]), ms,
+        source_path=FIXTURE, cfg=_lean_cfg(), out_dir=out)
+    outputs = deliverable.outputs
+    # Every output was promoted out of staging into out_dir itself.
+    assert outputs.reviewed_path.parent == out
+    assert outputs.findings_json == out / "findings.json"
+    assert outputs.summary_md.is_file() and outputs.reviewed_path.is_file()
+    assert not (out / _STAGING).exists()
+    envelope = json.loads(outputs.findings_json.read_text(encoding="utf-8"))
+    assert envelope["judge_model"] == REBUILD_MARKER["judge_model"] == "galley:rebuild"
+    assert envelope["rebuild"] == REBUILD_MARKER["rebuild"]
+    assert envelope["findings"], "the envelope finish() wrote is otherwise intact"
+
+
+def test_rebuild_marker_makes_certify_accept_the_zero_cost_build(tmp_path):
+    import json
+    from galley.manifest import certify_run
+    ms = _fixture_manuscript()
+    edit = GFinding(
+        id="g-1", error_type="spelling",
+        span=Span(TEH_PARA, TEH_START, TEH_START + 3),
+        find="teh", replace="the",
+        provenance=Provenance("docproof_ladder", 1, "fake-model", 0.0),
+    )
+    out = tmp_path / "run"
+    build_manuscript_deliverable(
+        AdjudicationResult(kept=[edit], queries=[]), ms,
+        source_path=FIXTURE, cfg=_lean_cfg(), out_dir=out)
+    (out / "casefile.json").write_text(json.dumps(
+        {"budget": {"charges": [{"label": "wave", "cost_usd": 1.25, "wave": 1}],
+                    "caps": {}}}))
+    by = {c.name: c for c in certify_run(out).checks}
+    assert by["zero-cost anomaly"].status == "pass"
+    assert "$1.25" in by["zero-cost anomaly"].detail
+
+
+def test_a_refused_build_leaves_no_manuscript_in_out_dir(tmp_path, monkeypatch):
+    """The word-count guard fires: WordCountDelta propagates, the reports are
+    still promoted (a diagnosis is left behind), and NO manuscript .docx sits
+    in out_dir for a caller to ship."""
+    from docproof.replay import WordCountDelta
+    import galley.deliverable as mod
+    from galley.deliverable import _STAGING
+
+    def refuse(path, **kw):
+        raise WordCountDelta(100, 10, "simulated sentence-eating misroute")
+
+    monkeypatch.setattr(mod, "word_count_delta_guard", refuse)
+    ms = _fixture_manuscript()
+    out = tmp_path / "run"
+    with pytest.raises(WordCountDelta):
+        build_manuscript_deliverable(
+            AdjudicationResult(kept=[], queries=[]), ms,
+            source_path=FIXTURE, cfg=_lean_cfg(), out_dir=out)
+    manuscripts = [p for p in out.glob("*.docx")
+                   if "change log" not in p.name.lower()]
+    assert manuscripts == []
+    assert (out / "findings.json").is_file() and (out / "summary.md").is_file()
+    assert not (out / _STAGING).exists()

@@ -10,7 +10,12 @@ You are given two things, both read-only:
    text is unlikely to be that much cleaner, so the review probably under-read it.
    A chapter whose density is very high may have crowded out subtler errors.
 2. A sample of pages drawn from the quieter chapters, so you can read real prose
-   rather than reason from the numbers alone.
+   rather than reason from the numbers alone. One sampled chapter is a
+   **control** (its page is tagged `control="true"` and named above the pages):
+   a chapter the review read closely and that is not suspected of anything. It is
+   there so your hit rate can be measured against chance. Reporting nothing for
+   a clean control is the expected answer — do not invent a miss there to fill
+   the list; name one only if its page genuinely shows an error.
 
 Form hypotheses about missed errors. For each one, name:
 

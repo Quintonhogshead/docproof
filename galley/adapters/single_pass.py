@@ -81,7 +81,26 @@ class SinglePassAdapter:
     provider: Any
     wave: int = 1
     error_dir: str | Path = DEFAULT_ERROR_DIR
+    # A ``galley.calibration.Calibration``; lets ``estimate_usd`` price a scope
+    # from the observed single_pass rate. None = no honest estimate.
+    calibration: Any = None
     name: str = "single_pass"
+
+    def estimate_usd(self, ms: Manuscript, scope: Scope) -> float | None:
+        """A pre-flight price for re-reading ``scope`` from the calibrated
+        single_pass rate; ``None`` when nothing has been calibrated yet."""
+
+        if self.calibration is None:
+            return None
+        from galley.calibration import est_usd_per_kword
+
+        rate = est_usd_per_kword(self.calibration, self.name,
+                                 scope.model or self.cfg.api.model, None)
+        if rate is None:
+            return None
+        words = sum(len(ms.paragraphs.get(pid, "").split())
+                    for pid in scope.paragraph_ids(ms))
+        return (words / 1000.0) * rate * max(1, scope.passes)
 
     def _group_keys(self, scope: Scope) -> list[list[str]]:
         """The error-type group(s) to run, as lists of registry keys.
@@ -165,19 +184,24 @@ class SinglePassAdapter:
 
         gfindings: list[GFinding] = []
         dropped = 0
+        queries = 0
         seen: set[tuple] = set()
         for f in validated:
-            # Only a finding the validator both anchored AND kept as a tracked
-            # change is a real correction — a "query" or "skipped_low_confidence"
-            # finding carries an Anchor too (every channel gets one) but its
-            # insert_text is not a fix (a query's is always empty), and would
-            # hand the case file a fabricated deletion if converted. See
-            # docproof_ladder.gfindings_from_json's matching guard.
-            if f.anchor is None or f.status != "validated":
+            # A finding the validator both anchored AND kept as a tracked
+            # change is a real correction. An anchored "query" is kept too, as
+            # confidence="query" with no replace text — its insert_text is
+            # always empty, a question not a fix — and the deliverable turns
+            # it into a margin comment. A "skipped_low_confidence" or rejected
+            # finding carries an Anchor as well (every channel gets one) but no
+            # real fix, and would hand the case file a fabricated deletion if
+            # converted. See docproof_ladder.gfindings_from_json's matching
+            # guard.
+            if f.anchor is None or f.status not in ("validated", "query"):
                 dropped += 1
                 continue
+            query = f.status == "query"
             key = (f.para_id, f.anchor.start, f.anchor.end, f.error_type,
-                   f.anchor.delete_text, f.anchor.insert_text)
+                   f.anchor.delete_text, "" if query else f.anchor.insert_text)
             if key in seen:
                 # A repeated pass (scope.passes>1) re-finds the same edit; union
                 # by identity so a second read adds only what it uniquely caught.
@@ -191,23 +215,28 @@ class SinglePassAdapter:
             digest = hashlib.sha1(
                 "\x00".join(str(part) for part in key).encode("utf-8")
             ).hexdigest()[:10]
+            queries += int(query)
             gfindings.append(GFinding(
                 id=f"sp-{digest}",
                 error_type=f.error_type,
                 span=Span(f.para_id, f.anchor.start, f.anchor.end),
                 find=f.anchor.delete_text,
-                replace=f.anchor.insert_text,
+                replace="" if query else f.anchor.insert_text,
                 note=f.explanation,
-                confidence=f.confidence,
+                confidence="query" if query else f.confidence,
                 provenance=Provenance(
                     detector=self.name, wave=self.wave, model=model,
                     cost_usd=0.0),
             ))
 
+        if queries:
+            notes.append(
+                f"{queries} finding(s) carried as queries (margin comments, "
+                f"not tracked changes)")
         if dropped:
             notes.append(
-                f"{dropped} finding(s) had no anchor and were dropped from the "
-                f"union")
+                f"{dropped} finding(s) had no anchor or no applied fix and were "
+                f"dropped from the union")
 
         # Thread this call's spend onto the shared usage, then price the local
         # meter alone for a clean per-call cost.

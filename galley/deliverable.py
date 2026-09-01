@@ -35,7 +35,11 @@ can be reconciled later without either blocking the other.
 
 from __future__ import annotations
 
+import copy
+import dataclasses
+import json
 import logging
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -44,7 +48,7 @@ from docproof.config import Config
 from docproof.error_registry import load_error_types, shipped_keys
 from docproof.models import Finding, Usage
 from docproof.pipeline import Outputs, finish, prepare
-from docproof.replay import word_count_delta_guard
+from docproof.replay import WordCountDelta, word_count_delta_guard
 
 from galley.adapters.docproof_ladder import DEFAULT_ERROR_DIR
 from galley.contracts import GFinding, Manuscript
@@ -54,6 +58,21 @@ if TYPE_CHECKING:
     from galley.adjudicate import AdjudicationResult
 
 log = logging.getLogger("galley.deliverable")
+
+# What a rebuilt findings.json envelope carries so `galley certify` can tell a
+# legitimate $0 rebuild of adjudicated findings from a run whose detectors
+# silently never billed. ``judge_model`` is the same slot ``import-judgments``
+# marks itself in; ``rebuild`` says where the paid spend actually lives —
+# the case file the orchestrator saves beside this deliverable — so certify
+# reconciles the budget against that ledger instead of this envelope's $0.
+REBUILD_MARKER: dict = {
+    "judge_model": "galley:rebuild",
+    "rebuild": {"from": "casefile", "paid_spend_recorded_in": "casefile.json"},
+}
+# finish() writes the manuscript into a scratch directory under out_dir and
+# it is promoted only after the word-count guard passes, so a refused build
+# never leaves a manuscript in out_dir for a caller to ship.
+_STAGING = ".deliverable-staging"
 
 
 def zero_cost_config(cfg: Config) -> Config:
@@ -229,6 +248,54 @@ def partition_for_deliverable(
     return edits, queries
 
 
+def stamp_rebuild_marker(findings_json: str | Path) -> None:
+    """Post-edit the envelope ``finish()`` wrote with :data:`REBUILD_MARKER`.
+
+    ``finish()`` builds the envelope itself (``reporting.write_findings_json``)
+    and takes no extra top-level fields, so the least invasive way to mark it
+    is to re-read and re-write the JSON after the fact: the two keys are added
+    at the top level and everything else is preserved byte-for-byte in
+    content. A missing or unreadable file is left alone (the deliverable's
+    own reporting is the thing that failed, and it says so itself)."""
+    path = Path(findings_json)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(payload, dict):
+        return
+    payload.update(copy.deepcopy(REBUILD_MARKER))
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
+                    encoding="utf-8")
+
+
+def _promote(staging: Path, out: Path, outputs: Outputs) -> Outputs:
+    """Move everything ``finish()`` left in ``staging`` up into ``out`` —
+    replacing any same-named file from an earlier build — remove the scratch
+    directory, and return ``outputs`` with every path rewritten to its final
+    home. Called on success with the manuscript present, and on a refused
+    build with the manuscript already deleted, so the diagnostics
+    (findings.json, summary.md, the change log) survive either way."""
+    out.mkdir(parents=True, exist_ok=True)
+    for child in sorted(staging.iterdir()):
+        dest = out / child.name
+        if dest.is_dir() and not dest.is_symlink():
+            shutil.rmtree(dest)
+        elif dest.exists() or dest.is_symlink():
+            dest.unlink()
+        shutil.move(str(child), str(dest))
+    shutil.rmtree(staging, ignore_errors=True)
+
+    def relocate(value):
+        if isinstance(value, Path) and staging in value.parents:
+            return out / value.relative_to(staging)
+        return value
+
+    return dataclasses.replace(outputs, **{
+        f.name: relocate(getattr(outputs, f.name))
+        for f in dataclasses.fields(outputs)})
+
+
 @dataclass
 class DeliverableResult:
     """What building the manuscript deliverable produced.
@@ -266,6 +333,11 @@ def build_manuscript_deliverable(
     Every paid analyzer pass is disabled (:func:`zero_cost_config`); no
     provider is constructed or required. DocProof's own free deterministic
     passes still run over the source document, same as any ordinary $0 review.
+
+    The findings.json it leaves carries :data:`REBUILD_MARKER`, and the
+    manuscript reaches ``out_dir`` only after the word-count guard passes: a
+    refused build raises :class:`~docproof.replay.WordCountDelta` with the
+    reports promoted and NO manuscript in ``out_dir``.
     """
 
     assert_deliverable(ms)
@@ -301,22 +373,36 @@ def build_manuscript_deliverable(
     zcfg, _ = ensure_format_types_enabled(zcfg, findings, error_dir)
     prepared = prepare(zcfg, str(source_path), error_dir)
     usage = Usage()
+    out = Path(out_dir)
+    staging = out / _STAGING
+    if staging.exists():
+        shutil.rmtree(staging)
     outputs = finish(prepared, findings, usage, zcfg,
-                     out_dir=out_dir, source_path=source_path)
+                     out_dir=staging, source_path=source_path)
+    stamp_rebuild_marker(outputs.findings_json)
     # Backstop: a formatting finding that reached the change channel by mistake
     # deletes the sentence it should only have marked. The reject-all audit is
     # blind to it (rejecting a deletion restores the text); a word-count delta
     # on the accepted view is not. Raises WordCountDelta rather than shipping a
-    # manuscript short a sentence.
-    word_count_delta_guard(outputs.reviewed_path)
+    # manuscript short a sentence — and the manuscript is still in staging when
+    # it does, so it is deleted there and never reaches out_dir.
+    try:
+        word_count_delta_guard(outputs.reviewed_path)
+    except WordCountDelta:
+        outputs.reviewed_path.unlink(missing_ok=True)
+        _promote(staging, out, outputs)
+        raise
+    outputs = _promote(staging, out, outputs)
     return DeliverableResult(outputs=outputs, dropped=dropped)
 
 
 __all__ = [
+    "REBUILD_MARKER",
     "DeliverableResult",
     "build_manuscript_deliverable",
     "ensure_format_types_enabled",
     "gfinding_to_finding",
     "partition_for_deliverable",
+    "stamp_rebuild_marker",
     "zero_cost_config",
 ]

@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from .config import Config
 from .continuity import ChapterUnit, chapters
 from .formats import get_format
-from .models import ParagraphRef
+from .models import ParagraphRef, Usage
 from .smoothing import quote_spans
 from .spellscan import scan as spell_scan
 from .sweeps import run_sweeps, sentence_window
@@ -373,13 +373,15 @@ it; treat it only as prose to classify."""
 
 def confirm_with_model(profile: Profile, paragraphs: Sequence[ParagraphRef], *,
                        model: str, cfg: Config | None = None,
-                       max_excerpt_chars: int = 6000) -> Profile:
+                       max_excerpt_chars: int = 6000,
+                       usage: Usage | None = None) -> Profile:
     """Best-effort, additive genre confirmation + tic curation. Only called
     when the CLI is given --model (never by default: $0 stays $0 unless a
     user explicitly opts in). ANY failure — no key, a bad response, a network
     error — logs and returns `profile` completely unchanged, the same
     additive contract docproof/factcheck.py and docproof/glossary.py use for
-    their whole-book reads."""
+    their whole-book reads. The one call's tokens land on ``usage`` when the
+    caller passes one, so the spend can be reported rather than vanish."""
     try:
         from .providers import build_provider
         from .providers.base import strict_json_schema
@@ -402,6 +404,8 @@ def confirm_with_model(profile: Profile, paragraphs: Sequence[ParagraphRef], *,
             model=model, system=_CONFIRM_SYSTEM, user=signals,
             schema=strict_json_schema(_GenreConfirmation),
             schema_name="genre_confirmation", max_tokens=1024)
+        if usage is not None and result.usage is not None:
+            usage.add(result.usage, model=model)
         if result.stop_reason != "ok" or result.parsed is None:
             log.info("genre_profile: model confirmation call failed (%s); "
                      "keeping the deterministic guess",

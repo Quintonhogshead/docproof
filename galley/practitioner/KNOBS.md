@@ -7,6 +7,40 @@ cache-read cost we've measured. Everything you need to write a run config is
 here. If a knob you need genuinely isn't documented here, that is an
 ESCALATION (the knob may not exist), not a reason to go read the source.
 
+## What changed (galley CLI contract fixes)
+
+- **`flights.posture` defaults to `lenient`** (config + CLI) — the copy-edit
+  lane offers rejectable tracked changes, the author decides; genre packs
+  still set it (academic / literary_memoir / general_* → strict). The flights
+  **judge defaults to `gpt-5.6-luna`** (or `flights.judge_model` when a config
+  names one) — a Claude model passed to `--judge-model` BILLS via the API; the
+  $0 Claude route is `export-judgments` → session subagent → `import-judgments`.
+  The $0 subagent-proposer route is `flights IN --models "" --external-proposals
+  P.json` (never `--judge-only`, which reads a clusters.json).
+- **`galley audit` / `galley verify` / `galley flights` take `--approval
+  approval.json` and `--budget USD`** — refuse (exit 5) when a model the verb
+  would call is outside the approval's allowed models/providers or the planned
+  spend exceeds the cap; `galley verify --dry-run` prints the priced call count
+  (one per 30 applied edits + one per ~6k chars of accepted text). `review
+  --approval` now hashes the config AFTER `--rounds`/`--meaning-*`/`--fix-*`
+  land, so a flag added past approval is a refused deviation.
+- **Every paid galley artifact carries `cost: {total_usd, by_model}`**
+  (audit.json, change_verify.json, finished_walk.json — each verify gate bills
+  its own file — and flights_findings.json); `review` prints its dollar line;
+  `galley profile --model` reports the call's spend on stderr.
+- **`galley verify` exits nonzero only for a flagged applied edit or a
+  HIGH-severity residual**; low/medium residuals print as notes (certify draws
+  the same line).
+- **`galley score` grades a `docproof review` findings.json directly** (rows
+  convert through the docproof-ladder adapter: anchored, validated rows only);
+  **`galley calibrate --from-run RUN`** synthesizes the case file from a bare
+  run's findings.json when no casefile.json exists.
+- `docproof sweep` / `docproof merge` are $0 for real: the storysheet read and
+  the candidate-screening judge (both prepare()-time spenders a mechanical-wave
+  config ships on) are zeroed with every other paid pass.
+- **`galley state`**: pass BOTH `--source` and `--config` on every `--advance`
+  and on `--verify-resume` — the resume check is strict about a missing hash.
+
 ## What changed in v0.143.0 (tense/cites verbs + serial-comma guard)
 
 - **`docproof tense IN --config C`** — new $0 report-only verb: whole-book
@@ -219,6 +253,7 @@ wrongly dropped on a bad grep.)
 | `continuity` (whole-book) | **default ON as a $0 Opus subagent** in the loop (base off; config model is Luna) | Timeline/age/date arithmetic, attribute + object drift across the whole book, plus the deterministic $0 calendar (weekday-vs-date) check. Query-only. Run it as an Opus session subagent, import the queries — do NOT enable it in the paid review config (that bills). |
 | `chapter_continuity` | **default ON as a $0 Opus subagent** in the loop (base off) | Intra-chapter physical continuity (sat who never stood, cigarette lit twice, dawn→evening). Query-only. Same $0 path: an Opus subagent per chapter, imported. |
 | `rewrite` ("type-and-compare") | **default ON as a $0 Sonnet→Opus subagent** in the loop (base off; the stage LOCKS the in-config lane off) | Retype each paragraph as a minimal proofread, diff against the source — catches the missing-word/homophone/agreement misses detection glides past (~25% of core-mechanical misses). Run as a subagent detector, import findings; the P0-1 guard keeps a real-word swap it proposes a query, never a blind edit. |
+| `flights.posture` | `lenient` | The copy-edit judge's stance: lenient offers every defensible change as a rejectable tracked edit (same hard vetoes either way); `strict` keeps the original by default. Genre packs set it; `--posture` overrides per run. |
 | `candidate_screening.mode` | `apply` under mechanical-wave (base `off`); judge = `gpt-5.6-luna` | The low-precision generators propose, the Luna judge rules, affirmed rows apply as tracked edits. Apply is contained: it stays SHADOW unless the deployment sets `DOCPROOF_CANDIDATE_APPLY=1` — the Galley launch does, production keeps the floor. |
 
 ## The judgment subagent — a $0 Opus/Fable read for whole-book judgment

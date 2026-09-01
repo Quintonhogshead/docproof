@@ -230,3 +230,301 @@ def test_certify_text_hygiene_passes_clean_text_and_dividers(tmp_path):
     cert = certify_run(run)
     check = next(c for c in cert.checks if c.name == "delivered text hygiene")
     assert check.status == "pass"
+
+
+# --- the `ran` flag from `galley verify` -------------------------------------
+
+def test_certify_change_verify_honors_ran_false(tmp_path):
+    """`galley verify --walk-only` writes change_verify.json with ran: false and
+    no problems — that is a gate that never ran, never a clean read."""
+    from galley.manifest import _certify_change_verify, _certify_finished_walk
+    (tmp_path / "change_verify.json").write_text(json.dumps(
+        {"ran": False, "applied_edits": 12, "problems": []}))
+    check = _certify_change_verify(tmp_path)
+    assert check.status == "skip"
+    assert "--walk-only" in check.detail and "did not run" in check.detail
+    (tmp_path / "finished_walk.json").write_text(json.dumps(
+        {"ran": False, "residuals": []}))
+    walk = _certify_finished_walk(tmp_path)
+    assert walk.status == "skip"
+    assert "--changes-only" in walk.detail and "did not run" in walk.detail
+
+
+def test_certify_verify_gates_surface_a_recorded_reason(tmp_path):
+    """verify_run that could read no accepted text records ran: false plus a
+    reason; the skip repeats it instead of blaming a flag that was not used."""
+    from galley.manifest import _certify_change_verify, _certify_finished_walk
+    reason = "no accepted text could be read from the deliverable"
+    for name in ("change_verify.json", "finished_walk.json"):
+        (tmp_path / name).write_text(json.dumps(
+            {"ran": False, "reason": reason, "problems": [], "residuals": []}))
+    assert reason in _certify_change_verify(tmp_path).detail
+    assert reason in _certify_finished_walk(tmp_path).detail
+
+
+def test_certify_verify_gates_without_ran_field_still_pass_a_clean_record(tmp_path):
+    from galley.manifest import _certify_change_verify, _certify_finished_walk
+    (tmp_path / "change_verify.json").write_text(json.dumps(
+        {"ran": True, "applied_edits": 3, "problems": []}))
+    (tmp_path / "finished_walk.json").write_text(json.dumps(
+        {"ran": True, "residuals": []}))
+    assert _certify_change_verify(tmp_path).status == "pass"
+    assert _certify_finished_walk(tmp_path).status == "pass"
+
+
+# --- the Galley rebuild marker ------------------------------------------------
+
+def _rebuild_envelope(n=2, **extra):
+    from galley.deliverable import REBUILD_MARKER
+    env = {"findings": [{"finding_id": f"f-{i}", "para_id": "b1",
+                         "corrected_text": "x", "status": "validated"}
+                        for i in range(n)],
+           "cost": {"total_usd": 0.0}, **REBUILD_MARKER}
+    env.update(extra)
+    return env
+
+
+def _casefile(run, *charges):
+    (run / "casefile.json").write_text(json.dumps({
+        "budget": {"charges": [{"label": "wave", "cost_usd": c, "wave": 1}
+                               for c in charges], "caps": {}}}))
+
+
+def test_galley_rebuild_is_not_a_zero_cost_anomaly(tmp_path):
+    run = _run_dir(tmp_path, _rebuild_envelope())
+    _casefile(run, 1.5, 2.7)
+    cert = certify_run(run)
+    by = {c.name: c for c in cert.checks}
+    assert by["zero-cost anomaly"].status == "pass"
+    assert "$4.20" in by["zero-cost anomaly"].detail
+    assert by["checkpoint present"].status == "pass"
+
+
+def test_galley_rebuild_reconciles_budget_against_the_casefile(tmp_path):
+    """The envelope says $0; the case file says $4.20 — the approval's ceiling
+    is checked against the money actually spent, not the rebuild's own $0."""
+    cfg = _mech_cfg()
+    src = _source(tmp_path)
+    run = _run_dir(tmp_path, _rebuild_envelope())
+    _casefile(run, 4.2)
+    tight = build_manifest(source=src, config_path=str(CONFIG), cfg=cfg,
+                           max_spend_usd=3.0)
+    budget = next(c for c in certify_run(run, manifest=tight).checks
+                  if c.name == "budget within approval")
+    assert budget.status == "fail" and "$4.20" in budget.detail
+    roomy = build_manifest(source=src, config_path=str(CONFIG), cfg=cfg,
+                           max_spend_usd=20.0)
+    budget = next(c for c in certify_run(run, manifest=roomy).checks
+                  if c.name == "budget within approval")
+    assert budget.status == "pass" and "casefile.json" in budget.detail
+
+
+def test_galley_rebuild_honors_a_serialized_spent_usd(tmp_path):
+    run = _run_dir(tmp_path, _rebuild_envelope())
+    (run / "casefile.json").write_text(json.dumps(
+        {"budget": {"spent_usd": 7.25, "charges": []}}))
+    anomaly = next(c for c in certify_run(run).checks
+                   if c.name == "zero-cost anomaly")
+    assert anomaly.status == "pass" and "$7.25" in anomaly.detail
+
+
+def test_galley_rebuild_without_a_casefile_skips_budget_loudly(tmp_path):
+    cfg = _mech_cfg()
+    src = _source(tmp_path)
+    run = _run_dir(tmp_path, _rebuild_envelope())     # no casefile.json
+    m = build_manifest(source=src, config_path=str(CONFIG), cfg=cfg,
+                       max_spend_usd=3.0)
+    by = {c.name: c for c in certify_run(run, manifest=m).checks}
+    assert by["zero-cost anomaly"].status == "pass"
+    assert by["budget within approval"].status == "skip"
+    assert "casefile.json" in by["budget within approval"].detail
+    assert by["checkpoint present"].status == "skip"
+
+
+def test_judge_model_marker_alone_is_enough(tmp_path):
+    run = _run_dir(tmp_path, {"findings": [{"a": 1}],
+                              "cost": {"total_usd": 0.0},
+                              "judge_model": "galley:rebuild"})
+    anomaly = next(c for c in certify_run(run).checks
+                   if c.name == "zero-cost anomaly")
+    assert anomaly.status == "pass"
+
+
+# --- the reject-all round trip -----------------------------------------------
+
+def _reject_all_check(tmp_path, audit):
+    env = {"findings": [], "cost": {"total_usd": 0.0}}
+    if audit is not None:
+        env["audit"] = audit
+    sub = tmp_path / f"case-{len(list(tmp_path.iterdir()))}"
+    sub.mkdir()
+    return next(c for c in certify_run(_run_dir(sub, env)).checks
+                if c.name == "reject-all round trip")
+
+
+def test_certify_fails_a_failed_reject_all_audit(tmp_path):
+    check = _reject_all_check(tmp_path, {
+        "ran": True, "passed": False, "checked": 40,
+        "mismatches": ["body-0007", "body-0012"], "missing": []})
+    assert check.status == "fail"
+    assert "2 paragraph(s) differ" in check.detail and "body-0007" in check.detail
+
+
+def test_certify_skips_loudly_when_the_audit_did_not_run(tmp_path):
+    check = _reject_all_check(tmp_path, {"ran": False, "passed": True,
+                                         "checked": 0, "mismatches": [],
+                                         "missing": []})
+    assert check.status == "skip" and "did not run" in check.detail
+    absent = _reject_all_check(tmp_path, None)
+    assert absent.status == "skip" and "no audit record" in absent.detail
+
+
+def test_certify_passes_a_passed_reject_all_audit(tmp_path):
+    check = _reject_all_check(tmp_path, {"ran": True, "passed": True,
+                                         "checked": 40, "mismatches": [],
+                                         "missing": []})
+    assert check.status == "pass" and "40" in check.detail
+
+
+# --- artifact regexes + applied rows only -----------------------------------
+
+def _scan(tmp_path, rows):
+    run = _run_dir(tmp_path, {"findings": rows, "cost": {"total_usd": 0.0}})
+    return next(c for c in certify_run(run).checks if c.name == "artifact scan")
+
+
+def test_artifact_scan_catches_an_ellipsis_followed_by_a_period(tmp_path):
+    """The old entry was the literal string '…\\.', which no text contains."""
+    check = _scan(tmp_path, [{"para_id": "b1", "corrected_text": "He waited…."}])
+    assert check.status == "fail" and "…" in check.detail
+
+
+def test_artifact_scan_period_patterns_are_literal_not_any_char(tmp_path):
+    check = _scan(tmp_path, [{"para_id": "b1",
+                              "corrected_text": "“Go,” she said…and left. ”x"}])
+    assert check.status == "pass"
+
+
+def test_artifact_scan_ignores_rejected_and_skipped_rows(tmp_path):
+    """What a rejected row WOULD have written never reaches the author."""
+    check = _scan(tmp_path, [
+        {"para_id": "b1", "corrected_text": "She paused,, then left.",
+         "status": "rejected_overlap"},
+        {"para_id": "b2", "corrected_text": "Bad ”. here",
+         "status": "skipped_low_confidence"},
+        {"para_id": "b3", "corrected_text": "fine ,, but unplaced",
+         "status": "validated", "applied": False},
+        {"para_id": "b4", "corrected_text": "Clean.", "status": "validated"},
+    ])
+    assert check.status == "pass"
+
+
+def test_artifact_scan_still_reads_an_applied_row(tmp_path):
+    check = _scan(tmp_path, [{"para_id": "b1", "status": "validated",
+                              "applied": True,
+                              "corrected_text": "She paused,, then left."}])
+    assert check.status == "fail"
+
+
+def test_insertion_collision_ignores_the_rejected_loser(tmp_path):
+    env = {"findings": [
+        {"finding_id": "f-1", "para_id": "b1", "original_text": "the cat",
+         "occurrence": 1, "corrected_text": "the cats", "status": "validated"},
+        {"finding_id": "f-2", "para_id": "b1", "original_text": "the cat",
+         "occurrence": 1, "corrected_text": "the CAT",
+         "status": "rejected_overlap"},
+    ], "cost": {"total_usd": 0.0}}
+    coll = next(c for c in certify_run(_run_dir(tmp_path, env)).checks
+                if c.name == "no insertion collisions")
+    assert coll.status == "pass"
+
+
+# --- explicit skips for an absent --source / --config ------------------------
+
+def test_certify_records_skips_when_no_approval_is_given(tmp_path):
+    run = _run_dir(tmp_path, {"findings": [], "cost": {"total_usd": 0.0}})
+    by = {c.name: c for c in certify_run(run).checks}
+    assert by["source hash"].status == "skip"
+    assert by["config hash"].status == "skip"
+    assert by["approved model routes"].status == "skip"
+    assert "no approval manifest" in by["source hash"].detail
+
+
+def test_certify_records_skips_when_source_or_config_is_absent(tmp_path):
+    cfg = _mech_cfg()
+    src = _source(tmp_path)
+    m = build_manifest(source=src, config_path=str(CONFIG), cfg=cfg,
+                       max_spend_usd=20.0)
+    run = _run_dir(tmp_path, {"findings": [], "cost": {"total_usd": 0.0}})
+    by = {c.name: c for c in certify_run(run, manifest=m, cfg=cfg).checks}
+    assert by["source hash"].status == "skip" and "--source" in by["source hash"].detail
+    assert by["config hash"].status == "pass"
+    by = {c.name: c for c in certify_run(run, manifest=m, source=src).checks}
+    assert by["source hash"].status == "pass"
+    assert by["config hash"].status == "skip" and "--config" in by["config hash"].detail
+    assert by["approved model routes"].status == "skip"
+
+
+# --- two-author attribution, read off the deliverable ------------------------
+
+def _docx_with_revisions(run, name, authors):
+    """A .docx whose one paragraph carries a tracked insertion per author."""
+    import zipfile
+    _docx_in(run, name, "A clean paragraph.")
+    path = run / name
+    tmp = run / (name + ".tmp")
+    ins = "".join(
+        f'<w:ins w:id="{i}" w:author="{a}" w:date="2026-01-01T00:00:00Z">'
+        f'<w:r><w:t xml:space="preserve"> more</w:t></w:r></w:ins>'
+        for i, a in enumerate(authors, 1))
+    with zipfile.ZipFile(path) as zin, \
+            zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "word/document.xml":
+                data = data.decode("utf-8").replace(
+                    "</w:p>", ins + "</w:p>", 1).encode("utf-8")
+            zout.writestr(item, data)
+    tmp.replace(path)
+
+
+_TWO_LANES = [
+    {"finding_id": "f-1", "para_id": "b1", "error_type": "spelling",
+     "lane": "mechanical", "corrected_text": "x", "status": "validated"},
+    {"finding_id": "f-2", "para_id": "b2", "error_type": "copyedit",
+     "lane": "copyedit", "corrected_text": "y", "status": "validated"},
+]
+
+
+def test_two_author_fails_when_both_lanes_share_one_author(tmp_path):
+    run = _run_dir(tmp_path, {"findings": _TWO_LANES, "cost": {"total_usd": 0.0}})
+    _docx_with_revisions(run, "book.docx",
+                         ["Atmosphere Press Proofreader"] * 2)
+    ta = next(c for c in certify_run(run).checks
+              if c.name == "two-author attribution")
+    assert ta.status == "fail" and "1 author" in ta.detail
+
+
+def test_two_author_passes_with_two_revision_authors(tmp_path):
+    run = _run_dir(tmp_path, {"findings": _TWO_LANES, "cost": {"total_usd": 0.0}})
+    _docx_with_revisions(run, "book.docx", ["Atmosphere Press Proofreader",
+                                            "Atmosphere Press Copy Editor"])
+    ta = next(c for c in certify_run(run).checks
+              if c.name == "two-author attribution")
+    assert ta.status == "pass" and "Copy Editor" in ta.detail
+
+
+def test_two_author_skips_without_a_deliverable_and_for_one_lane(tmp_path):
+    run = _run_dir(tmp_path, {"findings": _TWO_LANES, "cost": {"total_usd": 0.0}})
+    ta = next(c for c in certify_run(run).checks
+              if c.name == "two-author attribution")
+    assert ta.status == "skip" and "no manuscript .docx" in ta.detail
+    # A copy-edit row that was REJECTED is not an applied lane.
+    one = [dict(_TWO_LANES[0]), dict(_TWO_LANES[1], status="rejected_overlap")]
+    run2 = tmp_path / "run2"
+    run2.mkdir()
+    (run2 / "findings.json").write_text(json.dumps(
+        {"findings": one, "cost": {"total_usd": 0.0}}))
+    ta2 = next(c for c in certify_run(run2).checks
+               if c.name == "two-author attribution")
+    assert ta2.status == "skip" and "single lane" in ta2.detail

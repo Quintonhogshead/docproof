@@ -24,13 +24,15 @@ from galley.contracts import GFinding, Provenance, Span, Verdict, WaveRecord
 
 
 def _ruling_for(row: dict[str, Any]) -> str:
-    """The case-file ruling for a finished finding's channel: an applied edit is
-    an accept, a margin comment a query, anything rejected a reject."""
+    """The case-file ruling for a finished finding's channel, in the case
+    file's own vocabulary (:data:`galley.contracts.RULINGS`): an applied edit
+    held its span (``keep``), a margin comment is a ``query``, anything
+    rejected a ``reject``."""
     status = row.get("status")
     if row.get("force_query") or row.get("queried") or status == "query":
         return "query"
     if status in ("validated", "applied") or row.get("applied") is True:
-        return "accept"
+        return "keep"
     return "reject"
 
 
@@ -72,14 +74,19 @@ def casefile_from_run(run_dir: str | Path, *, book: str = "") -> CaseFile:
         ruling = _ruling_for(row)
         if ruling == "query":
             queries += 1
-        elif ruling == "accept":
+        elif ruling == "keep":
             edits += 1
         verdicts.append(Verdict(finding_id=fid, ruling=ruling,
                                 reason=row.get("explanation", ""), wave=1))
 
+    # The scope is the orchestrator's JSON shape (an empty scope = the whole
+    # book), so ``galley.calibration.record_run`` can price this run like any
+    # other rather than skipping a scope it cannot resolve.
     wave = WaveRecord(
         index=1,
-        actions=({"adapter": "review", "scope": "whole book",
+        actions=({"adapter": "review",
+                  "scope": {"chapters": [], "para_ids": [], "error_groups": [],
+                            "model": str(payload.get("model") or ""), "passes": 1},
                   "findings_added": edits + queries, "cost_usd": cost},),
         spend_usd=cost, findings_added=len(findings))
 

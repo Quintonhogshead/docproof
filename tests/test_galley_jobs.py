@@ -109,10 +109,12 @@ def test_run_galley_produces_every_deliverable(runner, monkeypatch):
     # The unanchorable finding is a warning, not a failure.
     assert any("g-3" in w for w in done.warnings)
 
-    # 4 — memory ingest: the overlap-loser verdict became a precedent.
+    # 4 — memory ingest ran, and the arbitrator's overlap-loser verdict did
+    # NOT become a precedent: it records which finding claimed the span, not
+    # whether the edit was right (galley.memory.ingest's arbitration guard).
     with MemoryStore.open(store.paths.galley_memory_db) as mem:
         precedents = mem.precedents()
-    assert precedents, "the run's verdicts should have been ingested"
+    assert all(p.ruled_by != "arbitrator" for p in precedents)
 
     # The job card exposes every deliverable that actually landed.
     api = done.to_api()
@@ -168,3 +170,88 @@ def test_a_deliverable_build_failure_is_a_warning_not_a_failed_job(
     # The case file and letter are still there.
     assert (Path(done.results_dir) / "casefile.json").is_file()
     assert (Path(done.results_dir) / "letter.md").is_file()
+
+
+def test_applied_counts_the_adjudicated_kept_findings(runner, monkeypatch):
+    """`applied` is what the deliverable carries — the adjudicated kept set —
+    not the raw size of the union (the overlap loser g-1b is not applied)."""
+    store, r = runner
+    monkeypatch.setattr(r, "_galley_adapters",
+                        lambda job, cfg: _fake_adapters())
+    _job(store)
+    r.run_one("j1")
+    done = store.get("j1")
+    assert done.state == "done", done.error
+    from galley.adjudicate import adjudicate
+
+    cf = CaseFile.load(Path(done.results_dir) / "casefile.json")
+    assert len(cf.findings) == 4
+    kept = adjudicate(cf.findings).kept       # arbitration only, same as the run
+    assert done.applied == len(kept) < len(cf.findings)
+
+
+def test_alarms_ride_the_warnings_and_never_zero_the_cost(runner, monkeypatch):
+    """An alarm from the loop lands in the job's warnings; only a wave digest
+    carries a spend total, so an alarm must not reset `cost` to 0."""
+    store, r = runner
+    ladder = FakeDetector(
+        name="docproof_ladder",
+        scripted=[gfinding("g-1", TEH_PARA, "teh", "the",
+                           start=TEH_START, end=TEH_START + 3, wave=1)],
+        cost_usd=0.5)
+    monkeypatch.setattr(r, "_galley_adapters",
+                        lambda job, cfg: {"docproof_ladder": ladder})
+
+    import galley.orchestrator as orch
+    real_run = orch.run_galley
+    seen_cost: list[float] = []
+
+    def run_then_alarm(*args, **kwargs):
+        cf = real_run(*args, **kwargs)
+        notify = kwargs["notify"]
+        notify("wave", {"wave": 1, "total_spent_usd": 0.5})
+        notify("alarm", {"alarm": "budget_overrun", "wave": 1,
+                         "detail": "docproof_ladder overran the cap"})
+        seen_cost.append(store.get("j1").cost)
+        return cf
+
+    monkeypatch.setattr(orch, "run_galley", run_then_alarm)
+    _job(store)
+    r.run_one("j1")
+
+    done = store.get("j1")
+    assert done.state == "done", done.error
+    assert seen_cost == [pytest.approx(0.5)]      # the alarm left cost alone
+    assert done.cost == pytest.approx(0.5)
+    assert any("budget_overrun" in w and "overran the cap" in w
+               for w in done.warnings)
+
+
+def test_a_failed_deliverable_build_leaves_no_partial_docx(runner, monkeypatch):
+    """When the build raises after finish() already wrote the reviewed docx
+    (the word-count guard's old ordering), the truncated manuscript must not
+    sit in the results folder looking like a deliverable."""
+    from docproof.formats import get_format
+
+    store, r = runner
+    monkeypatch.setattr(r, "_galley_adapters",
+                        lambda job, cfg: _fake_adapters())
+    reviewed_name = get_format(FIXTURE).reviewed_name(FIXTURE)
+
+    def write_then_raise(*a, out_dir, **kw):
+        (Path(out_dir) / reviewed_name).write_bytes(b"PK truncated")
+        raise RuntimeError("WordCountDelta: manuscript short a sentence")
+
+    import galley.deliverable as deliverable_mod
+    monkeypatch.setattr(deliverable_mod, "build_manuscript_deliverable",
+                        write_then_raise)
+
+    _job(store)
+    r.run_one("j1")
+    done = store.get("j1")
+    assert done.state == "done"
+    out = Path(done.results_dir)
+    assert not (out / reviewed_name).exists()
+    assert not list(out.glob("*.docx"))
+    assert any("reviewed manuscript" in w.lower() for w in done.warnings)
+    assert (out / "casefile.json").is_file()

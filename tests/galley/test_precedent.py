@@ -51,3 +51,20 @@ def test_limit_is_honored(tmp_path):
 
 def test_registered_as_tool():
     assert TOOLS["precedents_for"] is precedents_for
+
+
+def test_uncontested_findings_from_one_book_answer_the_next(tmp_path):
+    """The point of ingest: a wave-one edit kept without dispute on book N is an
+    ``accept`` precedent the same mark on book N+1 can lean on."""
+    from galley.casefile import CaseFile
+    from galley.memory.ingest import ingest_casefile
+
+    with MemoryStore.open(tmp_path / "mem.db", now="2026-08-21T00:00:00Z") as store:
+        cf = CaseFile(book="Book N")
+        cf.findings = [gfinding("g-1", "body-0001", "recieve", "receive",
+                                error_type="spelling", note="misspelling")]
+        assert ingest_casefile(store, cf).ingested == 1
+        later = gfinding("h-1", "body-0042", "recieve", "receive", error_type="spelling")
+        ranked = precedents_for(later, store)
+    assert ranked and ranked[0].ruling == "accept"
+    assert ranked[0].book == "Book N" and ranked[0].reason == "misspelling"

@@ -112,3 +112,57 @@ def test_reject_finding_survives_as_query_object():
     assert res.kept == []
     assert [f.id for f in res.queries] == ["g-9"]  # present, not vanished
     assert res.queries[0].find == "Alpha"  # the original finding object intact
+
+
+# ---- duplicate re-finds and provenance-less findings --------------------
+
+def test_identical_refind_is_a_duplicate_not_a_query():
+    w1 = _g("g-1", "body-0001", 4, 11, wave=1, find="recieve", replace="receive")
+    w2 = _g("g-2", "body-0001", 4, 11, wave=2, find="recieve", replace="receive")
+    res = arbitrate([w1, w2])
+    assert [f.id for f in res.kept] == ["g-1"]
+    assert res.queries == []                      # never a question for the author
+    v = res.verdicts[0]
+    assert v.finding_id == "g-2" and v.ruling == "downgrade"
+    assert v.judge == "arbitrator" and v.wave == 2
+    assert v.reason == "duplicate of g-1 (wave 2 re-find)"
+
+
+def test_same_span_different_fix_is_still_a_query():
+    w1 = _g("g-1", "body-0001", 4, 11, wave=1, find="recieve", replace="receive")
+    w2 = _g("g-2", "body-0001", 4, 11, wave=2, find="recieve", replace="recover")
+    res = arbitrate([w1, w2])
+    assert [f.id for f in res.queries] == ["g-2"]
+    assert res.verdicts[0].ruling == "query"
+
+
+def _bare(fid, para, start, end, find="x", replace="y"):
+    return GFinding(id=fid, error_type="typo", span=Span(para, start, end),
+                    find=find, replace=replace)   # no provenance at all
+
+
+def test_provenance_less_finding_ranks_as_the_latest_wave():
+    # Before: wave 0 outranked wave 1 and took the span. Now the finding that
+    # can say where it came from wins.
+    w1 = _g("g-1", "body-0001", 4, 11, wave=1)
+    unknown = _bare("g-u", "body-0001", 6, 9)
+    res = arbitrate([unknown, w1])
+    assert [f.id for f in res.kept] == ["g-1"]
+    assert [f.id for f in res.queries] == ["g-u"]
+    assert res.verdicts[0].wave == 0              # recorded as "unknown", not a sentinel
+    # Even against wave 3 the unattributed finding loses.
+    w3 = _g("g-3", "body-0002", 0, 3, wave=3)
+    late = _bare("g-v", "body-0002", 0, 3, find="a", replace="b")
+    assert [f.id for f in arbitrate([late, w3]).kept] == ["g-3"]
+
+
+def test_provenance_less_finding_is_screened():
+    ms = make_manuscript("Alpha beta gamma delta.")
+    unknown = _bare("g-u", "body-0001", 0, 5, find="Alpha", replace="Omega")
+    provider = FakeProvider(results=[ProviderResult(
+        parsed={"verdicts": [{"item": 1, "verdict": "withhold", "reason": "no"}]},
+        usage=_U)])
+    verdicts, rejected = screen_disputes([unknown], ms, provider, model="fake",
+                                         usage=Usage())
+    assert rejected == {"g-u"}
+    assert verdicts[0].ruling == "reject" and verdicts[0].wave == 0

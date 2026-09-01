@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 
 from galley.brain import make_planner
+from galley.contracts import RULINGS
 from galley.calibration import (
     Calibration,
     CostEntry,
@@ -145,6 +146,44 @@ def test_record_run_free_adapter_records_zero_rate(tmp_path):
     assert entry.usd_per_kword == 0.0
 
 
+def test_record_run_excludes_zero_cost_paid_passes(tmp_path):
+    # A paid adapter that billed $0 (subagent mode, a failed call) is not a
+    # free pair — folding its words in would price the adapter toward zero.
+    ms = make_manuscript(*["word " * 100] * 2, chapter_size=1)
+    path = tmp_path / "calibration.json"
+    cf = CaseFile(book="b")
+    cf.waves.append(WaveRecord(index=1, actions=(
+        _scope_action(adapter="single_pass", chapters=(0,), model="m", cost_usd=0.0),
+        _scope_action(adapter="single_pass", chapters=(1,), model="m", cost_usd=1.0),
+        _scope_action(adapter="languagetool", chapters=(0,), cost_usd=0.0),
+    )))
+    calibration = record_run(cf, ms, path)
+    paid = calibration.cost["single_pass:m"]
+    assert paid.kwords_total == 0.1 and paid.cost_usd_total == 1.0
+    assert calibration.cost["languagetool:(default)"].kwords_total == 0.1  # free stays free
+
+
+def test_record_run_accepts_a_synthesized_casefile(tmp_path):
+    import json
+
+    from galley.casefile_synth import casefile_from_run
+
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "findings.json").write_text(json.dumps({
+        "source": "Book.docx", "model": "m", "cost": {"total_usd": 0.5},
+        "findings": [{"finding_id": "f-1", "para_id": "body-0001",
+                      "error_type": "spelling", "original_text": "teh",
+                      "corrected_text": "the", "status": "validated",
+                      "anchor": {"start": 0, "end": 3}}]}), encoding="utf-8")
+    cf = casefile_from_run(run)
+    assert {v.ruling for v in cf.verdicts} <= set(RULINGS)
+    ms = make_manuscript(*["word " * 100] * 2)
+    calibration = record_run(cf, ms, tmp_path / "calibration.json")
+    entry = calibration.cost["review:m"]
+    assert entry.cost_usd_total == 0.5 and entry.kwords_total == 0.2
+
+
 # --- est_usd_per_kword ---------------------------------------------------
 
 
@@ -239,6 +278,23 @@ def test_record_recall_and_latest_recall_roundtrip(tmp_path):
 def test_latest_recall_none_when_no_history(tmp_path):
     path = tmp_path / "calibration.json"
     assert latest_recall(path) is None
+
+
+def test_latest_recall_is_keyed_by_book(tmp_path):
+    path = tmp_path / "calibration.json"
+    record_recall(RecallEstimate(planted=4, caught=1, rate=0.25), path,
+                  now="t1", book="Book A")
+    record_recall(RecallEstimate(planted=4, caught=3, rate=0.75), path,
+                  now="t2", book="Book B")
+    # Backward-compatible form: the last record of any book, tagged with it.
+    latest = latest_recall(path)
+    assert isinstance(latest, RecallEstimate)
+    assert latest.rate == 0.75 and latest.book == "Book B"
+    # Keyed: Book A's own gauge, not Book B's newer one.
+    assert latest_recall(path, book="Book A").rate == 0.25
+    assert latest_recall(path, book="Book A").book == "Book A"
+    # A book never gauged has no recall, rather than someone else's.
+    assert latest_recall(path, book="Book C") is None
 
 
 # --- Calibration to_json/from_json round-trip -----------------------------

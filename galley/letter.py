@@ -62,6 +62,17 @@ def _recall_rate(recall: Any) -> float | None:
     return None
 
 
+def _recall_book(recall: Any) -> str:
+    """The book a recall estimate was measured on, or ``""`` when it doesn't
+    say (a bare ``RecallEstimate``, a dict without ``book``)."""
+
+    if recall is None:
+        return ""
+    if isinstance(recall, dict):
+        return str(recall.get("book") or "")
+    return str(getattr(recall, "book", "") or "")
+
+
 def _pct(rate: float) -> str:
     """Render a rate as a percentage; accepts either 0..1 or 0..100 input."""
 
@@ -90,6 +101,14 @@ def _wave_action_lines(wave: WaveRecord) -> list[str]:
                 pass
         lines.append("  - " + ", ".join(parts))
     return lines
+
+
+def _is_duplicate(verdict: Any) -> bool:
+    """An arbitration verdict that merged a re-find into the finding it
+    duplicates (``galley.adjudicate.arbitrate``) — never an open question."""
+
+    return (verdict.judge == "arbitrator"
+            and verdict.reason.startswith("duplicate of "))
 
 
 def _coverage_notes(cf: CaseFile) -> list[str]:
@@ -187,8 +206,13 @@ def _section_queries(cf: CaseFile) -> list[str]:
     # galley.adjudicate.screen_disputes) both route their finding to the
     # margin, never delete it — see galley.contracts.Verdict. Both belong
     # here; showing only "query" would silently drop every panel-rejected
-    # finding from the one document that promises none is ever hidden.
-    query_verdicts = [v for v in cf.verdicts if v.ruling in ("query", "reject")]
+    # finding from the one document that promises none is ever hidden. A
+    # later wave's re-find of an edit already made ("downgrade", "duplicate
+    # of …") is not a question for the author — it was merged, not withheld.
+    query_verdicts = [
+        v for v in cf.verdicts
+        if v.ruling in ("query", "reject") and not _is_duplicate(v)
+    ]
     verdict_ids = {v.finding_id for v in query_verdicts}
 
     if not query_verdicts:
@@ -234,9 +258,20 @@ def _section_confidence(
 ) -> list[str]:
     out = ["## Confidence", ""]
     rate = _recall_rate(recall)
+    gauge_book = _recall_book(recall)
+    if rate is not None and gauge_book and cf.book and gauge_book != cf.book:
+        # A gauge measured on a different manuscript says nothing about this
+        # one; presenting it as this book's recall would be a false figure.
+        rate = None
     if rate is not None:
+        gauge = (
+            "Against our seeded gauge"
+            if gauge_book and gauge_book == cf.book
+            else "Against our seeded gauge (a cross-book gauge — measured on a "
+            "manuscript other than this one, not on this run)"
+        )
         out.append(
-            f"Against our seeded gauge, estimated recall is **{_pct(rate)}**. "
+            f"{gauge}, estimated recall is **{_pct(rate)}**. "
             "Read this honestly: a seeded gauge only measures the error classes "
             "we know to seed, so it cannot see blind spots outside our own "
             "taxonomy. The true miss rate is at least this high."

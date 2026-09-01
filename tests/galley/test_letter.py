@@ -210,3 +210,42 @@ def test_recall_accepts_object_and_percentage_scale(tmp_path):
     cf = CaseFile(book="Obj", waves=[WaveRecord(index=1)])
     text = render_letter(cf, tmp_path, recall=Est()).read_text(encoding="utf-8")
     assert "84.0%" in text
+
+
+def test_open_queries_omit_duplicate_refinds(tmp_path):
+    """A later wave re-finding an edit wave one already made is merged, not a
+    question for the author — it must not pad the open-queries list."""
+    from galley.adjudicate import arbitrate
+
+    cf, _ms = _scripted_casefile()
+    cf.findings.append(gfinding("F1b", "body-0001", "qwick", "quick", wave=2))
+    res = arbitrate(cf.findings)
+    dup = [v for v in res.verdicts if v.finding_id == "F1b"]
+    assert dup and dup[0].reason.startswith("duplicate of F1")
+    cf.verdicts.extend(res.verdicts)
+    text = render_letter(cf, tmp_path).read_text(encoding="utf-8")
+    queries = text.split("## Open queries")[1].split("## Confidence")[0]
+    assert "F3" in queries                 # the genuine query is still listed
+    assert "F1b" not in queries and "duplicate of" not in queries
+
+
+def test_cross_book_recall_is_not_presented_as_this_books_gauge(tmp_path):
+    from galley.calibration import BookRecall
+
+    cf, _ms = _scripted_casefile()
+    cf.book = "This Book"
+    # A gauge measured on another manuscript: no recall figure is claimed.
+    foreign = BookRecall(planted=8, caught=6, rate=0.75, book="Other Book")
+    text = render_letter(cf, tmp_path, recall=foreign).read_text(encoding="utf-8")
+    assert "Against our seeded gauge" not in text
+    assert "75.0%" not in text
+    assert "No recall estimate was supplied" in text
+    # The same book's gauge renders as before.
+    own = BookRecall(planted=8, caught=6, rate=0.75, book="This Book")
+    text = render_letter(cf, tmp_path, recall=own).read_text(encoding="utf-8")
+    assert "Against our seeded gauge, estimated recall is **75.0%**" in text
+    assert "cross-book" not in text
+    # A gauge that names no book (a legacy record) is labelled, not hidden.
+    untagged = {"overall": 0.5}
+    text = render_letter(cf, tmp_path, recall=untagged).read_text(encoding="utf-8")
+    assert "cross-book gauge" in text and "50.0%" in text

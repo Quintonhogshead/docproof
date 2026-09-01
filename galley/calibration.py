@@ -50,6 +50,7 @@ from docproof.utils.files import write_atomic
 
 from galley.casefile import CaseFile
 from galley.contracts import GFinding, Manuscript, WaveRecord
+from galley.seeding import RecallEstimate
 
 # The default calibration filename, resolved relative to whatever directory the
 # caller chooses (the CLI verb defaults it to alongside --config).
@@ -217,17 +218,34 @@ def _save(calibration: Calibration, path: str | Path) -> None:
 # --------------------------------------------------------------------------
 
 
+def _free_adapters() -> frozenset[str]:
+    """The adapters whose ``$0`` is a real price: the orchestrator's own list
+    (imported lazily — it imports this module's consumers), with a fixed
+    fallback so the store works standalone."""
+
+    try:
+        from galley.orchestrator import FREE_ADAPTERS
+
+        return FREE_ADAPTERS
+    except Exception:  # noqa: BLE001 - keep the calibration store standalone
+        return frozenset({"spellscan", "languagetool"})
+
+
 def record_run(
-    cf: CaseFile, ms: Manuscript, path: str | Path, *, now: str | None = None
+    cf: CaseFile, ms: Manuscript, path: str | Path, *, now: str | None = None,
+    free_adapters: frozenset[str] | None = None,
 ) -> Calibration:
     """Fold one case file's real spend into the cost table at ``path``.
 
     Walks ``cf.waves`` -> ``actions`` (the shape :func:`galley.orchestrator._run_wave`
     writes: ``adapter``, ``scope`` (a JSON dict), ``cost_usd``). Each action's
     scope is resolved against ``ms`` to a word count, so a ``$0`` action from a
-    free adapter (spellscan, LanguageTool) still counts its words — recording,
-    correctly, that the pair is free — while a skipped action (no ``scope`` or
-    no ``cost_usd`` recorded) contributes nothing.
+    free adapter (spellscan, LanguageTool — ``free_adapters``) still counts its
+    words — recording, correctly, that the pair is free — while a skipped
+    action (no ``scope`` or no ``cost_usd`` recorded) contributes nothing. A
+    ``$0`` action from a PAID adapter is not free, it is a pass that never
+    billed (subagent mode, a failed call); folding its words in would drag the
+    pair's rate toward zero, so it is excluded too.
 
     Accumulates into the existing entry rather than replacing it: cost and
     kwords both sum across every call this function has ever made for a given
@@ -237,6 +255,8 @@ def record_run(
 
     from galley.adapters import Scope
 
+    if free_adapters is None:
+        free_adapters = _free_adapters()
     calibration = read_calibration(path)
     ts = now or _utc_now()
 
@@ -249,6 +269,8 @@ def record_run(
             scope_json = action.get("scope")
             cost = action.get("cost_usd")
             if not adapter or not isinstance(scope_json, dict) or cost is None:
+                continue
+            if float(cost) <= 0 and str(adapter) not in free_adapters:
                 continue
             scope = Scope(
                 chapters=tuple(scope_json.get("chapters") or ()),
@@ -319,6 +341,14 @@ def record_recall(
 # --------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class BookRecall(RecallEstimate):
+    """A :class:`~galley.seeding.RecallEstimate` that remembers which book it
+    was measured on (``""`` for a record written before books were tagged)."""
+
+    book: str = ""
+
+
 def est_usd_per_kword(
     calibration: Calibration, adapter: str, model: str, default: float
 ) -> float:
@@ -346,9 +376,15 @@ def est_usd_per_kword(
     return default
 
 
-def latest_recall(path: str | Path) -> Any:
-    """The most recently recorded :class:`~galley.seeding.RecallEstimate`, or
-    ``None`` if the store holds no recall history yet.
+def latest_recall(path: str | Path, book: str | None = None) -> Any:
+    """The most recently recorded recall estimate, or ``None`` if there is none.
+
+    With ``book`` given, only records for that book count and ``None`` means
+    the book has never been gauged — a figure measured on another manuscript
+    is not this one's recall. Without it (the backward-compatible form) the
+    last record of any book is returned; either way the result is a
+    :class:`BookRecall`, a ``RecallEstimate`` that also carries its ``book``,
+    so a renderer can tell a same-book gauge from a cross-book one.
 
     A thin helper so a caller that only has the calibration path (the
     ``galley calibrate`` verb's own output, or ``app/jobs.py`` rendering the
@@ -357,18 +393,20 @@ def latest_recall(path: str | Path) -> Any:
     re-deriving one.
     """
 
-    from galley.seeding import RecallEstimate
-
     calibration = read_calibration(path)
-    if not calibration.recall:
+    records = calibration.recall
+    if book is not None:
+        records = [r for r in records if r.book == book]
+    if not records:
         return None
-    rec = calibration.recall[-1]
-    return RecallEstimate(
+    rec = records[-1]
+    return BookRecall(
         planted=rec.planted,
         caught=rec.caught,
         rate=rec.rate,
         by_type=dict(rec.by_type),
         caveat=rec.caveat,
+        book=rec.book,
     )
 
 
@@ -479,6 +517,7 @@ def calibrate_free(
 
 
 __all__ = [
+    "BookRecall",
     "Calibration",
     "CostEntry",
     "DEFAULT_CALIBRATION_FILENAME",

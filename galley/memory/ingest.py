@@ -13,7 +13,15 @@ and pull what we can rather than demanding one rigid layout:
   accepted / dismissed / swapped each flagged mark. Each resolved flag is a
   precedent.
 * **review dispositions** — a finished review job whose findings each carry an
-  applied / queried / rejected disposition. Each finding is a precedent.
+  applied / queried / rejected disposition, or DocProof's own ``findings.json``
+  rows (``status`` = validated / query / rejected_by_verifier …, with
+  ``original_text`` for the find text). Each finding is a precedent.
+* **case files** — :func:`ingest_casefile` reads a Galley
+  :class:`~galley.casefile.CaseFile` directly: every adjudicated finding by
+  its verdict, and every uncontested finding (kept, never disputed) as an
+  ``accept``. Arbitration bookkeeping — an overlap loser or a duplicate
+  re-find — is never a precedent: it says which finding claimed a span, not
+  whether the edit was right.
 
 Contract
 --------
@@ -74,6 +82,10 @@ _RULING_NORMALIZATION: dict[str, str] = {
     # is that vocabulary's "this finding held its span/passed the panel", the
     # same disposition "accept"/"applied" name for corrections and review.
     "keep": "accept",
+    # DocProof's findings.json: "validated" is an applied tracked change, and
+    # "rejected_by_verifier" the one rejection that is an editorial judgment.
+    "validated": "accept",
+    "rejected_by_verifier": "reject",
     # reject family (a dismissed mark == the proofreader's mark was rejected)
     "reject": "reject",
     "rejected": "reject",
@@ -98,6 +110,35 @@ _RULING_NORMALIZATION: dict[str, str] = {
 _SWAP_RAW: frozenset[str] = frozenset(
     {"swap", "swapped", "replace", "replaced", "substitute"}
 )
+
+# DocProof statuses that are bookkeeping, not rulings: a candidate the
+# validator could not anchor, a mechanical overlap/duplicate/no-op drop, an
+# oversize guard, or a row never adjudicated. None says whether the edit was
+# right, so none is a precedent — ignored quietly, not warned about.
+_NOT_A_RULING: frozenset[str] = frozenset({
+    "pending",
+    "rejected_no_anchor",
+    "rejected_overlap",
+    "rejected_duplicate",
+    "rejected_noop",
+    "rejected_oversized",
+    "skipped_low_confidence",
+})
+
+# The arbitrator's verdicts (galley.adjudicate.arbitrate) record which finding
+# claimed a span — an overlap loser routed to query, a re-find merged as a
+# duplicate. Neither is a judgment on the mark, so neither is a precedent.
+_ARBITRATION_JUDGE = "arbitrator"
+_ARBITRATION_REASONS = ("overlaps earlier finding", "duplicate of ")
+
+
+def _is_arbitration(item: dict[str, Any]) -> bool:
+    """Is this review item an arbitration verdict rather than a ruling?"""
+    judge = _first(item, "judge", "ruled_by").strip().lower()
+    if judge == _ARBITRATION_JUDGE:
+        return True
+    reason = _first(item, "reason", "note", "comment", "why").strip().lower()
+    return reason.startswith(_ARBITRATION_REASONS)
 
 
 def _normalize_ruling(raw: Any) -> str | None:
@@ -128,11 +169,15 @@ class IngestSummary:
     ingested: int = 0
     duplicates: int = 0
     skipped: int = 0
+    # Well-formed rows that are deliberately not precedents: arbitration
+    # bookkeeping and DocProof's mechanical statuses (``_NOT_A_RULING``).
+    ignored: int = 0
 
     def _add(self, other: "IngestSummary") -> None:
         self.ingested += other.ingested
         self.duplicates += other.duplicates
         self.skipped += other.skipped
+        self.ignored += other.ignored
 
 
 # ---------------------------------------------------------------------------
@@ -191,9 +236,17 @@ def _insert_precedent(
     ruled_by: str,
     seen: set[str],
     summary: IngestSummary,
+    now: Any = None,
 ) -> None:
     """Insert one precedent unless an equal row already exists (in the store from
-    a prior run, or already inserted this batch)."""
+    a prior run, or already inserted this batch). A ruling outside
+    :data:`RULING_VOCAB` is refused here — the one gate every shape passes
+    through — so the table never grows a vocabulary of its own."""
+    if ruling not in RULING_VOCAB:
+        logger.warning("precedent ruling %r is outside %s; skipping",
+                       ruling, sorted(RULING_VOCAB))
+        summary.skipped += 1
+        return
     key = _dedup_key(error_type, find_text, ruling, book, ruled_by)
     if key in seen:
         summary.duplicates += 1
@@ -209,9 +262,20 @@ def _insert_precedent(
         reason=reason,
         book=book,
         ruled_by=ruled_by,
+        now=_now_text(now),
     )
     seen.add(key)
     summary.ingested += 1
+
+
+def _now_text(now: Any) -> str | None:
+    """``now`` as the timestamp string the store pins ``created_at`` to, or
+    ``None`` to let the store's own clock date the row."""
+    if now is None:
+        return None
+    if callable(now):
+        now = now()
+    return str(now)
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +331,7 @@ def _ingest_corrections(
     book: str,
     seen: set[str],
     summary: IngestSummary,
+    now: Any = None,
 ) -> None:
     job_ruled_by = _first(job, "ruled_by", "resolved_by", "editor", "reviewer")
     for item in _pluck_list(job, _CORRECTIONS_LIST_KEYS):
@@ -313,6 +378,7 @@ def _ingest_corrections(
             ruled_by=ruled_by,
             seen=seen,
             summary=summary,
+            now=now,
         )
 
 
@@ -323,12 +389,18 @@ def _ingest_review(
     book: str,
     seen: set[str],
     summary: IngestSummary,
+    now: Any = None,
 ) -> None:
     job_ruled_by = _first(job, "ruled_by", "reviewer", "editor", default="review")
     for item in _pluck_list(job, _REVIEW_LIST_KEYS):
         if not isinstance(item, dict):
             logger.warning("review finding is not an object; skipping: %r", item)
             summary.skipped += 1
+            continue
+        if _is_arbitration(item):
+            logger.debug("review finding is arbitration bookkeeping; ignoring: %r",
+                         item.get("reason"))
+            summary.ignored += 1
             continue
         raw = (
             item.get("disposition")
@@ -337,6 +409,10 @@ def _ingest_review(
             if item.get("status") is not None
             else item.get("ruling")
         )
+        if isinstance(raw, str) and raw.strip().lower() in _NOT_A_RULING:
+            logger.debug("review finding status %r is not a ruling; ignoring", raw)
+            summary.ignored += 1
+            continue
         ruling = _normalize_ruling(raw)
         if ruling is None:
             logger.warning(
@@ -347,9 +423,13 @@ def _ingest_review(
         error_type = _first(
             item, "error_type", "type", "category", "kind", default="unknown"
         )
-        find_text = _first(item, "find_text", "find", "text", "original", "before")
-        ruled_by = _first(item, "ruled_by", "reviewer", "editor", default=job_ruled_by)
-        reason = _first(item, "reason", "note", "comment", "why")
+        find_text = _first(
+            item, "find_text", "find", "original_text", "text", "original", "before"
+        )
+        ruled_by = _first(
+            item, "ruled_by", "judge", "reviewer", "editor", default=job_ruled_by
+        )
+        reason = _first(item, "reason", "explanation", "note", "comment", "why")
         _insert_precedent(
             store,
             error_type=error_type,
@@ -360,6 +440,7 @@ def _ingest_review(
             ruled_by=ruled_by,
             seen=seen,
             summary=summary,
+            now=now,
         )
 
 
@@ -372,7 +453,7 @@ def ingest_job(
     store: MemoryStore,
     job_json: dict[str, Any],
     *,
-    now: Any = None,  # accepted for symmetry / future use; the store owns the clock
+    now: Any = None,
     book: str | None = None,
     seen: set[str] | None = None,
 ) -> IngestSummary:
@@ -383,8 +464,9 @@ def ingest_job(
     An unrecognized record is logged and skipped (returns ``skipped=1``), never
     raised. ``book`` is the fallback book label when the record carries none
     (:func:`ingest_archive` passes the file stem). ``seen`` lets a batch share one
-    dedup set across jobs; ``now`` is accepted but unused — the store injects its
-    own clock at write time.
+    dedup set across jobs; ``now`` (a timestamp string, or a callable returning
+    one) dates every row this call writes — omit it and the store's own clock
+    does.
     """
     summary = IngestSummary()
     if seen is None:
@@ -406,10 +488,67 @@ def ingest_job(
 
     book_label = _book_of(job_json, book)
     if shape == "corrections":
-        _ingest_corrections(store, job_json, book=book_label, seen=seen, summary=summary)
+        _ingest_corrections(store, job_json, book=book_label, seen=seen,
+                            summary=summary, now=now)
     else:
-        _ingest_review(store, job_json, book=book_label, seen=seen, summary=summary)
+        _ingest_review(store, job_json, book=book_label, seen=seen,
+                       summary=summary, now=now)
     return summary
+
+
+def casefile_items(cf: Any) -> list[dict[str, Any]]:
+    """Project a :class:`~galley.casefile.CaseFile` into review-shape items.
+
+    Every finding yields one item: its verdict's ruling when it was adjudicated
+    (``keep`` -> accept, ``reject``, ``query``), or — for a finding that holds
+    its span with no verdict at all, the common case for wave one — an
+    ``accept`` ruled by ``galley:uncontested``, because that edit was delivered
+    to the author. A finding that declares itself a query (the convention
+    ``galley.letter`` and ``galley.deliverable`` honour) is a ``query``.
+    Arbitration verdicts are carried through as-is and dropped by
+    :func:`ingest_job`'s arbitration guard.
+    """
+    by_id: dict[str, Any] = {}
+    for v in cf.verdicts:
+        by_id.setdefault(v.finding_id, v)
+    items: list[dict[str, Any]] = []
+    for f in cf.findings:
+        v = by_id.get(f.id)
+        if v is not None:
+            items.append({
+                "disposition": v.ruling,
+                "error_type": f.error_type or "unknown",
+                "find_text": f.find,
+                "reason": v.reason or f.note,
+                "ruled_by": v.judge or "galley",
+            })
+            continue
+        self_query = f.confidence == "query" or f.error_type == "query"
+        items.append({
+            "disposition": "query" if self_query else "accept",
+            "error_type": f.error_type or "unknown",
+            "find_text": f.find,
+            "reason": f.note,
+            "ruled_by": "galley:uncontested",
+        })
+    return items
+
+
+def ingest_casefile(
+    store: MemoryStore,
+    cf: Any,
+    *,
+    now: Any = None,
+    seen: set[str] | None = None,
+) -> IngestSummary:
+    """Ingest a finished run's :class:`~galley.casefile.CaseFile` as precedents.
+
+    The case-file form of :func:`ingest_job`: see :func:`casefile_items` for
+    what becomes a precedent (adjudicated findings by their verdict, uncontested
+    findings as ``accept``) and what never does (arbitration bookkeeping).
+    """
+    job_json = {"kind": "review", "book": cf.book, "findings": casefile_items(cf)}
+    return ingest_job(store, job_json, now=now, book=cf.book, seen=seen)
 
 
 def ingest_archive(
@@ -473,6 +612,8 @@ def _iter_entries(
 __all__ = [
     "IngestSummary",
     "RULING_VOCAB",
+    "casefile_items",
     "ingest_archive",
+    "ingest_casefile",
     "ingest_job",
 ]

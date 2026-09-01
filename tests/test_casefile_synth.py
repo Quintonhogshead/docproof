@@ -37,8 +37,12 @@ def test_casefile_from_run_projects_findings_verdicts_and_spend(tmp_path):
     assert len(cf.findings) == 2
     assert cf.budget.spent_usd == 0.64
     rulings = {v.finding_id: v.ruling for v in cf.verdicts}
-    assert rulings == {"s-0001": "accept", "c-0002": "query"}
+    # Case-file vocabulary (galley.contracts.RULINGS): an applied edit is "keep".
+    assert rulings == {"s-0001": "keep", "c-0002": "query"}
     assert cf.waves and cf.waves[0].findings_added == 2
+    # The wave's scope is the orchestrator's dict shape, so record_run prices it.
+    scope = cf.waves[0].actions[0]["scope"]
+    assert isinstance(scope, dict) and scope["chapters"] == []
 
 
 def test_galley_letter_runs_on_a_bare_run_directory(tmp_path):
