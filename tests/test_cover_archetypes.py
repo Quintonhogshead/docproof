@@ -216,6 +216,8 @@ _EXPECTED_GENRES = {
     "portrait_luminary": ["fantasy", "romance"],
     "elemental_aperture": ["fantasy", "science_fiction", "romance",
                           "mystery_thriller", "horror"],
+    "gilded_sigil": ["fantasy", "science_fiction", "romance",
+                    "mystery_thriller", "young_readers"],
 }
 
 
@@ -1070,3 +1072,133 @@ def test_pale_reliquary_keeps_its_discrete_object_plates_whole():
     for sid in ("crown", "undergrowth", "beast", "bloom", "claw"):
         assert not by_id[sid].keep_whole
         assert by_id[sid].cut_edge
+
+
+# -- Archetype Nine (gilded_sigil) — the six rules, as regression guards -----
+#
+# Every assertion below is a rule the template's own header states and which a
+# well-meaning later edit would plausibly "fix" in the wrong direction. They
+# are written against gilded_sigil by name (not swept over the shelf) because
+# each is a property of THIS arrangement, not of templates in general.
+
+def test_gilded_sigil_snaps_its_heart_into_the_titles_own_line_gap():
+    """Rule 5. `snap: line_gap` only fires for a CONTAIN-fit slot drawn
+    IMMEDIATELY after a text layer (compose._position_all_art reads
+    layers[i - 1]); slide one layer between them and the disc silently
+    reverts to its fixed anchor, which is the wrong place for every book.
+    And snap measures ALPHA, so the plate must carry real transparency —
+    rule 4's one exception."""
+    a = ARCHETYPES["gilded_sigil"]
+    heart = next(s for s in a.art if s.id == "heart")
+    assert heart.snap == "line_gap"
+    assert heart.fit == "contain"
+    assert heart.transparent, "snap and the occlusion guards measure alpha"
+    assert heart.blend == "normal", "a screened plate has no alpha to snap by"
+    i = a.layers.index("heart")
+    assert a.layers[i - 1] == "title"
+
+
+def test_gilded_sigil_leaves_its_foot_type_unprotected_on_purpose():
+    """Rule 2, and the single most likely wrong 'fix' in this file. The pale
+    foot band plus near-black author ink is produced by compose's two-ink
+    flip, which only runs once scrim escalation has nothing left to
+    escalate. Give `author` or `series` a scrim and the autopilot darkens
+    the band instead of flipping the ink, and rule 1's value inversion is
+    gone."""
+    a = ARCHETYPES["gilded_sigil"]
+    protected = {s.protects for s in a.scrims}
+    assert "author" not in protected
+    assert "series" not in protected
+    # ...while the two slots that sit on the DARK four-fifths keep theirs.
+    assert protected == {"title", "subtitle"}
+
+
+def test_gilded_sigil_builds_its_pale_foot_deterministically():
+    """Rule 1. The band may not depend on how the generated `drift` plate
+    came back, so it is a color_wash in the `text` role behind a feathered
+    gradient mask — drawn after the vignette (which would otherwise dirty
+    the one bright band on the cover) and before the two text slots that
+    stand on it."""
+    a = ARCHETYPES["gilded_sigil"]
+    foot = next(j for j in a.adjust if j.id == "foot_plate")
+    assert foot.op == "color_wash"
+    assert foot.color == "text"
+    assert foot.mask is not None and foot.mask.gradient is not None
+    assert foot.mask.gradient.angle == 90.0
+    order = a.layers.index
+    assert order("edge_fall") < order("foot_plate") < order("series")
+    assert order("foot_plate") < order("author")
+
+
+def test_gilded_sigil_quarantines_its_one_hue_by_mask():
+    """Rule 3. The metallic is APPLIED, not hoped for: one gradient_map per
+    struck plate, each onto background -> accent -> text and each masked to
+    its own plate. The mask SOURCE differs by plate kind and that is the
+    load-bearing detail — an opaque screened plate has solid alpha, so a
+    from_layer stencil would tint the whole canvas; its luminance is the
+    linework."""
+    a = ARCHETYPES["gilded_sigil"]
+    by_id = {j.id: j for j in a.adjust}
+    art_by_id = {s.id: s for s in a.art}
+    for adj_id, plate in (("sigil_ink", "sigil"),
+                          ("outrider_ink", "outrider"),
+                          ("heart_ink", "heart")):
+        adj = by_id[adj_id]
+        assert adj.op == "gradient_map"
+        # The near plates get the third stop — a white specular, which is what
+        # says NEAR. `outrider` is the same kind of thing seen far off and
+        # deliberately ends at `accent`: given a specular it renders as a
+        # bright swoosh in the disc's own plane (aerial perspective).
+        assert adj.stops == (["background", "accent"] if plate == "outrider"
+                             else ["background", "accent", "text"])
+        assert adj.mask is not None
+        if art_by_id[plate].transparent:
+            assert adj.mask.from_layer == plate
+        else:
+            assert adj.mask.luminance_of == plate, (
+                f"{plate} is opaque — a from_layer stencil tints everything")
+        assert a.layers.index(adj_id) > a.layers.index(plate)
+
+
+def test_gilded_sigil_screens_its_linework_instead_of_cutting_it_out():
+    """Rule 4. A generator asked for a transparent PNG of thin symmetrical
+    engraving returns a soft grey halo where the lines should be. Every
+    plate but `heart` is prompted on pure black and screened."""
+    a = ARCHETYPES["gilded_sigil"]
+    for sid in ("sigil", "outrider", "drift"):
+        slot = next(s for s in a.art if s.id == sid)
+        assert slot.blend == "screen"
+        assert not slot.transparent
+        assert "on pure black" in " ".join(slot.prompt_frame.split()).lower()
+
+
+def test_gilded_sigil_keeps_its_veil_undemotable():
+    """The occlusion budget. `drift` is the only art drawn after the title
+    that is not snapped, and it is COVER fit so the contain-fit sandwich
+    machinery never looks at it — it cannot be demoted below the type. What
+    keeps it honest instead is its own gradient mask, which holds it clear
+    of the upper frame and opens toward the foot."""
+    a = ARCHETYPES["gilded_sigil"]
+    drift = next(s for s in a.art if s.id == "drift")
+    assert drift.fit == "cover"
+    assert a.layers.index("drift") > a.layers.index("title")
+    assert drift.mask is not None and drift.mask.gradient is not None
+    assert drift.mask.gradient.start > 0.0
+
+
+def test_gilded_sigil_sets_the_author_in_the_title_face():
+    """The deliberate opposite of romantasy_vignette's choice, and what this
+    shelf actually does: on a brand-name hardcover the author's name is a
+    second title, because the name is the thing being sold."""
+    a = ARCHETYPES["gilded_sigil"]
+    author = next(t for t in a.text if t.id == "author")
+    assert author.font_role == "title"
+    assert ARCHETYPES["romantasy_vignette"].text[-1].font_role == ""
+
+
+def test_gilded_sigil_wears_no_shelf_recipe():
+    """Rule 6. Every recipe that suits this genre runs a gradient_map onto
+    background -> primary — the one ramp that does not contain the accent
+    this whole template spends its chroma budget on (crossed_relics rule 5,
+    learned again)."""
+    assert ARCHETYPES["gilded_sigil"].recipe == ""

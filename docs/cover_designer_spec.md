@@ -1668,6 +1668,74 @@ would be a different decision than the archetype asked for.
 **Ask which kind of thing a plate holds before reaching for an overshooting
 anchor.** That question is now part of authoring a slot.
 
+### 15.27 The value flip, and Archetype Nine (`gilded_sigil`)
+
+Provenance: building Archetype Nine (2026-09-01) off the blockbuster-fantasy
+EMBLEM shelf — a scratched near-black slab, one huge symmetrical device struck
+into it in a single metallic ink, a filled disc at its heart with one small
+creature-silhouette crossing it, an enormous condensed title straight down the
+middle. Five generatable slots, the cheapest template on the shelf. Four things
+came out of it that are not about that one arrangement.
+
+**1. A cover may change value regime partway down, and the ink follows by
+MEASUREMENT.** This shelf's real signature is not the emblem, it is that the
+last fifth of the cover flips pale and the author's name is printed on it in
+near-black. An archetype cannot express that directly: `TextSlot.color_role` is
+deliberately not an `ArchetypeText` field (fonts come from the Direction,
+content from the Brief, ink from TextSlot's own default), and this template did
+not get an exception. It does not need one. compose's legibility autopilot
+escalates a slot's protecting scrim *first* and only then flips to the better of
+two fixed inks — so **a text slot standing on a deliberately bright band is
+declared with NO SCRIM**, the escalation step has nothing to do, and the flip to
+`#111111` happens on its own, every render, correctly measured against whatever
+the band actually came out as. Give that slot a scrim and you get the opposite
+cover: the autopilot darkens the band it was asked to keep bright until white
+type passes on it.
+
+The general rule: **an omitted scrim is a design decision and should be
+commented as one.** Two of this template's tests exist only to stop a later
+reader "fixing" the omission.
+
+**2. `blend: screen` on pure black is how you generate linework; `luminance_of`
+is how you colour it.** Asking a generator for a transparent PNG of thin
+symmetrical engraving returns a soft grey halo where the lines should be.
+Prompting the same thing ON PURE BLACK and screening it drops the ground for
+free with no alpha involved. The cost is that the plate is then fully opaque, so
+`mask: {from_layer: ...}` — a 50%-alpha stencil — masks the entire canvas.
+`mask: {luminance_of: ...}` is the correct source for a screened plate: its
+luminance *is* the linework.
+
+Two consequences worth carrying forward. First, **a screened plate of thin lines
+carries almost no luminance**, so a `gradient_map` through that mask lands as a
+ghost; lift the linework with a masked `grade` BEFORE tinting it, not by raising
+the tint's opacity (opacity pushes the whole ramp toward the light stop and
+gives white lines, not metal ones). Second, mapping an alpha-carrying plate
+through `background -> accent -> text` does two-tone art for free: a dark
+silhouette inside a lit disc maps to `background` while the disc's own falloff
+becomes an accent-to-white metal ramp. Ask the ramp for the two-tone read rather
+than asking a generator for it.
+
+**3. COVER fit does not exempt a plate from the text-art contact guard.** It
+exempts it from the contain-fit *sandwich* machinery, which is a different
+thing, and the first build of this template confused them: a full-canvas veil
+drawn after the title touched 35% of its ink, was reordered below the type
+(cancelling the veil), and then sat there as a screened plate lightening the
+very ground the title's contrast is measured against — 3.87 against a 4.5
+threshold with the title's halo pinned at the 0.85 cap trying to save it. The
+fix is the plate's own gradient mask, opening below the type's last line. **A
+mask on a full-bleed layer drawn over text is an occlusion budget, not
+decoration.**
+
+**4. On a `snap: line_gap` slot the effects are free and the scale is not.**
+`snap` measures the RAW plate alpha (art effect stacks run after placement), and
+snapping records the pair as a sandwich, which exempts the plate from the
+contact guard as well. So no glow, shadow or stroke on that slot can ever cost
+it contact — while `scale` is the only knob that moves it, and it moves less
+than you expect (measured here: 0.21 -> 9%, 0.16 -> 6%, 0.14 -> 4.5%, 0.125 ->
+3.7% against a 4% limit). **A display face has an inter-line gap narrower than
+the void a device was drawn around**, so size the snapped ornament against the
+TYPE, then buy the presence back with a generous halo, which costs nothing.
+
 ## 16. The director and the atelier (DECIDED 2026-08-31, owner) — how a cover is made now
 
 The old flow was: distil a manuscript *sample* into a grounding sheet, ask one call for N directions, then paint each concept and put it through a fixed critique loop. The new flow is two acts, and it is what the owner arrived at by building six Longsword covers by hand with six agents:
