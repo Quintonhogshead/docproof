@@ -26,3 +26,4 @@ secrets.db
 # generated renders and paid art assets, never source.
 cover_jobs/
 build_cover/
+covers/

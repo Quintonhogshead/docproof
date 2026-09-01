@@ -241,9 +241,9 @@ adjust:
   - id: slab_grade
     # Rule 1. Sits directly on the slab, before any other plate.
     op: grade
-    brightness: -0.28
+    brightness: -0.06
     saturation: -0.45
-    contrast: 0.10
+    contrast: 0.20
 
   - id: cold_spine
     # One shared colour spine under a stack of separately-lit plates, taken
@@ -274,7 +274,7 @@ adjust:
 
   - id: edge_close
     op: vignette
-    strength: 0.62
+    strength: 0.30
 
 # =============================================================================
 scrims:
