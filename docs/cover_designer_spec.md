@@ -1657,3 +1657,146 @@ A full-bleed horizontal rule — the most ordinary way to put structure into an 
 
 **Fix:** a row is alive if it varies across itself **or** its mean differs from a neighbour's by `_DEAD_BAND_ROW_DELTA_THRESHOLD` (0.020). A horizontal edge is a jump between adjacent rows, so that is where it has to be looked for. A gradient moves its mean by a hair per row and still measures dead, which is the behaviour this metric already had and wants to keep.
 
+
+---
+
+## 18. Archetype Two — `elemental_aperture` (SHIPPED 2026-09-01)
+
+The second entry on the archetype shelf, and the first one written as a **technique** rather than as a picture.
+
+Reference DNA is the contemporary genre cover built on one colour and one cut — Penn Cole's *Burn of the Everflame* and the shelf around it. A full-bleed field of a single element colour; a big flat blackout silhouette cut out of it; a brighter world living inside that shape, visible only through it; a flat foreground subject standing in front of the whole arrangement; heavy display type on top.
+
+Where Archetype One (`romantasy_organic`) is a **collage** — a dozen separately lit cutouts arranged around a title — this one is a **portal**. Five painted plates, and the whole illusion rests on a single mask: `beyond` clipped to `aperture`'s own alpha.
+
+### 18.1 Why it is not a fifth romantasy template
+
+The first draft *was* a picture. Its prompt frames said "a young woman", "brow, nose, lips, chin, jaw and throat", "the head and crown fill the upper two thirds" — a portrait with a hole cut in it for an adjective. Every book run through it would have come out wearing the same face.
+
+The rewrite moved every noun out of the machinery and into a casting decision. Slot ids are roles now (`aperture`, `beyond`, `herald`, `field`, `drift`), the frames describe shapes and light rather than anatomy, and the genre tags widened to fantasy / SF / romance / thriller / horror because with the human assumptions gone the composition genuinely travels.
+
+### 18.2 `Archetype.casting` — the new field
+
+A template whose slots are roles has to tell the director how to fill them. Before this field the only prose a template could send the art-direction call was its one-line `describe`, which says what the cover *looks like* and nothing about how to cast it — so any casting doctrine was stranded in YAML comments where no model call could reach it, and the director filled the roles from the reference cover it was shown instead of from the book it was given.
+
+`casting` is emitted by `describe_archetypes()` as indented lines under the template's own entry, at the exact moment the model is choosing nouns. `""` (the default, and every pre-existing template's permanent state) emits nothing and leaves the enumeration byte-identical.
+
+The invariant that changed: `describe_archetypes()` output is **one entry line per archetype**, not one line per archetype. Tests assert the entry count.
+
+### 18.3 The six rules the template encodes
+
+1. **The aperture is a matte, not artwork.** Generated as a transparent cutout, treated `silhouette` so it flattens to one ink and its alpha becomes a clean stencil. The shape must be big, closed and legible in outline alone, because its interior *is* the window.
+2. **`beyond` must be uniformly bright, corner to corner.** It is clipped to an irregular hole, and every dark passage in it becomes a hole in the hole — damage, not depth.
+3. **The light source is internal.** Everything darkens outward from the middle of the aperture: `corona` behind it, `beyond_falloff` inside it, the vignette outside it. The shape is dark *because* it is backlit.
+4. **The element colour is a token that must reach every plate.** Swap the hue per book — that is what makes this a series template — but swap it in the palette and all five art prompts at once. The value ladder never changes: near-black at the trim, saturated hue through the field, a hot core, white only in the type.
+5. **One figure, one place, one cut — never the same thing twice.** `beyond` is a place and nothing else; every figure belongs to `herald`. Painting a figure into both renders one character twice, a few hundred pixels apart, which the eye resolves as a duplicate rather than as depth.
+6. **The type sits on top and crosses the art** — the deliberate opposite of Archetype One's sandwich.
+
+### 18.4 Two engine facts this template pinned down
+
+**The radial-mask invert is safe on exactly one slot.** `drift` feathers its particle field with `gradient: {kind: radial}` plus `invert: true`, because `radial` alone ramps transparent-core to opaque-rim and a particle field wants the reverse. That works because the mask has exactly one source. `beyond_falloff` multiplies a gradient *against* the stencil, so it is authored to never need an invert — inverting there would flip the stencil too and wash the whole cover black.
+
+**A cover-fit plate is sometimes better placed than a contain-fit one.** `aperture` is cover-fit deliberately. Where the subject sits inside a generated plate is the generator's decision, not the template's; contain-fitting a 2:3 plate into a 5:8 trim letterboxes it, and every anchor/offset guess then has to undo a shift the template created for itself. Cover-fit maps the plate's own composition 1:1 onto the trim, and the crop guarantees the severed base leaves through the bottom with no overshoot arithmetic.
+
+### 18.5 Known hazards
+
+- **Both silhouettes are stochastic.** The generator has to return true flat shapes; when it returns a shaded photograph the `silhouette` treatment flattens it anyway, but the outline can come back mushy. Repaint the plate rather than composing around it.
+- **The art-contrast floor fights a dark field.** A near-black aperture on a graded-down field trips the floor and gets re-inked toward white, which destroys the cover. The field is therefore graded *up* (+0.05 brightness, +0.24 saturation) and the vignette kept low (0.24) — run it hard and it darkens the very edge the outline lives on.
+- **A text slot missing from `layers` renders silently.** It fits, it produces real ink, it reports no warning, and it never appears. The foot band was lost this way for two builds.
+- **A swash display face eats the word space in a two-word name.** Nothing in the engine widens a word space independently of tracking, so `author` leaves `font_role` unset and wears the supporting face.
+
+
+## 19. Archetype Three, and the two engine changes it needed (2026-09-01)
+
+`portrait_luminary` — one lit face on the centre axis severed by the bottom trim, the book's own
+landscape behind it in two silhouetted depth bands, one big soft light source off the axis, two
+small saturated accent plates on a diagonal, author's name huge at the top and a display title
+huge at the foot. Drawn from the contemporary romantasy portrait shelf; it takes the arrangement
+and the craft from that shelf and none of the props.
+
+Building it surfaced two things that were wrong in the engine rather than in the template.
+
+### 19.1 A slot id is a label; the director needed a brief
+
+`describe_archetypes()` — the ONLY thing an archetype ever tells the art-direction call — emitted
+the `describe` line and each generatable slot's bare **id**. `ArchetypeArt.role` had existed since
+the v2 BODY wave and reached no prompt anywhere: documentation whose only audience never saw it.
+
+Told only that a template wants `luminary` and `token_near`, a model fills them from the nearest
+cover it can remember rather than from the manuscript in front of it. That is the mechanism by
+which a template stops being a template and becomes an impression of the one cover it was drawn
+from — and it is invisible in a render, because the render looks fine.
+
+**Fix:** `describe_archetypes()` emits `id — role` per generatable slot. `portrait_luminary` then
+writes every role as a second-person question about the book (*"the sky this book actually happens
+under. Name the hour, the weather and the world"*), so the template asks and the director answers.
+`romantasy_organic` picks this up unchanged; its roles are terse nouns, and `hero — focal_subject`
+still beats `hero`.
+
+**The corollary, learned the expensive way.** Anything a template states as fact, every book wears.
+The `hero` prompt frame originally ended its camera clause with *"the chin dropped slightly and the
+eyes looking up through the brow"* and specified shadow *"in the eye sockets and under the jaw."*
+That is not camera, it is ACTING — chin down, eyes up under the brow is the glower — and while it
+sat in the frame, two covers sharing no prop, palette, setting or gender still came back wearing
+one expression. The camera, the crop and the light geometry belong to the template. What is on the
+character's face belongs to the book. Audit a prompt frame for smuggled performance before shipping
+it.
+
+### 19.2 Fixed placement is right for one cover and wrong for a catalogue
+
+A one-shot template fixes placement so no book pays for it twice. That is the correct trade for a
+single cover and a sameness generator across a list: two `portrait_luminary` covers with nothing
+else in common still put their accent plates at byte-identical anchors, and a shelf of them reads
+as one cover reprinted.
+
+**Fix:** `TOKEN_LAYOUTS` — a closed shelf of four paired placements (`far_high_left`,
+`far_high_right`, `far_low_left`, `far_low_right`) and a `Direction.token_layout` field
+(`""` = the archetype's own anchors, so every existing archetype and archived direction is
+untouched). `build_spec._token_anchors` applies it, and drops a pick the archetype cannot honour
+with a log line rather than raising — the §6.1 surplus-prompt precedent.
+
+Every layout keeps the pair on **opposite sides** and at **different heights**, guarded by a test:
+the diagonal across the face is the composition and the corners are only its handedness, so a
+layout that stacked them would be a different arrangement rather than a variation. The template
+still owns scale, opacity, effects and z-order; placement is the one decision it delegates.
+
+Addressed by the conventional slot ids `token_far` / `token_near`, exactly as `_intent_mask`'s
+`"inside_focal"` addresses the conventional `focal` id.
+
+### 19.3 One known conflict this wave did NOT fix
+
+`CUTOUT_SUFFIX` tells every transparent plate it is *"fully visible and complete"* while
+`_cut_edge_clause` tells the same plate it is severed and runs out of the picture. Every
+`cut_edge` slot on both shipped archetypes carries the contradiction; the plates come back right
+by weight of emphasis, not by agreement. The suffix should be cut-edge aware.
+
+### 19.4 The photoreal exemption — `Archetype.photoreal`
+
+`direction.py` forbade untreated photoreal art across the whole shelf: `treatment: "none"` on a
+photoreal prompt was *"never allowed, brief or no brief."* `portrait_luminary` is photoreal by
+construction, so **the live director would have refused to fill the archetype this wave shipped.**
+It worked only because it was hand-directed.
+
+The ban is not squeamishness — a raw, untreated photoreal plate is the single biggest
+"AI-generated" tell — and its mitigation is stylization. None of that stylization is available to
+a multi-plate photographic template. `photo_soft` is a **duotone**: it greyscales each plate and
+maps it onto the background→primary ramp, which across eight separately-lit plates flattens the
+whole cover into one sepia mass and takes the two accent tokens with it. That is the same reason
+`romantasy_organic` forbids `photo_soft` outright. `duotone` and `silhouette` do it more bluntly,
+and a silhouetted face is not a portrait.
+
+**Fix:** `Archetype.photoreal` (default `False`, so the shelf-wide rule still binds everywhere it
+did before — the exemption is opt-in, never a silent widening). The flag does not mean "this
+archetype likes photographs." It **asserts** that the template carries its own photoreal discipline
+in place of the stylization it cannot use: one `composition_note` fixing medium, key, fill and
+saturation identically for every plate, and a finishing `recipe` grading, blooming and graining
+them onto one piece of film. A validator holds the template to the second half — `photoreal: true`
+without a `recipe` is refused at load, because without the grain the exemption is just permission
+to ship untreated stock photography.
+
+**Both halves ship together or neither works.** `describe_archetypes()` marks an exempt archetype
+`[PHOTOREAL TEMPLATE]` at the point of choice, and the rule in `direction.py` carves the exemption
+out by that exact marker in all three places it bites: the photorealism rule, the
+simplest-form-wins ladder (which pushes silhouettes and does not apply to a photographic template),
+and the `treatment` vocabulary. Marked but not carved out, the call obeys a rule it has been told
+it is exempt from; carved out but not marked, it cannot tell which archetypes hold the exemption.
+A test asserts the marker and the rule stay in step.

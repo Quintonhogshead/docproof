@@ -706,6 +706,62 @@ class Archetype(BaseModel):
     # printed. Dialling the shelf entry itself is not an option — other
     # templates share it.
     recipe_strength: float = Field(default=1.0, ge=0.0, le=1.0)
+    # How the art-direction call should CAST this template's generatable slots
+    # out of the manuscript in front of it, in the template's own words —
+    # emitted by describe_archetypes() underneath the `describe` line, so the
+    # model reads it at the moment it is choosing nouns.
+    #
+    # Before this field, the only prose a template could send the director was
+    # its one-line `describe`, which says what the cover LOOKS like and nothing
+    # about how to fill it. Any template whose slots are roles rather than
+    # nouns ("the cut", "the place beyond it", "the subject in front") then had
+    # its casting doctrine stranded in YAML comments, where no model call could
+    # ever reach it — so the director filled the roles from the reference cover
+    # it was shown instead of from the book it was given, and every cover built
+    # from that template came out looking like the same book.
+    #
+    # "" (the default, and every template that predates the field) sends
+    # nothing extra and leaves describe_archetypes' output byte-identical.
+    casting: str = ""
+    # Whether this template's plates are PHOTOGRAPHIC by construction, and
+    # may therefore be prompted photoreal with `treatment: "none"` —
+    # the one exemption from direction.py's shelf-wide ban on untreated
+    # photorealism (docs/cover_designer_spec.md §19.4).
+    #
+    # That ban is not squeamishness: a raw, untreated photoreal plate is the
+    # single biggest "AI-generated" tell, and the shelf's mitigation is
+    # stylization — silhouette, duotone, posterize, or the photo_soft
+    # blur+desaturate+ramp. A photoreal TEMPLATE cannot use any of them.
+    # photo_soft is a duotone: it greyscales each plate and maps it onto the
+    # background->primary ramp, which across eight separately-lit plates
+    # flattens a whole cover into one sepia mass — the same reason
+    # romantasy_organic forbids it outright.
+    #
+    # So this flag is not "this archetype likes photographs". It ASSERTS that
+    # the template carries its own photoreal discipline in place of the
+    # stylization it cannot use: one `composition_note` fixing the medium,
+    # the key, the fill and the saturation for every plate identically, and a
+    # finishing `recipe` (grade + bloom + grain) unifying them afterward.
+    # Those are what make eight separate generations read as one photograph
+    # rather than as eight stock images in a pile, and the validator below
+    # holds the template to the second half of that bargain.
+    photoreal: bool = False
+
+    @model_validator(mode="after")
+    def _photoreal_has_a_finish(self) -> Archetype:
+        """A photoreal template must declare a finishing `recipe`. The grade,
+        the bloom and above all the GRAIN are what put eight separately
+        generated plates on one piece of film; without them the exemption is
+        just permission to ship untreated stock photography, which is the
+        thing the shelf-wide rule exists to prevent."""
+        if self.photoreal and not self.recipe:
+            raise ValueError(
+                f"{self.name}: photoreal: true requires a finishing `recipe` "
+                f"— it is the grade/bloom/grain that unifies separately "
+                f"generated photographic plates, and it is half of what the "
+                f"flag asserts (known recipes: "
+                f"{', '.join(sorted(RECIPES)) or 'none'})")
+        return self
 
     @field_validator("recipe")
     @classmethod
@@ -1072,24 +1128,48 @@ def describe_archetypes(genre: str | None = None) -> str:
         archetypes = list(ARCHETYPES.values())
     lines = []
     for a in archetypes:
+        gen = [s for s in a.art if s.generatable]
         # The slot ids are load-bearing prompt content: v2's free-form slugs
         # mean the art director can no longer guess them, and a prompt for a
         # misspelled slot is silently dropped downstream — the first live v2
         # batch shipped every cover artless for exactly this reason.
         #
-        # Each id now carries its `role` where one is declared, because an id
-        # alone does not say what the slot IS. A director handed a bare list
-        # of slugs — `mat`, `pair`, `frame` — has to guess which of them wants
-        # this book's actual characters and which wants a material, and a
-        # guess is how a cover ends up with a generic hooded figure on it
-        # instead of the two people the manuscript is about. The role is the
-        # template's own one-word answer, and it is already written on every
-        # slot for human readers; this just stops throwing it away.
-        gen = [f"{s.id} ({s.role})" if s.role else s.id
-               for s in a.art if s.generatable]
-        slots = (f" (art slots to prompt, by exact id: {', '.join(gen)})"
+        # And the id ALONE is not enough. An id is a label, not a brief: told
+        # only that a template wants "luminary" and "token_near", a model
+        # fills them from the nearest cover it can remember rather than from
+        # the book in front of it — which is how a template stops being a
+        # template and becomes an impression of the one cover it was drawn
+        # from. `role` is the slot's own statement of what it is FOR, it has
+        # existed on ArchetypeArt since the v2 BODY wave, and until this it
+        # reached no prompt anywhere: it was documentation the only audience
+        # that needed it never saw. Emitting it here is what lets a template
+        # ask for "the one big light source in this book's sky" instead of
+        # hoping "luminary" means the same thing to the model as it did to
+        # whoever wrote the YAML.
+        pairs = [f"{s.id} — {' '.join(s.role.split())}" if s.role else s.id
+                 for s in gen]
+        slots = (f" (art slots to prompt, by exact id: {'; '.join(pairs)})"
                  if gen else " (no generated art — fully procedural)")
-        lines.append(f"- {a.name} — {' '.join(a.describe.split())}{slots}")
+        # A photoreal template is the ONE exemption from the shelf-wide ban
+        # on untreated photorealism, and the exemption is worthless if the
+        # call cannot tell which templates hold it: told only "never ship an
+        # untreated photoreal prompt", a model picking this archetype either
+        # refuses its own plates or pairs them with photo_soft, which is a
+        # duotone and destroys the template. Marked here, at the point of
+        # choice, rather than left to be inferred from the describe line.
+        mark = (" [PHOTOREAL TEMPLATE — prompt these plates photographically "
+                "and leave treatment \"none\"; see the photorealism rule]"
+                if a.photoreal else "")
+        lines.append(f"- {a.name} — {' '.join(a.describe.split())}{mark}{slots}")
+        # The casting doctrine (when the template has one) rides directly
+        # under its own entry, indented so it reads as belonging to that
+        # archetype rather than to the enumeration as a whole. Blank lines in
+        # the YAML block become paragraph breaks; every other line is
+        # whitespace-collapsed the same way `describe` is.
+        for para in a.casting.split("\n\n"):
+            para = " ".join(para.split())
+            if para:
+                lines.append(f"    {para}")
     return "\n".join(lines)
 
 

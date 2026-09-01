@@ -1,0 +1,519 @@
+# =============================================================================
+# ARCHETYPE TWO — elemental_aperture
+# =============================================================================
+#
+# Reference DNA: the contemporary genre cover built on ONE colour and ONE cut.
+# A full-bleed field of that colour; a big flat blackout shape cut out of it;
+# a second, brighter world living INSIDE that shape, visible only through it;
+# and a flat foreground subject standing in front of the whole arrangement.
+# Heavy display type on top, the author's name in the element colour.
+#
+# Where Archetype One (romantasy_organic) is a COLLAGE — a dozen separately
+# lit cutouts arranged around a title — this one is a PORTAL. Five painted
+# plates, and the whole illusion rests on a single mask: `beyond` clipped to
+# `aperture`'s own alpha. Every other layer exists to make that cut believable.
+#
+# -----------------------------------------------------------------------------
+# THIS TEMPLATE IS A TECHNIQUE, NOT A PICTURE
+# -----------------------------------------------------------------------------
+#
+# What is fixed here is the MACHINERY: the cut, the mask, the internal light,
+# the value ladder, the feathered particle field, the flat foreground subject,
+# the type on top. What is NOT fixed is what any of those things depicts.
+#
+# The slots below are ROLES. Nothing in this file says "a woman", "a crown",
+# "a face". A cover built from this template should look like the book it is
+# for and unlike every other book built from it — and the only way that
+# happens is if the art-direction call CASTS the roles out of the manuscript
+# instead of reaching for whatever the last cover used. The casting rules are
+# spelled out at the foot of this file and they are the most important thing
+# in it.
+#
+# -----------------------------------------------------------------------------
+# THE SIX RULES THIS TEMPLATE ENCODES
+# -----------------------------------------------------------------------------
+#
+# 1. THE APERTURE IS A MATTE, NOT ARTWORK. It is generated as a transparent
+#    cutout and treated `silhouette`, so it flattens to ONE ink and its alpha
+#    becomes a clean stencil. Ask the generator for "a black shape on a red
+#    background" instead and you get a JPEG with the ground baked in: no
+#    alpha, no stencil, no portal, and a rectangle of the wrong red on the
+#    cover.
+#
+#    The shape must be BIG, CLOSED and legible in outline alone, because its
+#    interior IS the window. A thin, ragged or open shape has no interior to
+#    open, and the whole archetype collapses into a sticker on a smoke field.
+#
+# 2. THE `beyond` PLATE MUST BE UNIFORMLY BRIGHT, CORNER TO CORNER. It is
+#    clipped to an irregular hole, and every dark passage in it becomes a hole
+#    in the hole — the eye reads it as damage, not as depth. Its frame
+#    therefore dictates a light source deep in the picture and forbids dark
+#    corners.
+#
+# 3. THE LIGHT SOURCE IS INTERNAL, AND IT IS WHY THE TRICK READS. Everything
+#    darkens outward from the middle of the aperture: `corona` behind it,
+#    `beyond_falloff` inside it, the vignette outside it. The shape is dark
+#    BECAUSE it is backlit. Light it any other way and the negative-space cut
+#    stops being physics and becomes a logo.
+#
+# 4. THE ELEMENT COLOUR IS A TOKEN, AND IT HAS TO REACH EVERY PLATE. Swap the
+#    hue per book — that is what makes this a SERIES template — but swap it in
+#    the palette AND in all five art prompts at once. A teal cover with orange
+#    sparks does not read as a variant, it reads as a mistake. What never
+#    changes is the VALUE LADDER: near-black at the trim, saturated hue
+#    through the field, a hot core, and white only in the type. Two guards
+#    come with it — clamp the field's brightness below the type's, and on a
+#    pale hue push the core toward that hue's own saturated extreme rather
+#    than to neutral white, or the title's counters fill in.
+#
+# 5. ONE FIGURE, ONE PLACE, ONE CUT — NEVER THE SAME THING TWICE. `beyond` is
+#    a PLACE and nothing else; every figure belongs to `herald`, in front, in
+#    flat black. Painting a figure into `beyond` as well is the mistake that
+#    reads worst of all: the same character rendered twice, once pale and once
+#    solid, a few hundred pixels apart, which the eye resolves as a duplicate
+#    rather than as depth.
+#
+# 6. THE TYPE SITS ON TOP, AND IT CROSSES THE ART. This is the deliberate
+#    opposite of Archetype One's sandwich. The title zone overlaps the lower
+#    third of the arrangement on purpose — that overlap is what stops the
+#    cover reading as two stacked panels — so the title carries a tight
+#    contact shadow, a wide soft one and a hairline stroke, because it has to
+#    hold against near-black and saturated hue in the same line of glyphs.
+#
+# -----------------------------------------------------------------------------
+# ROLES, NOT NOUNS
+# -----------------------------------------------------------------------------
+#
+#   field      the full-bleed weather of the book — the ground, never blank
+#   corona     the internal light source, behind the cut                 ($0)
+#   aperture   THE CUT — one big closed silhouette, and the stencil for it
+#   beyond     THE PLACE seen through the cut; never a figure
+#   herald     THE SUBJECT — a flat foreground silhouette, cut by the trim
+#   drift      the particle field, ONE plate, never a scatter
+#   haze       atmospheric shimmer over the whole field                  ($0)
+#   texture    grain, so nine layers read as one printed sheet           ($0)
+#
+# Five generated plates. At draft tier that is fifteen cents a cover.
+#
+# -----------------------------------------------------------------------------
+# THE TEXT SLOTS ARE BANDS, NOT SENTENCES
+# -----------------------------------------------------------------------------
+# `series` is the TOP BAND and `subtitle` is the FOOT BAND — both optional,
+# both filled by getattr(brief, slot.id), and neither one cares what the words
+# are. A credit line, a series-and-number line, a tagline, a pull quote, or
+# nothing at all: the four ids are a closed Literal, so fill the brief to suit
+# the book rather than trying to rename them.
+# -----------------------------------------------------------------------------
+name: elemental_aperture
+genres: [fantasy, science_fiction, romance, mystery_thriller, horror]
+axis: center
+recipe: airbrushed_glow
+recipe_strength: 0.45          # this template supplies its own bloom and its
+                                # own internal glow; the shelf recipe is wanted
+                                # only for the last of the haze and the whisper
+                                # of soft focus over the join
+describe: >-
+  One full-bleed field of a single element colour, with a big flat blackout
+  silhouette cut out of it and a brighter world burning inside that shape,
+  seen only through it — and the story's subject standing in front of the
+  whole thing in flat black. Optional band at the head, a heavy display title
+  across the lower third, optional band at the foot.
+composition_note: >-
+  One dominant colour throughout, lit entirely by a single strong source deep
+  in the middle of the picture, everything falling away to near-black at the
+  outer edges. Photographic and atmospheric — real air, real haze, fine grain,
+  soft depth of field. No painterly brushwork, no cartoon, no flat vector art,
+  no drawn-in vignette, no split panels, no montage, no collage.
+
+# =============================================================================
+art:
+# -- the ground ---------------------------------------------------------------
+  - id: field
+    role: ground
+    # Rule 4's ladder starts here. Generated, never procedural: a gradient with
+    # a texture tile over it has no curl and no internal structure, and this
+    # plate is 100% of the cover's visible area before anything is cut out of
+    # it.
+    generatable: true
+    procedural: gradient       # $0 fallback only
+    fit: cover
+    prompt_frame: >-
+      A full-frame wall of {subject}, filling the picture edge to edge with no
+      empty space, no horizon and no ground line — layered and moving,
+      brightest and most saturated through the middle of the frame and falling
+      away to near-black at all four corners and along the bottom edge. No
+      figure, no creature, no object, no landscape, no sky.
+
+  - id: corona
+    # Rule 3. The internal source, drawn on the ground BEFORE the cut so the
+    # middle of the field is already hotter than its corners — this is what a
+    # backlit shape is standing in front of.
+    generatable: false
+    fit: cover
+    procedural: radial_glow
+    anchor: [0.46, 0.42]
+    opacity: 0.50
+    blend: screen
+
+# -- THE CUT ------------------------------------------------------------------
+  - id: aperture
+    role: stencil
+    # Rule 1. `treatment: silhouette` is not decoration — it flattens the plate
+    # to one ink so no stray highlight survives inside the shape, and the
+    # composer's art-contrast floor then guarantees that ink reads against the
+    # field it sits on. The outer_glow is the rim of lit air around a backlit
+    # mass; without it the cut reads as a sticker laid on the field rather than
+    # as something standing in it.
+    generatable: true
+    transparent: true
+    treatment: silhouette
+    # `cover`, NOT `contain`-plus-anchor. This is the one plate whose framing
+    # cannot be fixed by placement, because where the subject sits inside it is
+    # the generator's decision, not the template's — and contain-fitting a 2:3
+    # plate into a 5:8 trim letterboxes it, so every anchor/offset guess then
+    # has to undo a shift the template created for itself. Cover-fit maps the
+    # plate's own composition 1:1 onto the trim: the frame below dictates where
+    # the shape goes, cover-fit honours it exactly, and the crop guarantees the
+    # severed base leaves through the bottom with no overshoot arithmetic.
+    fit: cover
+    cut_edge: bottom
+    prompt_frame: >-
+      A clean flat blackout silhouette of {subject}, as ONE large closed shape
+      whose outline alone carries the whole subject. Uniform solid black with
+      no interior detail of any kind — no features, no texture, no pattern, no
+      shading, no rim light, no gradient, nothing lighter anywhere inside the
+      outline. The shape fills the upper two thirds of the frame and its base
+      fills the bottom of the frame and is cut off by it. Plain empty
+      background.
+    effects:
+      - {kind: outer_glow, blur: 0.030, alpha: 0.45}
+
+  - id: beyond
+    role: place
+    # Rule 2, and THE PORTAL ITSELF. Rule 5 lives here too: this plate is a
+    # PLACE and nothing else. `fit: cover` rather than a placed cutout, because
+    # a mask is a better placement tool than an anchor here — the plate fills
+    # the canvas and the cut decides what survives. The mask's small feather
+    # softens the 50%-threshold stencil's staircase without bleeding the bright
+    # plate meaningfully past the outline.
+    #
+    # inner_shadow is the interior falloff's fine end — it darkens the plate
+    # just inside the silhouette's own edge, so the place fades into the shape
+    # instead of stopping dead at it. (`beyond_falloff` does the coarse end.)
+    # Effects see the slot's FINAL shape, after masking, which is the only
+    # reason a shadow drawn "inside the layer" lands inside the CUT.
+    generatable: true
+    fit: cover
+    mask: {from_layer: aperture, feather: 0.003}
+    prompt_frame: >-
+      {subject}, seen from within and opening away from the viewer into deep
+      distance down the middle of the frame. The strongest light in the picture
+      is far away at the end of that distance and shines back toward the
+      viewer, so the whole frame glows outward from its centre. Every corner of
+      the frame is filled with that light and its haze — no dark empty areas,
+      no black corners, no unlit background. Absolutely no people, no figures,
+      no silhouettes, no animals: the place is empty.
+    effects:
+      - {kind: inner_shadow, dy: 0.0, blur: 0.045, alpha: 0.75}
+
+# -- atmosphere, then the subject in front ------------------------------------
+  - id: drift
+    role: particles
+    # ONE full-frame plate, never `scatter` — a dozen stamped copies of one
+    # mote reads as a rendering defect rather than as falling matter. Screened,
+    # because these things catch light.
+    generatable: true
+    transparent: true
+    fit: cover
+    blend: screen
+    opacity: 0.85
+    # Radial feather: solid through the middle of the cover, fading to nothing
+    # by the trim. A generated particle plate is evenly dense across its whole
+    # frame by construction, and evenly dense is exactly what makes it read as
+    # a sheet of glass laid over the art — the motes at the corners carry the
+    # same weight as the ones on the focal core, so nothing recedes.
+    #
+    # `radial` alone ramps TRANSPARENT-core to OPAQUE-rim (the "grade only the
+    # outside" scope), which is the opposite of what a particle field wants, so
+    # `invert` flips it. That is safe HERE and nowhere else on this template:
+    # invert applies to the COMBINED mask, and this mask has exactly one
+    # source. Add a `from_layer` beside it and the invert would flip the
+    # stencil too — see `beyond_falloff`, which multiplies two sources and is
+    # therefore authored so it never needs one.
+    mask:
+      gradient: {kind: radial, center: [0.46, 0.45], start: 0.0, end: 0.72}
+      invert: true
+    prompt_frame: >-
+      A full-frame scattering of {subject} drifting through empty air at many
+      different sizes and angles, some large and sharp and near, some tiny and
+      soft and far. Irregular and sparse, no two alike, with large empty gaps
+      and no cluster, burst or bright centre anywhere. Nothing else in the
+      frame.
+
+  - id: herald
+    role: foreground_subject
+    # THE SUBJECT, and the thing the eye lands on. `beyond` shows a world;
+    # `aperture` shows a shape; this is the story, in front of both, cut as
+    # flat black so the glow inside the aperture becomes its backlight.
+    #
+    # Grounding: it has no floor to stand on — the cover has no ground plane —
+    # so the TRIM is the floor. It is cut off by the bottom edge and continues
+    # past it, exactly like the aperture. Never shrink it to sit fully inside
+    # the frame; a whole figure floating with air beneath it is the one failure
+    # this composition cannot absorb.
+    generatable: true
+    transparent: true
+    treatment: silhouette
+    fit: contain
+    cut_edge: bottom
+    anchor: [0.50, 1.00]
+    offset: [0.00, 0.06]
+    scale: 0.72
+    prompt_frame: >-
+      A clean flat blackout silhouette of {subject}, filling the frame from top
+      to bottom. Uniform solid black read as OUTLINE ONLY — no features, no
+      detail, no texture, no shading, no rim light, no gradient. Its base meets
+      the bottom edge of the frame and is cut off flat by it. Plain empty
+      background.
+    effects:
+      - {kind: outer_glow, blur: 0.026, alpha: 0.42}
+
+  - id: haze
+    generatable: false
+    fit: cover
+    procedural: fog_gradient
+    opacity: 0.16
+    blend: screen
+
+  - id: texture
+    generatable: false
+    fit: cover
+    procedural: grain
+    opacity: 0.06
+    blend: overlay
+
+# =============================================================================
+adjust:
+  - id: field_grade
+    # A generated field plate comes back as a bright saturated PHOTOGRAPH. This
+    # sits straight on it so the whole cover is built on a field that is
+    # already darker than the type that will cross it (rule 4's first guard) —
+    # and saturated enough that a black cut reads against it (rule 1's).
+    op: grade
+    brightness: 0.05
+    saturation: 0.24
+    contrast: 0.16
+
+  - id: field_vignette
+    # Rule 3's outward falloff, on the ground itself. Kept LOW on purpose: run
+    # it hard and it darkens the very edge the aperture's outline lives on, and
+    # a black shape on a black edge is no shape at all.
+    op: vignette
+    strength: 0.24
+
+  - id: beyond_lift
+    # Rule 2's other half, applied after the fact: the plate arrives as a
+    # correctly-exposed photograph, and a correctly-exposed photograph is not
+    # what goes inside a backlit shape. Clipped to the stencil, so the field
+    # outside never sees it.
+    op: grade
+    brightness: 0.16
+    contrast: 0.20
+    saturation: 0.08
+    mask: {from_layer: aperture, feather: 0.003}
+
+  - id: beyond_falloff
+    # Rule 3's coarse end, and the layer that stops the place reading as a
+    # photograph pasted into a shaped hole. A black wash, clipped to the
+    # silhouette AND ramped radially from the middle of the cut outward:
+    # transparent over the hot core, solid by the outline. Both mask sources
+    # multiply, so no `invert` is needed — inverting would flip the stencil too
+    # and wash the entire rest of the cover black.
+    op: color_wash
+    color: background
+    blend: normal
+    opacity: 0.95
+    mask:
+      from_layer: aperture
+      gradient: {kind: radial, center: [0.46, 0.45], start: 0.02, end: 0.26}
+
+  - id: tonal_spine
+    # One shared colour spine under five separately-generated plates — the
+    # single cheapest thing that makes a composite look photographed rather
+    # than assembled. Rule 4 lives here too: swap the palette and this ramp
+    # carries the new hue through every layer at once.
+    op: gradient_map
+    stops: [background, accent, text]
+    opacity: 0.15
+    blend: soft_light
+
+  - id: core_bloom
+    op: bloom
+    threshold: 0.72
+    radius: 0.026
+    strength: 0.38
+
+# =============================================================================
+scrims:
+  # All halo — soft and unclipped. `gradient_up`/`gradient_down` would paint
+  # hard-edged slabs across a field whose whole job is to be continuous. The
+  # title's starts low and reactive; the autopilot raises it only if the
+  # measured contrast actually fails.
+  - {kind: halo, protects: title, strength: 0.10}
+  - {kind: halo, protects: author, strength: 0.14}
+  - {kind: halo, protects: series, strength: 0.20}
+  - {kind: halo, protects: subtitle, strength: 0.20}
+
+# =============================================================================
+text:
+  - id: series
+    # THE TOP BAND, tracked out to the full measure.
+    zone: {x: 0.045, y: 0.024, w: 0.91, h: 0.034}
+    case: upper
+    align: center
+    valign: middle
+    tracking: 35
+    max_lines: 1
+    optional: true
+    size_min: 0.013
+    size_max: 0.023
+    effects:
+      - {kind: drop_shadow, dy: 0.003, blur: 0.006, alpha: 0.80}
+
+  - id: author
+    # Rule 4: the author's name is the ELEMENT COLOUR, and it is the only
+    # coloured type on the cover. TextSlot.color_role is not archetype
+    # territory — every slot is built at palette.text — so the accent arrives
+    # as a full-opacity gradient_overlay across the glyphs instead. Two stops
+    # of one role is a flat fill by design; give it two different roles and you
+    # get the foil-title move instead.
+    #
+    # font_role stays UNSET, so the name wears the SUPPORTING face while only
+    # the title gets the display one. That is not only taste: at author size a
+    # swash display face's decorative caps overrun the single word space
+    # between a first and last name, nothing in the engine widens a word space
+    # independently of tracking, and a two-word name then reads as one word.
+    zone: {x: 0.100, y: 0.062, w: 0.80, h: 0.082}
+    case: upper
+    tracking: 42
+    max_lines: 1
+    size_min: 0.032
+    size_max: 0.058
+    effects:
+      - {kind: gradient_overlay, stops: [accent, accent], angle: 90}
+      - {kind: drop_shadow, dy: 0.004, blur: 0.010, alpha: 0.70}
+
+  - id: title
+    # Rule 6. The zone deliberately overlaps the arrangement's lower third.
+    # Tight contact shadow + wide soft shadow + hairline stroke: the title
+    # crosses near-black silhouette and saturated field within a single line,
+    # and no one of the three holds it against both.
+    zone: {x: 0.050, y: 0.545, w: 0.90, h: 0.315}
+    case: upper
+    tracking: 4
+    max_lines: 3
+    size_min: 0.052
+    size_max: 0.135
+    effects:
+      - {kind: drop_shadow, dy: 0.0025, blur: 0.0035, alpha: 0.85}
+      - {kind: drop_shadow, dy: 0.012, blur: 0.030, alpha: 0.45}
+      - {kind: stroke, width: 0.0012, color: background, alpha: 0.85}
+
+  - id: subtitle
+    # THE FOOT BAND, widely tracked.
+    zone: {x: 0.070, y: 0.928, w: 0.86, h: 0.034}
+    case: upper
+    align: center
+    valign: middle
+    tracking: 60
+    max_lines: 1
+    optional: true
+    size_min: 0.012
+    size_max: 0.021
+    effects:
+      - {kind: drop_shadow, dy: 0.003, blur: 0.006, alpha: 0.80}
+
+# =============================================================================
+# Z-ORDER, bottom first. The three things that are fatal to get wrong:
+#   * `aperture` MUST precede `beyond` — a mask's from_layer has to be painted
+#     before the layer it stencils, and the load-time validator enforces it.
+#   * `beyond_falloff` comes straight after `beyond`, before the atmosphere, or
+#     the drift and haze get washed out along with the portal's rim.
+#   * `herald` is drawn AFTER the drift and BEFORE the type: in front of every
+#     painted thing, behind every set thing.
+layers: [field, field_grade, field_vignette, corona,
+         aperture, beyond, beyond_lift, beyond_falloff,
+         drift, herald, haze, texture,
+         "scrim:0", "scrim:1", "scrim:2", "scrim:3",
+         series, author, title, subtitle,
+         tonal_spine, core_bloom]
+
+# =============================================================================
+# CASTING — the doctrine the art-direction call actually receives
+# =============================================================================
+# This is a real field, not a comment: describe_archetypes() emits it under
+# this template's entry, so the model reads it at the moment it is choosing
+# nouns. It is the part that decides whether a cover belongs to its manuscript
+# or merely to this template.
+casting: >-
+  Cast five nouns out of the book itself, in this order — each one constrains
+  the next.
+
+
+  aperture — WHAT THE BOOK IS ABOUT, as one closed outline. Not "the
+  protagonist" by reflex. It is whatever a reader who finished the book would
+  recognise as a black shape: a head in profile, yes, but equally a beast, a
+  ship, a cathedral, a machine, a tree, a hand, a helmet, a keyhole, the
+  object the plot turns on. Test it two ways before choosing — could someone
+  name it from the outline alone, and is its interior a broad unbroken area?
+  Fail either and pick something else; a spindly or open shape has no window.
+
+
+  beyond — WHERE THE BOOK HAPPENS, at its most extreme, and specifically the
+  place the aperture-subject faces, guards, remembers or is trapped inside. It
+  is a PLACE and it is EMPTY. If the honest answer is a person, that person is
+  the herald instead and the beyond is the room they are standing in.
+
+
+  herald — THE STORY IN THE FLESH, standing in front. Cast it as the OTHER
+  POLE from the aperture: if the aperture is the protagonist, the herald is
+  what they face — the rival, the beast, the beloved, the pursuer. If the
+  aperture is a place or an object, the herald is the person. Casting the same
+  character in both is the duplicate failure: the reader sees one character
+  rendered twice, once pale and once solid, rather than two things in depth.
+
+
+  field — THE WEATHER OF THE BOOK, in the element colour: smoke, silt, dust,
+  snow, static, fog, cloud, current, heat shimmer.
+
+
+  drift — WHAT FALLS OR RISES IN THAT WORLD: ash, embers, snow, petals,
+  spores, rain, feathers, sand, sparks, bubbles. The same substance the field
+  is made of, at a larger grain.
+
+
+  Then the palette. primary is the SILHOUETTE INK — a near-black tinted with
+  the element hue, never a mid tone. accent IS the element colour and carries
+  the author's name. text goes to true white: the finishing stack costs the
+  type roughly a quarter of its brightness on the way down, and a bone title
+  lands grey.
+
+# =============================================================================
+# WHAT THE CALL DOES NOT CHOOSE
+# =============================================================================
+# The mask, the falloff, placement, scale, blend, opacity, adjust layers,
+# effects, scrim kinds, recipe strength, layer order. That list is what six
+# revision rounds bought, and it is spent here once so it is never spent again
+# per book.
+#
+# HONEST SCOPE: the skeleton is "one colour + one cut + one world inside it +
+# one subject in front". It carries any book with a strong central image and a
+# single dominant mood — fantasy, SF, thriller, horror, paranormal romance —
+# and it carries a SERIES especially well, because the hue token and the five
+# nouns swap together while the machinery does not. It does not fit an
+# ensemble book, a book whose appeal is warmth or comedy, or nonfiction.
+#
+# Its one genuinely stochastic part is the two silhouettes: the generator has
+# to return TRUE flat shapes, and when it returns a shaded photograph instead
+# the `silhouette` treatment flattens it anyway but the outline can come back
+# mushy. Repaint that plate rather than composing around it.
