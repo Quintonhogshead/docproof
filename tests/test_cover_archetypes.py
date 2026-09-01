@@ -209,6 +209,7 @@ def test_an_untagged_archetype_is_in_scope_for_every_genre():
 _EXPECTED_GENRES = {
     "romantasy_organic": ["fantasy", "romance"],
     "romantasy_vignette": ["fantasy", "romance"],
+    "gilded_descent": ["fantasy", "romance", "horror", "historical"],
     "pale_reliquary": ["fantasy", "romance"],
     "crossed_relics": ["fantasy", "romance", "mystery_thriller",
                               "science_fiction", "historical"],
