@@ -17,7 +17,7 @@
 # -----------------------------------------------------------------------------
 #
 # 0. EVERY CONTAIN-FIT PLATE IS PLACED BY ITS INK, NOT BY ITS FRAME.
-#    `place_by: ink` on all nine of them, and the archetype is unbuildable
+#    `place_by: ink` on all eight of them, and the archetype is unbuildable
 #    without it. A generated cutout is a full-frame PNG with the subject
 #    somewhere inside and an arbitrary model-chosen transparent margin around
 #    it, so against the plate border `scale` sizes the margin as much as the
@@ -53,9 +53,17 @@
 #    and y=0.62. Only the diagonal crosses that band, and it is deliberately
 #    quiet.
 #
-# 3. THE DIAGONAL BLEEDS AT BOTH ENDS, AND IT IS STRUCTURE, NOT SUBJECT.
+# 3. THE DIAGONAL IS ONE PLATE, AND IT IS STRUCTURE, NOT SUBJECT.
 #    `relic` is generated already diagonal inside its own full frame and set
-#    `fit: cover`, so both ends leave the trim with no rotation engine needed.
+#    `fit: cover`: its lower end leaves the trim with no rotation engine
+#    needed, and its UPPER end terminates just inside the top-right corner in
+#    its own finial. That terminal used to be a second slot (`relic_head`,
+#    contain-fit at the corner over the diagonal's exit) and it was a defect:
+#    two plates for one object can only align by luck, and the head's frame
+#    asked for its own shaft, so every build showed a second, mismatched
+#    shaft over the first (the Lantern Cartographer build, 2026-09-01 —
+#    a silver finial-shaft laid over a brass staff). Folded into `relic`'s
+#    own frame; one generation, one shaft.
 #    `relic_recede` then pushes it toward the field value: it should read at
 #    roughly 20-30% local contrast. A relic as loud as the title is a failed
 #    plate, not a bold choice.
@@ -80,8 +88,8 @@
 #   field        the luminous misted ground the cover is printed on
 #   fall         bright suspended specks
 #   drift        dark translucent falling matter
-#   relic        THE DIAGONAL — one long rigid object, corner to corner
-#   relic_head   its ornate terminal, the brightest thing in the top corner
+#   relic        THE DIAGONAL — one long rigid object, corner to corner,
+#                carrying its own finial at the top-right end
 #   claw         hard structural prongs intruding from the top-left
 #   crown        the wide arcing structure across the bottom, tines past mid
 #   undergrowth  the dark tangle the white type sits on
@@ -159,29 +167,15 @@ art:
     fit: cover
     prompt_frame: >-
       {subject}, photographed straight on and running the entire length of the
-      frame on a steep diagonal from the lower left corner to the upper right
-      corner, continuing past both corners and cut off by them. Cool polished
-      surface with one bright specular highlight running along its length.
-      Nothing else in the frame.
+      frame on a steep diagonal from the lower left corner up to the upper
+      right corner. Its lower end continues past the lower left corner and is
+      cut off by it; its upper end TERMINATES just inside the upper right
+      corner in its own ornate finial or head, the only end of it visible,
+      caught in a hard bright light. One continuous object with one shaft.
+      Cool polished surface with one bright specular highlight running along
+      its length. Nothing else in the frame.
     effects:
       - {kind: drop_shadow, dy: 0.004, blur: 0.016, alpha: 0.22}
-
-  - id: relic_head
-    role: terminal
-    generatable: true
-    transparent: true
-    fit: contain
-    place_by: ink
-    cut_edge: top_right
-    anchor: [1.00, 0.00]
-    offset: [0.005, 0.005]
-    scale: 0.30
-    prompt_frame: >-
-      {subject}, ornate and silvered, catching a hard bright light, oriented so
-      its shaft runs down and to the left and is cut off by the frame edge.
-    effects:
-      - {kind: drop_shadow, dy: 0.005, blur: 0.012, alpha: 0.35}
-      - {kind: outer_glow, blur: 0.026, alpha: 0.30}
 
   - id: claw
     role: upper_intrusion
@@ -396,7 +390,7 @@ adjust:
     mask: {from_layer: undergrowth, feather: 0.010}
 
   - id: tonal_spine
-    # One shared colour spine under thirteen separately-generated plates.
+    # One shared colour spine under twelve separately-generated plates.
     op: gradient_map
     stops: [background, primary, text]
     opacity: 0.10
@@ -485,7 +479,7 @@ text:
 # relic, and the collage sits below the type rather than over it. That inverted
 # sandwich is why this archetype is more one-shot-reliable than Archetype One.
 layers: [field, field_grade, fall, drift,
-         relic, relic_recede, relic_head, claw, grain, crown,
+         relic, relic_recede, claw, grain, crown,
          chroma_budget,
          subtitle, title,
          undergrowth, undergrowth_tame, beast, bloom, berries_l, berries_r, dew,
@@ -495,7 +489,7 @@ layers: [field, field_grade, fall, drift,
 # =============================================================================
 # WHAT THE DIRECTOR CHOOSES, AND NOTHING ELSE
 # =============================================================================
-#   * thirteen `{subject}` fills, one per generatable slot
+#   * twelve `{subject}` fills, one per generatable slot
 #   * five palette hexes — `background` must be near-white (L* >= 88) and
 #     `text` near-black; `accent` is jewel A and the two jewels must sit at
 #     least 90 degrees apart on the wheel, which the director enforces in the
