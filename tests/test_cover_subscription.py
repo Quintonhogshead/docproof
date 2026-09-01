@@ -53,19 +53,19 @@ def _palette() -> Palette:
 
 def _direction() -> Direction:
     return Direction(concept_name="Cold Light", rationale="A test concept.",
-                     archetype="big_type", palette=_palette(),
+                     archetype="probe_typographic", palette=_palette(),
                      title_font="Playfair Display", author_font="Spectral",
                      art_prompts={}, texture=False)
 
 
 def _spec():
-    return build_spec(_direction(), _brief(), ARCHETYPES["big_type"])
+    return build_spec(_direction(), _brief(), ARCHETYPES["probe_typographic"])
 
 
 _DIRECTIONS_REPLY = {"concepts": [{
     "concept_name": "Cold Light",
     "rationale": "Type is the hero.",
-    "archetype": "big_type",
+    "archetype": "probe_typographic",
     "palette": {"background": "#101010", "primary": "#f5f1e8",
                 "accent": "#c9a227", "text": "#f5f1e8", "scrim": "#000000"},
     "title_font": "Playfair Display",
@@ -214,7 +214,7 @@ def test_run_directions_parses_a_subscription_reply(monkeypatch):
     provider = _provider(monkeypatch, _DIRECTIONS_REPLY)
     result = run_directions(_brief(), provider, n=1)
     assert [d.concept_name for d in result.directions] == ["Cold Light"]
-    assert result.directions[0].archetype == "big_type"
+    assert result.directions[0].archetype == "probe_typographic"
     assert result.model == "claude-fable-5"
 
 
@@ -249,7 +249,7 @@ def test_a_reply_wrapped_in_prose_and_a_fence_still_parses(monkeypatch):
              + json.dumps(_DIRECTIONS_REPLY) + "\n```\nHope that helps.")
     provider = _provider(monkeypatch, reply)
     assert run_directions(_brief(), provider, n=1).directions[0].archetype \
-        == "big_type"
+        == "probe_typographic"
 
 
 def test_a_reply_with_no_json_becomes_a_readable_direction_error(monkeypatch):

@@ -395,23 +395,30 @@ def test_archetype_mask_from_valid_earlier_reference_loads_fine():
     assert archetype.art[1].mask_from == "background"
 
 
-@pytest.mark.parametrize("name", ["cozy_mystery_graphic_stamp",
-                                  "nonfiction_bold_colorblock_typographic",
-                                  "thriller_bigtype_silhouette"])
-def test_retrofitted_archetype_focal_icon_uses_silhouette_treatment(name):
+@pytest.mark.parametrize("name", ["probe_typestack"])
+def test_archetype_focal_icon_uses_silhouette_treatment(name):
+    """A template may bake `silhouette` onto its focal slot. Asserted against
+    the probe that carries the effects rack rather than against whichever
+    shipped templates happened to be retrofitted with it."""
     focal = next(a for a in ARCHETYPES[name].art if a.id == "focal")
     assert focal.treatment == "silhouette"
 
 
-def test_romantasy_emblem_retrofit_mirrors_a_corner_ornament_without_touching_the_medallion():
-    archetype = ARCHETYPES["romantasy_emblem"]
-    focal2 = next(a for a in archetype.art if a.id == "focal2")
-    assert focal2.corners is True
-    assert focal2.generatable is True
-    focal = next(a for a in archetype.art if a.id == "focal")
-    assert focal.corners is False        # the central medallion is untouched
-    assert "focal2" in archetype.layers
-    assert archetype.layers.index("focal2") < archetype.layers.index("focal")
+def test_corners_mirrors_one_ornament_without_touching_the_other_slots():
+    """§7.4a: `corners` mirrors THE SLOT THAT SETS IT into all four corners
+    and leaves every other slot alone — and the mirrored ornament is drawn
+    before the slot it frames."""
+    archetype = ARCHETYPES["probe_ornament"]
+    ornament = next(a for a in archetype.art if a.corners)
+    assert ornament.generatable is True
+    assert ornament.transparent is True
+    for slot in archetype.art:
+        if slot.id != ornament.id:
+            assert slot.corners is False, slot.id
+    framed = next(a for a in archetype.art
+                  if a.generatable and not a.corners and a.transparent)
+    assert (archetype.layers.index(ornament.id)
+            < archetype.layers.index(framed.id))
 
 
 # ===========================================================================

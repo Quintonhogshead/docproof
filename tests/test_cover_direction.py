@@ -44,7 +44,7 @@ def _direction_payload(**overrides) -> dict:
     data = dict(
         concept_name="Ash and Brass",
         rationale="A brooding industrial-fantasy palette with warm brass accents.",
-        archetype="full_bleed_art",
+        archetype="probe_scene",
         palette=_palette_payload(),
         title_font="Playfair Display",
         author_font="Spectral",
@@ -58,9 +58,9 @@ def _direction_payload(**overrides) -> dict:
 # fixture below can cycle through all three shipped archetypes rather than
 # accidentally testing only one.
 _PROMPTS_FOR_ARCHETYPE = {
-    "big_type": {},
-    "full_bleed_art": {"background": "A lonely lighthouse at dusk, oil painting."},
-    "cutout_sandwich": {"background": "A misty pine forest at dawn, gouache.",
+    "probe_typographic": {},
+    "probe_scene": {"background": "A lonely lighthouse at dusk, oil painting."},
+    "probe_sandwich": {"background": "A misty pine forest at dawn, gouache.",
                         "focal": "A cloaked figure walking away, cutout subject only."},
 }
 
@@ -80,7 +80,7 @@ def _direction_obj(**overrides) -> Direction:
     return Direction(**_direction_payload(**overrides))
 
 
-def _base_spec(archetype_name: str = "full_bleed_art",
+def _base_spec(archetype_name: str = "probe_scene",
               **direction_overrides) -> CoverSpec:
     archetype = ARCHETYPES[archetype_name]
     kwargs = {"archetype": archetype_name,
@@ -349,8 +349,15 @@ def test_run_directions_system_prompt_narrows_archetypes_to_the_briefs_genre():
         results=[ProviderResult(parsed=_directions_payload(2), usage=USAGE)])
     run_directions(_brief(genre="historical"), provider, n=2)
     system = provider.calls[0]["system"]
-    assert "historical_woman_walking_away" in system   # tagged for this genre
-    for name in ("big_type", "full_bleed_art", "cutout_sandwich"):
+    # asserted as the RULE, not as a remembered name: whatever is tagged
+    # for this genre must appear, and whatever is tagged only for others
+    # must not.
+    for name, arch in ARCHETYPES.items():
+        if arch.genres and "historical" in arch.genres:
+            assert name in system
+        elif arch.genres:
+            assert name not in system
+    for name in ("probe_typographic", "probe_scene", "probe_sandwich"):
         assert name in system                          # untagged: always shown
     # tagged for other genres only -- excluded from the narrowed enumeration
     assert "nonfiction_bold_colorblock_typographic" not in system
@@ -379,11 +386,11 @@ def test_run_directions_accepts_a_concept_naming_an_archetype_outside_the_narrow
     # stronger case than an untagged archetype, which is always in scope
     # regardless of any narrowing.
     payload = {"concepts": [_direction_payload(
-        archetype="horror_dark_emblem_ornate",
+        archetype="romantasy_organic",
         art_prompts={"background": "A dark portrait study, oil painting."})]}
     provider = FakeProvider(results=[ProviderResult(parsed=payload, usage=USAGE)])
     result = run_directions(_brief(genre="historical"), provider, n=1)
-    assert result.directions[0].archetype == "horror_dark_emblem_ornate"
+    assert result.directions[0].archetype == "romantasy_organic"
 
 
 def test_run_directions_manuscript_sample_section_present_only_when_passed():
@@ -462,7 +469,7 @@ def test_run_directions_drops_an_art_prompt_for_a_non_generatable_slot():
     # is now dropped -- the concept survives with only its generatable
     # prompts, and only a fabricated ARCHETYPE stays fatal.
     payload = {"concepts": [_direction_payload(
-        archetype="full_bleed_art",
+        archetype="probe_scene",
         art_prompts={"background": "a moody coastal scene, oil painting",
                      "texture": "a grainy film overlay"})]}
     provider = FakeProvider(results=[ProviderResult(parsed=payload, usage=USAGE)])
@@ -473,11 +480,11 @@ def test_run_directions_drops_an_art_prompt_for_a_non_generatable_slot():
 
 def test_run_directions_accepts_a_well_formed_cutout_sandwich_concept():
     payload = {"concepts": [_direction_payload(
-        archetype="cutout_sandwich",
-        art_prompts=_PROMPTS_FOR_ARCHETYPE["cutout_sandwich"])]}
+        archetype="probe_sandwich",
+        art_prompts=_PROMPTS_FOR_ARCHETYPE["probe_sandwich"])]}
     provider = FakeProvider(results=[ProviderResult(parsed=payload, usage=USAGE)])
     result = run_directions(_brief(), provider, n=1)
-    assert result.directions[0].archetype == "cutout_sandwich"
+    assert result.directions[0].archetype == "probe_sandwich"
 
 
 def test_run_directions_accepts_an_art_prompts_treatment_from_the_model(): # §7.4a
@@ -735,7 +742,7 @@ def test_revise_spec_leaves_other_art_slots_asset_untouched():
 
 
 def test_revise_spec_clears_asset_when_only_transparent_changes():
-    original = _base_spec(archetype_name="cutout_sandwich")
+    original = _base_spec(archetype_name="probe_sandwich")
     original = _with_asset(original, "focal", "assets/c0_focal.png")
     focal = next(a for a in original.art if a.id == "focal")
     assert focal.transparent is True    # cutout_sandwich's archetype default
@@ -758,7 +765,7 @@ def test_revise_spec_clears_asset_for_a_slot_the_input_never_had():
     # operation -- see _apply_edit) -- the asset-diffing code should not
     # choke (or, worse, leak a stray asset path) if it happens anyway --
     # there's no prior value to compare against, so it reads as changed.
-    original = _base_spec(archetype_name="full_bleed_art")
+    original = _base_spec(archetype_name="probe_scene")
     # fx_grain rides in from the archetype's default cinematic_duotone
     # recipe (PR4 retrofit) — one more real art slot like any other here.
     assert {a.id for a in original.art} == {"background", "texture", "fx_grain"}
@@ -948,7 +955,7 @@ def _spec_with_intent(archetype_name: str, slot: str, intent: str,
 
 
 def test_build_spec_blend_into_background_becomes_a_linear_gradient_mask():
-    spec = _spec_with_intent("full_bleed_art", "background",
+    spec = _spec_with_intent("probe_scene", "background",
                              "blend_into_background")
     background = next(a for a in spec.art if a.id == "background")
     assert background.mask is not None
@@ -958,7 +965,7 @@ def test_build_spec_blend_into_background_becomes_a_linear_gradient_mask():
 
 
 def test_build_spec_inside_title_becomes_mask_from_text_title():
-    spec = _spec_with_intent("cutout_sandwich", "focal", "inside_title")
+    spec = _spec_with_intent("probe_sandwich", "focal", "inside_title")
     focal = next(a for a in spec.art if a.id == "focal")
     assert focal.mask is not None
     assert focal.mask.from_text == "title"
@@ -1000,7 +1007,7 @@ def test_build_spec_inside_focal_dropped_when_the_archetype_has_no_focal(caplog)
     # full_bleed_art has no focal slot at all — the intent is dropped with
     # a log line (the §6.1 surplus-prompt precedent), never fatal.
     with caplog.at_level("INFO", logger="docproof.cover.model"):
-        spec = _spec_with_intent("full_bleed_art", "background",
+        spec = _spec_with_intent("probe_scene", "background",
                                  "inside_focal")
     background = next(a for a in spec.art if a.id == "background")
     assert background.mask is None
@@ -1051,7 +1058,7 @@ def _title_of(spec: CoverSpec):
 
 
 def _spec_with_move(**direction_overrides) -> CoverSpec:
-    return _base_spec("full_bleed_art", **direction_overrides)
+    return _base_spec("probe_scene", **direction_overrides)
 
 
 @_needs_type_move_fields

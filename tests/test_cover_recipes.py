@@ -44,7 +44,7 @@ def _brief(**overrides) -> Brief:
     return Brief(**data)
 
 
-def _direction(archetype: str = "big_type", recipe: str = "") -> Direction:
+def _direction(archetype: str = "probe_typographic", recipe: str = "") -> Direction:
     return Direction(concept_name="Test", rationale="test",
                      archetype=archetype, palette=_palette(),
                      title_font="Spectral", author_font="Spectral",
@@ -147,7 +147,7 @@ def test_archetype_rejects_a_recipe_that_is_not_on_the_shelf():
 
 def test_expansion_appends_real_layers_at_the_top_in_order():
     spec = build_spec(_direction(recipe="vintage_matte"), _brief(),
-                      ARCHETYPES["big_type"])
+                      ARCHETYPES["probe_typographic"])
     tail = [(l.kind, l.ref) for l in spec.layers[-5:]]
     assert tail == [("adjust", "fx_lift"), ("adjust", "fx_warm"),
                     ("art", "fx_paper"), ("adjust", "fx_vign"),
@@ -167,22 +167,22 @@ def test_direction_pick_wins_over_the_archetype_default():
     # big_type's own default is quiet_literary (PR4 retrofit) — a direction
     # that names vintage_matte gets vintage_matte, nothing of the default.
     spec = build_spec(_direction(recipe="vintage_matte"), _brief(),
-                      ARCHETYPES["big_type"])
+                      ARCHETYPES["probe_typographic"])
     fx_ids = {l.ref for l in spec.layers if l.ref.startswith("fx_")}
     assert "fx_lift" in fx_ids            # vintage_matte's
     assert "fx_hush" not in fx_ids        # quiet_literary's
 
 
 def test_silent_direction_falls_back_to_the_archetype_default():
-    spec = build_spec(_direction(), _brief(), ARCHETYPES["big_type"])
+    spec = build_spec(_direction(), _brief(), ARCHETYPES["probe_typographic"])
     assert {a.id for a in spec.adjust} == {"fx_hush", "fx_warm", "fx_vign"}
 
 
 def test_no_recipe_anywhere_expands_nothing():
     # An un-retrofitted archetype + a silent direction: zero fx_ layers,
     # zero adjust entries — the byte-identical no-recipe path's spec shape.
-    spec = build_spec(_direction(archetype="woven_emblem"), _brief(),
-                      ARCHETYPES["woven_emblem"])
+    spec = build_spec(_direction(archetype="probe_ornament"), _brief(),
+                      ARCHETYPES["probe_ornament"])
     assert spec.adjust == []
     assert not any(l.ref.startswith("fx_") for l in spec.layers)
 
@@ -191,7 +191,7 @@ def test_recipe_layers_survive_patch_edits_as_ordinary_fields():
     # §6.2's guarantee, §15.6 edition: "halve fx_grain" is one ordinary
     # field edit on the dumped document — no re-expansion machinery.
     spec = build_spec(_direction(recipe="quiet_literary"), _brief(),
-                      ARCHETYPES["big_type"])
+                      ARCHETYPES["probe_typographic"])
     dump = spec.model_dump()
     for slot in dump["art"]:
         if slot["id"] == "fx_grain":
@@ -206,7 +206,7 @@ def test_recipe_layers_survive_patch_edits_as_ordinary_fields():
 
 @pytest.mark.parametrize("name", SHIPPED_RECIPES)
 def test_every_shipped_recipe_expands_and_renders_through_the_autopilot(name):
-    spec = build_spec(_direction(recipe=name), _brief(), ARCHETYPES["big_type"])
+    spec = build_spec(_direction(recipe=name), _brief(), ARCHETYPES["probe_typographic"])
     image, report = compose(spec, Path("/nonexistent"), canvas=CANVAS)
     assert image.size == CANVAS
     # Autopilot: every rendered slot's final measured contrast clears its
@@ -224,11 +224,11 @@ def test_every_shipped_recipe_expands_and_renders_through_the_autopilot(name):
 def test_recipe_versus_no_recipe_changes_pixels_with_zero_image_spend():
     # Acceptance item (a), procedurally: same brief, recipe="" vs a real
     # grade — visibly different pixels, no generated assets involved.
-    bare = build_spec(_direction(archetype="woven_emblem"), _brief(),
-                      ARCHETYPES["woven_emblem"])
-    graded_direction = _direction(archetype="woven_emblem",
+    bare = build_spec(_direction(archetype="probe_ornament"), _brief(),
+                      ARCHETYPES["probe_ornament"])
+    graded_direction = _direction(archetype="probe_ornament",
                                   recipe="cinematic_duotone")
-    graded = build_spec(graded_direction, _brief(), ARCHETYPES["woven_emblem"])
+    graded = build_spec(graded_direction, _brief(), ARCHETYPES["probe_ornament"])
     img_bare, _ = compose(bare, Path("/nonexistent"), canvas=CANVAS)
     img_graded, _ = compose(graded, Path("/nonexistent"), canvas=CANVAS)
     assert img_bare.tobytes() != img_graded.tobytes()

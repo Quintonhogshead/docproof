@@ -320,7 +320,7 @@ def test_layer_lookup_failure_names_what_is_actually_there():
 def test_save_then_load_round_trips_every_field(tmp_path):
     doc = _doc(history=[{"op": "nudge", "layer_id": "ly_000001", "dx": -0.2}],
                cost_usd=0.13,
-               source_spec={"archetype": "full_bleed_art", "version": 3})
+               source_spec={"archetype": "probe_scene", "version": 3})
     path = tmp_path / "canvas.json"
     save_doc(doc, path)
     loaded = load_doc(path)

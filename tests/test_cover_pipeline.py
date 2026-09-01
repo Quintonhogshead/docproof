@@ -69,14 +69,14 @@ def _palette(**overrides) -> Palette:
 
 
 _PROMPTS = {
-    "big_type": {},
-    "full_bleed_art": {"background": "A lonely lighthouse at dusk, oil painting."},
-    "cutout_sandwich": {"background": "A misty pine forest, gouache.",
+    "probe_typographic": {},
+    "probe_scene": {"background": "A lonely lighthouse at dusk, oil painting."},
+    "probe_sandwich": {"background": "A misty pine forest, gouache.",
                         "focal": "A cloaked figure, cutout subject only."},
 }
 
 
-def _direction(archetype: str = "full_bleed_art", **overrides) -> Direction:
+def _direction(archetype: str = "probe_scene", **overrides) -> Direction:
     data = dict(concept_name=f"Concept ({archetype})", rationale="A test concept.",
                archetype=archetype, palette=_palette(),
                title_font="Playfair Display", author_font="Spectral",
@@ -91,7 +91,7 @@ def _report(**overrides) -> RenderReport:
     return RenderReport(**data)
 
 
-def _spec_for_diffing(archetype: str = "full_bleed_art") -> CoverSpec:
+def _spec_for_diffing(archetype: str = "probe_scene") -> CoverSpec:
     return build_spec(_direction(archetype), _brief(), ARCHETYPES[archetype])
 
 
@@ -129,7 +129,7 @@ def _fake_save_renders_with_thumb(image, job_dir, version, concept):
     return [rel]
 
 
-def _ready_job_with_concept(tmp_path, *, archetype: str = "full_bleed_art",
+def _ready_job_with_concept(tmp_path, *, archetype: str = "probe_scene",
                             asset: str = "assets/c0_background.png") -> pipeline.JobState:
     """A job with exactly one 'ready' concept, its background art already
     painted -- the state every revision test starts from."""
@@ -241,7 +241,7 @@ def test_default_root_reads_the_env_var_or_falls_back(monkeypatch, tmp_path):
 
 # -- run_job: the director reads, then the agents build (§8) -------------------
 
-def _assignment(archetype: str = "full_bleed_art", **overrides
+def _assignment(archetype: str = "probe_scene", **overrides
                 ) -> ConceptAssignment:
     data = dict(direction=_direction(archetype),
                 execution_notes="Do not let the plate fight the type.",
@@ -287,8 +287,8 @@ def test_run_job_reads_the_book_assigns_concepts_and_reaches_ready(
 
     def fake_assign(brief, provider, *, n, manuscript="", **kw):
         seen.update(brief=brief, provider=provider, n=n, manuscript=manuscript)
-        return _director_result(_assignment("big_type"),
-                                _assignment("full_bleed_art"))
+        return _director_result(_assignment("probe_typographic"),
+                                _assignment("probe_scene"))
     monkeypatch.setattr(pipeline, "assign_concepts", fake_assign)
     build, built = _fake_build()
     monkeypatch.setattr(pipeline, "build_concept", build)
@@ -305,8 +305,8 @@ def test_run_job_reads_the_book_assigns_concepts_and_reaches_ready(
     assert [c.status for c in result.concepts] == ["ready", "ready"]
     assert [b["index"] for b in built] == [0, 1]
     # one agent per concept, each handed ITS OWN spec and assignment
-    assert built[0]["spec"].archetype == "big_type"
-    assert built[1]["spec"].archetype == "full_bleed_art"
+    assert built[0]["spec"].archetype == "probe_typographic"
+    assert built[1]["spec"].archetype == "probe_scene"
     assert built[0]["image_client"] is IMAGE_CLIENT
 
     kinds = [row["kind"] for row in result.ledger]
@@ -736,7 +736,7 @@ def test_run_revision_on_a_vanished_job_is_a_silent_no_op(tmp_path):
 
 def test_run_revision_rejects_an_unknown_archetype_and_keeps_the_prior_version(
         tmp_path, monkeypatch):
-    job = _ready_job_with_concept(tmp_path, archetype="big_type")
+    job = _ready_job_with_concept(tmp_path, archetype="probe_typographic")
     monkeypatch.setattr(pipeline, "compose", _fake_compose)
     monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders)
 
@@ -755,7 +755,7 @@ def test_run_revision_rejects_an_unknown_archetype_and_keeps_the_prior_version(
     assert concept.status == "error"
     assert "not one of the shipped archetypes" in concept.error
     # The prior version survives untouched — a retry is not doomed.
-    assert concept.spec.archetype == "big_type"
+    assert concept.spec.archetype == "probe_typographic"
     assert concept.spec.version == 1
 
 
@@ -855,8 +855,9 @@ def test_diff_spec_fields_is_empty_when_only_bookkeeping_changed():
 
 def test_diff_spec_fields_reports_an_archetype_switch():
     old = _spec_for_diffing()
-    new = old.model_copy(update={"archetype": "big_type"})
-    assert "archetype full_bleed_art→big_type" in pipeline.diff_spec_fields(old, new)
+    new = old.model_copy(update={"archetype": "probe_typographic"})
+    assert ("archetype probe_scene→probe_typographic"
+            in pipeline.diff_spec_fields(old, new))
 
 
 def test_diff_spec_fields_reports_a_prompt_rewrite_without_dumping_the_full_text():

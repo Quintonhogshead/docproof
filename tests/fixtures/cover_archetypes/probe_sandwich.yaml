@@ -1,4 +1,12 @@
-name: cutout_sandwich
+# TEST FIXTURE — not shipped content.
+# THE SANDWICH SHAPE: a generated scene behind the title and a transparent contain-fit cutout drawn AFTER it, so the occlusion guard, the opaque-plate demotion and the sandwich measurement all have something to bite on.
+#
+# Structurally derived from the retired `cutout_sandwich` template, so every
+# engine test that used to lean on that shipped archetype exercises the
+# same shape without depending on what happens to be on the shelf. Edit
+# this freely to serve a test; it ships to no one.
+# ---------------------------------------------------------------------
+name: probe_sandwich
 describe: >-
   A generated scene behind the title, and a transparent cutout figure sitting
   in front of it, overlapping the title's lower edge — the "a designer did

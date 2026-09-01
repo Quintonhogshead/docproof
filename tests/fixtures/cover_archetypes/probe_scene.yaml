@@ -1,4 +1,12 @@
-name: full_bleed_art
+# TEST FIXTURE — not shipped content.
+# A full-bleed generatable background with a procedural grain over it and two gradient_down scrims — the shape for scrim escalation and full-bleed art prompts.
+#
+# Structurally derived from the retired `full_bleed_art` template, so every
+# engine test that used to lean on that shipped archetype exercises the
+# same shape without depending on what happens to be on the shelf. Edit
+# this freely to serve a test; it ships to no one.
+# ---------------------------------------------------------------------
+name: probe_scene
 describe: >-
   Full-bleed illustrated scene; title banded across the lower third on a scrim.
 # Deep-stack wave (§15.6): a full-bleed generated scene is the one archetype

@@ -128,10 +128,10 @@ def _cover_job(jobs_root: Path, *, statuses=("ready",)) -> str:
     for i, status in enumerate(statuses):
         direction = Direction(
             concept_name=f"Concept {i}", rationale="A test concept.",
-            archetype="big_type", palette=_palette(),
+            archetype="probe_typographic", palette=_palette(),
             title_font="Playfair Display", author_font="Spectral",
             art_prompts={}, texture=False)
-        spec = build_spec(direction, job.brief, ARCHETYPES["big_type"])
+        spec = build_spec(direction, job.brief, ARCHETYPES["probe_typographic"])
         concepts.append(ConceptState(spec=spec, status=status))
     job.concepts = concepts
     job.status = "ready"

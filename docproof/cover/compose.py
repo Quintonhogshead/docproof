@@ -950,6 +950,17 @@ def _degrade_opaque_focal(layers: list[LayerRef], art_by_id: dict[str, ArtSlot],
 
 # -- art layers ---------------------------------------------------------------
 
+def _mirror_if_asked(slot: ArtSlot, img: Image.Image) -> Image.Image:
+    """`ArtSlot.mirror` as a plain horizontal flip of the RAW plate, before
+    any fit or placement — so every anchor, offset, scatter and mask
+    downstream sees the flipped pixels and needs no special case. Which way
+    a generated cutout's severed stem points is whatever the model happened
+    to draw, and that decides which trim edge the cut can be carried out
+    through; this is the knob that fixes a plate pointing the wrong way
+    without regenerating it."""
+    return ImageOps.mirror(img) if slot.mirror else img
+
+
 def _load_or_synthesize(slot: ArtSlot, job_dir: Path, canvas: tuple[int, int],
                         palette: Palette, version: int) -> Image.Image | None:
     """Load a generated asset, or synthesize one procedurally when the slot
@@ -1579,6 +1590,7 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
         if source is None:
             positioned[slot.id] = Image.new("RGBA", canvas, (0, 0, 0, 0))
             continue
+        source = _mirror_if_asked(slot, source)
 
         has_alpha = _has_transparency(source)
         sandwich_text = None

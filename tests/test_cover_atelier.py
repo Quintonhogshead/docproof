@@ -44,7 +44,7 @@ def _brief() -> Brief:
                  concepts=1)
 
 
-def _direction(archetype="full_bleed_art") -> Direction:
+def _direction(archetype="probe_scene") -> Direction:
     return Direction(
         concept_name="The Piece", rationale="The book's own key image.",
         archetype=archetype,
@@ -62,7 +62,7 @@ def _assignment() -> ConceptAssignment:
                              done_when="It reads at thumbnail size.")
 
 
-def _spec(archetype="full_bleed_art"):
+def _spec(archetype="probe_scene"):
     return build_spec(_direction(archetype), _brief(), ARCHETYPES[archetype])
 
 
@@ -86,7 +86,7 @@ _PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
 
 
 def _session(tmp_path, monkeypatch, *, budget=None, generate=None,
-             alpha=True, archetype="full_bleed_art"):
+             alpha=True, archetype="probe_scene"):
     monkeypatch.setattr(atelier, "compose",
                         lambda spec, job_dir: (FAKE_IMAGE, _report()))
     monkeypatch.setattr(atelier, "has_real_alpha", lambda png: alpha)
@@ -201,7 +201,7 @@ def test_an_opaque_cutout_is_reported_rather_than_silently_composed(
     """§5.2.3: the transparency feature is in preview, and a cutout that
     comes back opaque changes the layer order underneath the agent. It has
     to be told, or it judges a composite it does not understand."""
-    s = _session(tmp_path, monkeypatch, archetype="cutout_sandwich",
+    s = _session(tmp_path, monkeypatch, archetype="probe_sandwich",
                  alpha=False, generate=lambda *a, **k: _PNG)
     out = _run(s.paint({"slot": "focal", "prompt": "A man from behind.",
                         "resolution": "1K"}))
@@ -313,14 +313,14 @@ def test_finish_records_the_summary(tmp_path, monkeypatch):
 def test_read_spec_hands_back_the_whole_document(tmp_path, monkeypatch):
     s = _session(tmp_path, monkeypatch)
     parsed = json.loads(_run(s.read_spec({}))["content"][0]["text"])
-    assert parsed["archetype"] == "full_bleed_art"
+    assert parsed["archetype"] == "probe_scene"
 
 
 def test_archetype_info_names_the_slots_the_agent_may_paint(tmp_path,
                                                             monkeypatch):
     s = _session(tmp_path, monkeypatch)
     text = _run(s.archetype_info({}))["content"][0]["text"]
-    assert "full_bleed_art" in text
+    assert "probe_scene" in text
     assert "background" in text
     assert "TEXT SLOTS" in text
 
@@ -503,4 +503,4 @@ def test_the_assignment_reaches_the_agents_prompt():
     assert "Generate the ground." in text          # execution notes
     assert "It reads at thumbnail size." in text   # done_when
     assert "The book's own key image." in text     # rationale
-    assert "full_bleed_art" in text
+    assert "probe_scene" in text

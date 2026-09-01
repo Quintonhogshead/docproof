@@ -160,6 +160,12 @@ class Brief(BaseModel):
 
     title: str = Field(min_length=1, max_length=200)
     subtitle: str = ""
+    # The credit/eyebrow line ("#1 New York Times Bestselling Author", "Book
+    # Two of the Ashfall Cycle"). build_spec fills every text slot by
+    # `getattr(brief, slot.id)`, so a `series` TextSlot had no source at all
+    # until this field existed — an archetype could declare the slot and it
+    # would always render empty.
+    series: str = ""
     author: str = Field(min_length=1)
     genre: str = Field(min_length=1)          # one of the 10 subject keys, or free text
     pitch: str = Field(default="", max_length=4000)
@@ -589,6 +595,15 @@ class MaskSpec(BaseModel):
     luminance_of: str = ""
     from_text: str = ""
     invert: bool = False
+    # Gaussian blur applied to the RESOLVED mask, as a fraction of canvas
+    # height; 0.0 (the default, and every pre-existing spec) leaves the mask
+    # exactly as the sources produced it. `gradient` is soft by construction
+    # and `luminance_of` is continuous, but `from_layer` is a hard 50%
+    # threshold stencil and `from_text` is only glyph-antialiased — this is
+    # the one knob that softens those two. Applied after the sources
+    # multiply and before `invert`, so a feathered mask inverts to its own
+    # feathered complement rather than to a hard edge.
+    feather: float = Field(default=0.0, ge=0.0, le=0.25)
 
     @field_validator("from_layer", "luminance_of")
     @classmethod
@@ -629,6 +644,13 @@ class ArtSlot(BaseModel):
         if not all(-2.0 <= v <= 2.0 for v in value):
             raise ValueError("anchor/offset values must stay within [-2, 2]")
         return value
+    # Flip the plate horizontally before any fit or placement. A generated
+    # cutout's severed stem points whichever way the model happened to draw
+    # it, and which way that is decides which trim edge the cut can be
+    # carried out through — so this is placement machinery, not decoration.
+    # (`corners` mirrors too, but into all four corners at once, which is a
+    # different move entirely.)
+    mirror: bool = False
     opacity: float = Field(default=1.0, ge=0.0, le=1.0)
     # The full BLEND_MODES table (deep-stack wave, §15.1) — hue/color/
     # luminosity deferred, see that constant's comment.
@@ -1295,7 +1317,18 @@ class JobState(BaseModel):
 FX_PREFIX = "fx_"
 
 
-def _expand_recipe(name: str) -> tuple[list[ArtSlot], list[AdjustLayer], list[LayerRef]]:
+# Every recipe field whose value IS the magnitude of the effect, and which
+# `recipe_strength` therefore scales toward zero. Deliberately explicit
+# rather than "every float": `radius`, `threshold` and `angle` are shapes,
+# not amounts — halving a bloom's threshold makes it catch MORE of the
+# image, and halving a gradient's angle points it somewhere else entirely.
+_RECIPE_MAGNITUDE_FIELDS: tuple[str, ...] = (
+    "opacity", "strength", "brightness", "contrast", "saturation",
+    "temperature")
+
+
+def _expand_recipe(name: str, strength: float = 1.0
+                   ) -> tuple[list[ArtSlot], list[AdjustLayer], list[LayerRef]]:
     """One recipe's finish entries as real spec layers (§15.6: expansion,
     not indirection — the spec stays fully self-contained, the archival
     guarantee never depends on the recipe file existing later, and a §6.2
@@ -1315,6 +1348,13 @@ def _expand_recipe(name: str) -> tuple[list[ArtSlot], list[AdjustLayer], list[La
     refs: list[LayerRef] = []
     for i, entry in enumerate(recipe["finish"]):
         kind, fields = next(iter(entry.items()))
+        if strength != 1.0:
+            fields = {k: (v * strength
+                          if k in _RECIPE_MAGNITUDE_FIELDS
+                          and isinstance(v, (int, float))
+                          and not isinstance(v, bool)
+                          else v)
+                      for k, v in fields.items()}
         try:
             if kind == "art":
                 slot = ArtSlot(**fields)
@@ -1481,11 +1521,11 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
     run_job) resolves that lookup once from archetypes.ARCHETYPES and passes
     the same object here rather than making build_spec re-fetch it.
 
-    `title` gets `direction.title_font`; every other text slot (subtitle,
-    author, and series if a future archetype adds one) gets
-    `direction.author_font` — the direction call only ever picks two fonts,
-    one hero face and one supporting face, so every non-title slot shares
-    the second."""
+    The direction call only ever picks two fonts, one hero face and one
+    supporting face. By default `title` wears the hero and every other slot
+    wears the supporting one; an archetype text slot may override that with
+    `font_role`, which is how a template puts the author's name in the
+    display face while the tagline stays in the serif."""
     if direction.archetype != archetype.name:
         raise ValueError(
             f"build_spec: direction picked archetype {direction.archetype!r} "
@@ -1529,6 +1569,7 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
                     if slot.generatable else ""),
             transparent=slot.transparent,
             fit=slot.fit,
+            mirror=slot.mirror,
             opacity=slot.opacity,
             blend=slot.blend,
             anchor=slot.anchor,
@@ -1547,6 +1588,12 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             procedural=slot.procedural,
             effects=[Effect(**e.model_dump()) for e in slot.effects]))
 
+    # The template's own adjustment layers (the six-to-ten of a real cover
+    # PSD). Recipe-expanded fx_ layers are appended after these below, so a
+    # recipe always finishes ON TOP of whatever the template already did.
+    adjust: list[AdjustLayer] = [
+        AdjustLayer(**layer.model_dump()) for layer in archetype.adjust]
+
     scrims = [ScrimSpec(kind=s.kind, protects=s.protects, strength=s.strength)
              for s in archetype.scrims]
 
@@ -1558,7 +1605,9 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
 
     text: list[TextSlot] = []
     for slot in archetype.text:
-        font = direction.title_font if slot.id == "title" else direction.author_font
+        role = getattr(slot, "font_role", "") or (
+            "title" if slot.id == "title" else "author")
+        font = direction.title_font if role == "title" else direction.author_font
         text.append(TextSlot(
             id=slot.id,
             content=getattr(brief, slot.id, ""),
@@ -1580,6 +1629,7 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             **(title_move if slot.id == "title" else {})))
 
     art_ids = {a.id for a in archetype.art}
+    adjust_ids = {a.id for a in archetype.adjust}
     layers: list[LayerRef] = []
     for ref in archetype.layers:
         if ref == "texture" and not include_texture:
@@ -1588,6 +1638,8 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             layers.append(LayerRef(kind="scrim", ref=ref.removeprefix("scrim:")))
         elif ref in art_ids:
             layers.append(LayerRef(kind="art", ref=ref))
+        elif ref in adjust_ids:
+            layers.append(LayerRef(kind="adjust", ref=ref))
         else:
             layers.append(LayerRef(kind="text", ref=ref))
 
@@ -1600,8 +1652,10 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
     # top of the z-order, so the spec archives self-contained and §6.2
     # patch edits reach every fx_ layer as an ordinary field.
     recipe_art, recipe_adjust, recipe_refs = _expand_recipe(
-        direction.recipe or archetype.recipe)
+        direction.recipe or archetype.recipe,
+        getattr(archetype, "recipe_strength", 1.0))
     art.extend(recipe_art)
+    adjust.extend(recipe_adjust)
     layers.extend(recipe_refs)
 
     # The axis declaration (§15.10) rides from archetype to spec verbatim —
@@ -1614,7 +1668,7 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
         concept_name=direction.concept_name,
         rationale=direction.rationale,
         palette=direction.palette,
-        art=art, adjust=recipe_adjust, scrims=scrims, text=text, layers=layers,
+        art=art, adjust=adjust, scrims=scrims, text=text, layers=layers,
         axis=archetype.axis, axis_x=archetype.axis_x)
 
 

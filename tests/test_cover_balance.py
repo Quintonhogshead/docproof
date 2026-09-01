@@ -50,7 +50,7 @@ def _text(**overrides) -> TextSlot:
 
 def _spec(**overrides) -> CoverSpec:
     data = dict(
-        archetype="big_type", concept_name="Balance", rationale="Fixture.",
+        archetype="probe_typographic", concept_name="Balance", rationale="Fixture.",
         palette=_palette(),
         art=[ArtSlot(id="background", fit="cover", procedural="gradient")],
         scrims=[], text=[_text()],
