@@ -209,6 +209,18 @@ genre's shelf actually uses, then the family whose vibe line fits the \
 concept, honoring any "pairs with" hint for the author line:
 {describe_fonts()}
 
+token_layout: where a template's two accent plates sit, from the closed \
+list far_high_left / far_high_right / far_low_left / far_low_right (or \
+"" to keep the template's own default). It applies only to archetypes \
+that declare a token_far/token_near pair and is ignored everywhere else. \
+Name says where the SMALLER, further token sits; the larger, nearer one \
+answers from the opposite corner. Vary it across concepts and across \
+books: the placement is the one part of such a template's arrangement \
+you can move, and leaving every cover on the same layout is what makes a \
+list of books built on one template read as one cover reprinted. Pick \
+the corner that leaves the subject's own silhouette and the light source \
+uncrowded.
+
 Palette: five hexes by role (background, primary, accent, text, scrim). \
 Grounds must be FLAT and CONFIDENT, never muddy: commit to a single color \
 (cream, or one saturated hue) or a lightly textured field, and use 2–4 \

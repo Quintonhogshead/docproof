@@ -1,0 +1,543 @@
+# =============================================================================
+# ARCHETYPE THREE — portrait_luminary
+# =============================================================================
+#
+# THE SHELF, NOT THE SHOT. This template was drawn from the contemporary
+# romantasy/fae-fantasy portrait cover — Callie Hart's QUICKSILVER and its
+# neighbours — but what it takes from that shelf is the ARRANGEMENT and the
+# CRAFT, never the props. One lit face on the centre axis, severed by the
+# bottom trim; a world behind it in two silhouetted depth bands; one big soft
+# light source off the axis; two small saturated things carrying the entire
+# colour budget; the author's name huge at the top and a display title huge at
+# the foot.
+#
+# A moon, a pine forest, a longsword and two butterflies are one book's answer
+# to that arrangement. They are not the arrangement, and this template must
+# never ask for them. Every generatable slot below is a QUESTION ABOUT THE
+# BOOK, and its `role` line is that question in words — see "roles are briefs"
+# below for why that matters mechanically.
+#
+# -----------------------------------------------------------------------------
+# ROLES ARE BRIEFS, AND THE DIRECTOR ACTUALLY READS THEM
+# -----------------------------------------------------------------------------
+#
+# describe_archetypes() emits each generatable slot as `id — role` into the
+# art-direction prompt. Before that, the director saw the slot IDS and nothing
+# else, and an id is a label rather than a brief: told only that a template
+# wants "luminary" and "token_near", a model fills them from the nearest cover
+# it can remember instead of from the manuscript in front of it. That is
+# exactly how a template stops being a template and becomes an impression of
+# the one cover it was drawn from.
+#
+# So the `role` strings below are written AS INSTRUCTIONS TO THE DIRECTOR, in
+# the second person, and they all say the same thing in different words: name
+# the thing this BOOK actually contains. A cover has to match its book — the
+# hour the story happens at, the country it happens in, the thing the
+# protagonist carries, what is in that world's air. If the fills could be
+# lifted onto a different novel without anyone noticing, the direction call
+# has failed, however handsome the render.
+#
+# -----------------------------------------------------------------------------
+# THE SEVEN RULES THIS TEMPLATE ENCODES
+# -----------------------------------------------------------------------------
+#
+# 1. THE VALUE STRUCTURE IS BUILT FOR THE TYPE, NOT REPAIRED AFTERWARDS.
+#    Three bands: dark sky at the top (type), the light source and the lit
+#    face across the middle (no type at all), dark foreground at the foot
+#    (type). `crown_wash` and `foot_wash` guarantee the two type bands stay
+#    dark whatever the generated sky comes back looking like. Doctrine rule
+#    8/9: a title that still needs a scrim is a failed value direction. The
+#    four halo scrims start almost inert and exist so the legibility autopilot
+#    has somewhere to escalate TO, not as the plan.
+#
+#    Every text slot renders in palette `text` (TextSlot.color_role is not
+#    addressable from an archetype), so BOTH type bands must be dark and
+#    `text` must be near-white. That is why the luminary sits at the shoulder
+#    line rather than high in the sky where a light source behind a head
+#    naturally wants to be — a bright top strip would need black type this
+#    engine cannot ask for.
+#
+# 2. AERIAL PERSPECTIVE IS DONE WITH VALUE, NOT WITH Z-ORDER (doctrine rule
+#    6). `farband` and `nearband` are the SAME kind of thing twice, and the
+#    `haze_far`/`dusk_near` adjust pair is the only thing separating them.
+#    Both directions are needed: a generated far tier comes back too dark and
+#    a generated near tier comes back too PALE — each is a well-lit photograph
+#    of its own subject — and without both grades the two read as one flat
+#    cutout with a busy edge.
+#
+# 3. THE FACE IS THE SUBJECT AND MUST STAY THE LOUDEST THING (rule 1). It is
+#    drawn last of all the art, above the world, the light and the tokens.
+#    Nothing on this template may out-shout it.
+#
+# 4. A BUST IS SEVERED BY THREE EDGES AND THE FOURTH MUST BE CLEAR. Doctrine
+#    rules 2/3/7 are about a STANDING figure; the escape here is that `hero`
+#    is cut by the trim and terminates nowhere inside the frame. That costs
+#    more than it looks. A contain-fitted plate has no crop, so a plate whose
+#    art stops short of its own left and right margins leaves the shoulders
+#    ending in mid-air a few percent inside the trim — which reads exactly as
+#    badly as a floating figure and cannot be fixed by placement. Hence the
+#    three-edge clause in the prompt frame, and hence `scale: 1.00`: the plate
+#    has to REACH both trims before its art can bleed past them. The top edge
+#    is the opposite requirement — hair cut flat by the plate's top edge
+#    crowds the author line and cannot be pushed down — so the frame demands
+#    headroom just as explicitly.
+#
+# 5. THE SATURATION BUDGET IS ABOUT 2% OF THE PIXELS. `token_far` and
+#    `token_near` are the only slots allowed a saturated hue; the sky, both
+#    bands and whatever the figure wears are near-monochrome. Two small bright
+#    things carry the entire genre signal — give the rest of the cover colour
+#    and they stop reading as magic.
+#
+# 6. THE TWO TOKENS ARE A DIAGONAL, NOT DECORATION (rule 15). One small and
+#    far, high on one side; one larger and near, low on the other, beside the
+#    jaw. They differ in size, in height and in focus, because that is what
+#    makes them occupy different planes instead of reading as two stamps of
+#    one sticker. WHICH corner each takes is the direction call's one
+#    placement choice (`token_layout`, §15.24) — the four legal arrangements
+#    all preserve the opposite-sides, different-heights diagonal, because the
+#    diagonal is the composition and the corners are only its handedness.
+#
+# 7. THE TOKENS ARE DRAWN BEHIND THE SUBJECT. They are things in the scene she
+#    or he stands in, not stickers on top of them, and in front of the face
+#    they compete with the one thing rule 3 says must win. Behind the figure
+#    they still carry the diagonal — they read past the hair and at the
+#    shoulders — and the composition gets quieter for free.
+#
+# -----------------------------------------------------------------------------
+# WHAT THIS TEMPLATE DOES NOT HAVE
+# -----------------------------------------------------------------------------
+#
+# There is deliberately NO prop slot. An earlier draft carried a `relic` — a
+# vertical object up the left third, which on the reference cover is a sword.
+# It was the one slot that was a NOUN rather than a question, it crowded the
+# left third against the far band and the light source, and it invited every
+# book onto the same shelf of weapons. A book whose subject should be holding
+# something puts it in the `hero` prompt, where it is theirs and is lit like
+# the rest of them.
+#
+# -----------------------------------------------------------------------------
+# HONEST SCOPE: one person, head and shoulders, looking at the reader, in a
+# world with weather in it. It fits romantasy, YA fantasy, paranormal, dark
+# fantasy and any historical or literary novel that wants one face and a
+# landscape. It does not fit a book with no person on the cover, and a
+# two-hander needs a different template rather than a wider `hero` prompt.
+# -----------------------------------------------------------------------------
+name: portrait_luminary
+genres: [fantasy, romance]
+axis: center
+recipe: cinematic_duotone
+recipe_strength: 0.50          # the full grade maps eight plates onto two
+                                # colours and eats the tokens; wanted here for
+                                # its unify, its bloom and its grain
+describe: >-
+  One lit face on the centre axis, cut off at the shoulders by the bottom
+  trim, against this book's own landscape in two silhouetted depth bands with
+  one big soft light source behind it, and two small saturated things from the
+  book's world floating on a diagonal across the frame. Author's name huge at
+  the top, display title huge at the foot, nothing drawn in front of either.
+  Fill every slot from the manuscript — the hour the story happens at, the
+  country it happens in, what is in that world's air — never from another
+  cover. Each fill is a BARE NOUN PHRASE that will be dropped into the middle
+  of a sentence this template already wrote, so give the thing and its
+  qualities and stop: no leading article where the frame supplies one, no
+  trailing participle ("standing in water", "spread wide"), no sentence of
+  your own. And phrase every concept freshly — two fills that share their
+  syntax produce two plates that share their pose, however different the
+  nouns in them are.
+composition_note: >-
+  Cinematic photoreal book-cover art, lit by one hard cool key from the upper
+  left plus a soft rim from the light source behind, deep unfilled shadows and
+  a small number of restrained specular highlights. Desaturated and
+  near-monochrome except where the prompt names a colour. No text, no logos,
+  no borders, no vignette, no scene inside a scene.
+
+# =============================================================================
+art:
+# -- ground band --------------------------------------------------------------
+  - id: field
+    role: >-
+      the sky this book actually happens under. Name the hour, the weather and
+      the world — a specific dusk, dawn, storm or night over a specific place,
+      not a mood word
+    generatable: true
+    procedural: gradient       # $0 fallback only; this slot is meant to be painted
+    fit: cover
+    prompt_frame: >-
+      A full-frame photograph of {subject} with nothing in front of it,
+      brightest in a soft off-centre lobe a little above the middle of the
+      frame and falling away to near-black at the top edge and at both bottom
+      corners. Empty, atmospheric, no horizon line, no ground, no objects, no
+      creatures.
+
+  - id: field_grade
+    generatable: false
+    fit: cover
+    procedural: grain
+    opacity: 0.04
+    blend: overlay
+
+  - id: luminary
+    role: >-
+      the one big light source in that sky — the sun, moon, fire, beacon or
+      other glow this book's world would actually hang there at that hour
+    # Sits at the SHOULDER line, not high in the sky — see rule 1. Its own
+    # glow is what lifts the middle band above both type bands.
+    generatable: true
+    transparent: true
+    fit: contain
+    anchor: [0.26, 0.26]
+    scale: 0.60
+    opacity: 0.92
+    prompt_frame: >-
+      One single enormous {subject}, seen through thick haze so its edge is
+      soft and indistinct, glowing evenly from within, nothing at all in front
+      of it and nothing else in the frame.
+    effects:
+      - {kind: outer_glow, blur: 0.070, alpha: 0.55}
+
+  - id: farband
+    role: >-
+      the far depth tier: the silhouette of whatever stands on this book's
+      horizon — trees, towers, rigging, rooftops, rock, machinery
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: bottom
+    anchor: [0.50, 1.00]
+    offset: [0.00, 0.10]
+    scale: 1.00
+    opacity: 0.72
+    prompt_frame: >-
+      A wide row of {subject} standing in a broken line right across the frame
+      at many different heights, seen as flat silhouettes against nothing,
+      their bases running straight down and out of the bottom of the frame.
+      Wide empty gaps between them; no ground, no sky, no horizon.
+
+  - id: nearband
+    role: >-
+      the near depth tier: the same KIND of thing as the far tier but close
+      enough to crowd the figure and be read in detail
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: bottom
+    anchor: [0.50, 1.00]
+    offset: [0.00, 0.14]
+    scale: 1.05
+    opacity: 0.60
+    prompt_frame: >-
+      A dense clustered row of {subject} crowded across the frame, much closer
+      to the viewer, dark and sharply detailed, their bases running straight
+      down and out of the bottom of the frame. No ground, no sky, no horizon.
+    effects:
+      - {kind: drop_shadow, dy: 0.004, blur: 0.014, alpha: 0.35}
+
+  - id: motes
+    role: >-
+      what is actually in this book's air — snow, ash, spores, sparks, rain,
+      dust, pollen, sea spray
+    # ONE whole plate, never a scatter of one stamp: a dozen copies of one
+    # blob reads as a rendering defect rather than as falling matter.
+    generatable: true
+    transparent: true
+    fit: cover
+    # A generated particle plate always comes back graded — coarse blobs at
+    # one end, fine specks at the other. `scale` past 1.0 is what gives the
+    # cover-fit crop any vertical room at all (at 1.0 the crop is forced
+    # flush), and the bottom anchor is what spends that room on the FINE end.
+    # Opacity stays a whisper: at anything you can actually see, a particle
+    # plate reads as dirt on the lens.
+    anchor: [0.50, 1.00]
+    scale: 1.35
+    opacity: 0.14
+    prompt_frame: >-
+      A full-frame scattering of {subject} drifting through empty air. They
+      are TINY — the largest is a grain of rice, most are specks only a few
+      pixels across — irregular, sparse and unevenly spaced, denser toward the
+      upper half and thinning out downward, with large empty gaps. No big soft
+      out-of-focus discs, no bokeh circles, no blobs.
+
+  - id: keylight
+    # The luminary's own light thrown onto the field behind the figure, so the
+    # middle band is genuinely brighter than either type band before the
+    # recipe's grade touches anything.
+    generatable: false
+    fit: cover
+    procedural: radial_glow
+    anchor: [0.30, 0.31]
+    scale: 0.95
+    opacity: 0.34
+    blend: screen
+
+# -- the tokens: the whole colour budget, drawn BEHIND the subject (rule 7) ---
+  - id: token_far
+    role: >-
+      the smaller, further of the two saturated things floating in the air —
+      a creature, a drifting light, a falling object: whatever this book's
+      world would actually put there. This is one of only two slots allowed a
+      strong colour
+    generatable: true
+    transparent: true
+    fit: contain
+    anchor: [0.10, 0.24]
+    scale: 0.15
+    prompt_frame: >-
+      One single small {subject}, at rest or drifting and seen slightly from
+      the side, lit softly from the left, nothing else in the frame.
+    effects:
+      - {kind: outer_glow, blur: 0.022, alpha: 0.45}
+      - {kind: drop_shadow, dy: 0.004, blur: 0.008, alpha: 0.35}
+
+  - id: token_near
+    role: >-
+      the larger, nearer twin of token_far — the same kind of thing, closer to
+      the camera, in motion, beside the jaw. Same colour family, different
+      plane
+    generatable: true
+    transparent: true
+    fit: contain
+    anchor: [0.93, 0.50]
+    scale: 0.24
+    prompt_frame: >-
+      One single {subject} in mid-air with its wings, limbs or trailing parts
+      spread wide, seen from slightly below and very slightly out of focus as
+      though it is the nearest thing to the camera, nothing else in the frame.
+    effects:
+      - {kind: outer_glow, blur: 0.030, alpha: 0.50}
+      - {kind: drop_shadow, dx: 0.006, dy: 0.008, blur: 0.014, alpha: 0.45}
+
+# -- the subject --------------------------------------------------------------
+  - id: hero
+    role: >-
+      the person this book is about, described FROM THE BOOK and not from a
+      cover you have seen. Take their age, build, skin, hair, dress and any
+      scar or mark as the manuscript itself gives them, in the manuscript's
+      own particulars — if the text says she is forty and greying and wears a
+      customs clerk's coat, that is the portrait, and a young warrior in
+      armour is a wrong answer however well it renders. Their EXPRESSION is
+      equally the book's to decide: name what is actually on this character's
+      face in the scene this cover is about, which may be fury, grief, calm,
+      exhaustion, amusement or nothing at all. Anything they carry or wear
+      goes here, on them
+    # THE SUBJECT (rule 3), drawn above everything. Rule 4 governs its fit and
+    # is not negotiable: three edges cut the body, the fourth must not, and
+    # `scale: 1.00` is what lets the plate reach both trims in the first
+    # place. Both numbers were measured on a real render, not guessed.
+    #
+    # NOTE WHAT THIS FRAME NO LONGER SAYS. It used to end the camera clause
+    # with "the chin dropped slightly and the eyes looking up through the
+    # brow", and specify shadow "in the eye sockets and under the jaw" — and
+    # those are not camera at all, they are ACTING. Chin down, eyes up under
+    # the brow IS the glower, and while it sat here every book got the same
+    # face: two covers with no prop, palette, setting or gender in common
+    # still came back wearing one expression, because the template was
+    # directing the performance and only letting the book pick the costume.
+    # The camera, the crop and the light geometry belong to the template.
+    # What is on the character's face belongs to the book, and now lives in
+    # `role` where the director has to answer it.
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: bottom
+    anchor: [0.50, 1.00]
+    offset: [0.00, 0.04]
+    scale: 1.00
+    prompt_frame: >-
+      A head-and-shoulders portrait of {subject}, facing the camera dead-on.
+      THREE EDGES CUT THE BODY AND THE FOURTH MUST NOT. The shoulders are WIDE
+      and fill the whole width of the picture: they run off the LEFT edge and
+      off the RIGHT edge and are cut off by the BOTTOM edge as well, so the
+      body terminates nowhere inside the frame. The TOP of the head, however,
+      is entirely inside the picture with a generous band of empty transparent
+      space above it — roughly the top fifth of the frame is empty — and no
+      part of the hair touches or is cut by the top edge. Hard cool key light
+      from the upper left and a soft rim light from directly behind the head,
+      with the fill kept low so the shadow side stays deep. The figure is
+      an ISOLATED CUTOUT: the person and nothing else, on completely empty
+      transparent space. There is no backdrop, no wall, no studio sweep, no
+      sky, no scenery and no rectangular patch of anything behind the head —
+      every pixel that is not the person themselves is fully transparent.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.020, alpha: 0.40}
+
+# =============================================================================
+# ADJUST LAYERS — what turns eight separately-lit plates into one photograph.
+adjust:
+  - id: field_wash
+    # A generated sky comes back as a bright saturated PHOTOGRAPH; this sits
+    # on it before any other plate so the cover is built on a quiet field.
+    op: grade
+    brightness: -0.12
+    saturation: -0.16
+    contrast: 0.06
+
+  - id: haze_far
+    # Rule 2, first half: push the far tier back toward the sky behind it.
+    op: grade
+    brightness: 0.10
+    contrast: -0.30
+    saturation: -0.40
+    opacity: 0.90
+    mask: {from_layer: farband, feather: 0.02}
+
+  - id: dusk_near
+    # Rule 2, second half, and just as load-bearing: a generated near tier
+    # comes back as a well-lit photograph of its subject, which lands PALER
+    # than the hazed far tier and inverts the depth read. This is what makes
+    # the near band the darkest thing in the landscape.
+    op: grade
+    brightness: -0.46
+    contrast: 0.10
+    saturation: -0.30
+    mask: {from_layer: nearband, feather: 0.012}
+
+  - id: crown_wash
+    # Rule 1: the top type band, dark whatever the sky came back as. angle 270
+    # ramps bottom-transparent -> top-opaque; start 0.70 holds it fully clear
+    # below the top 30%.
+    op: color_wash
+    color: background
+    blend: normal
+    opacity: 0.58
+    mask:
+      gradient: {kind: linear, angle: 270.0, start: 0.70, end: 1.0}
+
+  - id: foot_wash
+    # Rule 1 at the other end: the display title's ground, and the slot most
+    # exposed to what the BOOK decides. Whatever the subject wears arrives
+    # under the title, and a character in bone-white desert linen dropped a
+    # passing 11.7 title to 5.0 against a 4.5 floor — technically legal,
+    # visibly weak, and the autopilot stays asleep for exactly that band. The
+    # answer to a photographic surface under type is to darken the surface,
+    # not to escalate a scrim onto it, so this is set deep enough to hold a
+    # title over pale cloth rather than tuned to whatever the first book
+    # happened to wear.
+    op: color_wash
+    color: "#000000"
+    blend: normal
+    opacity: 0.80
+    mask:
+      gradient: {kind: linear, angle: 90.0, start: 0.63, end: 1.0}
+
+  - id: tonal_spine
+    # One shared colour spine under eight separately-lit plates.
+    op: gradient_map
+    stops: [background, primary, text]
+    opacity: 0.20
+    blend: soft_light
+
+  - id: hero_bloom
+    # The speculars this template allows itself — the light source, the one
+    # wet highlight on the face, the metal of the title — are the only things
+    # above this threshold.
+    op: bloom
+    threshold: 0.84
+    radius: 0.024
+    strength: 0.34
+
+# =============================================================================
+scrims:
+  # All halo (soft, unclipped): a panel or a gradient bar behind type on a
+  # photographic cover reads as a bezel. Deliberately weak — see rule 1.
+  - {kind: halo, protects: title, strength: 0.10}
+  - {kind: halo, protects: author, strength: 0.12}
+  - {kind: halo, protects: series, strength: 0.18}
+  - {kind: halo, protects: subtitle, strength: 0.20}
+
+# =============================================================================
+text:
+  - id: series
+    # The eyebrow / credit line, above the author (doctrine rule 8).
+    zone: {x: 0.08, y: 0.032, w: 0.84, h: 0.030}
+    case: upper
+    align: center
+    valign: top
+    tracking: 60
+    max_lines: 1
+    optional: true
+    size_min: 0.012
+    size_max: 0.020
+    effects:
+      - {kind: drop_shadow, dy: 0.0030, blur: 0.007, alpha: 0.70}
+
+  - id: author
+    # On this shelf the author's name outranks the title, so it gets the
+    # bigger ceiling of the two and the full width.
+    zone: {x: 0.045, y: 0.070, w: 0.91, h: 0.090}
+    case: upper
+    align: center
+    valign: top
+    tracking: 12
+    max_lines: 1
+    size_min: 0.040
+    size_max: 0.090
+    effects:
+      - {kind: drop_shadow, dy: 0.004, blur: 0.010, alpha: 0.65}
+      - {kind: drop_shadow, dy: 0.014, blur: 0.034, alpha: 0.30}
+
+  - id: title
+    zone: {x: 0.050, y: 0.735, w: 0.90, h: 0.150}
+    case: as_is
+    tracking: 0
+    max_lines: 2
+    size_min: 0.055
+    size_max: 0.150
+    effects:
+      # Polished metal: a vertical white -> steel -> white ramp inside the
+      # glyphs is what a chrome display face actually is, and the hairline
+      # stroke is what keeps it off the surface behind it.
+      - {kind: gradient_overlay, stops: ["#FFFFFF", "#8E9AA2", "#FDFDFD"], angle: 90.0, opacity: 0.85}
+      - {kind: stroke, width: 0.0016, color: "#0B0D10", alpha: 0.85}
+      - {kind: drop_shadow, dy: 0.003, blur: 0.004, alpha: 0.75}
+      - {kind: drop_shadow, dy: 0.015, blur: 0.034, alpha: 0.40}
+      - {kind: outer_glow, blur: 0.020, alpha: 0.22}
+
+  - id: subtitle
+    # The tagline, under the title at the foot — NOT at the top, where it
+    # would come between the eyebrow and the author's name.
+    zone: {x: 0.13, y: 0.905, w: 0.74, h: 0.036}
+    case: upper
+    align: center
+    valign: middle
+    tracking: 80
+    max_lines: 1
+    optional: true
+    size_min: 0.012
+    size_max: 0.021
+    effects:
+      - {kind: drop_shadow, dy: 0.0030, blur: 0.007, alpha: 0.70}
+
+# =============================================================================
+# Z-ORDER, bottom first.
+#
+# The two things that are easy to get wrong: `hero` is drawn after everything
+# in the world INCLUDING the two tokens (rules 3 and 7), and NO art slot is
+# drawn after any text slot. The second is what makes this template's type
+# unconditionally safe — there is no front tier to demote, so the occlusion
+# guard never has to nudge the portrait off the centre axis to save a glyph.
+layers: [field, field_wash, field_grade,
+        luminary, farband, haze_far, nearband, dusk_near, motes, keylight,
+        token_far, token_near, hero,
+        crown_wash, "scrim:1", "scrim:2", series, author,
+        foot_wash, "scrim:0", "scrim:3", title, subtitle,
+        tonal_spine, hero_bloom]
+
+# =============================================================================
+# WHAT THE DIRECTOR CHOOSES, AND NOTHING ELSE
+# =============================================================================
+#   * eight `{subject}` fills, one per generatable slot, every one of them
+#     answerable from the manuscript
+#   * five palette hexes — take `text` to true white; the finishing stack
+#     costs the type roughly a quarter of its brightness on the way down
+#   * title_font (a display face big enough to carry the foot) and author_font
+#     (the supporting serif the name and both small lines wear)
+#   * the eyebrow line and the tagline
+#   * `token_layout` — one of far_high_left / far_high_right / far_low_left /
+#     far_low_right, the ONE placement decision this template delegates
+#     (§15.24). The anchors below are the far_high_left arrangement and stay
+#     the default; a catalogue built on this template must vary the pick, or
+#     every book puts its accents in the same two spots and a shelf of them
+#     reads as one cover reprinted.
+#
+# It does NOT choose any OTHER placement, nor scale, blend, opacity, masks,
+# adjust layers, effects, scrim kinds, recipe strength or layer order.

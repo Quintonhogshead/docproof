@@ -1657,3 +1657,73 @@ A full-bleed horizontal rule — the most ordinary way to put structure into an 
 
 **Fix:** a row is alive if it varies across itself **or** its mean differs from a neighbour's by `_DEAD_BAND_ROW_DELTA_THRESHOLD` (0.020). A horizontal edge is a jump between adjacent rows, so that is where it has to be looked for. A gradient moves its mean by a hair per row and still measures dead, which is the behaviour this metric already had and wants to keep.
 
+
+
+## 18. Archetype Three, and the two engine changes it needed (2026-09-01)
+
+`portrait_luminary` — one lit face on the centre axis severed by the bottom trim, the book's own
+landscape behind it in two silhouetted depth bands, one big soft light source off the axis, two
+small saturated accent plates on a diagonal, author's name huge at the top and a display title
+huge at the foot. Drawn from the contemporary romantasy portrait shelf; it takes the arrangement
+and the craft from that shelf and none of the props.
+
+Building it surfaced two things that were wrong in the engine rather than in the template.
+
+### 18.1 A slot id is a label; the director needed a brief
+
+`describe_archetypes()` — the ONLY thing an archetype ever tells the art-direction call — emitted
+the `describe` line and each generatable slot's bare **id**. `ArchetypeArt.role` had existed since
+the v2 BODY wave and reached no prompt anywhere: documentation whose only audience never saw it.
+
+Told only that a template wants `luminary` and `token_near`, a model fills them from the nearest
+cover it can remember rather than from the manuscript in front of it. That is the mechanism by
+which a template stops being a template and becomes an impression of the one cover it was drawn
+from — and it is invisible in a render, because the render looks fine.
+
+**Fix:** `describe_archetypes()` emits `id — role` per generatable slot. `portrait_luminary` then
+writes every role as a second-person question about the book (*"the sky this book actually happens
+under. Name the hour, the weather and the world"*), so the template asks and the director answers.
+`romantasy_organic` picks this up unchanged; its roles are terse nouns, and `hero — focal_subject`
+still beats `hero`.
+
+**The corollary, learned the expensive way.** Anything a template states as fact, every book wears.
+The `hero` prompt frame originally ended its camera clause with *"the chin dropped slightly and the
+eyes looking up through the brow"* and specified shadow *"in the eye sockets and under the jaw."*
+That is not camera, it is ACTING — chin down, eyes up under the brow is the glower — and while it
+sat in the frame, two covers sharing no prop, palette, setting or gender still came back wearing
+one expression. The camera, the crop and the light geometry belong to the template. What is on the
+character's face belongs to the book. Audit a prompt frame for smuggled performance before shipping
+it.
+
+### 18.2 Fixed placement is right for one cover and wrong for a catalogue
+
+A one-shot template fixes placement so no book pays for it twice. That is the correct trade for a
+single cover and a sameness generator across a list: two `portrait_luminary` covers with nothing
+else in common still put their accent plates at byte-identical anchors, and a shelf of them reads
+as one cover reprinted.
+
+**Fix:** `TOKEN_LAYOUTS` — a closed shelf of four paired placements (`far_high_left`,
+`far_high_right`, `far_low_left`, `far_low_right`) and a `Direction.token_layout` field
+(`""` = the archetype's own anchors, so every existing archetype and archived direction is
+untouched). `build_spec._token_anchors` applies it, and drops a pick the archetype cannot honour
+with a log line rather than raising — the §6.1 surplus-prompt precedent.
+
+Every layout keeps the pair on **opposite sides** and at **different heights**, guarded by a test:
+the diagonal across the face is the composition and the corners are only its handedness, so a
+layout that stacked them would be a different arrangement rather than a variation. The template
+still owns scale, opacity, effects and z-order; placement is the one decision it delegates.
+
+Addressed by the conventional slot ids `token_far` / `token_near`, exactly as `_intent_mask`'s
+`"inside_focal"` addresses the conventional `focal` id.
+
+### 18.3 Two known conflicts this wave did NOT fix
+
+- `CUTOUT_SUFFIX` tells every transparent plate it is *"fully visible and complete"* while
+  `_cut_edge_clause` tells the same plate it is severed and runs out of the picture. Every
+  `cut_edge` slot on both shipped archetypes carries the contradiction; the plates come back right
+  by weight of emphasis, not by agreement. The suffix should be cut-edge aware.
+- `direction.py` forbids untreated photoreal art outright (`treatment: "none"` on a photoreal
+  prompt is "never allowed, brief or no brief"), and `photo_soft` is a duotone that
+  `portrait_luminary` cannot use — it flattens eight separately-lit plates into one sepia mass.
+  The archetype is photoreal by construction, so the live director would refuse to fill it as
+  written. The shelf-wide rule needs an archetype-scoped exemption.

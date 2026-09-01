@@ -104,6 +104,38 @@ def _validate_role_or_hex(value: str) -> str:
         f"hex color")
 
 
+# The paired token placements a Direction may pick from (§15.24). A
+# one-shot template fixes placement so no book pays for it twice — the right
+# trade for ONE cover, and a sameness generator across a catalogue: every
+# book off portrait_luminary put its two accent plates at exactly the same
+# two anchors, which is what made two covers with nothing else in common
+# still rhyme. This is the smallest fix that keeps the bargain: the template
+# still owns scale, opacity, effects and z-order, and the direction call gets
+# ONE closed choice over where the pair sits.
+#
+# Every entry keeps the arrangement's two load-bearing properties — the two
+# tokens are on OPPOSITE sides and at DIFFERENT heights — because that
+# diagonal, not the tokens themselves, is what carries the eye across the
+# face. A layout that stacked them would be a different composition, not a
+# variation, so there isn't one on the shelf.
+#
+# Names read as "where the FAR (smaller, higher-up-the-stack) token sits";
+# the near one always answers it from the opposite corner.
+TOKEN_LAYOUTS: dict[str, dict[str, tuple[float, float]]] = {
+    "far_high_left":  {"token_far": (0.10, 0.24), "token_near": (0.93, 0.50)},
+    "far_high_right": {"token_far": (0.90, 0.24), "token_near": (0.07, 0.50)},
+    "far_low_left":   {"token_far": (0.11, 0.60), "token_near": (0.90, 0.22)},
+    "far_low_right":  {"token_far": (0.89, 0.60), "token_near": (0.10, 0.22)},
+}
+
+# The conventional slot ids a token layout addresses, mirroring how
+# _intent_mask's "inside_focal" addresses the conventional `focal` id: an
+# archetype that doesn't declare them simply isn't a template this choice
+# applies to, and the pick is dropped with a log line rather than raising
+# (the §6.1 surplus-prompt precedent).
+TOKEN_SLOT_IDS: tuple[str, ...] = ("token_far", "token_near")
+
+
 # The slot treatments every ArtSlot/ArtPrompt may request (§7.4a): pure,
 # deterministic Pillow ops compose.py applies after fit/placement and before
 # compositing. "none" is the default on every launch archetype and every
@@ -1205,6 +1237,8 @@ def _coerce_art_prompts(value: object) -> object:
     return value
 
 
+_TOKEN_LAYOUT_NAMES: tuple[str, ...] = ("",) + tuple(sorted(TOKEN_LAYOUTS))
+
 Direction = create_model(
     "Direction",
     __config__=ConfigDict(extra="forbid"),
@@ -1241,6 +1275,15 @@ Direction = create_model(
     # doesn't contain is dropped with a log line (the §6.1 surplus-prompt
     # precedent), never fatal.
     emphasis_word=(str, ""),
+    # Where the two accent plates sit, from the closed TOKEN_LAYOUTS shelf
+    # (§15.24) — the one placement decision a template of that shape hands
+    # to the direction call, precisely so a catalogue of books built on one
+    # template does not put its accents in the same two spots every time.
+    # "" (the default) keeps whatever anchors the archetype itself declares,
+    # so every existing archetype and every existing Direction is unchanged.
+    # A pick naming slots the archetype doesn't declare is dropped with a log
+    # line in build_spec, never fatal.
+    token_layout=(Literal[*_TOKEN_LAYOUT_NAMES], ""),
     __validators__={
         "_art_prompts_dict_ok": field_validator(
             "art_prompts", mode="before")(_coerce_art_prompts),
@@ -1511,6 +1554,29 @@ def _title_type_move(direction: Direction, title: str) -> dict[str, Any]:
     return overrides
 
 
+def _token_anchors(direction: Direction, archetype: Archetype
+                   ) -> dict[str, tuple[float, float]]:
+    """Direction.token_layout as per-slot anchor overrides, or {} — either
+    "no pick" or "this archetype has no token pair", and the can't-honor
+    path logs and drops rather than raising (the §6.1 surplus-prompt
+    precedent: a multi-concept job must never die over one inapplicable
+    placement choice).
+
+    Only the two conventional TOKEN_SLOT_IDS are addressed, and only when
+    the archetype declares BOTH: half a layout is worse than none — it would
+    move one token off its diagonal and leave the other where the template
+    put it, which is the one arrangement TOKEN_LAYOUTS exists to prevent."""
+    name = getattr(direction, "token_layout", "")
+    if not name:
+        return {}
+    declared = {slot.id for slot in archetype.art}
+    if not set(TOKEN_SLOT_IDS) <= declared:
+        log.info("token_layout %r dropped: the %s archetype does not declare "
+                 "both of %s.", name, archetype.name, ", ".join(TOKEN_SLOT_IDS))
+        return {}
+    return dict(TOKEN_LAYOUTS[name])
+
+
 def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> CoverSpec:
     """Merge one art-direction concept into its chosen archetype's template.
 
@@ -1551,6 +1617,8 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
     intents = {p.slot: p.mask_intent for p in direction.art_prompts
                if getattr(p, "mask_intent", "")}
 
+    token_anchors = _token_anchors(direction, archetype)
+
     art: list[ArtSlot] = []
     for slot in archetype.art:
         if slot.id == "texture" and not include_texture:
@@ -1572,7 +1640,7 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             mirror=slot.mirror,
             opacity=slot.opacity,
             blend=slot.blend,
-            anchor=slot.anchor,
+            anchor=list(token_anchors.get(slot.id, slot.anchor)),
             scale=slot.scale,
             offset=slot.offset,
             treatment=prompt_treatments.get(slot.id, slot.treatment),
@@ -1674,6 +1742,7 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
 
 __all__ = [
     "ART_SLOT_IDS", "ART_TREATMENTS", "BLEND_MODES", "FX_PREFIX",
+    "TOKEN_LAYOUTS", "TOKEN_SLOT_IDS",
     "PROCEDURAL_KINDS",
     "Brief", "PaletteRole", "Palette", "Zone", "Shadow", "Stroke", "Effect",
     "GradientMask", "MaskSpec", "AdjustLayer",

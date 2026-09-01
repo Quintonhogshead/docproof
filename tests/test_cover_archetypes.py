@@ -158,6 +158,7 @@ def test_an_untagged_archetype_is_in_scope_for_every_genre():
 # doesn't silently drift the library's genre coverage.
 _EXPECTED_GENRES = {
     "romantasy_organic": ["fantasy", "romance"],
+    "portrait_luminary": ["fantasy", "romance"],
 }
 
 
@@ -165,6 +166,36 @@ def test_new_archetypes_have_the_expected_genres():
     assert set(_EXPECTED_GENRES) == set(SHIPPED_ARCHETYPES)
     for name, genres in _EXPECTED_GENRES.items():
         assert ARCHETYPES[name].genres == genres
+
+
+def test_describe_archetypes_emits_each_slot_role():
+    """A slot id is a label, not a brief. `role` is the slot's own statement
+    of what it is FOR, and until it was emitted here it reached no prompt
+    anywhere — leaving the art-direction call to guess what "luminary" or
+    "token_near" meant and fill it from the nearest cover it could remember
+    instead of from the book. Guard both halves: the exact id still appears
+    (a misspelled slot is silently dropped downstream), and the role rides
+    with it."""
+    text = describe_archetypes()
+    for archetype in ARCHETYPES.values():
+        for slot in archetype.art:
+            if not slot.generatable:
+                continue
+            assert slot.id in text, f"{archetype.name}: {slot.id} not offered"
+            if slot.role:
+                assert f"{slot.id} — {' '.join(slot.role.split())}" in text, (
+                    f"{archetype.name}: {slot.id}'s role never reaches the "
+                    f"direction prompt")
+
+
+def test_portrait_luminary_carries_no_prop_slot():
+    """The template asks questions about the book, not for a shot list. A
+    `relic` slot (a vertical object up the left third — a sword on the cover
+    this template was drawn from) was the one slot that was a NOUN rather
+    than a question, and it invited every book onto the same shelf of
+    weapons. Anything the subject carries belongs in `hero`, on them."""
+    ids = {slot.id for slot in ARCHETYPES["portrait_luminary"].art}
+    assert "relic" not in ids
 
 
 def test_every_new_archetype_genre_is_a_subject_key():

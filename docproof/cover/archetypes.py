@@ -1037,12 +1037,27 @@ def describe_archetypes(genre: str | None = None) -> str:
         archetypes = list(ARCHETYPES.values())
     lines = []
     for a in archetypes:
-        gen = [s.id for s in a.art if s.generatable]
+        gen = [s for s in a.art if s.generatable]
         # The slot ids are load-bearing prompt content: v2's free-form slugs
         # mean the art director can no longer guess them, and a prompt for a
         # misspelled slot is silently dropped downstream — the first live v2
         # batch shipped every cover artless for exactly this reason.
-        slots = (f" (art slots to prompt, by exact id: {', '.join(gen)})"
+        #
+        # And the id ALONE is not enough. An id is a label, not a brief: told
+        # only that a template wants "luminary" and "token_near", a model
+        # fills them from the nearest cover it can remember rather than from
+        # the book in front of it — which is how a template stops being a
+        # template and becomes an impression of the one cover it was drawn
+        # from. `role` is the slot's own statement of what it is FOR, it has
+        # existed on ArchetypeArt since the v2 BODY wave, and until this it
+        # reached no prompt anywhere: it was documentation the only audience
+        # that needed it never saw. Emitting it here is what lets a template
+        # ask for "the one big light source in this book's sky" instead of
+        # hoping "luminary" means the same thing to the model as it did to
+        # whoever wrote the YAML.
+        pairs = [f"{s.id} — {' '.join(s.role.split())}" if s.role else s.id
+                 for s in gen]
+        slots = (f" (art slots to prompt, by exact id: {'; '.join(pairs)})"
                  if gen else " (no generated art — fully procedural)")
         lines.append(f"- {a.name} — {' '.join(a.describe.split())}{slots}")
     return "\n".join(lines)
