@@ -1153,3 +1153,56 @@ def test_burning_cartouche_keeps_the_relic_larger_than_the_debris():
     assert by_id["strewn"].scale < by_id["relic"].scale
     # Both rest rather than grow, hang or span, so neither may be trim-cut.
     assert by_id["relic"].keep_whole and by_id["strewn"].keep_whole
+
+
+def test_burning_cartouche_grounds_its_type_before_drawing_it():
+    """§20.4. `foot_wash` sat AFTER the title for four tunings. That was
+    harmless while its ramp started below the type and became the whole problem
+    the moment the ramp was moved up to darken the title's ground: a wash over
+    the type is a VEIL, and it dims the ink in exact proportion to how much it
+    was supposed to be helping. The render read as a title fading out down a
+    ramp — an ink fault it was not, so three successive tunings of the ink moved
+    it essentially not at all. Fixing the order alone took title contrast from
+    4.58 to 15.02.
+
+    A wash is a ground only if it is drawn first."""
+    a = ARCHETYPES["burning_cartouche"]
+    wash = a.layers.index("foot_wash")
+    for slot in ("subtitle", "title", "author"):
+        assert wash < a.layers.index(slot), (
+            f"foot_wash is drawn after {slot!r}, which veils it rather than "
+            f"grounding it")
+    # `series` is the exception and deliberately so: it lives in the crest's
+    # medallion at the very top, nowhere near this wash's ramp.
+    assert wash > a.layers.index("series")
+
+
+def test_burning_cartouche_title_is_a_three_line_stack_in_a_tall_zone():
+    """The uniform fit sizes every line to whatever the LONGEST line can carry,
+    so the extra break is what buys the size: three lines throttled by
+    "DROWNING" instead of two throttled by "DROWNING BELL", +27% on the fitted
+    size. The tall zone is half of that decision — without the height the fit
+    just re-throttles on the zone instead of the measure."""
+    title = {t.id: t for t in ARCHETYPES["burning_cartouche"].text}["title"]
+    assert title.max_lines >= 3
+    assert title.zone.h >= 0.20
+    # justify_stack was tried and is the trap here (§15.24's known gap): it
+    # shrinks the block to the zone height and clamps short lines at size_max,
+    # which returned a two-line title at 0.047 — smaller than the uniform fit's
+    # 0.063 — under a giant "THE".
+    assert title.fit_mode == "uniform"
+
+
+def test_burning_cartouche_relic_is_loud_by_light_not_by_edge():
+    """Rule 3, restated. Against a border of hundreds of small crisp objects a
+    hard-edged, hard-lit focal plate is just one more hard thing; the relic
+    wins by being the soft, lit, simple mass. The prompt says so and
+    `relic_soften` backs it up in the engine, so the read does not depend on
+    one generation coming back tender."""
+    a = ARCHETYPES["burning_cartouche"]
+    soften = {j.id: j for j in a.adjust}["relic_soften"]
+    assert soften.op == "blur"
+    assert soften.mask is not None and soften.mask.from_layer == "relic"
+    assert a.layers.index("relic") < a.layers.index("relic_soften")
+    frame = {s.id: s for s in a.art}["relic"].prompt_frame
+    assert "soft" in frame.lower() and "no hard specular" in frame.lower()

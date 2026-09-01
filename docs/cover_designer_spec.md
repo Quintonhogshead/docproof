@@ -1994,3 +1994,57 @@ dictated, not measured. The zone's `y` is tuned off a real render rather than gu
 `optional` so a standalone novel leaves the boss blank, and a medallion that lands off-centre is a
 $0.03 repaint of `crest` — **never** a moved zone, or the next book's crest is wrong in the other
 direction.
+
+### 20.4 A wash is a ground only if it is drawn first (the legibility red herring)
+
+Owner note on the first build: *the focal image needs to be softer, and the title needs to be bigger
+and easier to read.* The first two were straightforward. The third produced the most expensive
+false trail in this template's history, and it is worth writing down because the symptom names the
+wrong layer.
+
+`foot_wash` — the feathered black wash at the foot — sat **after** the title in `layers`. That was
+harmless as long as its ramp started at 0.74, below the type, where it only ever touched the
+byline's field. The moment the ramp was moved up to 0.58, then 0.46, then 0.44 to darken the
+*title's* ground, the wash started falling **on the title instead of under it**. A wash over type is
+a veil, and it dims the ink in exact proportion to how much it was meant to be helping.
+
+The render read as a title whose first line was legible and whose last two faded out down a ramp —
+which looks exactly like an ink fault. Three successive tunings of the ink followed, and moved the
+render essentially not at all:
+
+- **ramp bias** — `[accent, text, accent]` → `[accent, text, text]`, so only one end of each stroke
+  sits in the dark stop;
+- **stop order** — discovered along the way that `gradient_overlay` at `angle: 90` lands `stops[0]`
+  at the **bottom** of the alpha bbox, the opposite of the mask helper's documented
+  "top-transparent → bottom-opaque" reading of the same angle. Reversed to `[text, text, accent]`;
+- **ramp authority** — opacity 0.96 → 0.42, which is a real fix for a different problem (below) and
+  did nothing for this one.
+
+Moving `foot_wash` above `subtitle` in the layer order, changing nothing else, took title contrast
+from **4.58 to 15.02** and left enough headroom to give back both the wash's opacity (0.93 → 0.80,
+which had been flattening the foot of the cover to solid black — finial, floor and all) and the
+ramp's authority (0.42 → 0.62, so the title reads as metal again).
+
+**The rule:** any `color_wash` or grade whose job is to be a type's *ground* must appear before that
+type in `layers`. If a wash's ramp is ever moved up into a band that carries type, check what is
+under it first. There is now a test for this archetype's ordering; the general form belongs in any
+template that grounds type with a wash.
+
+**Two smaller findings from the same pass.** *The multi-line ramp trap:* `gradient_overlay` ramps
+across the layer's whole alpha **bbox**, not per glyph and not per line — a shimmer down each
+letterform on a one-line title, but on a three-line stack it puts an entire *line* inside each stop.
+At full opacity that renders the first line solid in the accent. *Where the extra size actually
+came from:* not from a bigger zone and not from `justify_stack`, which is the trap here (§15.24's
+known gap — it shrinks the block to the zone height and clamps short lines at `size_max`, returning
+a two-line title at 0.047, smaller than the uniform fit's 0.063, under a giant "THE"). It came from
+**one more line break**: the uniform fit sizes every line to whatever the longest line can carry, so
+three lines throttled by "DROWNING" beat two throttled by "DROWNING BELL" — +27% on the fitted size,
+with the zone made tall enough that the height does not become the new throttle.
+
+**And rule 3 was restated: dominance is not hardness.** The relic's frame asked for hard edges, a
+cold specular rim and *"every surface mark, crack and pit sharply in focus."* Against a border of
+hundreds of small crisp objects that reads as one more hard thing in a field of hard things, and the
+eye has nowhere to rest. The relic wins by being the **soft, lit, simple** mass in a busy frame:
+broad diffuse light, gentle falloff, an outline that eases rather than cuts, a wider and weaker
+contact shadow than the border plates carry. `relic_soften` — a masked `blur` mixed back at 0.45 —
+backs the prompt up in the engine, so the read does not depend on one generation coming back tender.

@@ -64,14 +64,24 @@
 #    one cutout ten times reads as a rendering defect). Each column is one
 #    generation of thirty things, no two alike.
 #
-# 3. ONE PALE RELIC, DEAD CENTRE, AND IT IS THE ONLY BRIGHT OBJECT.
+# 3. ONE PALE RELIC, DEAD CENTRE — LOUDEST BY LIGHT, NOT BY EDGE.
 #    The composition is a shrine: everything else is a border around a thing on
-#    an altar. `relic` is the brightest value, the highest local contrast and
-#    the most detail on the cover, it is `keep_whole` (it does not grow, hang or
-#    span — it RESTS, and a relic sliced by a trim is a relic cut in half:
-#    §15.25), and it is drawn AFTER the entire border tier so nothing can bury
-#    it. If a render comes back with the border out-shouting the middle, the
-#    fault is a border fill that is too pale, not a relic that is too small.
+#    an altar. `relic` is the brightest VALUE and the largest single mass, it is
+#    `keep_whole` (it does not grow, hang or span — it RESTS, and a relic sliced
+#    by a trim is a relic cut in half: §15.25), and it is drawn AFTER the entire
+#    border tier so nothing can bury it. If a render comes back with the border
+#    out-shouting the middle, the fault is a border fill that is too pale, not a
+#    relic that is too small.
+#
+#    DOMINANCE IS NOT HARDNESS, and the first build of this template confused
+#    the two. Its frame asked for hard edges, a cold specular rim and "every
+#    surface mark, crack and pit sharply in focus" — against a border of
+#    hundreds of small crisp objects, that reads as one more hard thing in a
+#    field of hard things, and the eye has nowhere to rest. The relic wins by
+#    being the SOFT, LIT, SIMPLE mass in a busy frame: broad diffuse light,
+#    gentle falloff, edges that ease rather than cut. `relic_soften` backs the
+#    prompt up in the engine so the read does not depend on one generation
+#    coming back tender.
 #
 # 4. THE RELIC IS STANDING ON SOMETHING, AND THAT SOMETHING IS GENERATED.
 #    §15.23, verbatim and load-bearing. `floor` is a real plate — a polished
@@ -421,8 +431,8 @@ art:
     fit: contain
     place_by: ink
     keep_whole: true
-    anchor: [0.50, 0.845]
-    scale: 0.30
+    anchor: [0.50, 0.870]
+    scale: 0.25
     opacity: 0.92
     prompt_frame: >-
       One small symmetrical ornament of {subject}, perfectly mirrored left to
@@ -445,7 +455,7 @@ art:
     fit: contain
     place_by: ink
     cut_edge: top
-    anchor: [0.50, 0.575]
+    anchor: [0.50, 0.470]
     offset: [0.012, 0.00]      # a hair off the axis: dead-centre reads as a
                                 # printed rule dropped down the middle
     scale: 0.13
@@ -459,8 +469,9 @@ art:
 
   - id: relic
     role: focal_subject
-    # Rule 3. Brightest, sharpest, most detailed plate on the cover, drawn
-    # after everything that could bury it. `keep_whole`: it rests, it does not
+    # Rule 3. Brightest and largest, NOT hardest — see the rule for why those
+    # came apart. Drawn after everything that could bury it. `keep_whole`: it
+    # rests, it does not
     # grow or hang, so it has no severed end and must never be cut by a trim.
     # Roughly square ink, so `scale` reads against canvas WIDTH.
     generatable: true
@@ -470,21 +481,25 @@ art:
     keep_whole: true
     # The relic's ink is nearly always taller than it is wide, so `scale`
     # reading on WIDTH still buys ~0.41 of canvas HEIGHT. Sized and seated so
-    # its foot lands around y=0.54: any lower and `pendant` has nowhere to hang
+    # its foot lands around y=0.51: any lower and `pendant` has nowhere to hang
     # between it and the tagline, which is how rule 5's ladder goes missing.
-    anchor: [0.50, 0.22]
+    anchor: [0.50, 0.16]
     scale: 0.44
     prompt_frame: >-
       One single {subject}, seen straight on and very slightly from above,
       resting on a flat surface, filling its frame with a little empty air all
-      round it. Pale and hard-edged against nothing, lit warmly and strongly
-      from the front and slightly above with a cold rim of light down one side;
-      every surface mark, crack and pit sharply in focus. It is the brightest,
-      sharpest, most detailed thing in the whole picture. Nothing else in the
-      frame.
+      round it. Pale, and lit by ONE broad soft diffused light from the front
+      and slightly above — a wide gentle falloff around the form, no hard
+      specular highlight anywhere on it, no cold rim, and its outline easing
+      softly into the air rather than cutting against it. Surface detail is
+      present but quiet and low in contrast, softening further toward the
+      edges. It is the brightest and largest thing in the picture and the only
+      restful one. Nothing else in the frame.
     effects:
-      - {kind: drop_shadow, dy: 0.010, blur: 0.017, alpha: 0.50}
-      - {kind: outer_glow, blur: 0.036, alpha: 0.28}
+      # A wider, weaker contact shadow than the border plates carry: a tight
+      # dark shadow is itself an edge, and it undoes the softness above.
+      - {kind: drop_shadow, dy: 0.012, blur: 0.030, alpha: 0.38}
+      - {kind: outer_glow, blur: 0.048, alpha: 0.34}
 
   - id: strewn
     role: fallen_fragments
@@ -497,12 +512,12 @@ art:
     fit: contain
     place_by: ink
     keep_whole: true
-    anchor: [0.43, 0.700]
+    anchor: [0.28, 0.420]
     # HARD CEILING: this scale must stay well under `relic`'s. At 0.68 the
     # first render put fragments BIGGER than the focal object across the middle
     # of the cover, which buried `pendant` outright and broke rule 3 — a
     # scatter of debris cannot out-mass the thing on the altar.
-    scale: 0.26
+    scale: 0.22
     opacity: 0.85
     prompt_frame: >-
       Five or six SMALL loose detached pieces of {subject} lying flat and
@@ -584,10 +599,26 @@ adjust:
     mask: {from_layer: floor, feather: 0.02}
 
   - id: foot_wash
+    # A WASH IS A GROUND ONLY IF IT IS DRAWN FIRST. This layer sat AFTER the
+    # title in `layers` for four tunings, which was harmless while its ramp
+    # started at 0.74 (below the type, so it only ever touched the byline's
+    # field) and became the whole problem the moment the ramp was moved up to
+    # darken the title's ground: a wash over the type is a VEIL, and it dims
+    # the ink exactly in proportion to how much it was supposed to be helping.
+    # It rendered as a title whose first line was legible and whose last two
+    # faded out down the ramp — which reads as an ink fault and is not one, so
+    # three successive tunings of the ink (ramp bias, stop order, ramp
+    # authority) moved the render essentially not at all.
+    #
+    # It now sits above `series` and below everything else with words in it.
+    # If this ramp is ever moved up again, check what is under it in `layers`
+    # first.
+    #
     # A feathered black wash over the lower THIRD, fading out upward, so BOTH
     # the title and the byline sit on something quiet. It starts at 0.58 —
     # above the title band, not below it — and that is deliberate: the first
-    # tuning started it at 0.74, which protected the byline and left the title
+    # tuning started it at 0.74 and the second at 0.58, both of which protected
+    # the byline and left the title
     # standing on a lit floor at 4.4 against a 4.5 threshold, whereupon the
     # legibility autopilot went after the finishing stack instead. The wash is
     # the cheap fix and the scrim is the expensive one; spend the cheap one
@@ -600,16 +631,50 @@ adjust:
     op: color_wash
     color: "#000000"
     blend: normal
-    opacity: 0.74
+    # 0.80, not the 0.93 it took to punch a title through this ground while
+    # the wash was still (wrongly) drawn over it: with the z-order fixed the
+    # title clears its threshold three times over, and the surplus was being
+    # spent flattening the foot of the cover to solid black — finial, floor
+    # and all.
+    opacity: 0.80
     mask:
-      gradient: {kind: linear, angle: 90.0, start: 0.58, end: 0.94}
+      # Reaching full strength at 0.70 rather than 0.94: the ramp has to be
+      # DONE by the time the title's band starts, not still climbing through
+      # it, or the type stands on a gradient and its worst region is wherever
+      # the wash had not yet arrived.
+      #
+      # And the opacity is high because of what is actually under there. The
+      # border columns and the floor's reflection of them run the full height
+      # of the cover, so the title's ground is not the quiet field it looks
+      # like in the layer list — it is pale coral, brightly lit, reflected wet.
+      # Three tunings of the title's INK (ramp bias, stop order, ramp
+      # authority) moved the render barely at all, because the ink was never
+      # the problem: bright type on a bright ground reads as translucent
+      # whatever colour it is. Doctrine rules 8/9, learned again — fix the
+      # value direction, not the type.
+      gradient: {kind: linear, angle: 90.0, start: 0.44, end: 0.70}
+
+  - id: relic_soften
+    # The engine half of rule 3's softness, so the read survives a generation
+    # that comes back crisp anyway. Blurred at 0.5% of canvas height and mixed
+    # back at 0.45 (§15.3's own equation) — a whisper of soft focus over the
+    # focal mass only, feathered so the transition is not itself a new edge.
+    # Deliberately small: past ~0.010 it stops reading as light and starts
+    # reading as a plate that failed to render.
+    op: blur
+    radius: 0.005
+    opacity: 0.45
+    mask: {from_layer: relic, feather: 0.012}
 
   - id: tonal_spine
     # One shared colour spine under thirteen separately-lit plates — the price
     # of a maximalist template, and the cheapest way to pay it.
     op: gradient_map
     stops: [background, primary, text]
-    opacity: 0.16
+    # 0.16 is a lot to spend on top of the type: this is the LAST layer drawn,
+    # so whatever it takes off the title's ink is taken after every scrim and
+    # ink-flip the autopilot has already paid for.
+    opacity: 0.10
     blend: soft_light
 
   - id: gild_bloom
@@ -627,7 +692,7 @@ scrims:
   # (romantasy_organic rule 5). The title's starts low: it lands on graded wall
   # and the foil ramp carries it. The subtitle's is the highest because it is
   # the one line that sits on the floor's own reflected glow.
-  - {kind: halo, protects: title, strength: 0.12}
+  - {kind: halo, protects: title, strength: 0.30}
   - {kind: halo, protects: author, strength: 0.18}
   - {kind: halo, protects: subtitle, strength: 0.32}
   - {kind: halo, protects: series, strength: 0.22}
@@ -661,7 +726,7 @@ text:
     # centred, in the supporting face — this is the one place on the cover
     # where a sentence is read rather than recognised, and the display face
     # cannot carry a sentence at 1.6% of canvas height.
-    zone: {x: 0.155, y: 0.576, w: 0.69, h: 0.064}
+    zone: {x: 0.155, y: 0.522, w: 0.69, h: 0.058}
     case: as_is
     align: center
     valign: bottom
@@ -684,19 +749,55 @@ text:
     # afford to be: the band beneath it is graded wall and reflected floor, ONE
     # value regime, so the worst-region legibility measure has nothing to trip
     # on. Do not slide it up into the strewn fragments.
-    zone: {x: 0.100, y: 0.650, w: 0.80, h: 0.118}
+    # A TALL zone and THREE lines, and both halves are the same decision: on
+    # this template the title has to be big, and the uniform fit sizes every
+    # line to whatever the LONGEST line can carry. Two lines of "THE /
+    # DROWNING BELL" is throttled by thirteen characters of measure; three
+    # lines of "THE / DROWNING / BELL" is throttled by eight, and every line
+    # gets about half again the size for it. The zone has to be tall enough to
+    # take the extra line or the height becomes the new throttle — 0.225 is
+    # three lines' worth plus leading, and it is why this band starts at 0.60
+    # rather than at 0.65.
+    #
+    # `justify_stack` is the trap here and was tried: it grows each line toward
+    # the measure independently, which sounds like exactly what a poster stack
+    # wants, but it then shrinks the whole block to fit the zone HEIGHT and
+    # clamps short lines at size_max — a two-line title came back at 0.047,
+    # smaller than the uniform fit's 0.063, with a giant "THE" over a small
+    # "DROWNING BELL". That is §15.24's known gap, not a tuning miss.
+    zone: {x: 0.090, y: 0.600, w: 0.82, h: 0.225}
     case: upper
     align: center
     valign: middle
-    tracking: 4
-    max_lines: 2
-    size_min: 0.048
-    size_max: 0.098
+    tracking: 2
+    max_lines: 3
+    size_min: 0.052
+    size_max: 0.118
     effects:
       # A tight dark contact shadow under a wide soft one — the pro type move.
       - {kind: drop_shadow, dy: 0.003, blur: 0.004, alpha: 0.75}
       - {kind: drop_shadow, dy: 0.014, blur: 0.032, alpha: 0.44}
-      - {kind: gradient_overlay, stops: [accent, text, accent], angle: 90.0, opacity: 0.96}
+      # THE MULTI-LINE RAMP TRAP. A gradient_overlay ramps across the layer's
+      # whole alpha BBOX, not per glyph and not per line — so on a one-line
+      # title it is a shimmer down each letterform, and on the three-line stack
+      # above it puts an ENTIRE LINE inside each stop. At full opacity that
+      # rendered "THE" solid in the accent: a dark teal word on a washed dark
+      # ground, measuring 4.8 and reading like a watermark.
+      #
+      # So the ramp keeps its metal but gives up its authority: at 0.62 the ink
+      # is mostly the near-white `text` role with a metal cast over it, which
+      # is a foil at a distance and a legible title at thumbnail. Raise this
+      # back toward 1.0 only for a one- or two-line title, and never on this
+      # template without looking at the render.
+      #
+      # AND THE STOP ORDER IS MEASURED, NOT ASSUMED. At angle 90 this effect
+      # lands stops[0] at the BOTTOM of the alpha bbox, which is the opposite
+      # of the mask helper's documented "top-transparent -> bottom-opaque"
+      # reading of the same angle. Written the intuitive way round, the render
+      # came back with the last two lines in the accent and only the first
+      # line legible. `accent` goes LAST here so the dark end of the ramp
+      # lands on the top of the first line and nowhere else.
+      - {kind: gradient_overlay, stops: [text, text, accent], angle: 90.0, opacity: 0.62}
       - {kind: bevel, width: 0.0022, alpha: 0.38}
       - {kind: texture_overlay, texture_file: marble, blend: soft_light, opacity: 0.22}
 
@@ -730,11 +831,12 @@ layers: [field, field_grade, floor, floor_recede, keylight, motes,
         bower_left, bower_right, bough, filigree, crest, finial,
         pendant, relic, strewn,
         "scrim:3", series,
+        foot_wash,
         "scrim:2", subtitle,
         "scrim:0", title,
-        foot_wash, "scrim:1", author,
+        "scrim:1", author,
         blaze,
-        tonal_spine, gild_bloom]
+        relic_soften, tonal_spine, gild_bloom]
 
 # =============================================================================
 # WHAT THE DIRECTOR STILL CHOOSES, AND NOTHING ELSE
