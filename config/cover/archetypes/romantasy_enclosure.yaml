@@ -1,0 +1,484 @@
+# =============================================================================
+# ARCHETYPE FOUR — romantasy_enclosure
+# =============================================================================
+#
+# Reference DNA: the enemies-to-lovers romantasy trade paperback — Brigitte
+# Knightley's THE EXQUISITE TORMENT OF LOVING YOUR ENEMY and the wider
+# Fourth Wing / Powerless shelf, stripped to the two moves that shelf is
+# actually built on. A void field bordered edge to edge in one spot colour; a
+# huge stone-white display title in the upper half; and the book's two leads
+# in the lower half, cropped at the thigh, posed however the story has them,
+# inside a single pool of that same colour.
+#
+# It began life as a cabinet of curiosities — a dozen small drawn objects
+# pinned around the margins — and was cut down to this over two rounds of
+# owner notes. That history is worth keeping, because the thing that survived
+# the cut is the thing the composition was always about: TWO PEOPLE, ONE
+# LIGHT, ONE ENCLOSURE. Every object removed was competing with one of those
+# three for the same inch of cover.
+#
+# It is still the OPPOSITE composition to romantasy_organic and that is still
+# the point. Archetype One puts one object on the centre axis and grows a
+# tangle through the type. This one puts NOTHING on the centre axis above the
+# leads' heads, and defends that emptiness: type above, figures below, a
+# border around, and no third thing anywhere.
+#
+# -----------------------------------------------------------------------------
+# THE FIVE RULES THIS TEMPLATE ENCODES
+# -----------------------------------------------------------------------------
+#
+# 1. VALUE OPPOSITION CARRIES THE PREMISE. The two leads are pitched at
+#    opposite ends of one value scale — one dark against the black, one pale
+#    and lit — inside the same halo. That contrast IS the two-handed pitch of
+#    the book; it is not decoration and it is not re-decided per title. Note
+#    that it is a LIGHTING fact, not a wardrobe one: the template never says
+#    what either of them wears, only how each is pitched, and the direction
+#    assigns the roles simply by choosing which character to describe first.
+#
+# 2. THE BORDER IS THE TRIM, NOT AN ORNAMENT ON IT. `frame` is `cover`-fit and
+#    runs out to all four edges, its outer edge cut by the trim. A border with
+#    ANY bare ground outside it — even the ~130px a contained 2:3 plate leaves
+#    in a 1:1.6 canvas — stops reading as the edge of the page and starts
+#    reading as a rectangle floating on it. There is no "nearly" here: the
+#    gate is placed ink flush to 0px on all four sides, and it is measurable
+#    (inspect.placed_ink_mask).
+#
+# 3. NOTHING ELSE IS ON THE COVER. Background, glow, border, leads, type. That
+#    is the whole inventory, and the restraint is the design — this template's
+#    entire revision history is objects being removed and the cover getting
+#    better each time. A new noun does not go on this archetype; if a book
+#    needs a cabinet of objects around its margins, that is a different
+#    template, not this one with additions.
+#
+# 4. ONE COLOUR SPINE, FOUR COLOURS TOTAL. Void black, one saturated spot
+#    (border and halo), one metal (the author's name), one off-white (title,
+#    and the pale lead). The eye descends the cover on the spot colour alone.
+#    A fifth hue anywhere kills it — which is why `tonal_spine` maps the whole
+#    thing through background->primary->text, and why `photo_soft` is refused
+#    here for the same reason Archetype One refuses it.
+#
+# 5. THE DEAD BAND IS LOAD-BEARING. The strip between the title's last line
+#    and the leads' heads is deliberately empty. It is what lets the tagline
+#    sit off-axis at the right without colliding with anything, and it is the
+#    one place on this template where empty space is the design rather than a
+#    fault. Do not fill it.
+#
+# 6. ONE PLATE, WHATEVER THE POSE. The pose belongs to the book — back to
+#    back, one shielding the other, one walking away, squared up, holding on
+#    — and the template says nothing about it beyond the crop and the light.
+#    What the template does NOT release is that the two of them are generated
+#    TOGETHER, in a single image, always. That is not a stylistic preference:
+#    two figures generated separately and composited share no contact point,
+#    no eyeline, no light and no ground, so any pose that depends on one of
+#    those — which is every pose worth drawing — cannot be assembled after
+#    the fact. Whatever the book has them doing, they do it in one frame.
+#
+# -----------------------------------------------------------------------------
+# ROLES, NOT NOUNS
+# -----------------------------------------------------------------------------
+#
+#   mat            the ground the whole cover is printed on
+#   tooth          a whisper of grain over it, so the void is a surface ($0)
+#   halo           the spot-colour light the two leads stand in ($0 synth)
+#   pair           THE LEADS — this book's two characters, posed as the book
+#                  has them, in ONE plate
+#   frame          the spot-colour border, run out to all four trim edges
+#
+# Three generatable slots. That is the whole art budget: ~$0.09 at draft tier.
+#
+# -----------------------------------------------------------------------------
+# ENGINE SUPPORT THIS FILE REQUIRES
+# -----------------------------------------------------------------------------
+#
+#   i) `fit_mode` / `arc` / `rotate` on an archetype text slot, mirroring
+#      TextSlot's own §15.12 fields. Two of the three are load-bearing here:
+#      the credit line and the author's name BOW along one shared arc (the
+#      convention this whole shelf uses and no template could express —
+#      Direction.type_move reaches arc only on the title), and the title is
+#      `justify_stack` so its lines each fill the measure at their own size.
+#      That stepped stack is the reference's title, and a uniform fit cannot
+#      make it. Direction.type_move still wins on the title where a concept
+#      sets one; build_spec folds it over these.
+#
+# Everything else this template needs — adjust layers, screen blend,
+# prompt_frame, font_role, recipe_strength — landed for Archetype One.
+# =============================================================================
+name: romantasy_enclosure
+genres: [fantasy, romance]
+axis: center
+recipe: midnight_neon
+recipe_strength: 0.22          # this template already emits its own light in
+                                # `halo` and `edge_bloom`; the shelf recipe is
+                                # wanted only for its grade and its grain, and
+                                # at full strength its burn eats the black
+describe: >-
+  A void-black field bordered edge to edge in one cracked spot colour, with
+  nothing else on it. Arched credit line and metallic author's name at the
+  top over a huge stacked stone-white title; the book's two leads in the
+  lower half, cropped at the thigh and posed as the story has them, standing
+  in a single pool of that same colour. Tagline right-aligned beside them.
+composition_note: >-
+  Painted illustration on pure black, restrained and graphic rather than
+  richly rendered: one strong cold key light, deep unlit shadow, colour held
+  to the few hues named in the prompt and nothing else. No scene, no horizon,
+  no sky, no landscape, no ground plane, no vignette, no cast shadow on any
+  surface.
+
+# =============================================================================
+art:
+# -- ground band --------------------------------------------------------------
+  - id: mat
+    role: ground
+    generatable: true
+    procedural: gradient       # $0 fallback only; this slot is meant to be painted
+    fit: cover
+    prompt_frame: >-
+      A full-frame straight-on photograph of {subject} — a flat inanimate
+      MATERIAL SURFACE filling the entire frame edge to edge, photographed
+      square on from directly above, almost black, lit by a single raking
+      light so it reads as texture under the fingers rather than as printed
+      ink. Darkest at the corners. It is a surface, NOT an object and NOT a
+      creature: nothing is lying on it, nothing is growing on it, and there
+      is no thing in the picture at all.
+    # e.g. subject = "black slate shot through with hairline fractures"
+
+  - id: tooth
+    # A whisper of tooth so the black field is a printed surface rather than
+    # a flat fill. The mat carries the real texture; a loud tile fights it.
+    generatable: false
+    fit: cover
+    texture_file: canvas_weave
+    texture_fit: tile
+    opacity: 0.07
+    blend: multiply
+
+  - id: halo
+    # The light the two leads stand in, and the only reason the lower half of
+    # the field is brighter than its corners. Anchored ON the figures, not at
+    # centre canvas — this is their light, not the cover's.
+    generatable: false
+    fit: cover
+    procedural: radial_glow
+    anchor: [0.50, 0.72]
+    scale: 0.72
+    opacity: 0.16
+    blend: screen
+
+# -- the leads ----------------------------------------------------------------
+  - id: pair
+    role: leads
+    # RULE 1 and RULE 6, and the one plate on this template that may never be
+    # split. Drawn before `frame` (rule 2) but after nothing else, so the two
+    # of them are the first thing painted onto the field and everything the
+    # margins do afterwards happens around them.
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: bottom           # they are cropped at the thigh: the cut is the
+    anchor: [0.50, 1.00]       # bottom of their own plate, pushed past trim
+    offset: [0.00, 0.04]
+    scale: 0.54
+    prompt_frame: >-
+      Two figures together in one image: {subject}. Render each of them
+      exactly as described AND pose them exactly as described — who they are
+      and how they stand toward each other are both fixed by that
+      description, and neither is yours to change or improve. Both are
+      cropped at mid-thigh and both are wholly inside the frame. The FIRST
+      figure described is pitched dark against the black and the SECOND is
+      pitched pale and bright, so the two of them read as opposite ends of
+      one value scale whatever they are actually wearing. Lit coldly from
+      behind so a rim of light separates both silhouettes. Wherever the
+      description has them touching or meeting, that point of contact is the
+      most important detail in the image and must be fully visible.
+    effects:
+      - {kind: drop_shadow, dy: 0.008, blur: 0.014, alpha: 0.45}
+      - {kind: outer_glow, blur: 0.034, alpha: 0.40}
+
+# -- the border, IN FRONT of the figures (rule 2) ------------------------------
+  - id: frame
+    role: border
+    generatable: true
+    transparent: true
+    # `cover`, NOT `contain`. A contained border can only ever APPROACH the
+    # trim: plates come back at a native 2:3 and the canvas is 1:1.6, so
+    # containing one always leaves surplus height to put somewhere, and
+    # wherever that surplus goes — split evenly, or pushed to one end — it is
+    # a band of bare ground between the border and the edge of the book.
+    # Covering fills the canvas exactly and spends the aspect difference as a
+    # ~44px crop off each side of the border's OUTER edge instead, which costs
+    # nothing: the band is far thicker than the crop, and a border whose outer
+    # edge is cut by the trim is precisely what a border printed to the edge
+    # looks like.
+    fit: cover
+    anchor: [0.50, 0.50]
+    offset: [0.00, 0.00]
+    scale: 1.00
+    prompt_frame: >-
+      A tall rectangular picture BORDER made of {subject}: four bands — top,
+      bottom, left and right — meeting at the corners to enclose a large
+      empty rectangle. The border is built from that one material repeating
+      along its whole length so it reads as a single continuous band rather
+      than as four separate objects laid end to end, and it is broken and
+      interrupted along the way rather than smooth and even. It runs right
+      out to all four edges of the image with no margin around it, and
+      everything inside it is completely empty — no objects, no texture,
+      nothing at all.
+
+# -- NOTE: there is no front tier ------------------------------------------
+#
+# This template used to carry five more plates in front of the type — a
+# creature breaking the upper-left corner, a long one coiling down the right
+# edge, an object hanging point-down the right margin, a growth crossing the
+# lower-right corner, and a row of small objects strung along the top rail.
+# They were cut (owner's call, and the right one): five separately generated
+# objects perched on and dangling off a border turn the border into a peg
+# board, and the thing this composition is actually about — two people, one
+# light, one enclosure — was competing with the decoration for every inch of
+# margin.
+#
+# Rule 2 survives the cut intact, because it never needed five objects to
+# make its point: `rail_left` and `rail_right` are still drawn AFTER `frame`,
+# they still cross it, and that crossing is still the whole depth illusion.
+# What changed is that the two plates doing it are the two that also carry
+# rule 3 — so every object left on this cover is now earning its place twice.
+#
+# =============================================================================
+# ADJUST LAYERS
+# =============================================================================
+adjust:
+  - id: mat_grade
+    # A generated slate/cloth plate comes back as a bright saturated
+    # PHOTOGRAPH. This sits straight on it so the whole cover is built on a
+    # void, which is the one thing this design cannot do without.
+    op: grade
+    brightness: -0.55
+    saturation: -0.62
+    contrast: 0.10
+
+  - id: type_field
+    # The reference's type sits on pure black, and by the time the reliquary
+    # is assembled the top of the field is not pure black any more. A
+    # feathered wash over the upper third, fading out DOWNWARD (angle 270 =
+    # bottom transparent -> top opaque, held clear until `start`), restores
+    # it. Drawn after `crown`, which is a back-tier plate and is supposed to
+    # sit down in it, and before the type, which is not.
+    op: color_wash
+    color: "#000000"
+    blend: normal
+    opacity: 0.50
+    mask:
+      gradient: {kind: linear, angle: 270.0, start: 0.66, end: 1.0}
+
+  - id: tonal_spine
+    # Rule 4: thirteen separately generated plates put on one colour spine.
+    op: gradient_map
+    stops: [background, primary, text]
+    opacity: 0.10
+    blend: soft_light
+
+  - id: edge_bloom
+    # The border and the halo are the two things on this cover that emit
+    # light; this is what makes them look like it.
+    op: bloom
+    threshold: 0.78
+    radius: 0.020
+    strength: 0.36
+
+# =============================================================================
+scrims:
+  # Halo only, for Archetype One's rule 5 reason: gradient_up/gradient_down
+  # extend a solid fill to the nearest canvas edge across the zone's full
+  # width, and every text slot here sits well inboard of one. The title's
+  # starts near-inert — it is stone-white on a void and the autopilot will
+  # raise it only if the measured contrast actually fails.
+  - {kind: halo, protects: title, strength: 0.10}
+  - {kind: halo, protects: author, strength: 0.14}
+  - {kind: halo, protects: series, strength: 0.20}
+  - {kind: halo, protects: subtitle, strength: 0.26}
+
+# =============================================================================
+text:
+  - id: series
+    # The credit line, arched, riding the same virtual circle as the author's
+    # name below it so the two curves nest instead of merely both bending.
+    zone: {x: 0.11, y: 0.108, w: 0.78, h: 0.032}
+    case: upper
+    align: center
+    valign: middle
+    tracking: 95
+    max_lines: 1
+    optional: true
+    size_min: 0.009
+    size_max: 0.015
+    arc: 0.10                  # (i)
+
+  - id: author
+    # Metal, and the only metal in the type. Wears the SUPPORTING face, not
+    # the display one — the inverse of Archetype One's convention, because
+    # here the title is a heavy slab and the name is the high-contrast serif
+    # beside it. That is `font_role`'s default for a non-title slot, so it is
+    # simply left unset.
+    zone: {x: 0.06, y: 0.138, w: 0.88, h: 0.070}
+    case: upper
+    align: center
+    valign: middle
+    tracking: 12
+    max_lines: 1
+    size_min: 0.024
+    size_max: 0.044
+    arc: 0.13                  # (i)
+    effects:
+      # The foil. A text slot's colour is TextSlot.color_role's default white
+      # and no archetype field reaches it — but a gradient_overlay does the
+      # job better than a flat fill would anyway: light along the top of each
+      # glyph, dark under it, which is what makes stamped metal read as metal
+      # rather than as yellow ink. `primary` is the palette's metal role.
+      - {kind: gradient_overlay, stops: ["#6B4E15", primary, "#F6E7B4"],
+         angle: 90.0, opacity: 1.0}
+      - {kind: drop_shadow, dy: 0.003, blur: 0.006, alpha: 0.60}
+
+  - id: title
+    # justify_stack, not uniform: each line is sized independently to fill
+    # the measure, which is what produces the reference's stepped hourglass
+    # — a short word small, the long ones large. A uniform fit renders the
+    # same four lines as one flat grey brick.
+    zone: {x: 0.105, y: 0.252, w: 0.79, h: 0.212}
+    case: upper
+    align: center
+    valign: middle
+    tracking: 0
+    max_lines: 3
+    size_min: 0.026
+    size_max: 0.058
+    fit_mode: justify_stack    # (i)
+    effects:
+      # The pro move: a tight dark contact shadow under a wide soft one.
+      - {kind: drop_shadow, dy: 0.003, blur: 0.004, alpha: 0.65}
+      - {kind: drop_shadow, dy: 0.012, blur: 0.028, alpha: 0.34}
+
+  - id: subtitle
+    # The tagline, and the ONLY element on the cover that is off the centre
+    # axis (rule 5). It lives in the dead band at the right, beside the pale
+    # lead's shoulder.
+    zone: {x: 0.545, y: 0.474, w: 0.375, h: 0.080}
+    case: upper
+    align: right
+    valign: top
+    tracking: 60
+    max_lines: 3
+    optional: true
+    size_min: 0.012
+    size_max: 0.020
+    effects:
+      - {kind: drop_shadow, dy: 0.003, blur: 0.007, alpha: 0.75}
+
+# =============================================================================
+# Z-ORDER, bottom first. The three that are easy to get wrong and fatal:
+# `motes` at the BOTTOM, `pair` BEFORE `frame` (rule 2), and every front-tier
+# plate AFTER the title so it breaks the border in front of the type's plane.
+layers: [mat, mat_grade, tooth, halo,
+        pair, frame,
+        type_field, "scrim:0", "scrim:1", "scrim:2", "scrim:3",
+        series, author, title, subtitle,
+        tonal_spine, edge_bloom]
+
+# =============================================================================
+# THE DIRECTION CONTRACT — WHAT COMES FROM THE BOOK
+# =============================================================================
+#
+# This template owns the STRUCTURE and the STYLE. The book owns every NOUN.
+# The split is absolute and it runs through every `prompt_frame` above: the
+# frame supplies the pose, the crop, the lighting, the value assignment, which
+# edge a thing is cut on and how it fills its plate — all of it fixed, none of
+# it re-decided per title — and the `{subject}` hole supplies who and what,
+# from THIS manuscript and nowhere else.
+#
+# The failure this guards against is a cover that is merely genre-correct: a
+# hooded figure who is nobody, a border of generic filigree, a palette off the
+# romantasy shelf rather than out of the text. It renders fine and it is
+# still wrong, because it would serve any book equally, which means it serves
+# this one not at all.
+#
+#   `pair`  (role: leads) — THE BOOK'S ACTUAL CHARACTERS, AND THE POSE THE
+#           BOOK PUTS THEM IN. Two things, and the second is the one most
+#           easily forgotten.
+#
+#           WHO: give both of them — age, build, colouring, hair, dress, what
+#           they carry, what they are marked by — from what the text says
+#           about them, not from what the genre expects.
+#
+#           HOW THEY STAND: say it explicitly, in the same breath, because
+#           anything you leave unsaid the generator will fill with the most
+#           generic two-hander it knows. The pose is an argument about the
+#           book: back to back is one relationship and only one. One of them
+#           half-turned away while the other watches; one holding the other
+#           up; both squared to the viewer and not touching at all; a hand at
+#           an elbow, a grip on a wrist, a body put between the other and
+#           whatever is coming — each says something different, and the right
+#           one is whatever is actually true between these two at the moment
+#           the book is about. If they touch, say exactly where.
+#
+#           Then decide WHICH of the two you describe first, because the
+#           frame pitches the first dark and the second pale — that ordering
+#           is your only lever on the value opposition, and it should follow
+#           whatever the book has already made true of them.
+#
+#   `frame` (role: border) — a MATERIAL OR MOTIF THE BOOK NAMES, stated as a
+#           substance the border can be built out of and repeated along its
+#           length. Not an ornament style ("art deco filigree"), not a mood
+#           ("something menacing") — a thing: what the book's world is made of
+#           at the place the story is about.
+#
+#   `mat`   (role: ground) — the SURFACE THE STORY SITS ON, again a real
+#           material, photographed flat and dark. It is behind everything and
+#           is never the subject; if it reads as an object it has failed (an
+#           early build asked for "slate shot through with hairline fractures"
+#           and got a jellyfish, which then sat behind the entire cover).
+#
+#   palette — out of the text as well. `accent` is the SPOT and it is what the
+#           border and the halo are lit in; `primary` is the metal the
+#           author's name is stamped in.
+#
+# A worked example, deliberately from a book nothing like the one this
+# template was first built for — a whaling-era ghost story set on a becalmed
+# ship, whose leads are a deaf sailmaker and the naturalist she is hiding:
+#
+#   pair  = "Abiah Crowe, forty, broad and sun-scarred, in a tarred canvas
+#            slop-coat with a sail needle on a cord at her throat, standing
+#            square and side-on with her body between the viewer and Dr.
+#            Peale — slight, barely thirty, in a salt-stained linen shirt
+#            with his specimen satchel still strapped across him — who is
+#            half behind her shoulder looking back the way they came. She is
+#            not touching him. Her hand is open at her side, ready to."
+#   frame = "grey whalebone and knotted tarred rope"
+#   mat   = "wet holystoned oak decking, almost black"
+#   accent = the phosphor green of the water at night; primary = brass
+#
+# Same five plates, same layer order, same effects, same arcs, same seated
+# border. A completely different cover, because every noun changed and no
+# structure did. That is the whole design.
+#
+# =============================================================================
+# WHAT THE DIRECTOR STILL CHOOSES, AND NOTHING ELSE
+# =============================================================================
+#   * THREE `{subject}` fills — the ground, the two leads AND THEIR POSE, and
+#     the border — each sourced per the contract above
+#   * five palette hexes, out of the book's own described colour. `text` goes
+#     to true white: the finishing stack costs the type ~25% brightness on its
+#     way down and a bone title lands grey.
+#   * title_font (heavy display) and author_font (the supporting serif the
+#     credit line and tagline also wear)
+#   * the tagline
+#
+# It does NOT choose: placement, scale, blend, opacity, arcs, fit modes,
+# adjust layers, effects, scrim kinds, recipe strength, or layer order. It
+# does not get to add a slot (rule 3). And it does not get to restate the
+# structure a prompt frame already fixed — the frame is not a suggestion the
+# prompt may argue with, it is the sentence the prompt is inserted into.
+#
+# HONEST SCOPE: the skeleton is "two opposed leads inside a bordered void". It
+# fits romantasy, enemies-to-lovers fantasy and gothic romance, and it travels
+# further than that whenever a book genuinely has TWO people at its centre.
+# One lead leaves the composition without its subject and three break rule 1;
+# it also needs a title long enough to stack three lines. It is not a thriller
+# template and it should not be stretched into one.
