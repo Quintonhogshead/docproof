@@ -149,7 +149,14 @@ them is what let a mechanical proofread quietly turn into a copy-edit.
 - **Genre** (`--genre`, `config/genres/`) = *posture*, never a lane switch. The
   taxonomy now covers fiction (`general_fiction`, `literary_memoir`,
   `fantasy_sf`) and non-fiction (`general_nonfiction`, `academic`, `historical`,
-  `religious`) plus `self_help_business`. **Religious/theological non-fiction
+  `religious`) plus `self_help_business` and `poetry`. **Poetry is feather-soft
+  (Quinton, 2026-09-01): verse gets the spelling pass and the spell scan and
+  nothing else.** Line breaks, line-head capitals, fragments, missing or odd
+  punctuation, ellipses, dashes, repetition, coinages, numerals and dialect are
+  the poet's choices. Always compose `--genre poetry --stage poetry-touch`; the
+  stage locks every other lane off so nothing can reopen it, and your own pen
+  files only real-word misspellings — anything else is at most one gentle
+  query, usually silence. **Religious/theological non-fiction
   has its own preset now — never run it under `self_help_business`**, which
   flips edits-mode smoothing and the rewrite lever on (wrong: quoted Scripture
   must not be reworded). No non-fiction preset enables an auto-edit lane;
@@ -306,6 +313,31 @@ context ~150 times. Keep your window lean:
    estimate, style sheet. The letter/style sheet render from `casefile.json` when
    one exists, else straight from the run's `findings.json` (`galley letter`
    builds it either way).
+
+## Lessons from the Redding run (2026-09-01) — doctrine, not suggestions
+
+- **Verify per lane, mechanical first.** Build the mechanical lane, run the change verifier and the
+  finished-text walk on it, THEN add the copy-edit lane and verify again. Damage must be attributable
+  to one lane. The verify gates run as $0 Sonnet session subagents by default (packet = source
+  paragraph + accepted paragraph + the applied edits; walk windows ≈ 50k chars of
+  `paragraph_view_text(accept)` text, position-aligned to source ids); Luna is the optional
+  cross-family confirmation at the end, never the workhorse.
+- **Overlap is a policy, not a composition.** A copy-edit row that overlaps any mechanical span loses
+  (the merge desk now enforces this). Never patch an existing row's replacement with a later
+  suggestion that carries a parenthetical note — notes leak into the manuscript.
+- **Facts are queries.** A "correction" that changes a number, a name, a title, or a quoted line is
+  an author question, never a tracked edit — the flights judge now demotes these; your own pen
+  must too.
+- **Lock labels before the ladder.** Put "Mindset Number N"/"Chapter N"-style labels, epigraph
+  attribution lines, and copyright-page template lines in a `locked` intent zone before any typed
+  pass runs; the number pass will otherwise spell out labels and the terminal-period sweep will
+  punctuate attributions.
+- **Price flights at ~5x the dry-run.** The projection undershot fivefold on a dense self-help
+  manuscript (projected $0.28, billed $1.31); set `--budget` accordingly or expect an overrun line.
+- **Repair clusters are atomic.** Patching one member's text withdraws the cluster to a query;
+  replace the cluster with standalone rows instead.
+- **Regenerate, don't reuse.** Delete `change_verify.json`/`finished_walk.json` before a rebuild;
+  certify now marks older-than-build artifacts stale, but a fresh verify is the only real gate.
 
 ## The traps ledger (all paid for in blood)
 

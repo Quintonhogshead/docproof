@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import re
 
 from .models import (Anchor, CONFIDENCE_RANK, DocumentModel, Finding,
                      index_paragraphs)
@@ -123,6 +124,59 @@ def minimal_regions(original: str, corrected: str
 # either signal identifies it. Used only to give a hand-made decision claim
 # precedence over the machine floor on a contested span (see validate_findings).
 _IMPORT_ID_PREFIXES = ("import", "replay", "curated")
+
+
+# --- number labels are not prose numbers -------------------------------------
+#
+# The typed number_style pass spells a numeral out when it reads as a count in a
+# sentence ("she had 3 dogs" -> "three dogs"). A LABEL is not that: "Mindset
+# Number 23" is the name of a section, and the Redding Book 1 run rewrote it as
+# "Mindset Number twenty-three" — an edit no house style asks for and no reader
+# would accept. A numbered label is identified three ways: a labelling noun
+# followed by its number, a list marker opening the line, and a heading.
+_NUMBER_LABEL = re.compile(
+    r"\b(Mindset|Chapter|Part|Number|Step|Day|Week|Lesson|Figure|Table"
+    r"|Section)\s+\d+")
+_LIST_LABEL = re.compile(r"^\s*\d+\)")
+_HEADING_STYLES = ("heading", "title", "subtitle")
+
+
+def _line_at(text: str, pos: int) -> tuple[int, str]:
+    """The line containing `pos`, and where it starts. A canonical paragraph
+    keeps its w:br line breaks, so a label can sit on its own line inside an
+    otherwise ordinary paragraph."""
+    start = text.rfind("\n", 0, pos) + 1
+    stop = text.find("\n", pos)
+    stop = len(text) if stop == -1 else stop
+    return start, text[start:stop]
+
+
+def _looks_like_heading(style: str, line: str) -> bool:
+    st = (style or "").strip().lower()
+    if st.startswith(_HEADING_STYLES):
+        return True
+    t = line.strip().rstrip("\"'”’)")
+    if not t or len(t) > 60 or t[-1] in ".!?…,;:":
+        return False
+    words = t.split()
+    if len(words) > 8:
+        return False
+    lead = sum(1 for w in words if w[:1].isupper() or w[:1].isdigit())
+    return lead / len(words) > 0.6
+
+
+def _is_number_label(para, start: int, end: int) -> bool:
+    """Whether the span [start, end) of this paragraph is part of a label
+    rather than a number in a sentence."""
+    text = para.text
+    if any(_overlaps(start, end, m.start(), m.end())
+           for m in _NUMBER_LABEL.finditer(text)):
+        return True
+    line_start, line = _line_at(text, start)
+    m = _LIST_LABEL.match(line)
+    if m and start < line_start + m.end():
+        return True
+    return _looks_like_heading(getattr(para, "style", ""), line)
 
 
 def _is_imported(f: Finding) -> bool:
@@ -278,6 +332,18 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
         # byte-identical to `deleted`, so nothing changes on that path.)
         anchor = Anchor(start=start, end=end,
                         delete_text=para.text[start:end], insert_text=inserted)
+
+        # 2.45 — number labels. A number_style edit that lands on a LABEL — a
+        # "Mindset Number 23", a "1)" list marker, a heading — is refused
+        # outright: the numeral is part of a name, not a count in a sentence,
+        # and spelling it out renames the section. Its own status, so the
+        # report says why rather than filing it with the anchor failures.
+        if f.error_type == "number_style" and _is_number_label(para, start, end):
+            out.append(_status(f, "rejected_policy", anchor))
+            log.info("%s (number_style): refused — %r is a label, not a "
+                     "number in a sentence", f.finding_id,
+                     para.text[max(0, start - 20):end + 10])
+            continue
 
         # 2.5 — overreach guard. A proofreading fix is minimal; an edit that
         # re-types a large span or adds a lot of new text is the model

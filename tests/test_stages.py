@@ -24,7 +24,7 @@ from docproof.stages import (LOCKABLE_KEYS, apply_stage, available_stages,
 CONFIG = Path(__file__).parent.parent / "config" / "default.yaml"
 
 SHIPPED_STAGES = ("copyedit-wave", "external-judgment", "final-replay",
-                  "mechanical-wave")
+                  "mechanical-wave", "poetry-touch")
 
 
 def test_available_stages_lists_every_shipped_preset():

@@ -10,6 +10,8 @@ become a tracked change, and counted so the rejection stays visible.
 """
 from __future__ import annotations
 
+import pytest
+
 from docproof.config import EditGuardConfig, load_config
 from docproof.models import DocumentModel, Finding, ParagraphRef
 from docproof.validator import validate_findings
@@ -154,3 +156,73 @@ def test_a_space_deletion_beside_punctuation_is_not_a_merge():
     out = validate_findings([_finding(original, corrected)], doc, "medium",
                             edit_guard=GUARD)
     assert out[0].status == "validated"
+
+
+# --- number labels are not prose numbers (Redding Book 1, 2026-09-01) --------
+#
+# The typed number_style pass spelled out the numeral in "Mindset Number 23",
+# renaming a section of the book. A numeral that is part of a LABEL — a
+# labelling noun and its number, a list marker, a heading — is refused outright.
+
+def _number_status(text: str, original: str, corrected: str,
+                   style: str = "Normal") -> str:
+    para = ParagraphRef("body-0000", "word/document.xml", "body", text, style)
+    doc = DocumentModel(source_path="x.docx", paragraphs=(para,))
+    f = Finding(finding_id="f-0001", chunk_id="chunk-000", para_id="body-0000",
+                error_type="number_style", original_text=original, occurrence=1,
+                corrected_text=corrected, explanation="x", confidence="high")
+    return validate_findings([f], doc, "medium", edit_guard=GUARD)[0].status
+
+
+def test_a_labelled_number_is_refused_by_policy():
+    assert _number_status(
+        "Mindset Number 23 is the one that finally landed.",
+        "Mindset Number 23 is the one that finally landed.",
+        "Mindset Number twenty-three is the one that finally landed."
+    ) == "rejected_policy"
+
+
+@pytest.mark.parametrize("label", [
+    "Chapter 4", "Part 2", "Step 7", "Day 3", "Week 12", "Lesson 9",
+    "Figure 5", "Table 1", "Section 6",
+])
+def test_every_labelling_noun_is_refused(label):
+    noun, number = label.split()
+    text = f"{label} was the hardest one to write."
+    corrected = text.replace(number, "four" if number == "4" else "seven")
+    assert _number_status(text, text, corrected) == "rejected_policy"
+
+
+def test_a_list_marker_is_refused():
+    assert _number_status("3) Keep the receipts in one place.",
+                          "3) Keep the receipts in one place.",
+                          "Three) Keep the receipts in one place."
+                          ) == "rejected_policy"
+
+
+def test_a_heading_is_refused():
+    assert _number_status("The 3 Rules of Rest", "The 3 Rules of Rest",
+                          "The Three Rules of Rest", style="Heading1"
+                          ) == "rejected_policy"
+
+
+def test_an_ordinary_prose_number_still_gets_styled():
+    assert _number_status("She counted 3 dogs on the porch that morning.",
+                          "She counted 3 dogs on the porch that morning.",
+                          "She counted three dogs on the porch that morning."
+                          ) == "validated"
+
+
+def test_the_policy_gate_only_applies_to_number_style():
+    """A typo fix inside a labelled line is still a typo fix."""
+    para = ParagraphRef("body-0000", "word/document.xml", "body",
+                        "Mindset Number 23 is teh one that landed.", "Normal")
+    doc = DocumentModel(source_path="x.docx", paragraphs=(para,))
+    f = Finding(finding_id="f-0001", chunk_id="chunk-000", para_id="body-0000",
+                error_type="spelling",
+                original_text="Mindset Number 23 is teh one that landed.",
+                occurrence=1,
+                corrected_text="Mindset Number 23 is the one that landed.",
+                explanation="x", confidence="high")
+    assert validate_findings([f], doc, "medium",
+                             edit_guard=GUARD)[0].status == "validated"

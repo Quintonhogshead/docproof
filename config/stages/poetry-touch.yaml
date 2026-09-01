@@ -1,0 +1,83 @@
+# Stage preset: poetry touch — feather-soft. Spelling only.
+#
+# Verse is not prose. Line breaks, capitals at line heads, sentence fragments,
+# absent or unconventional punctuation, ellipses, dashes, repeated words,
+# invented compounds, numerals, dialect — every one of those is a poet's choice
+# and none of them is an error. The only thing a proofreader may touch in a
+# poem without the poet is a misspelling of a real word. So this stage runs the
+# spelling typed pass and the deterministic spell scan and nothing else: no
+# comma rules, no number style, no capitalization, no sweeps, no LanguageTool,
+# no repair, no smoothing, no rewrite, no consistency queries, no gates that
+# would have nothing to gate. Every lane is LOCKED so a genre applied on top
+# cannot reopen it.
+#
+# Compose:  docproof galley genre-pack poetry --stage poetry-touch --out runs/book/poetry.yaml
+# The practitioner's own pen follows the same rule: a real-word misspelling is a
+# row; anything else is at most one gentle query, and usually silence.
+name: poetry-touch
+description: >
+  Feather-soft proofread for verse: the spelling pass and the spell scan only.
+  Punctuation, capitalization, line breaks, fragments, repetition, numerals and
+  dialect are the poet's; every other lane is off and locked.
+
+patch:
+  error_types:
+    - spelling
+  sweeps: []
+  ensemble:
+    detectors: []
+    verify_policy: none
+  languagetool:
+    enabled: false
+  spellcheck:
+    enabled: true
+  consistency:
+    enabled: false
+  glossary:
+    enabled: false
+  residuals:
+    enabled: false
+  recurrence:
+    enabled: false
+  repair:
+    enabled: false
+  smoothing:
+    enabled: false
+    edits: false
+  rewrite:
+    enabled: false
+  flights:
+    posture: strict
+  meaning_check:
+    enabled: false
+  fix_check:
+    enabled: false
+  factcheck:
+    enabled: false
+  continuity:
+    enabled: false
+  chapter_continuity:
+    enabled: false
+  chapter_sweep:
+    enabled: false
+  sapling:
+    enabled: false
+  storysheet:
+    enabled: false
+  toccheck:
+    enabled: false
+  speaker_split:
+    enabled: false
+  candidate_screening:
+    mode: 'off'
+  low_confidence:
+    confirm: false
+
+locks:
+  - smoothing.enabled
+  - smoothing.edits
+  - rewrite.enabled
+  - repair.enabled
+  - ensemble.verify_policy
+  - sapling.enabled
+  - chapter_sweep.enabled

@@ -40,6 +40,7 @@ STATUS_WORDS = {
     # finding carries its own, so every status a finding can hold needs a word.
     "rejected_oversized": "A real catch, but too large a fix to make for you",
     "rejected_by_verifier": "Set aside by the second reader",
+    "rejected_policy": "Refused by house policy — the number is part of a label",
 }
 
 _WORDS = re.compile(r"\s+")

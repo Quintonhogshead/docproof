@@ -1,0 +1,18 @@
+# Posture preset: poetry.
+#
+# The softest posture on the shelf. Poetry is never run under a prose stage:
+# pair this genre with `--stage poetry-touch`, which holds every lane but
+# spelling shut and locked. This overlay only sets what a genre may set — the
+# stylistic posture — and sets all of it to "offer nothing": strict flights,
+# no smoothing, no rewrite. Mechanics rules do not apply to verse at all; the
+# stage, not the genre, is what enforces that.
+name: poetry
+description: >
+  Feather-soft: verse is proofread for real-word misspellings only. Strict
+  flights posture, no smoothing, no rewrite — and always composed with
+  `--stage poetry-touch`, which locks every other lane off.
+
+overlay:
+  flights.posture: strict
+  smoothing.enabled: false
+  rewrite.enabled: false

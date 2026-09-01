@@ -23,6 +23,10 @@ STATUSES = (
     # The overseer-verifier judged this finding a false positive; kept for the
     # report with the verifier's reason, never applied.
     "rejected_by_verifier",
+    # A house policy refuses this class of edit outright, however well the
+    # model argued it — a number_style rewrite of a numbered LABEL ("Mindset
+    # Number 23"), which renames a section rather than styling a count.
+    "rejected_policy",
     "skipped_low_confidence",
 )
 

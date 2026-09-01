@@ -1480,8 +1480,19 @@ class EnsembleConfig(BaseModel):
     An empty `detectors` list is the default and means single-detector mode:
     api.model runs once, nothing is merged, no verifier runs — byte-for-byte the
     behaviour that shipped before the ensemble existed. The moment `detectors`
-    is non-empty the fan-out, merge and (optional) verifier turn on."""
+    is non-empty the fan-out, merge and (optional) verifier turn on.
+
+    `enabled: false` in the YAML is an explicit OFF switch that wins over a
+    populated `detectors` list. A materialized genre pack writes that key, and
+    until v0.182.0 it was accepted and then ignored — the pack said the ensemble
+    was off and the run fanned out to every detector in it anyway."""
     detectors: list[DetectorSpec] = Field(default_factory=list)
+    # The YAML key is `enabled`; the field is named apart from it because
+    # `enabled` is the property below — the one every consumer reads. None (the
+    # default) means "decide from `detectors`", which is the historical
+    # behaviour; False forces the ensemble off; True is accepted and still
+    # requires detectors to fan out to (there is nothing to run without them).
+    enabled_override: bool | None = Field(default=None, alias="enabled")
     # The overseer. None disables verification whatever verify_policy says.
     # Meant to be a stronger model than the detectors, thinking harder — it sees
     # far fewer calls (one per disputed finding, not per chunk), so it is a small
@@ -1497,8 +1508,12 @@ class EnsembleConfig(BaseModel):
     # promotion is earned.
     consensus_confidence_bump: bool = False
 
+    model_config = ConfigDict(populate_by_name=True)
+
     @property
     def enabled(self) -> bool:
+        if self.enabled_override is False:
+            return False
         return len(self.detectors) > 0
 
     @property

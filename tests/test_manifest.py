@@ -262,6 +262,65 @@ def test_certify_verify_gates_surface_a_recorded_reason(tmp_path):
     assert reason in _certify_finished_walk(tmp_path).detail
 
 
+# --- a verify artifact older than the findings it claims to have read --------
+#
+# Redding Book 1 (2026-09-01): the deliverable was rebuilt after `galley verify`
+# ran, and certify reported the PREVIOUS build's clean read over the new build's
+# edits. A stale artifact is a skip, never a verdict.
+
+def _clean_verify_records(run: Path) -> None:
+    (run / "change_verify.json").write_text(json.dumps(
+        {"ran": True, "applied_edits": 3, "problems": []}))
+    (run / "finished_walk.json").write_text(json.dumps(
+        {"ran": True, "residuals": []}))
+
+
+def test_certify_skips_verify_artifacts_older_than_the_findings(tmp_path):
+    import os
+    from galley.manifest import _certify_change_verify, _certify_finished_walk
+    _clean_verify_records(tmp_path)
+    (tmp_path / "findings.json").write_text(json.dumps({"findings": []}))
+    # The rebuild wrote findings.json after both verify artifacts.
+    old = 1_700_000_000
+    for name in ("change_verify.json", "finished_walk.json"):
+        os.utime(tmp_path / name, (old, old))
+    os.utime(tmp_path / "findings.json", (old + 3600, old + 3600))
+    for check in (_certify_change_verify(tmp_path),
+                  _certify_finished_walk(tmp_path)):
+        assert check.status == "skip"
+        assert "stale" in check.detail and "galley verify" in check.detail
+
+
+def test_certify_reads_generated_at_over_mtimes(tmp_path):
+    """A copied run directory loses its mtimes; the recorded timestamps still
+    say which build each artifact belongs to."""
+    from galley.manifest import _certify_change_verify, _certify_finished_walk
+    (tmp_path / "change_verify.json").write_text(json.dumps(
+        {"generated_at": "2026-09-01T10:00:00+00:00", "ran": True,
+         "applied_edits": 3, "problems": []}))
+    (tmp_path / "finished_walk.json").write_text(json.dumps(
+        {"generated_at": "2026-09-01T10:00:00+00:00", "ran": True,
+         "residuals": []}))
+    (tmp_path / "findings.json").write_text(json.dumps(
+        {"generated_at": "2026-09-01T12:00:00+00:00", "findings": []}))
+    assert _certify_change_verify(tmp_path).status == "skip"
+    assert _certify_finished_walk(tmp_path).status == "skip"
+
+
+def test_certify_keeps_a_verify_record_written_after_the_findings(tmp_path):
+    from galley.manifest import _certify_change_verify, _certify_finished_walk
+    (tmp_path / "findings.json").write_text(json.dumps(
+        {"generated_at": "2026-09-01T10:00:00+00:00", "findings": []}))
+    (tmp_path / "change_verify.json").write_text(json.dumps(
+        {"generated_at": "2026-09-01T12:00:00+00:00", "ran": True,
+         "applied_edits": 3, "problems": []}))
+    (tmp_path / "finished_walk.json").write_text(json.dumps(
+        {"generated_at": "2026-09-01T12:00:00+00:00", "ran": True,
+         "residuals": []}))
+    assert _certify_change_verify(tmp_path).status == "pass"
+    assert _certify_finished_walk(tmp_path).status == "pass"
+
+
 def test_certify_verify_gates_without_ran_field_still_pass_a_clean_record(tmp_path):
     from galley.manifest import _certify_change_verify, _certify_finished_walk
     (tmp_path / "change_verify.json").write_text(json.dumps(

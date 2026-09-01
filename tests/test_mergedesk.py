@@ -105,18 +105,11 @@ def test_mechanical_wins_a_contested_span_by_default():
     assert rule.reason == "manufactured dirt"
 
 
-def test_clean_rewrite_subsumes_the_overlapping_mechanical_fix():
-    doc = _doc("It was late, we left.")
-    mech = [_finding("m-1", "body-0000", "It was late, we left.",
-                     "It was late. We left.")]
-    ce = [_finding("c-1", "body-0000", "It was late, we left.",
-                   "It was very late, so we left.", lane="copyedit")]
-    result = md.merge_lanes(mech, ce, doc, rewrite_checker=ALWAYS_CLEAN)
-    statuses = {f.finding_id: f.status for f in result.validated}
-    assert statuses["c-1"] == "validated"
-    assert statuses["m-1"] == "rejected_overlap"
-    rule = next(r for r in result.ledger if r.winner_id == "c-1")
-    assert rule.rule == "rewrite_clean" and rule.loser_id == "m-1"
+# A clean rewrite no longer subsumes an overlapping mechanical fix merely by
+# being clean — it must also already make that fix verbatim. See
+# `test_true_subsumption_with_a_clean_rewrite_is_still_allowed` and
+# `test_a_clean_rewrite_that_does_not_repeat_the_mechanical_fix_still_loses`
+# below, which replace the old "clean is enough" test.
 
 
 def test_rewrite_is_clean_fails_closed_when_languagetool_unavailable(monkeypatch):
@@ -280,3 +273,179 @@ def test_iterate_until_clean_is_a_noop_when_the_merge_is_already_clean():
     assert reports == []
     assert [f.finding_id for f in merged.findings] == \
         [f.finding_id for f in result.findings]
+
+
+# --- strict cross-lane non-overlap (the 2026-09-01 corruption) ---------------------
+
+def test_a_clean_rewrite_that_does_not_repeat_the_mechanical_fix_still_loses():
+    # The strict rule: cleanliness alone no longer buys a copy-edit row an
+    # overlapping mechanical row's span. This rewrite passes every $0 check and
+    # still loses, because it does not itself make the mechanical fix.
+    doc = _doc("She recieved the letter, she read it twice.")
+    mech = [_finding("m-1", "body-0000", "recieved", "received")]
+    ce = [_finding("c-1", "body-0000", "She recieved the letter, she read it twice.",
+                   "She recieved the letter and read it twice.", lane="copyedit")]
+    result = md.merge_lanes(mech, ce, doc, rewrite_checker=ALWAYS_CLEAN)
+    statuses = {f.finding_id: f.status for f in result.validated}
+    assert statuses["m-1"] == "validated"
+    assert statuses["c-1"] == "rejected_overlap"
+    assert "c-1" not in {f.finding_id for f in result.findings}
+    rec = next(r for r in result.ledger if r.loser_id == "c-1")
+    assert rec.rule == "mechanical_default"
+    assert rec.policy == md.STRICT_MECHANICS
+    assert rec.reason == md.NO_SUBSUMPTION
+
+
+def test_disjoint_minimal_diffs_inside_one_rewritten_sentence_do_not_compose():
+    # The production failure itself: the mechanical fix and the rewrite touch
+    # DIFFERENT characters, so their shrunk spans miss each other and the
+    # validator would have let both land — composing "was was". The copy-edit
+    # row claims its whole quote, so the two are contested and only one lands.
+    doc = _doc("The response was corrupted and the text read badly.")
+    mech = [_finding("m-1", "body-0000", "The response was corrupted",
+                     "The response was was corrupted")]
+    ce = [_finding("c-1", "body-0000",
+                   "The response was corrupted and the text read badly.",
+                   "The response was corrupted, and the text read badly.",
+                   lane="copyedit")]
+    result = md.merge_lanes(mech, ce, doc, rewrite_checker=ALWAYS_CLEAN)
+    landed = [f for f in result.validated if f.status == "validated"]
+    assert [f.finding_id for f in landed] == ["m-1"]
+    assert md.scan_artifacts(result.validated, doc) == []
+
+
+def test_true_subsumption_with_a_clean_rewrite_is_still_allowed():
+    # The rewrite already contains the mechanical row's corrected text
+    # verbatim, so it MAKES that fix rather than racing it — and it passes the
+    # $0 checks. Only then does the mechanical row step aside.
+    doc = _doc("She recieved the letter, she read it twice.")
+    mech = [_finding("m-1", "body-0000", "recieved", "received")]
+    ce = [_finding("c-1", "body-0000", "She recieved the letter, she read it twice.",
+                   "She received the letter and read it twice.", lane="copyedit")]
+    result = md.merge_lanes(mech, ce, doc, rewrite_checker=ALWAYS_CLEAN)
+    statuses = {f.finding_id: f.status for f in result.validated}
+    assert statuses["c-1"] == "validated"
+    assert statuses["m-1"] == "rejected_overlap"
+    assert "m-1" not in {f.finding_id for f in result.findings}
+    rec = next(r for r in result.ledger if r.winner_id == "c-1")
+    assert rec.rule == "rewrite_clean" and rec.loser_id == "m-1"
+
+
+def test_a_dirty_rewrite_loses_even_when_it_would_have_subsumed():
+    doc = _doc("She recieved the letter, she read it twice.")
+    mech = [_finding("m-1", "body-0000", "recieved", "received")]
+    ce = [_finding("c-1", "body-0000", "She recieved the letter, she read it twice.",
+                   "She received the letter and read it twice.", lane="copyedit")]
+    result = md.merge_lanes(mech, ce, doc, rewrite_checker=ALWAYS_DIRTY)
+    statuses = {f.finding_id: f.status for f in result.validated}
+    assert statuses["m-1"] == "validated" and statuses["c-1"] == "rejected_overlap"
+
+
+def test_same_lane_overlap_keeps_the_earlier_finding():
+    doc = _doc("It was late, we left for home.")
+    ce = [
+        _finding("c-1", "body-0000", "It was late, we left for home.",
+                 "It was late, so we left for home.", lane="copyedit"),
+        _finding("c-2", "body-0000", "It was late, we left for home.",
+                 "Because it was late, we left for home.", lane="copyedit"),
+    ]
+    result = md.merge_lanes([], ce, doc, rewrite_checker=ALWAYS_CLEAN)
+    statuses = {f.finding_id: f.status for f in result.validated}
+    assert statuses["c-1"] == "validated"
+    assert statuses["c-2"] == "rejected_overlap"
+    rec = next(r for r in result.ledger if r.loser_id == "c-2")
+    assert rec.rule == "same_lane_overlap" and rec.policy == md.SAME_LANE
+    assert [f.finding_id for f in result.findings] == ["c-1"]
+
+
+def test_two_mechanical_rows_on_one_span_do_not_both_land():
+    doc = _doc("It was late, we left for home.")
+    mech = [
+        _finding("m-1", "body-0000", "It was late, we left for home.",
+                 "It was late. We left for home."),
+        _finding("m-2", "body-0000", "It was late, we left for home.",
+                 "It was late; we left for home."),
+    ]
+    result = md.merge_lanes(mech, [], doc)
+    landed = [f.finding_id for f in result.validated if f.status == "validated"]
+    assert landed == ["m-1"]
+    assert next(r for r in result.ledger if r.loser_id == "m-2").rule == \
+        "same_lane_overlap"
+
+
+def test_no_two_overlapping_findings_ever_reach_validated():
+    doc = _doc("It was late, we left for home and slept.")
+    mech = [_finding("m-1", "body-0000", "late, we", "late. We"),
+            _finding("m-2", "body-0000", "It was late, we left for home",
+                     "It was late, and we left for home")]
+    ce = [_finding("c-1", "body-0000", "It was late, we left for home and slept.",
+                   "It was late; we left for home and slept.", lane="copyedit")]
+    result = md.merge_lanes(mech, ce, doc, rewrite_checker=ALWAYS_CLEAN)
+    spans = sorted((f.anchor.start, f.anchor.end) for f in result.validated
+                   if f.status == "validated")
+    for (s1, e1), (s2, e2) in zip(spans, spans[1:]):
+        assert not md._overlaps(s1, e1, s2, e2)
+
+
+# --- convergence: a split member's parent is what gets dropped --------------------
+
+def test_dropping_a_split_member_drops_its_parent_and_converges():
+    # `validate_findings` splits a wide row into one tracked change per minimal
+    # region ("c-1" -> "c-1", "c-1b"), and only the SECOND region is the one
+    # that composes a doubled space. Dropping the derived id alone left the
+    # parent in the working set, which re-derived the identical member every
+    # iteration until the bound was exhausted — the "did not converge —
+    # UNRESOLVED" loop from the 2026-09-01 run. The parent must go.
+    doc = _doc("the cat sat on the mat by the fire")
+    wide = _finding("c-1", "body-0000", "the cat sat on the mat",
+                    "The cat sat on the  mat", lane="copyedit")
+    from docproof.validator import validate_findings
+    probe = validate_findings([wide], doc, "medium")
+    ids = [f.finding_id for f in probe if f.status == "validated"]
+    assert ids == ["c-1", "c-1b"], ids     # the split this test depends on
+
+    merged, reports = md.iterate_until_clean(md.MergeResult(findings=[wide]), doc)
+    assert [r.resolved for r in reports] == [True]
+    assert reports[0].dropped_id == "c-1"          # the parent, not "c-1b"
+    assert len(reports) == 1                        # never reported twice
+    assert merged.findings == []
+    assert md.scan_artifacts(merged.validated, doc) == []
+
+
+def test_convergence_keeps_the_innocent_edits_in_the_same_paragraph():
+    doc = _doc("the cat sat on the mat by the fire")
+    wide = _finding("c-1", "body-0000", "the cat sat on the mat",
+                    "The cat sat on the  mat", lane="copyedit")
+    other = _finding("m-1", "body-0000", "the fire", "the hearth")
+    merged, reports = md.iterate_until_clean(
+        md.MergeResult(findings=[wide, other]), doc)
+    assert [f.finding_id for f in merged.findings] == ["m-1"]
+    assert all(r.resolved for r in reports) and len(reports) == 1
+    assert md.scan_artifacts(merged.validated, doc) == []
+
+
+def test_an_unresolved_artifact_names_the_offending_finding_ids():
+    # Every edit in the paragraph is a cluster member, so none is droppable
+    # (rule (a): a cluster is claimed whole) — the loop must give up and SAY
+    # which findings are in play rather than only which paragraph.
+    doc = _doc("the cat sat on the mat by the fire")
+    a = _finding("r-1", "body-0000", "the cat", "the  cat",
+                 cluster_id="rp-c-0001", error_type="repair")
+    b = _finding("r-2", "body-0000", "the fire", "the hearth",
+                 cluster_id="rp-c-0001", error_type="repair")
+    merged, reports = md.iterate_until_clean(md.MergeResult(findings=[a, b]), doc)
+    unresolved = [r for r in reports if not r.resolved]
+    assert unresolved and set(unresolved[0].finding_ids) >= {"r-1"}
+    assert [f.finding_id for f in merged.findings] == ["r-1", "r-2"]
+
+
+def test_iterate_until_clean_carries_the_claim_rules_rejects_through():
+    doc = _doc("She recieved the letter, she read it twice.")
+    mech = [_finding("m-1", "body-0000", "recieved", "received")]
+    ce = [_finding("c-1", "body-0000", "She recieved the letter, she read it twice.",
+                   "She recieved the letter and read it twice.", lane="copyedit")]
+    result = md.merge_lanes(mech, ce, doc, rewrite_checker=ALWAYS_CLEAN)
+    merged, reports = md.iterate_until_clean(result, doc)
+    assert reports == []
+    statuses = {f.finding_id: f.status for f in merged.validated}
+    assert statuses == {"m-1": "validated", "c-1": "rejected_overlap"}

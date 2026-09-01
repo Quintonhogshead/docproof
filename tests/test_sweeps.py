@@ -327,13 +327,6 @@ def test_deity_leaves_these_alone(text):
 # --- dialogue splice ---------------------------------------------------------
 
 @pytest.mark.parametrize("before,after", [
-    # a tag after a sentence-final quote, joined to the next quote by a comma
-    ('“Of course!” Raymond said, “Anything for you.”',
-     '“Of course!” Raymond said. “Anything for you.”'),
-    ('“This is amazing!” she continued, “I called in.”',
-     '“This is amazing!” she continued. “I called in.”'),
-    ('“Do you?” he asked angrily, “Do you understand?”',
-     '“Do you?” he asked angrily. “Do you understand?”'),
     # a physical-action beat mistaken for a tag
     ('“At this point,” Raymond smiled.', '“At this point.” Raymond smiled.'),
     ('“Yeah,” she nodded.', '“Yeah.” She nodded.'),
@@ -349,6 +342,20 @@ def test_dialogue_splice(before, after):
     "“Really?” she asked, tilting her head.",          # tag + participial, not a quote
 ])
 def test_dialogue_splice_leaves_these_alone(text):
+    assert unchanged("sweep_dialogue_splice", text)
+
+
+# Redding Book 1 (2026-09-01): the comma of a tag standing immediately before an
+# opening quotation mark INTRODUCES the speech and is correct. The sweep used to
+# turn it into a period, writing "He said. “Well then…" into a real book.
+@pytest.mark.parametrize("text", [
+    '“Is that so?” He said, “Well then, we had better hurry.”',
+    '“You think?” Bodhi said, “You might want to sit down.”',
+    '“Of course!” Raymond said, “Anything for you.”',
+    '“This is amazing!” she continued, “I called in.”',
+    '“Do you?” he asked angrily, “Do you understand?”',
+])
+def test_a_tag_comma_before_an_opening_quote_is_never_a_period(text):
     assert unchanged("sweep_dialogue_splice", text)
 
 
@@ -599,6 +606,32 @@ def test_terminal_period_lands_inside_a_closing_quote():
     "The Star Thief and the Winter Court",       # title case, no prose shape
 ])
 def test_terminal_period_leaves_these_alone(text):
+    assert _sweep_terminal_period(text) == []
+
+
+# Redding Book 1 (2026-09-01): lines that are not sentences and were given a
+# period anyway — an epigraph attribution, a dedication, a copyright-page
+# template line, a display line on the half-title.
+@pytest.mark.parametrize("text", [
+    # An epigraph whose last line is the attribution — dashed, or a bare name.
+    "We are what we repeatedly do, so excellence is not an act\n—Aristotle",
+    "The only way out is through, and the way through is together"
+    "\nAlexandra Redding",
+    "- T. S. Eliot",
+    "– Ursula K. Le Guin",
+    # Copyright-page template lines, with and without the colon.
+    "Cover design by Rafael Andres and interior layout by the Atmosphere "
+    "Press design team",
+    "Interior design and typesetting by the Atmosphere Press team, with "
+    "thanks to everyone",
+    "Printed in the United States of America by a union shop in Ohio state",
+    "ISBN 978 1 63988 000 0, also available as an ebook from every retailer",
+    # Display lines: short, and carrying no punctuation of their own.
+    "For my mother and my father",
+    "A Novel of the Broken Coast",
+    "The wind kept blowing all night\nAlexandra Redding",
+])
+def test_terminal_period_never_punctuates_a_non_sentence(text):
     assert _sweep_terminal_period(text) == []
 
 

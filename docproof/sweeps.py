@@ -534,6 +534,61 @@ _CLOSERS = "”’\"')]"
 # the Purpura beta got a period appended to the book's title page.
 _INTERNAL_END = re.compile(r"[.!?…][\"”’')\]]?\s+[\"“‘'(\[]?[A-Z0-9]")
 
+# Lines that are NOT sentences and must never be given a period, whatever
+# else they look like. Every one of these came off the Redding Book 1 run,
+# where the sweep punctuated an epigraph attribution, a dedication and two
+# copyright-page lines.
+#
+# 1. An attribution opens with a dash — "—Marcus Aurelius", "- T. S. Eliot".
+_ATTRIBUTION_DASH = re.compile(r"^[-–—]")
+# 2. A copyright/front-matter template line names its field. Most carry a
+#    colon (already refused above), but the same line is written without one
+#    just as often ("Cover design by Rafael Andres", "ISBN 978-1-..."), and it
+#    is no more a sentence for the colon's absence.
+_TEMPLATE_LINE = re.compile(
+    r"^(cover design|cover art|cover photo|cover illustration|interior design"
+    r"|interior layout|book design|typeset|edited by|editing|proofread"
+    r"|printed in|published by|publisher|first edition|first printing|isbn"
+    r"|library of congress|copyright|all rights reserved|a note|for more"
+    r"|visit|www\.|https?://)\b", re.I)
+# 3. A proper-name-only line: an attribution, a dedication, a byline. Particles
+#    stay lowercase in a name and must not disqualify it.
+_NAME_WORD = re.compile(r"^[A-Z][\w'’.\-]*$")
+_NAME_PARTICLES = frozenset({
+    "de", "del", "della", "der", "di", "du", "la", "le", "van", "von", "bin",
+    "al", "ibn", "y", "of", "the",
+})
+# Marks that make a line read as a sentence rather than a display line. An
+# apostrophe between letters is not one of them (see _has_internal_punct).
+_DISPLAY_PUNCT = ",;:!?.…—–\"“”‘()[]{}"
+
+
+def _has_internal_punct(s: str) -> bool:
+    """Whether the line carries punctuation of its own — the thing a display
+    line (a title, a heading, a dedication, a signature) does not have."""
+    if any(ch in _DISPLAY_PUNCT for ch in s):
+        return True
+    for m in re.finditer(r"[’']", s):
+        i = m.start()
+        in_word = (i > 0 and s[i - 1].isalpha()
+                   and i + 1 < len(s) and s[i + 1].isalpha())
+        if not in_word:
+            return True
+    return False
+
+
+def _is_name_only_line(line: str) -> bool:
+    """Whether the line is nothing but a proper name — "Marcus Aurelius",
+    "T. S. Eliot", "Ursula K. Le Guin". Those end an epigraph or a dedication
+    and take no period."""
+    words = line.split()
+    if not words or len(words) > 5:
+        return False
+    if not any(_NAME_WORD.match(w) for w in words):
+        return False
+    return all(_NAME_WORD.match(w) or w.lower() in _NAME_PARTICLES
+               for w in words)
+
 
 def _sweep_terminal_period(text: str, variant=None) -> list[Hit]:
     """A body paragraph of prose that runs off the end without terminal
@@ -562,6 +617,23 @@ def _sweep_terminal_period(text: str, variant=None) -> list[Hit]:
     if not (s[0].isupper() or s[0] in "\"“‘'"):     # sentences open like sentences
         return []
     if ":" in s:                                    # a label or definition, not prose
+        return []
+    # Not a sentence at all — an attribution, a front-matter template line, a
+    # name standing on its own. Checked on the paragraph AND on its last line:
+    # an epigraph is one paragraph whose final line is the attribution, and it
+    # is that line the period would land on.
+    lines = [ln for ln in s.split("\n") if ln.strip()]
+    last_line = lines[-1].strip() if lines else s
+    if _ATTRIBUTION_DASH.match(s) or _ATTRIBUTION_DASH.match(last_line):
+        return []
+    if _TEMPLATE_LINE.match(s) or _TEMPLATE_LINE.match(last_line):
+        return []
+    if _is_name_only_line(last_line):
+        return []
+    # A display line — a title, a heading, a dedication, a stand-alone label —
+    # is short and carries no punctuation of its own. Prose that short always
+    # carries something (a comma, a quote, an internal stop).
+    if len(words) <= 8 and not _has_internal_punct(s):
         return []
     tail = words[-1]
     if tail.isupper() and len(tail) <= 3:           # an acronym or initial, not a word
@@ -974,19 +1046,20 @@ def _sweep_deity_capital(text: str, variant=None) -> list[Hit]:
     return hits
 
 
-# --- dialogue splice: tag after a complete quoted sentence --------------------
-
-# A reporting verb (optionally with one adverb) that sits between a
-# sentence-final quote and the NEXT opening quote, joined to it by a comma:
+# --- dialogue splice: an action beat mistaken for a tag -----------------------
+#
+# RETIRED, Redding Book 1 (2026-09-01): this sweep also used to turn the comma
+# of a tag standing between two quotations into a period —
 #   "Of course!" Raymond said, "Anything for you."
-# The first quote ended the sentence (! or ?), so the tag closes it with a
-# period, and the second quote opens a new one — the comma is a splice.
-_SPLICE_TAG = re.compile(
-    r"(?P<end>[!?][”\"’'])[  ]+"
-    r"(?P<subject>[A-Z][\w'’]*|he|she|they|we|it|you)"
-    r"(?:[  ]+(?P<verb>[A-Za-z][\w'’]*))"
-    r"(?:[  ]+(?P<adverb>[A-Za-z]+ly))?"
-    r"(?P<comma>,)[  ]+(?=[“\"‘])")
+#      ->  "Of course!" Raymond said. "Anything for you."
+# on the theory that the first quote's ! had already ended the sentence. Over a
+# real book that rule wrote "He said. “Well then…" and "Bodhi said. “You
+# might…": a comma standing immediately before an opening quotation mark is the
+# comma that INTRODUCES the speech, and it is correct. A reporting verb followed
+# straight by an opening quote therefore never has its comma rewritten here. The
+# genuinely spliced pair of quoted sentences is a judgment call and belongs to
+# the dialogue_tag error type, which can weigh what the second quotation does.
+# Only the action-beat half of this sweep remains.
 
 # Physical-action verbs that CANNOT take speech as their object, so a comma
 # before them inside a quote is a run-on, not a tag: the quote ends with a
@@ -1008,24 +1081,16 @@ _ACTION_BEAT = re.compile(
 
 
 def _sweep_dialogue_splice(text: str, variant=None) -> list[Hit]:
-    """Two comma-for-period splices around a dialogue tag that the per-sentence
-    passes glide over because each half reads locally fine:
+    """A physical-action beat mistaken for a dialogue tag — "…at this point,"
+    Raymond smiled. — where the comma inside the quote is a run-on: the quote
+    closes with a period and the beat is its own sentence.
 
-      * a tag after a ! or ?-ended quote, joined to the next quote by a comma
-        ("Of course!" Raymond said, "Anything.") — the tag takes a period;
-      * a physical-action beat mistaken for a tag ("…," Raymond smiled.) — the
-        quote takes a period and the beat is its own sentence.
+    Idempotent: the fixed comma is gone, so a re-scan matches nothing.
 
-    Both are idempotent: the fixed comma is gone, so a re-scan matches nothing.
+    A tag standing between two quotations ("Of course!" Raymond said, "Anything
+    for you.") is deliberately NOT touched — see the note above the pattern.
     """
     hits: list[Hit] = []
-    for m in _SPLICE_TAG.finditer(text):
-        if m.group("verb").lower() not in REPORTING_VERBS:
-            continue
-        c = m.start("comma")
-        hits.append(Hit(c, c + 1, ".",
-                        "House style: a complete quoted sentence ends the tag "
-                        "with a period before the next quotation."))
     for m in _ACTION_BEAT.finditer(text):
         if m.group("verb").lower() not in _ACTION_BEATS:
             continue
@@ -1217,7 +1282,7 @@ SWEEPS: tuple[Sweep, ...] = (
     Sweep("sweep_time_of_day", "Times of day (11:00 AM)", _sweep_time_of_day),
     Sweep("sweep_deity_capital", "Deity capitalized in set expressions",
           _sweep_deity_capital),
-    Sweep("sweep_dialogue_splice", "Comma splices around a dialogue tag",
+    Sweep("sweep_dialogue_splice", "An action beat mistaken for a dialogue tag",
           _sweep_dialogue_splice),
     Sweep("sweep_initialism", "Initialisms set in capitals (TV)",
           _sweep_initialism),

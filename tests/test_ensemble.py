@@ -390,3 +390,44 @@ def test_verifies_property_gates_the_hook():
     assert not EnsembleConfig(detectors=two, verifier_model="claude-opus-5",
                               verify_policy="none").verifies   # verifier off
     assert EnsembleConfig(detectors=two, verifier_model="claude-opus-5").verifies
+
+
+# --- the explicit off switch (Redding Book 1, 2026-09-01) --------------------
+#
+# A materialized genre pack writes `ensemble: {enabled: false, detectors: [...]}`
+# and the run fanned out to every detector anyway: the key was accepted by the
+# model and then never read. `enabled: false` now wins over a populated list.
+
+def test_enabled_false_in_yaml_turns_a_populated_ensemble_off():
+    import yaml
+    cfg = EnsembleConfig(**yaml.safe_load(
+        """
+        enabled: false
+        detectors:
+          - model: gpt-5.6-luna
+          - model: claude-haiku-4-5
+        verifier_model: claude-opus-5
+        """))
+    assert cfg.detectors and not cfg.enabled
+    assert not cfg.verifies
+
+
+def test_enabled_defaults_to_the_detector_list():
+    two = [DetectorSpec(model="gpt-5.6-luna"), DetectorSpec(model="claude-haiku-4-5")]
+    assert EnsembleConfig(detectors=two).enabled
+    assert not EnsembleConfig().enabled
+    # An explicit true is honoured, and still needs detectors to fan out to.
+    assert EnsembleConfig(**{"enabled": True, "detectors": two}).enabled
+    assert not EnsembleConfig(**{"enabled": True}).enabled
+
+
+def test_a_disabled_ensemble_reports_one_detector_to_the_cost_estimate(tmp_path):
+    cfg = load_config("config/default.yaml")
+    cfg.ensemble = EnsembleConfig(**{
+        "enabled": False,
+        "detectors": [{"model": "gpt-5.6-luna"},
+                      {"model": "claude-haiku-4-5"}]})
+    cfg.output_dir = str(tmp_path)
+    prepared = prepare(cfg, "tests/fixtures/simple.docx", "config/error_types",
+                       dry_run=True)
+    assert prepared.n_detectors == 1
