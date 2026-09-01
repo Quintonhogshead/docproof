@@ -1073,18 +1073,34 @@ def test_pale_reliquary_keeps_its_discrete_object_plates_whole():
         assert by_id[sid].cut_edge
 
 
-# -- uplit_vigil (archetype eight): the three mechanisms of rule 2 -----------
+# -- uplit_vigil (archetype eight) ------------------------------------------
 #
-# "A standing figure must look like it is standing on something" (spec
-# §15.23) is the one rule this arrangement is most likely to break, and it is
-# enforced by three cooperating pieces rather than by one. Each is cheap to
-# delete by accident during a tidy-up and none of them fails loudly — the
-# render just quietly goes back to a cutout hovering over a texture. Guard all
-# three, and guard the ordering that makes them work.
+# Two rules here fight each other and the resolution is the whole design, so
+# both halves are guarded. Rule 2 puts the figure on the TOP layer, which
+# forbids the usual way of making a standing figure look grounded (paint some
+# ground in front of her feet). Rule 3 still demands she look grounded. What
+# is left is a hem that dissolves, a shadow pool she stands in, and a kerb of
+# ground just behind her — plus rule 9's blur, which is the only depth cue the
+# composition has left once nothing may overlap her.
+
+def test_uplit_vigil_draws_its_figure_above_every_art_layer():
+    """Rule 2. The figure is composited after every art plate and after the
+    title; only the author's name — type, not paint — crosses her."""
+    a = ARCHETYPES["uplit_vigil"]
+    order = a.layers
+    here = order.index("subject")
+    for slot in a.art:
+        if slot.id == "subject":
+            continue
+        assert order.index(slot.id) < here, f"{slot.id} is painted over the figure"
+    assert here > order.index("title")
+    assert here < order.index("author")
+
 
 def test_uplit_vigil_dissolves_its_figures_hem_rather_than_cutting_it():
-    """Mechanism one: the figure fades INTO the floor. Without the mask her
-    plate ends on a hard horizontal cut line partway up the hazard band."""
+    """Rule 3, mechanism one — and with rule 2 having retired the occlusion,
+    this is now the load-bearing one. Without the mask her plate ends on a hard
+    horizontal cut line partway up the hazard band."""
     subject = next(s for s in ARCHETYPES["uplit_vigil"].art if s.id == "subject")
     assert subject.cut_edge == "bottom"
     assert subject.mask is not None and subject.mask.gradient is not None
@@ -1095,36 +1111,73 @@ def test_uplit_vigil_dissolves_its_figures_hem_rather_than_cutting_it():
     assert subject.place_by == "ink"
 
 
-def test_uplit_vigil_draws_floor_matter_in_front_of_its_figure():
-    """Mechanism two: `hazard_front` is drawn AFTER `subject`, off the centre
-    axis, so ground passes in front of her feet. Demote it below her and she
-    is standing on a picture of a floor."""
+def test_uplit_vigil_pools_its_contact_shadow_on_the_axis_before_the_figure():
+    """Rule 3, mechanism two. The pool is defined by the template's centre
+    axis rather than by the figure's silhouette, and that is FORCED, not
+    chosen: a `from_layer` mask reads already-composited pixels, so rule 2's
+    top-layer figure cannot be a mask source for anything. Guard both the
+    ordering and the fact that no layer tries to mask off her."""
+    a = ARCHETYPES["uplit_vigil"]
+    pool = next(x for x in a.adjust if x.id == "foot_shadow")
+    assert pool.mask is not None and pool.mask.gradient is not None
+    assert pool.mask.gradient.kind == "radial"
+    assert pool.mask.invert is True
+    assert a.layers.index("foot_shadow") < a.layers.index("subject")
+    # The pool sits under the axis the figure is anchored to.
+    subject = next(s for s in a.art if s.id == "subject")
+    assert a.axis == "center"
+    assert pool.mask.gradient.center[0] == subject.anchor[0] == 0.5
+    # Nothing may name the figure as a mask source — the loader refuses it,
+    # and this asserts the template never tries.
+    for layer in list(a.adjust) + list(a.art):
+        mask = getattr(layer, "mask", None)
+        if mask is not None:
+            assert mask.from_layer != "subject"
+            assert mask.luminance_of != "subject"
+
+
+def test_uplit_vigil_keeps_a_kerb_of_ground_behind_the_figures_feet():
+    """Rule 3, mechanism three. `hazard_near` no longer crosses in front of
+    her, but it must still be drawn after the distant floor and off the centre
+    axis, or she has no ground plane to meet at all."""
     a = ARCHETYPES["uplit_vigil"]
     order = a.layers
-    assert order.index("hazard_front") > order.index("subject")
-    assert order.index("hazard") < order.index("subject")
-    front = next(s for s in a.art if s.id == "hazard_front")
-    assert front.anchor[0] != 0.5, "a plinth on the axis is not ground"
+    assert order.index("hazard") < order.index("hazard_near") < order.index("subject")
+    near = next(s for s in a.art if s.id == "hazard_near")
+    assert near.anchor[0] != 0.5, "a plinth on the axis is not ground"
+    # §15.24, and not optional: the prompt empties the plate's upper three
+    # quarters, so frame-anchoring parks the whole strip below the trim.
+    assert near.place_by == "ink"
 
 
-def test_uplit_vigil_pools_a_contact_shadow_after_the_front_floor():
-    """Mechanism three: the contact darkening is masked to the figure's own
-    silhouette and drawn after `hazard_front`, or the near slabs paint over
-    the contact it just made."""
+def test_uplit_vigil_softens_the_background_and_nothing_else():
+    """Rule 9: the blur is the LAST background operation. Every art plate but
+    the figure is below it; every text layer and the figure are above it.
+    Move it up and it smears the title; move it down and plates escape it."""
     a = ARCHETYPES["uplit_vigil"]
-    shadow = next(x for x in a.adjust if x.id == "foot_shadow")
-    assert shadow.mask is not None
-    assert shadow.mask.from_layer == "subject"
-    assert shadow.mask.feather > 0.0
-    assert a.layers.index("foot_shadow") > a.layers.index("hazard_front")
+    order = a.layers
+    blur = next(x for x in a.adjust if x.id == "back_soften")
+    assert blur.op == "blur" and 0.0 < blur.opacity < 1.0
+    here = order.index("back_soften")
+    for slot in a.art:
+        if slot.id == "subject":
+            assert order.index(slot.id) > here
+        else:
+            assert order.index(slot.id) < here, f"{slot.id} escapes the softening"
+    for slot in a.text:
+        assert order.index(slot.id) > here, f"{slot.id} would be blurred"
 
 
-def test_uplit_vigil_keeps_its_front_type_sandwiches():
-    """Rule 6 / the occlusion budget: `drift` crosses the title and
-    `ember_front` crosses the author, both drawn after their own text."""
-    order = ARCHETYPES["uplit_vigil"].layers
-    assert order.index("drift") > order.index("title")
-    assert order.index("ember_front") > order.index("author")
+def test_uplit_vigil_spends_its_occlusion_budget_to_zero():
+    """Rule 2's price, asserted as the rule rather than as a slot list: no art
+    plate is drawn after any text slot, so there is no sandwich left for the
+    composer to silently demote."""
+    a = ARCHETYPES["uplit_vigil"]
+    order = a.layers
+    last_art_below_type = max(
+        order.index(s.id) for s in a.art if s.id != "subject")
+    first_type = min(order.index(t.id) for t in a.text)
+    assert last_art_below_type < first_type
 
 
 def test_uplit_vigil_throws_the_floors_colour_back_onto_the_void():
@@ -1144,7 +1197,7 @@ def test_uplit_vigil_throws_the_floors_colour_back_onto_the_void():
 
 
 def test_uplit_vigil_sets_its_author_in_the_display_face():
-    """Rule 6: the author's name is the second title. `font_role: title` is
+    """Rule 7: the author's name is the second title. `font_role: title` is
     the only thing that puts it in the display face, and dropping it silently
     demotes the name to the eyebrow's supporting font."""
     author = next(t for t in ARCHETYPES["uplit_vigil"].text if t.id == "author")
@@ -1154,16 +1207,18 @@ def test_uplit_vigil_sets_its_author_in_the_display_face():
     assert author.size_max >= title.size_max * 0.9
 
 
-def test_uplit_vigil_keeps_its_tagline_off_the_centre():
-    """Rule 7: the tagline fills the dead left band. Centre it and it lands on
-    the figure's back and competes with the title."""
+def test_uplit_vigil_keeps_its_tagline_clear_of_the_figure():
+    """Rule 8: the tagline fills the dead left band. Under rule 2 this is no
+    longer only a taste rule — a tagline set wide enough to reach the figure
+    gets her DEMOTED below it, which silently cancels rule 2. The zone must
+    end well left of the centre axis, not merely start left of it."""
     tagline = next(t for t in ARCHETYPES["uplit_vigil"].text if t.id == "subtitle")
     assert tagline.align == "left"
-    assert tagline.zone.x + tagline.zone.w < 0.5
+    assert tagline.zone.x + tagline.zone.w <= 0.32
 
 
 def test_uplit_vigil_leaves_its_frame_open_at_the_bottom():
-    """Rule 3: three vapor plates, all entering from the top or the upper
+    """Rule 4: three vapor plates, all entering from the top or the upper
     sides. A fourth closing the bottom makes this romantasy_vignette's wreath."""
     a = ARCHETYPES["uplit_vigil"]
     vapor = [s for s in a.art if s.id.startswith("vapor_")]
@@ -1177,11 +1232,27 @@ def test_uplit_vigil_leaves_its_frame_open_at_the_bottom():
 
 
 def test_uplit_vigil_clamps_only_its_whole_fragment_plate():
-    """Rule 5 and its one exception (§15.25): severed ends overshoot the trim,
+    """Rule 6 and its one exception (§15.25): severed ends overshoot the trim,
     but the scatter of discrete whole pieces is clamped inside it."""
     a = ARCHETYPES["uplit_vigil"]
     whole = [s.id for s in a.art if s.keep_whole]
-    assert whole == ["ember_front"]
+    assert whole == ["ember_drift"]
     for slot in a.art:
         if slot.cut_edge:
             assert not slot.keep_whole, f"{slot.id} both severs and clamps"
+
+
+def test_uplit_vigil_dictates_no_pose():
+    """Rule 10. The template used to hard-code "from BEHIND", "turned away"
+    and "one arm is raised" into the figure's frame, which is one book's
+    staging masquerading as structure. What it may still dictate is geometry
+    and light; what it may not is which way the character faces."""
+    subject = next(s for s in ARCHETYPES["uplit_vigil"].art if s.id == "subject")
+    frame = subject.prompt_frame.lower()
+    for banned in ("turned away", "from behind", "arm is raised", "raised arm",
+                   "over one shoulder", "her back"):
+        assert banned not in frame, f"the frame still dictates a pose: {banned!r}"
+    # ...but the structure it DOES need is still spelled out.
+    assert "full-length" in frame
+    assert "one large simple pale shape" in frame
+    assert "below" in frame            # the light direction, rule 1
