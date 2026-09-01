@@ -1676,7 +1676,13 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
         role = getattr(slot, "font_role", "") or (
             "title" if slot.id == "title" else "author")
         font = direction.title_font if role == "title" else direction.author_font
-        text.append(TextSlot(
+        # The archetype's own §15.12 fields first, then the direction's move
+        # folded OVER them — `update`, not a second `**` — so a template that
+        # arcs its title and a concept that asks for `tilt` resolve by
+        # precedence (the concept wins) instead of raising TypeError on a
+        # duplicate keyword. Read through getattr for the same reason
+        # font_role is: a template that predates the fields still builds.
+        fields: dict[str, Any] = dict(
             id=slot.id,
             content=getattr(brief, slot.id, ""),
             zone=Zone(x=slot.zone.x, y=slot.zone.y, w=slot.zone.w, h=slot.zone.h),
@@ -1694,7 +1700,12 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             optional=slot.optional,
             mode=slot.mode,
             mask_from=slot.mask_from,
-            **(title_move if slot.id == "title" else {})))
+            fit_mode=getattr(slot, "fit_mode", "uniform"),
+            arc=getattr(slot, "arc", 0.0),
+            rotate=getattr(slot, "rotate", 0.0))
+        if slot.id == "title":
+            fields.update(title_move)
+        text.append(TextSlot(**fields))
 
     art_ids = {a.id for a in archetype.art}
     adjust_ids = {a.id for a in archetype.adjust}

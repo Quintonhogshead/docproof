@@ -621,6 +621,24 @@ class ArchetypeText(BaseModel):
     # text is clipped to, or "" = off. Checked for existence (never
     # ordering — see Archetype._text_mask_from_exists below) at load time.
     mask_from: str = ""
+    # The §15.12 expressive-typography fields, mirroring
+    # docproof.cover.model.TextSlot.fit_mode/arc/rotate exactly (same
+    # ranges, same defaults, same meaning). Direction.type_move already
+    # reaches all three — but only ever on the TITLE, and only through the
+    # one-signature-move mapping. A TEMPLATE has the opposite need: a
+    # convention where the AUTHOR's name and the credit line above it both
+    # bow along one shared arc is structure, not per-concept taste, and
+    # until these existed an archetype could not express it at all.
+    #
+    # Precedence, where both reach the same slot: the direction's move
+    # wins, because it is the later and more specific decision — see
+    # build_spec, which folds `title_move` over these rather than beside
+    # them (a duplicate keyword would otherwise be a TypeError, not a
+    # policy). The defaults below are TextSlot's own, so every archetype
+    # that predates the field builds a byte-identical spec.
+    fit_mode: Literal["uniform", "justify_stack"] = "uniform"
+    arc: float = Field(default=0.0, ge=-0.35, le=0.35)
+    rotate: float = Field(default=0.0, ge=-15.0, le=15.0)
 
     @model_validator(mode="after")
     def _size_range(self) -> ArchetypeText:
@@ -826,6 +844,23 @@ class Archetype(BaseModel):
             raise ValueError(
                 f"{self.name}: adjust layer(s) {orphans} are declared but "
                 f"never appear in `layers`, so they would never be drawn")
+        # And the text-slot twin of that check, for exactly the same reason.
+        # A text slot absent from `layers` is not merely inert: it validates,
+        # it gets a zone, it gets a scrim protecting it, the fit search sizes
+        # it, and it renders as nothing at all — a whole tagline can be
+        # declared, scrimmed, priced and silently dropped off the cover.
+        # (This is not hypothetical; romantasy_enclosure shipped its first
+        # three renders that way.) Text slots have no legitimate reason to be
+        # declared-but-undrawn — an `optional` slot is one whose CONTENT may
+        # be empty, which is a brief's decision at build time, not a template's
+        # at load time — so this is an error, not a warning.
+        text_orphans = sorted(text_ids - drawn)
+        if text_orphans:
+            raise ValueError(
+                f"{self.name}: text slot(s) {text_orphans} are declared but "
+                f"never appear in `layers`, so they would never be drawn "
+                f"(use `optional: true` for a slot whose CONTENT may be "
+                f"empty — that is a different thing)")
         return self
 
     @model_validator(mode="after")

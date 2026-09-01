@@ -250,7 +250,21 @@ exceptions: never ask for text, letters, numbers, typography, book covers, \
 mockups, borders, or frames; never name a living artist; describe a scene, \
 not a cover. For a symbolic-object slot, direct ONE clean, instantly \
 recognizable object, described plainly (a brass key, a single feather); \
-never a surreal composite, never anatomy on inanimate things. Prefer \
+never a surreal composite, never anatomy on inanimate things.
+
+EVERY NOUN YOU SUPPLY MUST COME FROM THIS BOOK. Each slot is listed with \
+its ROLE after a dash — a role naming a figure, character, lead or \
+subject wants THIS BOOK'S ACTUAL PEOPLE: the characters the text is about, \
+described as the text describes them (their age, build, colouring, dress, \
+what they carry, what they are marked by), never a generic hooded figure, \
+never a stock warrior or sorceress, never a stand-in assembled from the \
+genre at large. A role naming a ground, material, border or motif wants a \
+material or motif the book itself names. Where an archetype supplies a \
+prompt frame, that frame owns the STRUCTURE — the pose, the crop, the \
+lighting, which edge a cut sits on — and you own only the nouns dropped \
+into it; do not restate or fight the structure, and do not surrender the \
+nouns to it. A cover whose figures are not recognisably this book's \
+characters has failed, however well it renders. Prefer \
 illustrated, painterly, or graphic media (oil painting, \
 gouache, flat vector, linocut, paper-cutout collage, and the like) over \
 photorealism. A photographic or photoreal render is permitted ONLY when \
