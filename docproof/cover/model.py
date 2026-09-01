@@ -104,7 +104,7 @@ def _validate_role_or_hex(value: str) -> str:
         f"hex color")
 
 
-# The paired token placements a Direction may pick from (§15.24). A
+# The paired token placements a Direction may pick from (§19.2). A
 # one-shot template fixes placement so no book pays for it twice — the right
 # trade for ONE cover, and a sameness generator across a catalogue: every
 # book off portrait_luminary put its two accent plates at exactly the same
@@ -465,6 +465,23 @@ class TextSlot(BaseModel):
     # against fonts.FAMILIES). Must stay "" for every other style — a set
     # value the renderer would ignore is authoring error, not a no-op.
     emphasis_font: str = ""
+    # Word indices (into the POST-CASE, whitespace-split content) that must
+    # START a new line — a hard, designed break, as opposed to the automatic
+    # search's opinion. [] (the default, and every slot that predates the
+    # field) keeps the search exactly as it was.
+    #
+    # WHY THIS HAD TO EXIST: both fit paths choose breaks by a scoring rule,
+    # and neither rule can express a designed one. The uniform fit ranks
+    # fitting splits by LOWEST WIDTH VARIANCE, which structurally refuses to
+    # put a short connective alone on a line ("AND" by itself is the highest
+    # variance a four-word title can produce). justify_stack ranks by least
+    # wasted VERTICAL space, which is a different opinion but still an
+    # opinion. The four-line poster stack — long / long / short connective /
+    # long, the shape half the dark-fantasy shelf is set in — is therefore
+    # unreachable by search at any zone width or size range. It is not a
+    # tuning problem; it is a "the designer knows and the scorer cannot"
+    # problem, so the fix is to let the designer say it.
+    line_breaks: list[int] = Field(default_factory=list)
 
     @field_validator("font_family")
     @classmethod
@@ -481,6 +498,38 @@ class TextSlot(BaseModel):
             raise ValueError(
                 f"size_min ({self.size_min}) exceeds size_max "
                 f"({self.size_max})")
+        return self
+
+    @model_validator(mode="after")
+    def _line_breaks_wellformed(self) -> TextSlot:
+        """Strictly increasing, every index at least 1 (a break BEFORE the
+        first word is not a break), and — when content is present, the same
+        condition the emphasis contract uses, since an archetype's slot has
+        none at load time — in range and within max_lines. A break list that
+        forces more lines than the slot allows is authoring error, not
+        something to silently clamp: the whole point of the field is that
+        the author gets exactly the stack they asked for."""
+        if any(i < 1 for i in self.line_breaks):
+            raise ValueError(
+                f"line_breaks indices must be >= 1 (a break before the "
+                f"first word is not a break), got {self.line_breaks}")
+        if self.line_breaks != sorted(set(self.line_breaks)):
+            raise ValueError(
+                f"line_breaks must be strictly increasing with no repeats, "
+                f"got {self.line_breaks}")
+        if self.line_breaks and len(self.line_breaks) + 1 > self.max_lines:
+            raise ValueError(
+                f"line_breaks {self.line_breaks} forces "
+                f"{len(self.line_breaks) + 1} lines but max_lines is "
+                f"{self.max_lines}")
+        if self.line_breaks and self.content.strip():
+            n_words = len(self.content.split())
+            bad = [i for i in self.line_breaks if i >= n_words]
+            if bad:
+                raise ValueError(
+                    f"line_breaks {bad} out of range — content has "
+                    f"{n_words} word(s), so the last legal break is "
+                    f"{n_words - 1}")
         return self
 
     @model_validator(mode="after")
@@ -1275,8 +1324,15 @@ Direction = create_model(
     # doesn't contain is dropped with a log line (the §6.1 surplus-prompt
     # precedent), never fatal.
     emphasis_word=(str, ""),
+    # Where the title's lines break, as word indices that START a new line
+    # (§15.12's missing half — see TextSlot.line_breaks for why no scorer
+    # can infer this). [] leaves the automatic search alone. Folded onto the
+    # title slot by build_spec, and dropped with a log line — never fatal,
+    # the §6.1 surplus-prompt posture — when the indices do not fit the
+    # title this book actually has.
+    title_breaks=(list[int], []),
     # Where the two accent plates sit, from the closed TOKEN_LAYOUTS shelf
-    # (§15.24) — the one placement decision a template of that shape hands
+    # (§19.2) — the one placement decision a template of that shape hands
     # to the direction call, precisely so a catalogue of books built on one
     # template does not put its accents in the same two spots every time.
     # "" (the default) keeps whatever anchors the archetype itself declares,
@@ -1670,6 +1726,23 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
     # honored (a logged drop, see _title_type_move), or the §15.12 TextSlot
     # fields haven't landed yet.
     title_move = _title_type_move(direction, brief.title)
+
+    # Designed line breaks for the title (§15.12). Validated against THIS
+    # book's title here rather than left to TextSlot's own validator, so a
+    # break list that fits the last book but not this one drops with a log
+    # line instead of failing the whole job — the same surplus-prompt
+    # posture _title_type_move takes for an emphasis_word the title lacks.
+    title_breaks = list(getattr(direction, "title_breaks", []) or [])
+    if title_breaks and "line_breaks" in TextSlot.model_fields:
+        n_words = len(brief.title.split())
+        ok = (title_breaks == sorted(set(title_breaks))
+              and all(1 <= i < n_words for i in title_breaks))
+        if ok:
+            title_move = {**title_move, "line_breaks": title_breaks}
+        else:
+            log.info("Direction %r set title_breaks=%s, which is not a valid "
+                     "set of break points for the %d-word title %r; dropped.",
+                     direction.concept_name, title_breaks, n_words, brief.title)
 
     text: list[TextSlot] = []
     for slot in archetype.text:

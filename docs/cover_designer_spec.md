@@ -1560,6 +1560,65 @@ gradient into it (this cover: 83.6 unshadowed → 81.5 → 67.5 at the contact).
   conditioning, not at seat time.
 
 
+### 15.24 Designed line breaks, and Archetype Five (`crossed_relics`)
+
+**The archetype.** `config/cover/archetypes/crossed_relics.yaml` — a near-black slab shot from
+directly overhead, two long relics laid across it in a shallow X, one repeated object from the
+book's own world ringed around the perimeter, and a huge white display serif stacked down the
+centre **on top of everything**. It is the inverse of `romantasy_organic`: no sandwich, no plate
+in front of the type, no plate permitted to occlude a letterform. Depth comes from the flat-lay
+itself — an overhead shot has no horizon to get wrong, so it cannot fail the way §15.23's
+standing figure fails. What it can fail is legibility, and the whole template is built to make
+that impossible.
+
+Three things it encodes that are worth stealing elsewhere:
+
+- **Long rigid objects are placed by overshoot, not by `cut_edge`.** Both ends of a sword want to
+  leave the frame and a slot has exactly one cut edge, so each relic is prompted corner-to-corner
+  inside its own plate and seated at `scale` > 1. No per-book anchor judgement, both ends off the
+  trim.
+- **Prompt frames name the ROLE and never the noun.** The first draft asked the ring for pieces
+  "glossy and wet-looking with hard specular highlights and deep veining" — which is not a role,
+  it is a leaf, and a director asking for brass gears against that frame gets a wet veined gear.
+  Every frame now carries size, count, placement and light only. The openwork clause ("where an
+  object has holes, spokes, teeth or gaps, those openings are genuinely empty") is what stops a
+  generator painting a gear as a filled brass disc — the plate's alpha was always real; the
+  solidity was drawn in.
+- **One decoration, and it must be in the manuscript.** An earlier draft carried a second scatter
+  slot; the first book through it filled the two with two different nouns (bougainvillea and
+  gears) and read as two covers fighting. The second slot was deleted rather than governed by a
+  rule nobody remembers at 2am. The one that remains is the cover's entire chroma budget, so it
+  is chosen because the object is *in the book, in quantity, and means something* — the
+  reference's red leaves are the ash-and-blood the title names, not decoration.
+
+It deliberately does **not** carry the reference printing's gold SPECIAL EDITION seal. That is a
+sticker for one edition, not a piece of the design, and a template that ships one puts a foil
+badge on every book whether or not there is an edition to sell.
+
+**`TextSlot.line_breaks` / `Direction.title_breaks`.** Word indices that must start a new line;
+`[]` (the default) leaves the automatic search exactly as it was. This exists because the
+four-line poster stack — long / long / short connective / long, the shape half the dark-fantasy
+shelf is set in — was **unreachable by search at any zone width or size range**, and that is
+structural, not a tuning miss:
+
+- the uniform fit ranks fitting splits by **lowest width variance**, and a lone "AND" is the
+  single highest-variance split a four-word title can produce — the last candidate that rule will
+  ever pick;
+- `justify_stack` ranks by **least wasted vertical height**, a different opinion but still an
+  opinion; three fat lines fill a zone better than four, most of the time.
+
+Both are defensible rules and both are wrong here, so the author overrides them. Once breaks are
+set, `max_lines` is ignored (the author's line count *is* the answer, and the validator already
+refused a list asking for more lines than the slot allows) and the fit escalation is barred from
+inventing extra lines — re-breaking would silently discard the whole instruction. `build_spec`
+validates the indices against *this* book's title and drops them with a log line rather than
+failing the job, the same posture `_title_type_move` takes for an `emphasis_word` the title lacks.
+
+**Still not expressible:** the *size* of a minor line. `justify_stack` grows every line toward the
+measure and clamps at `size_max`, so a two-letter connective lands at the cap and underfills,
+centred — the break is designed but the wide/wide/**small**/wide rhythm is not. That needs a
+`minor_lines` set or a per-line size multiplier, and is not in this wave.
+
 ## 16. The director and the atelier (DECIDED 2026-08-31, owner) — how a cover is made now
 
 The old flow was: distil a manuscript *sample* into a grounding sheet, ask one call for N directions, then paint each concept and put it through a fixed critique loop. The new flow is two acts, and it is what the owner arrived at by building six Longsword covers by hand with six agents:

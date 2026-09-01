@@ -252,6 +252,34 @@ def _lines_from_splits(words: list[str], splits: tuple[int, ...]) -> tuple[str, 
                 for i in range(len(bounds) - 1))
 
 
+def _forced_split(words: list[str], breaks: list[int]) -> tuple[int, ...]:
+    """`slot.line_breaks` as a split tuple in the same 0-based shape
+    _partitions yields, clipped to the words actually present. TextSlot's
+    own validator has already refused a malformed list; the clip here is
+    for the one case it cannot see — a spec hand-edited to a shorter title
+    after the breaks were authored — where dropping the out-of-range tail
+    beats raising inside the renderer."""
+    return tuple(i for i in breaks if 0 < i < len(words))
+
+
+def _forced_break(words: list[str], breaks: list[int], measure_fn,
+                  zone_w_px: float) -> _Break:
+    """The designed break as a _Break, bypassing every scoring rule. `fits`
+    still reports honestly — a forced line that overflows the zone is the
+    author's problem to SEE, and fit_text's own escalation ladder then
+    handles it exactly as it handles a searched break that will not fit
+    (shrink below the floor rather than crop a glyph). What the escalation
+    must never do here is re-break the line: extra lines beyond max_lines
+    are not offered when the breaks are designed, because inventing a line
+    the author did not ask for silently discards the whole instruction."""
+    splits = _forced_split(words, breaks)
+    lines = _lines_from_splits(words, splits)
+    starts = (0, *splits)
+    widths = [measure_fn(line, start) for line, start in zip(lines, starts)]
+    return _Break(lines=lines, fits=all(w <= zone_w_px for w in widths),
+                  variance=_variance(widths))
+
+
 def _best_break_brute(words: list[str], measure_fn, zone_w_px: float,
                       max_lines: int) -> _Break:
     """Try 1, then 2, ... lines; the first line count with any width-fitting
@@ -430,10 +458,21 @@ def fit_text(slot: TextSlot, canvas_size: tuple[int, int], *,
                                   zone_w_px, zone_h_px,
                                   size_min_px, size_max_px)
 
+    forced = _forced_split(words, slot.line_breaks)
+
     def resolve_at(size_px: float, max_lines: int) -> tuple[_Break, float]:
         tracking_px = slot.tracking / 1000.0 * size_px
-        br = _best_break(words, measure_at(size_px, tracking_px),
-                         zone_w_px, max_lines)
+        if forced:
+            # Designed breaks: the same partition at every candidate size,
+            # so the binary search below solves purely for SIZE. max_lines
+            # is deliberately ignored — the author's line count IS the
+            # answer, and TextSlot's validator already refused a list that
+            # asks for more lines than the slot allows.
+            br = _forced_break(words, list(forced),
+                               measure_at(size_px, tracking_px), zone_w_px)
+        else:
+            br = _best_break(words, measure_at(size_px, tracking_px),
+                             zone_w_px, max_lines)
         return br, tracking_px
 
     def fits_zone(br: _Break, size_px: float, max_lines: int) -> bool:
@@ -602,7 +641,15 @@ def _fit_justify_stack(slot: TextSlot, canvas_size: tuple[int, int],
 
     # -- candidate sweep ------------------------------------------------------
     candidates: list[tuple[tuple[str, ...], tuple[int, ...]]] = []
-    if len(words) <= MAX_BRUTE_WORDS:
+    forced = _forced_split(words, slot.line_breaks)
+    if forced:
+        # Designed breaks: exactly one candidate, so the sweep's
+        # least-wasted-height scoring never runs. This is the whole reason
+        # the field exists — that scorer is what turns a four-line poster
+        # stack into three lines whenever three happens to fill the zone
+        # more completely, which is most of the time.
+        candidates.append((_lines_from_splits(words, forced), (0, *forced)))
+    elif len(words) <= MAX_BRUTE_WORDS:
         for n_lines in range(1, slot.max_lines + 1):
             for splits in _partitions(len(words), n_lines):
                 lines = _lines_from_splits(words, splits)
