@@ -1560,6 +1560,55 @@ gradient into it (this cover: 83.6 unshadowed → 81.5 → 67.5 at the contact).
   conditioning, not at seat time.
 
 
+### 15.24 Placement measures the INK — `place_by` and `keep_whole` (the Saltmere addendum)
+
+Two additive `ArtSlot` fields, both defaulting to the old behaviour, both found
+by building Archetype Six (`pale_reliquary`) and both fixing faults that had
+been misread as bad art direction.
+
+**`place_by: "frame" | "ink"` (default `"frame"`).** `_fit_contain` scaled and
+anchored the PLATE, never the ink. A generated cutout comes back as a
+full-frame PNG with the subject somewhere inside it and an arbitrary,
+model-chosen transparent margin around it, so against that border both knobs
+lie: `scale` sizes the margin as much as the subject, and `anchor: [1.0, y]`
+flushes the MARGIN to the trim. Same bug, opposite symptoms depending on which
+way each plate's margin fell — one plate stranded two inches inside the trim
+while another sat half off it. §15.20's instruction to choose `anchor` "from
+WHERE THE CUT IS on that plate" was a promise the frame measurement could not
+keep: the cut is a property of the ink, and the plate border knows nothing
+about it.
+
+Under `"ink"` the source is cropped to its alpha bbox at the SOURCE stage —
+before corners, scatter, snap, the occlusion anchor search and both fits — so
+every downstream placement path inherits ink semantics from one edit. Measure
+with `balance.ink_bbox`, never `Image.getbbox()`: the latter scans every band
+and counts the colour a treated layer routinely leaves under zero alpha, which
+on a soft-edged cutout crops to nothing.
+
+Consequence worth writing down: **contain-fit sizes on the BINDING axis, and
+which axis binds is a property of the ink.** The same `scale` that makes a
+wide plate span the frame makes a tall one run the full height of the cover.
+Read every scale against its plate's own aspect after switching a slot to ink.
+
+**`keep_whole: bool` (default `False`).** "Severed ends must leave the frame"
+(§15.21 rule 1) governs a subject that GROWS OR HANGS — a stem, cane, chain or
+blade has a cut end, and carrying it out through the trim is what makes it read
+as a slice of a larger scene. It is exactly wrong for a SCATTER OF DISCRETE
+WHOLE OBJECTS. A glass float, a berry, a pearl has no cut end; sliced by the
+trim it reads as a bulb cut in half, which is the precise failure the overshoot
+rule exists to prevent. `keep_whole` clamps the slot's ink fully inside the
+trim, and such a slot must declare no `cut_edge` — the two are contradictory
+instructions, and an archetype test enforces it.
+
+The clamp measures ink (so it composes with `place_by` rather than fighting
+it), only ever pulls INWARD (a correctly-placed slot renders byte-identically
+with the flag on), lands the ink flush to the trim rather than inset, and gives
+up honestly on an axis where the ink exceeds the canvas — silently shrinking
+would be a different decision than the archetype asked for.
+
+**Ask which kind of thing a plate holds before reaching for an overshooting
+anchor.** That question is now part of authoring a slot.
+
 ## 16. The director and the atelier (DECIDED 2026-08-31, owner) — how a cover is made now
 
 The old flow was: distil a manuscript *sample* into a grounding sheet, ask one call for N directions, then paint each concept and put it through a fixed critique loop. The new flow is two acts, and it is what the owner arrived at by building six Longsword covers by hand with six agents:

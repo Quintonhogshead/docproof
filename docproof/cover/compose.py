@@ -1337,7 +1337,8 @@ def _place_contain_clear_of_text(source: Image.Image, canvas: tuple[int, int],
 
     def measure(anchor: tuple[float, float]
                 ) -> tuple[Image.Image, float, float]:
-        placed = _fit_contain(source, canvas, anchor, slot.scale, slot.offset)
+        placed = _fit_contain(source, canvas, anchor, slot.scale,
+                              slot.offset, slot.keep_whole)
         treated, _warning = _apply_treatment(placed, slot.treatment, palette,
                                              slot.id, has_alpha)
         alpha = treated.getchannel("A")
@@ -1591,6 +1592,7 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
             positioned[slot.id] = Image.new("RGBA", canvas, (0, 0, 0, 0))
             continue
         source = _mirror_if_asked(slot, source)
+        source = _crop_to_ink(slot, source)
 
         has_alpha = _has_transparency(source)
         sandwich_text = None
@@ -1669,7 +1671,8 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
                     f"layer; drew it normally instead.")
             img = (_fit_cover(source, canvas, slot.anchor, slot.scale, slot.offset)
                   if slot.fit == "cover" else
-                  _fit_contain(source, canvas, slot.anchor, slot.scale, slot.offset))
+                  _fit_contain(source, canvas, slot.anchor, slot.scale,
+                               slot.offset, slot.keep_whole))
 
         if slot.treatment != "none":
             pre_treatment[slot.id] = img
@@ -3241,9 +3244,36 @@ def _fit_cover(img: Image.Image, canvas: tuple[int, int],
     return out
 
 
+def _crop_to_ink(slot: ArtSlot, source: Image.Image) -> Image.Image:
+    """`source` cropped to its alpha bounding box when the slot asks to be
+    placed by its ink (ArtSlot.place_by), else `source` untouched.
+
+    Applied at the SOURCE stage — before corners, scatter, snap, the
+    occlusion anchor search and both fits — so every downstream placement
+    path inherits ink semantics from one edit rather than each growing its
+    own copy of this measurement.
+
+    A plate with no alpha at all (an opaque ground, a procedural field) has
+    no ink box distinct from its frame, so it is returned unchanged: the
+    crop is a no-op there, not an error. balance.ink_bbox is the measuring
+    tool on purpose — it thresholds the alpha channel, where a bare
+    Image.getbbox() would scan every band and count the color a treated
+    layer routinely leaves lying under zero alpha, which on a soft-edged
+    cutout means cropping to nothing at all."""
+    if slot.place_by != "ink":
+        return source
+    if source.mode != "RGBA":
+        return source
+    box = balance.ink_bbox(source)
+    if box is None or box == (0, 0, source.width, source.height):
+        return source
+    return source.crop(box)
+
+
 def _fit_contain(img: Image.Image, canvas: tuple[int, int],
                  anchor: tuple[float, float], scale: float,
-                 offset: tuple[float, float]) -> Image.Image:
+                 offset: tuple[float, float],
+                 keep_whole: bool = False) -> Image.Image:
     """Scale to fit WITHIN `canvas` (the smaller ratio) preserving aspect
     ratio, then place it against the full canvas using `anchor` as the
     alignment point (0,0 = flush top-left, 1,1 = flush bottom-right, 0.5,1 =
@@ -3262,9 +3292,41 @@ def _fit_contain(img: Image.Image, canvas: tuple[int, int],
     ox, oy = offset
     dest_x = round(ax * (cw - new_w) + ox * cw)
     dest_y = round(ay * (ch - new_h) + oy * ch)
+    if keep_whole:
+        dest_x, dest_y = _clamp_inside(resized, canvas, dest_x, dest_y)
     out = Image.new("RGBA", canvas, (0, 0, 0, 0))
     out.alpha_composite(resized, dest=(dest_x, dest_y))
     return out
+
+
+def _clamp_inside(resized: Image.Image, canvas: tuple[int, int],
+                  dest_x: int, dest_y: int) -> tuple[int, int]:
+    """`dest` pulled back just far enough that `resized`'s INK lands entirely
+    within `canvas` — ArtSlot.keep_whole, for a plate whose subject is a
+    scatter of discrete whole objects rather than something with a severed end
+    to carry out through the trim.
+
+    Measured on the ink, not the plate, so it composes with place_by: under
+    place_by "ink" the source is already cropped and the two agree, and under
+    "frame" this still clamps the subject rather than the model's arbitrary
+    transparent margin (clamping the margin would strand the subject far
+    inside the trim, which is the bug place_by exists to kill).
+
+    Only ever pulls INWARD. A plate already inside is returned untouched, and
+    one larger than the canvas on an axis is left alone on that axis — there
+    is no placement that keeps it whole, and silently shrinking it would be a
+    different decision than the archetype asked for."""
+    box = balance.ink_bbox(resized)
+    if box is None:
+        return dest_x, dest_y
+    ix0, iy0, ix1, iy1 = box
+    cw, ch = canvas
+    ink_w, ink_h = ix1 - ix0, iy1 - iy0
+    if ink_w <= cw:
+        dest_x = min(max(dest_x, -ix0), cw - ix1)
+    if ink_h <= ch:
+        dest_y = min(max(dest_y, -iy0), ch - iy1)
+    return dest_x, dest_y
 
 
 # _composite_layer lives in effects.composite_layer now (§15.1: one blend
