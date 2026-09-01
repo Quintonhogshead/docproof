@@ -21,7 +21,7 @@
 # A DARK ORNAMENTED OVAL. Everything below exists to protect that read.
 #
 # Like Archetypes One, Six and Seven this template is written to be ONE-SHOT.
-# The art direction chooses TEN NOUNS, five hexes, two fonts, a tagline and a
+# The art direction chooses NINE NOUNS, five hexes, two fonts, a tagline and a
 # set of title line breaks. Placement, scale, cut edges, effects, adjust
 # layers, scrims, occlusion budget and layer order are decided here, once.
 #
@@ -83,13 +83,34 @@
 #    in the composition is placed to leave it a clear vertical corridor, and
 #    the corridor is the relic's own dark shaft — see rule 6.
 #
-# 5. THE RUNOFF IS THE SIGNATURE MOVE, AND IT IS A FRONT PLATE. Metal running
-#    down off the bottoms of the letterforms, drawn AFTER the title. Without a
-#    plate drawn after the type, an ornate title is a sticker sitting on a
-#    picture; with one, the gilding is something that happened TO the cover.
-#    Note the exception it takes to the severed-ends doctrine (Archetype One
-#    rule 1, pale_reliquary rule 0b): a run of liquid that stops in mid-air is
-#    a TERMINUS, not a cut — it is where the metal ran out. So `runoff` is
+# 5. NOTHING IS DRAWN IN FRONT OF THE TYPE, AND THE TYPE IS THE BRIGHTEST
+#    THING ON THE COVER. This template has NO front tier. That is unusual on
+#    this shelf — Archetypes One, Six and Seven all run a sandwich, and this
+#    one shipped with one too: a `runoff` plate of metal running off the
+#    letterforms, plus ornament curls crossing the last line, on the standard
+#    argument that without a plate drawn after the type an ornate title is a
+#    sticker sitting on a picture.
+#
+#    That argument loses here, and it is worth being clear about why rather
+#    than treating this as a lost feature. This title is FOUR lines of ornate
+#    display face across 0.45 of frame height — it is not a two-word slug with
+#    room to spare. Every crossing costs it ink, the composer demotes any
+#    front plate that costs too much (which silently cancels the sandwich you
+#    paid for), and the one remaining crossing still measured 13.8% of the
+#    title's glyph ink. Meanwhile the depth this template needs is already
+#    carried three other ways: the relic is drawn after the whole back tier,
+#    the enclosure closes over the flanks, and the title's own stacked contact
+#    shadow and bevel lift it off the field. A sandwich was buying a fourth
+#    copy of something the cover already had, at the price of the one element
+#    that has to be perfectly legible.
+#
+#    So `runoff` is deleted rather than demoted — it existed only to be in
+#    front of the type, and drawn behind it, it is drips floating in space —
+#    and `gilt_front` keeps its corners but is drawn BEFORE the title.
+#
+#    The second half of the rule is not decoration either: the type must be
+#    the brightest ink on the cover, brighter than the relic's metal. See the
+#    z-order note on why that is a LAYER ORDER fact before it is a colour one. So `runoff` is
 #    `keep_whole: true` and must not be carried off the trim.
 #
 # 6. THE TITLE CORRIDOR IS ONE VALUE REGIME. Inherited verbatim from
@@ -123,8 +144,7 @@
 #                  height, SAME scale, different contents
 #   relic          THE VERTICAL — one long rigid object, whole, centre axis,
 #                  ornate at the head and quiet down the shaft
-#   gilt_front     front-tier metallic ornament, lower corners, symmetric pair
-#   runoff         the metal running off the bottoms of the letterforms
+#   gilt_front     metallic ornament, lower corners, symmetric pair
 #
 # EVERY FRAME BELOW IS WRITTEN IN GEOMETRY, NOT IN NOUNS, AND MUST STAY THAT
 # WAY — the doctrine romantasy_vignette had to learn the hard way. A slot asks
@@ -141,15 +161,14 @@
 #   knots of dried chrysanthemum / a lacquer cartouche / brass mon
 #
 # -----------------------------------------------------------------------------
-# THE OCCLUSION BUDGET
+# THE OCCLUSION BUDGET IS ZERO
 # -----------------------------------------------------------------------------
-# Exactly TWO plates cross the title zone, and both are pinned to its edges:
-# `runoff` hangs from the title's own baseline and `gilt_front` intrudes from
-# the bottom corners into the last line only. That is the whole budget, and it
-# is smaller than romantasy_vignette's on purpose — this title is four lines
-# of ornate display face and it cannot afford a third crossing. The composer
-# demotes a front plate below the title the moment it buries too much ink, and
-# a demoted plate silently cancels the sandwich.
+# No plate is drawn after the title, and none may be added. The composer's
+# demotion machinery therefore never fires on this template, and the title's
+# measured contrast is a property of the FIELD BEHIND IT alone — which is what
+# makes rule 6's "one value regime" corridor enforceable instead of aspirational.
+# If a future book wants something crossing its type, it wants a different
+# archetype.
 # =============================================================================
 name: gilded_cartouche
 genres: [fantasy, romance, historical, horror]
@@ -344,49 +363,11 @@ art:
       - {kind: drop_shadow, dy: 0.009, blur: 0.016, alpha: 0.48}
       - {kind: outer_glow, blur: 0.030, alpha: 0.26}
 
-# -- FRONT TIER: the sandwich, drawn AFTER the title --------------------------
+# -- the corner ornament, drawn BEFORE the title (rule 5) ---------------------
 #
-# Each carries its own drop shadow — the shadow falling onto the letterforms
-# IS the depth illusion; without it a front plate reads as a sticker.
-#
-  - id: runoff
-    role: front_runoff
-    # Rule 5. Hangs from the title's last baseline. keep_whole and no
-    # cut_edge: a run of liquid that stops in mid-air is a TERMINUS, not a
-    # severed end, and carrying it off the trim would turn drips into stripes.
-    #
-    # THE CURTAIN TRAP, and why every number here is small. The first build
-    # asked for "seven or eight runs, each a different length" at scale 0.66
-    # and got a floor-to-ceiling palisade of nine identical pewter columns
-    # that buried 24% of the title's glyph ink and hid the relic's whole shaft
-    # behind it. A generator reads "runs hanging down" as "fill the frame with
-    # runs", because that is what makes a nice picture — and a nice picture is
-    # exactly what this slot must not be. So the frame now states the plate's
-    # ASPECT RATIO in words (a wide shallow strip), caps the count at five,
-    # and the scale caps the damage even if the plate comes back tall anyway.
-    # A front plate that buries the type gets DEMOTED below it by the
-    # composer, which silently cancels the sandwich this rule exists for.
-    generatable: true
-    transparent: true
-    fit: contain
-    place_by: ink
-    keep_whole: true
-    anchor: [0.50, 0.672]
-    scale: 0.30
-    opacity: 0.95
-    prompt_frame: >-
-      A wide shallow strip, far wider than it is tall, empty except for four
-      or five short separate runs of {subject} beginning at the very top edge
-      and hanging a little way down, no two the same length and none of them
-      reaching even halfway down the frame. Each is thin and tapering and ends
-      in a single small hanging bead. Wide empty gaps between them; the whole
-      lower half of the frame completely empty.
-    effects:
-      - {kind: drop_shadow, dy: 0.005, blur: 0.009, alpha: 0.60}
-
   - id: gilt_front
-    role: front_ornament
-    # Rule 3's symmetric half, restated in the front tier. Cover-fit so its
+    role: corner_ornament
+    # Rule 3's symmetric half, restated at the foot. Cover-fit so its
     # own edges are always outside the trim and the pair always lands in the
     # two lower corners; the middle of its frame is prompted empty so it
     # intrudes on the title's LAST line only.
@@ -455,7 +436,7 @@ adjust:
     mask: {from_layer: cluster_right, feather: 0.03}
 
   - id: tonal_spine
-    # Rule 7 from above: one shared colour spine under ten separately-lit
+    # Rule 7 from above: one shared colour spine under nine separately-lit
     # plates. soft_light and low, so it unifies without repainting.
     op: gradient_map
     stops: [background, primary, text]
@@ -463,12 +444,17 @@ adjust:
     blend: soft_light
 
   - id: gild_bloom
-    # The deluxe-edition tell: foil catches light. Threshold high so only the
-    # metal blooms — the relic's head, the gilt curls, the title's own ramp.
+    # The deluxe-edition tell: foil catches light. The threshold is set to sit
+    # just UNDER the title's own ink so the type blooms along with the metal —
+    # at 0.84 it caught the relic's head and the gilt curls and left the
+    # letterforms alone, which is backwards for a template whose type is
+    # supposed to outshine its metal (rule 5). Last layer in the stack on
+    # purpose: it is the only thing allowed over the type, because it is the
+    # only adjust layer that ADDS light.
     op: bloom
-    threshold: 0.84
+    threshold: 0.70
     radius: 0.019
-    strength: 0.34
+    strength: 0.40
 
   - id: edge_close
     # The emblem needs a dark rim to sit inside. Declared here rather than
@@ -542,9 +528,15 @@ text:
       # A tight dark contact shadow under a wide soft one — the pro type move.
       - {kind: drop_shadow, dy: 0.003, blur: 0.004, alpha: 0.74}
       - {kind: drop_shadow, dy: 0.014, blur: 0.032, alpha: 0.44}
-      - {kind: gradient_overlay, stops: [accent, text], angle: 90.0, opacity: 0.95}
-      - {kind: bevel, width: 0.0035, alpha: 0.45}
-      - {kind: texture_overlay, texture_file: marble, blend: soft_light, opacity: 0.22}
+      # Rule 5's brightness half. Both stops are LIGHT — `accent` is the
+      # metal's own highlight-side mid-tone, not its shadow — and the overlay
+      # is pulled back to 0.82 so the ramp tints the ink rather than
+      # replacing it. The texture drops to 0.10 for the same reason: at 0.22
+      # a stone plate at soft_light was costing the type real luminance for
+      # a tooth nobody sees at thumbnail size.
+      - {kind: gradient_overlay, stops: [accent, text], angle: 90.0, opacity: 0.82}
+      - {kind: bevel, width: 0.0035, alpha: 0.38}
+      - {kind: texture_overlay, texture_file: marble, blend: soft_light, opacity: 0.10}
 
   - id: series
     # The credit/eyebrow line above the author's name.
@@ -568,21 +560,35 @@ text:
     size_max: 0.052
 
 # =============================================================================
-# Z-ORDER, bottom first. The four that are easy to get wrong and fatal:
-# `motes` sits low, `relic` is drawn AFTER the whole back tier, `runoff` and
-# `gilt_front` are drawn AFTER the title, and `edge_close` comes before the
-# foot so the wash is not itself vignetted away.
+# Z-ORDER, bottom first. Rule 5 is a LAYER ORDER fact before it is a colour
+# one, and this is where it is enforced: EVERY DIMMING LAYER SITS UNDER THE
+# TYPE. `edge_close` and `tonal_spine` used to sit at the end of the stack,
+# where a vignette written to darken the cover's corners was also darkening
+# the title's corners, and a gradient map written to put ten separately-lit
+# PLATES on one tonal spine was mapping the type through that ramp as well.
+# Neither was ever meant to touch the letterforms — a plate-unifying grade
+# left above the type is simply a type-dimming grade — and moving the pair
+# down cost the design nothing and bought back most of the luminance the
+# finishing stack had been quietly taking.
+#
+# `gild_bloom` stays last because it is the one adjust layer that ADDS light.
+# The recipe's own fx_ layers are appended after everything by build_spec and
+# are outside a template's reach, which is the remaining reason `text` must be
+# taken near white: the finish still costs the type on the way down.
+#
+# The other three that are easy to get wrong: `motes` sits low, `relic` is
+# drawn AFTER the whole back tier, and NOTHING is drawn after the title.
 layers: [field, veins, field_grade, motes, keylight,
          architecture, haze_back, cartouche,
          cluster_left, cluster_right, recede_left, recede_right, relic,
+         gilt_front, edge_close, tonal_spine,
          "scrim:1", subtitle, title,
-         runoff, gilt_front,
-         edge_close, foot_wash, "scrim:0", series, author,
-         tonal_spine, gild_bloom]
+         foot_wash, "scrim:0", series, author,
+         gild_bloom]
 
 # =============================================================================
 casting: >-
-  Cast ten nouns out of the book itself, in this order — the first three
+  Cast nine nouns out of the book itself, in this order — the first three
   constrain everything after them.
 
 
@@ -625,11 +631,6 @@ casting: >-
   static.
 
 
-  runoff — WHAT THE TITLE IS WRITTEN IN, as a liquid. Molten gold, blood, wax,
-  ink, mercury, sap, tar. This is the one noun a reader will remember, so take
-  it from the title itself wherever the title names a substance.
-
-
   gilt_front — THE METAL OF THE EDITION, as a pair of curls. Gilt scrollwork,
   chrome flanges, brass fittings, bone hooks, copper vine.
 
@@ -638,12 +639,16 @@ casting: >-
 # =============================================================================
 #   * nine `{subject}` fills, one per generatable slot (see `casting`).
 #   * five palette hexes. `background` is the slab and must be genuinely dark;
-#     `accent` is the title's DARK stop and `text` its LIGHT stop, so the two
-#     together are the metal — take them from one metal's own shadow and
-#     highlight (an old-gold and a pale cream, a cold pewter and a white), not
-#     from two unrelated hues, or the ramp reads as a colour error rather than
-#     as foil. `text` is also the author's ink: take it near white, because
-#     the finishing stack costs type ~25% brightness on the way down.
+#     `accent` and `text` are the title's two stops and together they ARE the
+#     metal, so take both from ONE metal (an old-gold and a pale cream, a
+#     bright pewter and a white) rather than from two unrelated hues, or the
+#     ramp reads as a colour error rather than as foil. BOTH MUST BE LIGHT.
+#     `accent` is the metal's highlight-side mid-tone, NOT its shadow: the
+#     first build took it from the shadow side at #4E5654 and the ramp spent
+#     the top half of every letterform in the dark, so the title lost to the
+#     relic's own brass and the autopilot had to flip the ink to recover 4.5
+#     contrast. Take `text` near white, because the recipe's finishing layers
+#     are appended above everything and still cost the type on the way down.
 #   * title_font and author_font — an ornate display face and a plain one.
 #   * `title_breaks`, because this title is set in four interlocking lines and
 #     the fitter's own breaks will not find the shape (§15.12).
@@ -663,5 +668,6 @@ casting: >-
 # THE RISKIEST PLATE is `relic`: rule 6 asks the generator for an object that
 # is intricate at one end and deliberately boring for the rest of its length,
 # which is the opposite of what an image model wants to do. Expect to repaint
-# it once. `runoff` is second — ask for too many runs and it comes back as a
-# curtain.
+# it once. `cluster_right` is second, and for a reason rule 3 explains — it
+# has to match `cluster_left`'s bulk, and a plate that comes back sparse
+# leaves the cover leaning.
