@@ -135,7 +135,55 @@ def test_describe_archetypes_mentions_every_archetype_and_its_describe_line():
     for archetype in ARCHETYPES.values():
         assert archetype.name in text
         assert " ".join(archetype.describe.split()) in text
-    assert text.count("\n") == len(ARCHETYPES) - 1
+    # One "- name — describe" ENTRY line per archetype. Not one line per
+    # archetype: a template that declares `casting` rides extra indented lines
+    # under its own entry, so the entry count is the invariant, not the line
+    # count.
+    entries = [l for l in text.splitlines() if l.startswith("- ")]
+    assert len(entries) == len(ARCHETYPES)
+
+
+# -- casting: the doctrine that reaches the art-direction call ---------------
+#
+# A template whose slots are ROLES rather than nouns has to tell the director
+# how to fill them, or the director fills them from the reference cover it was
+# shown instead of from the book it was given. `casting` is the channel; these
+# guard that it actually reaches the enumeration and that silent templates are
+# unaffected.
+
+def test_casting_text_reaches_describe_archetypes():
+    casting = ARCHETYPES["elemental_aperture"].casting
+    assert casting, "elemental_aperture is a role-slot template; it must cast"
+    text = describe_archetypes()
+    for slot in ("aperture", "beyond", "herald", "field", "drift"):
+        assert f"{slot} —" in text, slot
+
+
+def test_casting_is_indented_under_its_own_archetype():
+    casting_by_name = {a.name: a.casting for a in ARCHETYPES.values()}
+    owner = None
+    for line in describe_archetypes().splitlines():
+        if line.startswith("- "):
+            owner = line.split(" — ")[0].removeprefix("- ")
+        elif line.startswith("    "):
+            # An indented line only ever belongs to the entry above it, and
+            # only a template that declares `casting` may emit one.
+            assert casting_by_name.get(owner), (owner, line[:40])
+
+
+def test_a_template_with_no_casting_adds_no_lines():
+    # Byte-identical default path: every template that predates the field
+    # still describes as exactly one line and contributes no indented ones.
+    silent = [a for a in ARCHETYPES.values() if not a.casting]
+    assert silent, "the no-casting path needs at least one template to guard"
+    lines = describe_archetypes().splitlines()
+    for i, line in enumerate(lines):
+        if not line.startswith("- "):
+            continue
+        name = line.split(" — ")[0].removeprefix("- ")
+        if any(a.name == name for a in silent):
+            following = lines[i + 1:i + 2]
+            assert not following or following[0].startswith("- ")
 
 
 # -- genres (§5.3): the field, its tags, and describe_archetypes(genre) ------
@@ -158,6 +206,8 @@ def test_an_untagged_archetype_is_in_scope_for_every_genre():
 # doesn't silently drift the library's genre coverage.
 _EXPECTED_GENRES = {
     "romantasy_organic": ["fantasy", "romance"],
+    "elemental_aperture": ["fantasy", "science_fiction", "romance",
+                          "mystery_thriller", "horror"],
 }
 
 
