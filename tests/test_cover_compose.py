@@ -25,6 +25,14 @@ from docproof.cover.model import (ArtSlot, Brief, CoverSpec, Direction,
 from docproof.cover.compose import (EBOOK_H, EBOOK_W, PROCEDURAL_SYNTHESIZERS,
                                     THUMB_LARGE, THUMB_SMALL, ComposeError,
                                     compose, save_renders)
+# Private, and deliberately imported: the three 2026-08-31 fixes at the end of
+# this file are all about what a MEASUREMENT returns, and asserting them
+# through a finished render alone would only ever prove the number moved, not
+# that it now means the right thing.
+from docproof.cover.compose import (_OCCLUSION_THRESHOLD, _dead_band_frac,
+                                    _duotone, _glyph_boxes,
+                                    _occlusion_fraction, _occlusion_severity,
+                                    _worst_glyph_occlusion)
 
 CANVAS = (400, 640)
 
@@ -354,7 +362,13 @@ def test_opaque_focal_asset_swaps_behind_its_title_and_warns(tmp_path):
 def test_focal_asset_with_real_transparency_does_not_swap_or_warn(tmp_path):
     _flat_png(tmp_path / "background.png", CANVAS, (60, 60, 90))
     focal = Image.new("RGBA", (200, 300), (200, 50, 50, 0))
-    for y in range(60, 240):
+    # The opaque region sits in the LOWER part of the plate, so after the
+    # contain fit it lands clear of the title's glyphs. It used to run
+    # y 60-240, which buried whole letters of the title while measuring only
+    # 13% of the word -- the exact blind spot the per-glyph guard closes, so
+    # that fixture now (correctly) trips the guard this test is asserting the
+    # absence of. See test_a_cutout_that_buries_one_whole_letter_is_guarded.
+    for y in range(200, 290):
         for x in range(60, 140):
             focal.putpixel((x, y), (200, 50, 50, 255))
     focal.save(tmp_path / "focal.png")
@@ -1449,3 +1463,213 @@ def test_thriller_repro_title_stays_inside_its_zone_and_off_the_trim(tmp_path):
     trim_warnings = [w for w in report.warnings
                      if "'title'" in w and "trim edge" in w]
     assert not trim_warnings, trim_warnings
+
+
+# -- the three engine bugs the Longsword run surfaced (fixed 2026-08-31) -------
+#
+# All three were silent: nothing crashed, nothing warned, and each returned a
+# number that looked reasonable while describing the wrong thing. They are
+# tested together because they share that shape -- a measurement asking a
+# question subtly different from the one its caller needed answered.
+
+# 1. The duotone tone crush ---------------------------------------------------
+
+def test_duotone_keeps_a_low_key_plates_tonality_instead_of_crushing_it():
+    """A dark plate is exactly what a duotone is reached for, and it used to
+    be exactly what a duotone destroyed.
+
+    Ramp position was WCAG relative luminance -- physically linear, and
+    savagely compressed at the dark end -- so a plate living between sRGB 10
+    and 60 landed inside a ~6%-wide slice of the 256-step ramp and came back
+    a flat rectangle."""
+    plate = Image.new("RGBA", (64, 1))
+    for x in range(64):
+        v = 10 + x                       # sRGB 10..73: a night interior
+        plate.putpixel((x, 0), (v, v, v, 255))
+
+    out = _duotone(plate, _palette(background="#000000", primary="#ffffff"))
+    values = sorted({px[0] for px in out.getdata()})
+
+    # The old behaviour put every pixel inside a handful of adjacent steps.
+    assert max(values) - min(values) > 40, (
+        f"the plate collapsed into {max(values) - min(values)} ramp steps")
+    # Every input tone survives as its own output tone: the mapping is
+    # 1:1 over this plate, not merely "spread out a bit."
+    assert len(values) == 64, "distinct input tones collapsed into each other"
+
+
+def test_duotone_still_puts_every_pixel_exactly_on_the_ramp():
+    """The §7.4a guarantee the fix must not break: WHICH point on the line a
+    pixel lands at changed; that it lands on the line did not."""
+    plate = Image.new("RGBA", (64, 1))
+    for x in range(64):
+        plate.putpixel((x, 0), (4 * x, 4 * x, 4 * x, 255))
+    palette = _palette(background="#101820", primary="#f5f1e8")
+    bg = ImageColor.getrgb(palette.background)
+    fg = ImageColor.getrgb(palette.primary)
+
+    ramp = {tuple(round(bg[c] + (fg[c] - bg[c]) * (i / 255)) for c in range(3))
+            for i in range(256)}
+    for px in _duotone(plate, palette).getdata():
+        assert px[:3] in ramp
+
+
+def test_duotone_preserves_the_order_of_two_tones():
+    """sRGB re-encoding is monotonic, so nothing that depended on 'this pixel
+    is darker than that one' changed."""
+    plate = Image.new("RGBA", (3, 1))
+    for x, v in enumerate((20, 90, 200)):
+        plate.putpixel((x, 0), (v, v, v, 255))
+    out = _duotone(plate, _palette(background="#000000", primary="#ffffff"))
+    a, b, c = (out.getpixel((x, 0))[0] for x in range(3))
+    assert a < b < c
+
+
+# 2. Per-glyph occlusion ------------------------------------------------------
+
+def _title_ink(spec, canvas=CANVAS):
+    slot = next(t for t in spec.text if t.id == "title")
+    return typeset.text_mask(slot, typeset.fit_text(slot, canvas), canvas)
+
+
+def test_a_whole_word_can_pass_while_one_letter_is_entirely_buried():
+    """The measurement gap itself, stated as a number.
+
+    This is the live defect: a cutout crested a title's baseline, the report
+    said 13% occlusion -- comfortably inside the 30% limit -- and the cover
+    shipped reading LONGSW RD. A word is ~9 letters, so losing one whole
+    letter costs the WORD about a ninth of its ink and costs the READER the
+    word."""
+    ink = _title_ink(_spec("cutout_sandwich"))
+    boxes = _glyph_boxes(ink)
+    assert len(boxes) > 3, "the fixture title should have several glyphs"
+
+    art = Image.new("L", CANVAS, 0)
+    ImageDraw.Draw(art).rectangle(boxes[len(boxes) // 2], fill=255)
+
+    whole = _occlusion_fraction(ink, art)
+    worst = _worst_glyph_occlusion(ink, art, boxes)
+    assert whole < _OCCLUSION_THRESHOLD, "fixture no longer reproduces the gap"
+    assert worst == pytest.approx(1.0, abs=0.01)
+    assert _occlusion_severity(whole, worst) > 1.0, (
+        "severity did not flag a letter that is 100% gone")
+
+
+def test_glyph_boxes_splits_lines_then_letters():
+    ink = Image.new("L", (400, 200), 0)
+    d = ImageDraw.Draw(ink)
+    d.rectangle((10, 10, 40, 60), fill=255)      # line 1, letter 1
+    d.rectangle((60, 10, 90, 60), fill=255)      # line 1, letter 2
+    d.rectangle((10, 120, 40, 170), fill=255)    # line 2, letter 1
+    boxes = _glyph_boxes(ink)
+    assert len(boxes) == 3
+    tops = sorted({b[1] for b in boxes})
+    assert len(tops) == 2, "the two lines were not separated"
+
+
+def test_glyph_boxes_ignores_antialiasing_between_letters():
+    """Projecting raw ink would bridge two letters through their own soft
+    edges and hand the measurement back the blind spot it exists to close."""
+    ink = Image.new("L", (200, 60), 0)
+    d = ImageDraw.Draw(ink)
+    d.rectangle((10, 10, 40, 50), fill=255)
+    d.rectangle((60, 10, 90, 50), fill=255)
+    d.rectangle((41, 10, 59, 50), fill=8)        # faint AA in the gap
+    assert len(_glyph_boxes(ink)) == 2
+
+
+def test_an_empty_mask_has_no_glyphs():
+    assert _glyph_boxes(Image.new("L", (50, 50), 0)) == []
+    assert _worst_glyph_occlusion(Image.new("L", (50, 50), 0),
+                                  Image.new("L", (50, 50), 255), []) == 0.0
+
+
+def test_a_cutout_that_buries_one_whole_letter_is_guarded_and_says_so(tmp_path):
+    """End to end: the guard fires, the art goes behind the text, and the
+    warning names the limit that actually broke -- a buried LETTER and a
+    crowded WORD are different defects with different fixes."""
+    _flat_png(tmp_path / "background.png", CANVAS, (60, 60, 90))
+    spec = _spec("cutout_sandwich", art_prompts={"background": "x", "focal": "y"})
+
+    # The original fixture of test_focal_asset_with_real_transparency_does_
+    # not_swap_or_warn, restored here because it turned out to reproduce the
+    # live defect exactly: once contain-fitted it covers 13% of the title's
+    # ink -- comfortably inside the 30% whole-word limit -- while burying one
+    # letter completely.
+    focal = Image.new("RGBA", (200, 300), (200, 50, 50, 0))
+    for y in range(60, 240):
+        for x in range(60, 140):
+            focal.putpixel((x, y), (200, 50, 50, 255))
+    focal.save(tmp_path / "focal.png")
+    for art in spec.art:
+        if art.id in ("background", "focal"):
+            art.asset = f"{art.id}.png"
+
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    guarded = [w for w in report.warnings if "focal" in w and "title" in w]
+    assert guarded, "a fully buried letter did not trip the guard"
+    assert "one whole letter" in guarded[0]
+    assert "single glyph" in guarded[0]
+
+
+def test_the_worst_glyph_is_reported_even_when_the_sandwich_passes(tmp_path):
+    """An agent tuning a sandwich needs to see how close the worst letter
+    came, not only that the word survived."""
+    _flat_png(tmp_path / "background.png", CANVAS, (60, 60, 90))
+    spec = _spec("cutout_sandwich", art_prompts={"background": "x", "focal": "y"})
+    focal = Image.new("RGBA", (200, 300), (200, 50, 50, 0))
+    for y in range(200, 290):
+        for x in range(60, 140):
+            focal.putpixel((x, y), (200, 50, 50, 255))
+    focal.save(tmp_path / "focal.png")
+    for art in spec.art:
+        if art.id in ("background", "focal"):
+            art.asset = f"{art.id}.png"
+
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+    assert "title<-focal" in report.occlusion
+    assert "title<-focal#glyph" in report.occlusion
+
+
+# 3. The dead band's blind axis -----------------------------------------------
+
+def test_full_bleed_rules_break_a_dead_band():
+    """The metric measured the wrong axis. A full-bleed horizontal rule -- the
+    most ordinary way to put structure into an empty stretch -- is perfectly
+    uniform ACROSS its own row, so it scored as flat as the emptiness it was
+    drawn to break, and a cover could not improve this number by adding
+    exactly the thing the warning asked for."""
+    flat = Image.new("RGB", CANVAS, (120, 120, 130))
+    assert _dead_band_frac(flat)[0] == pytest.approx(1.0, abs=0.02)
+
+    ruled = flat.copy()
+    d = ImageDraw.Draw(ruled)
+    for y in (200, 320, 440):
+        d.rectangle((0, y, CANVAS[0], y + 3), fill=(20, 20, 25))
+
+    frac, _top, _bottom = _dead_band_frac(ruled)
+    assert frac < 0.5, f"full-bleed rules still measured as dead ({frac:.2f})"
+
+
+def test_a_smooth_gradient_is_still_dead():
+    """The behaviour the fix must not break: a gradient moves its mean by a
+    hair per row, and a quiet field is still a quiet field."""
+    grad = Image.new("RGB", CANVAS)
+    d = ImageDraw.Draw(grad)
+    for y in range(CANVAS[1]):
+        v = 60 + int(y * 0.15)
+        d.line((0, y, CANVAS[0], y), fill=(v, v, v))
+    assert _dead_band_frac(grad)[0] == pytest.approx(1.0, abs=0.02)
+
+
+def test_real_ink_across_a_row_still_reads_as_alive():
+    """The original within-row test, unchanged: glyphs and art edges vary
+    across their own row and were always caught."""
+    field = Image.new("RGB", CANVAS, (120, 120, 130))
+    d = ImageDraw.Draw(field)
+    for y in (300, 302, 304):
+        for x in range(0, CANVAS[0], 20):
+            d.rectangle((x, y, x + 8, y + 1), fill=(10, 10, 10))
+    assert _dead_band_frac(field)[0] < 0.9
+

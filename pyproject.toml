@@ -69,11 +69,15 @@ languagetool = [
     "language_tool_python>=3.4,<4",
 ]
 canvas = [
-    # Cover Canvas's in-app AI art director (docproof/canvas/assistant.py)
-    # drives the local Claude Code login through the agent SDK, so a Max
-    # subscription — not an API key — pays for assistant turns. The editor
-    # itself works without this extra; only the AI box needs it (the chat
-    # route answers 501 with instructions when it is missing).
+    # The agent lane (docproof/agent_lane.py): the Cover Canvas AI box
+    # (docproof/canvas/assistant.py) AND the per-concept builders a new cover
+    # job now runs on (docproof/cover/atelier.py). Both drive the local Claude
+    # Code login through the agent SDK, so a Max subscription — not an API
+    # key — pays for those turns.
+    #
+    # This stopped being optional when the atelier replaced the fixed
+    # critique loop: the editor still opens without it, but MAKING a cover
+    # does not, so any deployment that runs jobs must install this extra.
     "claude-agent-sdk>=0.2",
 ]
 build = [

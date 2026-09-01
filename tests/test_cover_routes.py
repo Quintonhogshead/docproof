@@ -114,8 +114,19 @@ def _bypass_provider_and_image_client(monkeypatch) -> None:
 
 
 def _fake_direction_call(monkeypatch, directions: list[Direction]) -> None:
-    monkeypatch.setattr(cover_pipeline, "run_directions", lambda *a, **k: DirectionResult(
-        directions=directions, model="gpt-5.6-luna", cost=0.02))
+    """The director's read, faked. Every route test that lets a job run needs
+    one: the real call reads a whole manuscript."""
+    from docproof.cover.director import ConceptAssignment, DirectorResult
+
+    monkeypatch.setattr(cover_pipeline, "assign_concepts", lambda *a, **k:
+                        DirectorResult(
+                            assignments=[
+                                ConceptAssignment(direction=d,
+                                                  execution_notes="notes",
+                                                  done_when="it reads")
+                                for d in directions],
+                            reading="a read", model="gpt-5.6-luna", cost=0.02,
+                            words_read=1000, sliced=False))
 
 
 def _save_renders(image, job_dir, version, concept) -> list[str]:
@@ -130,15 +141,32 @@ def _save_renders(image, job_dir, version, concept) -> list[str]:
     return [rel]
 
 
-def _fake_render_chain(monkeypatch) -> None:
-    """generate/has_real_alpha/compose/save_renders -- every route test that
-    lets a job actually run through to 'ready' needs these."""
-    monkeypatch.setattr(cover_pipeline, "generate",
-                        lambda client, prompt, **k: b"fake-png-bytes")
-    monkeypatch.setattr(cover_pipeline, "has_real_alpha", lambda png: True)
-    monkeypatch.setattr(cover_pipeline, "compose", lambda spec, job_dir: (
-        object(), RenderReport(contrast={}, scrim_final={}, fitted_sizes={},
-                              warnings=[])))
+def _fake_render_chain(monkeypatch, tiers: list[str] | None = None) -> None:
+    """The atelier, faked -- every route test that lets a job run through to
+    'ready' needs this. A real agent spawns a Claude session; these tests are
+    about the HTTP layer and the job store, so the agent is stood in for by
+    something that writes one render and bills one image at the tier its
+    BUDGET implies. `tiers` collects the tier each concept was funded for,
+    which is how the tier tests still prove the request reached the roll."""
+    async def fake_build(*, job_dir, index, brief, assignment, spec,
+                         image_client, assemble_prompt, save_renders,
+                         sem=None, budget=None, model=None):
+        per = budget.max_usd / budget.max_generations if budget else 0.05
+        tier = "1K" if abs(per - IMAGE_COST["1K"]) < 1e-9 else "2K"
+        if tiers is not None:
+            tiers.append(tier)
+        renders = save_renders(object(), job_dir, spec.version, index)
+        return cover_pipeline.ConceptOutcome(
+            spec=spec,
+            report=RenderReport(contrast={}, scrim_final={}, fitted_sizes={},
+                                warnings=[]),
+            renders=renders,
+            ledger=[{"kind": "image", "concept": index,
+                     "detail": f"concept {index} background ({tier}, atelier)",
+                     "usd": IMAGE_COST[tier]}],
+            summary="done", finished=True)
+
+    monkeypatch.setattr(cover_pipeline, "build_concept", fake_build)
     monkeypatch.setattr(cover_pipeline, "save_renders", _save_renders)
 
 
@@ -259,16 +287,26 @@ def test_get_job_404s_for_an_unknown_id(monkeypatch, tmp_path):
 
 # -- multipart manuscript upload (§8.1) -------------------------------------------
 
-def test_multipart_create_with_a_manuscript_persists_sample_and_reaches_direction(
+def test_multipart_create_reads_the_whole_book_and_stores_only_the_sample(
         monkeypatch, tmp_path):
+    """The upload reaches the director WHOLE -- not as the opening-plus-middle
+    sample create_job writes -- and the book itself still never lands in the
+    job store."""
+    from docproof.cover.director import ConceptAssignment, DirectorResult
+
     app = _app(monkeypatch, tmp_path)
     _bypass_provider_and_image_client(monkeypatch)
     _fake_render_chain(monkeypatch)
     received = {}
-    def fake_run_directions(brief, provider, *, n, manuscript_sample="", **kw):
-        received["sample"] = manuscript_sample
-        return DirectionResult(directions=[_direction("big_type")], model="m", cost=0.0)
-    monkeypatch.setattr(cover_pipeline, "run_directions", fake_run_directions)
+
+    def fake_assign(brief, provider, *, n, manuscript="", **kw):
+        received["manuscript"] = manuscript
+        return DirectorResult(
+            assignments=[ConceptAssignment(direction=_direction("big_type"),
+                                           execution_notes="n",
+                                           done_when="d")],
+            reading="r", model="m", cost=0.0, words_read=100, sliced=False)
+    monkeypatch.setattr(cover_pipeline, "assign_concepts", fake_assign)
     headers = {"X-Cover-Key": COVER_KEY}
 
     body = ("A ship sailed into the fog. " * 400).encode("utf-8")
@@ -284,8 +322,13 @@ def test_multipart_create_with_a_manuscript_persists_sample_and_reaches_directio
         assert data["status"] == "ready"
         assert data["manuscript_name"] == "book.txt"
         assert data["word_count"] > 0
-        assert "OPENING SAMPLE:" in received["sample"]
-        assert "A ship sailed into the fog." in received["sample"]
+        # the WHOLE book, not the sampled form
+        assert "OPENING SAMPLE:" not in received["manuscript"]
+        assert received["manuscript"].count("A ship sailed into the fog.") == 400
+        # ...and only the sample was ever written down
+        job_dir = cover_pipeline.job_dir(tmp_path, job_id)
+        assert (job_dir / cover_pipeline.MANUSCRIPT_SAMPLE_NAME).is_file()
+        assert (job_dir / cover_pipeline.ASSIGNMENTS_NAME).is_file()
 
 
 def test_wrong_suffix_manuscript_is_400_and_leaves_no_job_dir(monkeypatch, tmp_path):
@@ -618,7 +661,6 @@ def test_auto_takes_the_subscription_when_the_machine_can_run_one(monkeypatch):
     assert lane == "subscription"
     assert isinstance(providers.direction, SubscriptionProvider)
     assert isinstance(providers.revision, SubscriptionProvider)
-    assert isinstance(providers.reality, SubscriptionProvider)
     assert isinstance(cover_routes._critique_client(lane),
                       SubscriptionAnthropicClient)
 
@@ -630,7 +672,7 @@ def test_auto_falls_back_to_the_api_key_when_it_cannot(monkeypatch):
     providers = cover_routes._providers(lane)
     assert lane == "api"
     assert not isinstance(providers.direction, SubscriptionProvider)
-    assert built == ["claude-fable-5", "claude-sonnet-5", "claude-sonnet-5"]
+    assert built == ["claude-fable-5", "claude-sonnet-5"]
 
 
 def test_the_api_lane_never_reaches_for_the_subscription(monkeypatch):
@@ -642,7 +684,7 @@ def test_the_api_lane_never_reaches_for_the_subscription(monkeypatch):
     assert lane == "api"
     assert not isinstance(cover_routes._providers(lane).direction,
                           SubscriptionProvider)
-    assert built == ["claude-fable-5", "claude-sonnet-5", "claude-sonnet-5"]
+    assert built == ["claude-fable-5", "claude-sonnet-5"]
 
 
 def test_a_pinned_subscription_lane_502s_rather_than_billing_the_api(
@@ -824,20 +866,15 @@ async def _noop_revision() -> None:
 
 def _tier_over_http(monkeypatch, tmp_path, form: dict) -> tuple[list[str], dict]:
     """POST a brief that actually needs a generated image, let the background
-    job run to terminal, and return (the resolutions generate() was asked
-    for, the job payload). Everything past the HTTP layer is the real
+    job run to terminal, and return (the tiers each concept's agent was
+    funded for, the job payload). Everything past the HTTP layer is the real
     pipeline, which is the only way to prove the request's tier reached both
-    the roll and the price."""
+    the budget and the price."""
     app = _app(monkeypatch, tmp_path)
     _bypass_provider_and_image_client(monkeypatch)
     _fake_direction_call(monkeypatch, [_direction("full_bleed_art")])
-    _fake_render_chain(monkeypatch)
-
     resolutions: list[str] = []
-    def fake_generate(client, prompt, *, transparent=False, resolution="2K"):
-        resolutions.append(resolution)
-        return b"fake-png-bytes"
-    monkeypatch.setattr(cover_pipeline, "generate", fake_generate)
+    _fake_render_chain(monkeypatch, tiers=resolutions)
 
     headers = {"X-Cover-Key": COVER_KEY}
     with TestClient(app) as client:

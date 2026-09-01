@@ -285,18 +285,13 @@ Input: current `CoverSpec` (JSON-dumped into the user prompt) + the human's note
 
 Post-call, in code: `version += 1`; `notes_log.append(notes)`; **diff the art slots** — a slot whose `prompt` or `transparent` changed gets its `asset` cleared, which is the signal to regenerate that one image (and only that one). Validate the result; on validation failure raise `RevisionError` (the UI keeps the old version and shows the sentence).
 
-### 6.3 Critique pass (DECIDED 2026-08-28: in v1; iterated, given two images, and given a bounded art-repaint escape hatch in the BRAIN wave / BRAIN v2.1, 2026-08-29)
+### 6.3 ~~Critique pass~~ — REPLACED by the atelier (§16), 2026-08-31
 
-After a concept first composes, and **before** it is marked `ready`, a vision model reviews the finished cover the way an art director reviews a proof — and, since the BRAIN wave, can loop this critique-then-revise cycle up to `MAX_CRITIQUE_ROUNDS` (4) times per concept: the owner's beta verdict was that a single fixed round left the judge merely reporting problems instead of getting them fixed. Module `docproof/cover/critique.py`:
+The fixed critique-and-revise loop (a vision judge, a Sonnet reviser, up to four rounds) has been **removed**, along with `docproof/cover/critique.py` and the `reality.py` sample distillation that fed the old opening call. Both were bounded by their own shape: the judge could only ever ask its questions in the order it was written to ask them, and it had no move for most of what it found, so it reported defects it could not fix and spent its rounds on wall-clock pressure rather than on the cover being right.
 
-- `@dataclass(frozen=True) CritiqueResult: passes: bool; tells: list[str]; notes: str; cost: float | None; art_defects: list[str] = []`
-- `run_critique(png_bytes: bytes, thumb_bytes: bytes | None, spec: CoverSpec, brief: Brief, client, *, model=CRITIQUE_MODEL, composer_warnings: Sequence[str] = ()) -> CritiqueResult` — the `Provider` protocol is text-only, so this call uses the `anthropic` SDK directly (same "vendor SDK lives in its own module" precedent imaging.py sets for the `openai` SDK, just a different vendor; the actual request shape mirrors `docproof/providers/anthropic_provider.py`'s own structured-output call almost exactly). Sends **one or two images**: the composed render downscaled to ≤600px wide always, plus — BRAIN v2.1 — the job's own 100px shelf/search thumbnail (`save_renders`'s `_thumb100.png` companion file, read straight off disk next to the render) when one exists, each labeled so the judge can address either by name; a missing thumbnail (an old job, a caller that never rendered one) degrades to sending the one image and never fails the call over it. Plus a one-paragraph summary of brief + genre + this concept's generated art slots (id + prompt, so `art_defects` can name one) + any composer measurements (`composer_warnings` — the composer's own `RenderReport.warnings` for this exact render, clearly labeled, so the judge reasons with real measurements instead of re-deriving them by eye). Structured output. System prompt: you are reviewing a proof for a traditional press; would this pass on a trad-published shelf in this genre? Name concrete tells (type crowding, weak hierarchy, text fighting busy art, palette mismatch, AI-art artifacts, genre miscues, a large empty band with nothing designed in it, an element so low-contrast against its ground it disappears, a cover that reads as a blank field with words at thumbnail size). `passes=true` means ship it. `notes` = one actionable **design-only** revision instruction in the voice of §6.2 notes (it may NOT request new art — that's what `art_defects` is for). `art_defects` = the id of every art slot named in that same summary whose GENERATED IMAGE ITSELF is the problem — a visible generation artifact, anatomical or structural nonsense on an inanimate object, an illegible/warped subject — as opposed to a slot whose art is clean but simply mis-designed; that distinction is exactly what lets the pipeline tell "revise the design" apart from "repaint the art," below.
-- Pipeline integration (`run_job`): compose → critique → if `passes` or the critique call fails (a critique failure must never block a cover — log, ledger note, proceed), mark `ready`; else run the §6.2 revision machinery with `critique.notes` and `allow_new_art=False`, recompose, and critique again — up to `MAX_CRITIQUE_ROUNDS` critique calls total (so at most `MAX_CRITIQUE_ROUNDS - 1` revisions), stopping early on a genuine pass, a revision that comes back byte-identical to its input (nothing left to give — unless a repaint also happened this round; see below), or a critique/revision call failure. A round that still fails on the very last permitted round ships with its tells as leftover `RenderReport.warnings` rather than buying a revision nothing will ever re-check. Ledger row `{kind: "critique", detail, usd}` per round; the FINAL verdict's leftover `tells` (if any) are appended to `RenderReport.warnings`; every applied note lands in `notes_log`, prefixed `[auto-critique r{n}]`, with a second, CODE-COMPUTED `[auto-critique r{n} changed] ...` entry right after it naming what the revision actually changed (`diff_spec_fields`, diffing the validated spec models themselves — never the model's own prose) — "revising did nothing" is visibly impossible this way.
-- **Art-repaint escape hatch (BRAIN v2.1):** a design-only revision can never fix a defective GENERATED image (a surreal blob standing in for the intended object, an eye baked into a lighthouse lantern). When a failing verdict names `art_defects`, at least one more round remains, and this concept has not already used its repaint this job, the pipeline clears up to 2 of those flagged slots' `asset` fields and repaints them through the same `_generate_art_slot` path a fresh concept's own art uses — the same prompt, or the one this round's design revision just rewrote if it touched that slot (regeneration re-rolls the image either way) — then recomposes and continues the loop. Ledger row per repainted slot: `{kind: "image", detail: "concept N slot X repainted on judge's flag", usd: 0.0}`, alongside the normal costed image-generation row. **Hard bound: at most one repaint round per concept per job, and auto path only** — a human-triggered revision (§6.2) never repaints on its own initiative. Because a repaint changes real pixels on disk without changing the spec's `asset` string at all (the path is a deterministic function of concept index + slot id), the identical-spec early stop is blind to it by construction and is skipped for any round in which a repaint just happened.
-- Revisions triggered by humans do NOT re-run critique (the human is the critic there), and never trigger a repaint on their own initiative.
-- Model: default `claude-sonnet-5` (vision-capable) via a module constant; cost is a few tenths of a cent per critique call.
+What replaced it is §16: one director that reads the whole book and assigns each concept its spec, and one agent per concept that plans, buys, looks and iterates until it decides the cover is done. Everything §6.3 used to promise — a proof reviewed before it ships, art repainted when the pixels themselves are wrong, a design revised when they are not — the agent does with its own eyes and the composer's own verbs.
 
-Also (same decision date): the §6.1 art-direction system prompt gains one rule — prefer illustrated, painterly, or graphic media for `art_prompts`; avoid photorealistic renders unless the brief explicitly calls for photography (stylized media hide generation artifacts; photoreal is the biggest "AI look" tell).
+The §6.1 art-direction rule this section added still stands, and now lives in the director's prompt: prefer illustrated, painterly or graphic media for `art_prompts`; avoid photorealistic renders unless the brief explicitly calls for photography (stylized media hide generation artifacts; photoreal is the biggest "AI look" tell).
 
 ## 7. Rendering
 
@@ -398,7 +393,9 @@ Root: `COVER_DATA_PATH` env (Fly: `/data/cover`; local default: `cover_jobs/` un
 
 ### 8.1 Manuscript handling
 
-When job creation includes a manuscript file: validate suffix/size exactly like `_read_upload` in [app/routes/quest.py](../app/routes/quest.py) (`.docx/.txt/.md`, 40MB cap, human-sentence errors), write it to a temp dir, run `read_sample_source` + `sample_text`, persist only the sample text to `manuscript_sample.txt` (never the full manuscript — the sample is all the direction call reads), and record `manuscript_name` and `word_count` on `JobState` (add both fields: `manuscript_name: str = ""`, `word_count: int = 0`). An unreadable file fails job creation with a 400 sentence — before any model spend. Revisions re-read the stored sample so grounding survives across versions.
+When job creation includes a manuscript file: validate suffix/size exactly like `_read_upload` in [app/routes/quest.py](../app/routes/quest.py) (`.docx/.txt/.md`, 40MB cap, human-sentence errors), write it to a temp dir, run `read_sample_source` + `sample_text`, persist only the sample text to `manuscript_sample.txt` (never the full manuscript), and record `manuscript_name` and `word_count` on `JobState` (add both fields: `manuscript_name: str = ""`, `word_count: int = 0`). An unreadable file fails job creation with a 400 sentence — before any model spend. Revisions re-read the stored sample so grounding survives across versions.
+
+**The director reads the whole book, and it is still never stored** (2026-08-31, §16). The route reads the uploaded file's full text in the same `with tempfile.TemporaryDirectory(...)` block that creates the job, hands it to `run_job(..., manuscript=text)` as an argument, and drops it when the job ends; `cover_pipeline.read_manuscript` is the one function that does this, so the policy stays in one place. What survives on disk is the director's `assignments.json` — its reading of the book plus one assignment per concept — never the prose. `manuscript_sample.txt` is unchanged and is the fallback the director reads when a job is replayed with no text in hand.
 
 `JobState` (pydantic, serialized to `job.json` after **every** step so a poll — or a machine restart — always sees truth):
 
@@ -1561,3 +1558,102 @@ gradient into it (this cover: 83.6 unshadowed → 81.5 → 67.5 at the contact).
 - Generated cutouts arrive with 140–240px of sub-40 alpha haze, and `contain`-fit scales the whole
   source frame — so that padding silently shrinks every object. Crop to the hard-alpha box during
   conditioning, not at seat time.
+
+
+## 16. The director and the atelier (DECIDED 2026-08-31, owner) — how a cover is made now
+
+The old flow was: distil a manuscript *sample* into a grounding sheet, ask one call for N directions, then paint each concept and put it through a fixed critique loop. The new flow is two acts, and it is what the owner arrived at by building six Longsword covers by hand with six agents:
+
+> **One model reads the book and assigns cover specs, and N agents execute the plan, iterate, and return when finished.**
+
+### 16.1 The director (`docproof/cover/director.py`)
+
+ONE structured call on the frontier model (`DIRECTOR_MODEL`, `claude-fable-5`), given the **whole manuscript**, answering with:
+
+- `reading` — what this book is actually about in the terms a cover has to work in: the concrete objects and places the prose returns to, the register, and the single thing a browser must understand in one second.
+- one `ConceptAssignment` per concept: a `Direction` (the design — archetype, palette, fonts, art prompts, recipe, type move, exactly as §6.1 defined it) **plus two pieces of prose a schema alone cannot carry**:
+  - `execution_notes` — the specific way THIS design fails if built carelessly, and the clause the art prompt must carry to pre-empt it.
+  - `done_when` — the finish line, concrete enough that the agent can judge itself against it at thumbnail size.
+
+Those two fields are the whole reason the director exists as a separate thing from the old direction call. The agent that executes a concept has not read the book; everything it knows about why this cover is right comes from here.
+
+`fit_manuscript` is the one concession to physics: at or under `MAX_BOOK_WORDS` (120k) the text goes in whole and unlabelled; past it, the book is read as `BOOK_SLICES` (8) labelled slices spanning its whole length, with the opening and the ending at double weight. **Sliced, never truncated** — a cover designed off the first 120k words of a 300k-word novel is designed off the setup, and the book's own answer never reaches the director. `DirectorResult.sliced` and `.words_read` are ledgered, so nobody believes a long novel was read end to end when it was not.
+
+Failure posture is `run_directions`': `DirectorError` on any trouble, no fallback, because the next step spends real image-generation dollars.
+
+### 16.2 The atelier (`docproof/cover/atelier.py`)
+
+One agent per concept — a Claude Code session over the agent SDK (`docproof/agent_lane.py`), on the owner's subscription — holding the composer's own verbs as tools:
+
+| tool | cost | what it does |
+|---|---|---|
+| `read_spec` | free | the current CoverSpec as JSON |
+| `archetype_info` | free | this archetype's slot ids, which are generatable, which carry an authored mask, the text zones |
+| `budget` | free | generations and dollars left |
+| `paint` | **money** | generate one slot's art at `1K` or `2K` and attach it |
+| `render` | free | compose and return the render report |
+| `look` | free | the composed cover, downscaled to about thumbnail size |
+| `edit_spec` | free | patch the spec by JSON path and recompose — the same vocabulary and the same guarded paths `revise_spec` uses |
+| `finish` | free | declare the cover done, with an honest summary |
+
+Four things this is built around:
+
+1. **The tools are the studio's own verbs.** `paint` runs the pipeline's own prompt assembler, so the archetype's composition note and the negative suffix cannot be bypassed by an agent writing its own prompt. There is no second rendering path to drift onto.
+2. **Money is metered in code, not trusted to the agent.** `Budget` is checked before every generation and the refusal comes back as the tool result — a sentence the agent can act on. Both ceilings bind: `MAX_GENERATIONS` (12) stops an agent that has lost the thread on cheap rolls; `MAX_ART_USD` stops one that escalated everything to 2K. The agent MAY choose the tier — escalating a keeper to 2K is exactly the judgment worth delegating — and every roll is priced from the same tier it rolled at. `pipeline._concept_art_budget` scales the dollar ceiling with the job's tier, so a draft job buys the same NUMBER of rolls as a full one.
+3. **Finishing is a decision, not a timeout.** An agent that stops calling tools without `finish` has run out of turns, and that is recorded as a different outcome from a cover its builder called done. Either way the composed cover ships — throwing away art the person paid for would be worse — with the fact in the ledger.
+4. **A failed concept is one concept.** `build_concept` never raises for anything that is one concept's problem; it returns a `ConceptOutcome` carrying `error` and whatever was composed. The two exceptions are the lane's own refusals (no SDK, no login), which are the whole job's problem and are raised.
+
+### 16.3 Concurrency — N agents at once (reverses the 2026-08-31 serial rule)
+
+Concepts are built **concurrently**, `asyncio.gather` over `_build_concept`. This reverses "one concept at a time," decided earlier the same day, and the reason it is safe is that the thing serialisation protected no longer exists: concepts used to interleave through one image semaphore while a shared judge loop and staged reviews waited on each other's generations. An atelier session is its own reasoning process holding its own budget, and the per-job image semaphore still bounds what is actually in flight. N agents therefore cost about as long as one — which is what the owner watched happen building the six Longsword covers.
+
+### 16.4 What this orphaned
+
+- **`critique.py` — deleted.** Its loop is §16.2.
+- **`reality.py` — deleted.** Its sample distillation is the director's whole-book read. `Providers.reality` remains as an accepted keyword so existing callers keep working; nothing reads it.
+- **The §15.16 composition planner no longer runs on a new job.** It was the pre-flight that made several independent generations into one planned composition; an agent that reads the archetype, argues itself into a prompt and looks at what came back is doing that job with its eyes open. `planner.py` stays for `run_revision`'s replan path, and `COVER_PLANNER` now gates only that.
+- **The `critique` doctrine surface is now `atelier`**, and it inherits `canvas`'s conduct rules ("measure before you move", "fewest ops") because, like the canvas assistant, the atelier is a tool-using conversation that can obey them.
+
+### 16.5 Deployment consequence — READ THIS
+
+The agent lane needs the Claude Agent SDK **and a Claude login**. `Dockerfile.quest` now installs `.[app,cover,canvas]` for the SDK, but a Fly machine has no interactive login: it needs `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` in its secrets, or **every new cover job will fail at the first agent** with the lane's own sentence. There is deliberately no fallback path — the owner chose replacement over a dual-mode engine (2026-08-31).
+
+
+## 17. Three measurement bugs (FIXED 2026-08-31, from the Longsword run)
+
+Six covers built by six agents surfaced three defects in the composer that share one shape: nothing crashed, nothing warned, and each returned a number that looked reasonable while answering a subtly different question from the one its caller had asked. All three are the kind an agent hits immediately, because an agent reads the render report and believes it.
+
+### 17.1 The duotone tone crush
+
+`_duotone` (and `_posterize`) positioned each pixel on its ramp by **WCAG relative luminance**, reusing `effects.luminance_band` on the reasoning that one measurement serving two purposes was a virtue.
+
+Linear luminance is savagely compressed at the dark end. A plate living between sRGB 10 and 60 — a night interior, a dark table, deep water, i.e. exactly the plates a duotone is reached for — spans linear luminance 1 to 17 out of 255: a ~6%-wide slice of a 256-step ramp. Every tone in the plate collapsed onto effectively one colour and the treatment returned a flat rectangle. The agent building "The Empty Seat" hit this, measured `|ΔL| = 0.009` against a 0.12 floor, and worked around it with a `gradient_map` adjust layer.
+
+**Fix:** new `effects.lightness_band` — the same WCAG channel weights applied to the **gamma-encoded** values, with no trip through linear space — and `_duotone`/`_posterize` read it instead. For a neutral pixel it is the identity, so every tone the plate had survives (64 test tones in, 64 out; it was 5).
+
+Note the rejected first attempt, which is the instructive part: `luminance_band(...).point(srgb_encode)` looks equivalent and is worse, because `luminance_band` quantises to 8 bits *while still in linear space* — the dark detail is already destroyed before any re-encode can spread it back out (64 tones came back as 17).
+
+**`luminance_band` is unchanged and still what the legibility autopilot uses.** Contrast math is the one place linear is right. The lesson is not "linear luminance was wrong", it is that *contrast measurement* and *tone mapping* are different questions.
+
+### 17.2 Per-glyph occlusion
+
+`_occlusion_fraction` measured what fraction of a text slot's **total** ink an art slot covers. That is the right question for "is this text crowded" and the wrong one for "is this text readable."
+
+A word is about nine letters, so losing one whole letter costs the WORD about a ninth of its ink and costs the READER the word. On the "Tarmac" cover a cutout crested the title's baseline: whole-word occlusion measured 16.3%, comfortably inside the 30% limit, while the O was 100% buried and the R 44%. The cover said `LONGSW RD` and every gate passed.
+
+**Fix:** `_glyph_boxes` cuts a fitted ink mask into one box per glyph — row runs for the lines, then column runs inside each line, via Pillow's `getprojection()`, thresholded at `_GLYPH_INK_FLOOR` so antialiasing cannot bridge two letters. `_worst_glyph_occlusion` returns the most-buried single glyph. `_occlusion_severity(whole, worst, limit)` combines both into one number where 1.0 is exactly at the limit, and all three guards (the sandwich guard, the line-gap snap, the general text/art contact pass) now accept, reject and **rank** candidates by it.
+
+`_GLYPH_OCCLUSION_THRESHOLD` is 0.50 and is deliberately NOT scaled with each guard's whole-word limit: half a letter gone is an unreadable letter whichever guard is asking. The governing fact from the run — at a normal display weight, *any* bottom-edge overlap destroys a round letter, whose whole identity is its bowl.
+
+Two reporting consequences: `RenderReport.occlusion` gains a `"{text}<-{art}#glyph"` key alongside the existing whole-word one (reported even when the sandwich passes, so an agent can see how close the worst letter came), and the degrade warning now names **which limit broke** — a buried letter and a crowded word are different defects with different fixes, and quoting the word's number for a letter's problem sends a reader looking in the wrong place.
+
+Cost is not a concern: the per-glyph pass works on small crops and measures ~1.4ms against the whole-word measurement's ~16.7ms at full canvas size, and glyph boxes are computed once per text slot rather than per search candidate.
+
+### 17.3 The dead band's blind axis
+
+`_dead_band_frac` called a row dead when its **within-row** luminance stddev was under threshold. That measures one axis, and the structure a designer reaches for to fix a dead band lives on the other.
+
+A full-bleed horizontal rule — the most ordinary way to put structure into an empty stretch — is perfectly uniform across its own row, so it scored as flat as the emptiness it was drawn to break. Worse than useless: a rule's row is *flatter* than a textured one, so drawing rules could raise the number. The "Scoreboard" cover's agent found this empirically — only its vertical column rules moved the metric, 0.327 → 0.120.
+
+**Fix:** a row is alive if it varies across itself **or** its mean differs from a neighbour's by `_DEAD_BAND_ROW_DELTA_THRESHOLD` (0.020). A horizontal edge is a jump between adjacent rows, so that is where it has to be looked for. A gradient moves its mean by a hair per row and still measures dead, which is the behaviour this metric already had and wants to keep.
+

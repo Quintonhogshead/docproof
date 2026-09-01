@@ -68,15 +68,14 @@ log = logging.getLogger("docproof.app.cover")
 # _build_role_provider), not a locally-agreed convention, so importing them
 # is the only correct choice, not a stylistic one.
 try:
-    from docproof.cover.direction import DIRECTION_MODEL, REVISION_MODEL
+    from docproof.cover.direction import REVISION_MODEL
 except ImportError:                                        # pragma: no cover
-    DIRECTION_MODEL = "claude-fable-5"
     REVISION_MODEL = "claude-sonnet-5"
 
 try:
-    from docproof.cover.reality import REALITY_MODEL
+    from docproof.cover.director import DIRECTOR_MODEL
 except ImportError:                                        # pragma: no cover
-    REALITY_MODEL = "claude-sonnet-5"
+    DIRECTOR_MODEL = "claude-fable-5"
 
 try:
     from docproof.cover.imaging import make_client
@@ -304,22 +303,19 @@ def _build_role_provider(model: str, *, role: str, lane: str = "api"):
 
 
 def _providers(lane: str = "api") -> cover_pipeline.Providers:
-    """One Provider per model role (BRAIN wave, 2026-08-29): the frontier
-    model for art direction, the workhorse model for revision, the
-    workhorse model for manuscript distillation — see
-    docproof.cover.pipeline.Providers' own docstring for why three, not
-    one. Built fresh per request, same as the single provider it replaces.
+    """One Provider per model role: the frontier model that reads the book
+    and assigns the concepts, and the workhorse model that edits a spec from
+    a person's revision notes — see docproof.cover.pipeline.Providers' own
+    docstring for why two, not one. Built fresh per request.
 
     `lane` is the resolved purse (see _resolve_lane); it defaults to the
     API-key path so any caller that never learned about lanes behaves
     exactly as it did before."""
     return cover_pipeline.Providers(
-        direction=_build_role_provider(DIRECTION_MODEL, role="direction",
+        direction=_build_role_provider(DIRECTOR_MODEL, role="director",
                                        lane=lane),
         revision=_build_role_provider(REVISION_MODEL, role="revision",
-                                      lane=lane),
-        reality=_build_role_provider(REALITY_MODEL, role="reality",
-                                     lane=lane))
+                                      lane=lane))
 
 
 def _critique_client(lane: str = "api"):
@@ -431,6 +427,12 @@ def register(app: FastAPI) -> None:
         root = _data_root(request)
 
         manuscript_name = ""
+        # The director reads the WHOLE book, so the full text is carried from
+        # here into run_job as an argument and dropped when the job ends. It
+        # is never written to the job store: the temp file dies with this
+        # block and only `manuscript_sample.txt` and the director's own
+        # assignments survive on disk (§8.1's storage posture, unchanged).
+        manuscript_text = ""
         with tempfile.TemporaryDirectory(prefix="cover-job-") as tmp:
             manuscript_path = None
             if manuscript is not None:
@@ -442,12 +444,16 @@ def register(app: FastAPI) -> None:
                     root, brief_obj, manuscript_path=manuscript_path,
                     manuscript_name=manuscript_name, anthropic_lane=lane,
                     image_quality=quality)
+                if manuscript_path is not None:
+                    manuscript_text = cover_pipeline.read_manuscript(
+                        manuscript_path)
             except IngestError as e:
                 raise HTTPException(400, detail=str(e)) from e
 
         task = asyncio.create_task(
             cover_pipeline.run_job(root, job.job_id, providers, image_client,
-                                   critique_client))
+                                   critique_client,
+                                   manuscript=manuscript_text))
         cover_pipeline.register_task(job.job_id, task)
         return {"job_id": job.job_id}
 

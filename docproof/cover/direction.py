@@ -69,11 +69,10 @@ log = logging.getLogger("docproof.cover.direction")
 DIRECTION_MODEL = "claude-fable-5"
 
 # The workhorse model: a revision (§6.2) is shown a document it is already
-# handed in full and answers with a short list of patch edits against it,
-# human-triggered or from the auto-critique loop
-# (docproof.cover.pipeline._critique_and_revise) — a narrower task than
-# drafting concepts from nothing, and not worth the frontier price repeated
-# up to MAX_CRITIQUE_ROUNDS times per concept.
+# handed in full and answers with a short list of patch edits against it —
+# a narrower task than drafting concepts from nothing, and not worth the
+# frontier price. Human-triggered only now; the auto-critique loop that also
+# called it was replaced by docproof.cover.atelier.
 REVISION_MODEL = "claude-sonnet-5"
 
 # Structured replies on a reasoning model share max_tokens with thinking, and
