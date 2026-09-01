@@ -1,0 +1,493 @@
+# =============================================================================
+# ARCHETYPE SEVEN — romantasy_vignette
+# =============================================================================
+#
+# Reference DNA: the contemporary dark-fairy-tale romantasy paperback in its
+# OTHER dominant arrangement — not a hanging object on a cloth ground
+# (romantasy_organic) but ONE FIGURE, turned away, standing inside a wreath of
+# thorned growth that closes on all four edges. Elizabeth Helen's BONDED BY
+# THORNS is the canonical shelf example; the Bloom/Entangled fae shelf is full
+# of it.
+#
+# The composition is a proscenium. The border is dark and crowded, the centre
+# is empty and bright, and the figure is the only warm thing on the cover. At
+# thumbnail size the whole design must read as ONE PALE VERTICAL SHAPE INSIDE
+# A DARK RING — everything below exists to protect that read.
+#
+# Like romantasy_organic this template is written to be ONE-SHOT. The art
+# direction chooses TEN NOUNS, five hexes, two fonts and a tagline. Placement,
+# scale, cut edges, effects, adjust layers, scrims, occlusion budget and layer
+# order are decided here, once.
+#
+# -----------------------------------------------------------------------------
+# THE FIVE RULES THIS TEMPLATE ENCODES
+# -----------------------------------------------------------------------------
+#
+# 1. THE FIGURE IS THE LOUDEST THING IN THE FRAME. Brightest value, highest
+#    local contrast, most detail, and drawn AFTER every piece of the back-tier
+#    wreath — the same ordering fix romantasy_organic's `hero` needed after its
+#    first build buried the lantern under a flower cluster. `subject_bloom`
+#    exists to keep it that way once the finishing stack has run.
+#
+# 2. THE IDENTITY IS WITHHELD, AND THE MASS IS SIMPLE. The plate is prompted
+#    from behind and slightly to the side, whatever carries the identity small
+#    and high and turned away. What fills the middle is ONE large simple lit
+#    shape — a bare back, a cloak, a wing, a lit carapace, an armoured
+#    shoulder. The template needs a big bright unbroken area and does not care
+#    what it is made of, only that it is not busy: the first draft demanded
+#    bare shoulders, which quietly ruled out every book whose focal figure is
+#    armoured, robed, feathered or not human. Any mark the book's premise puts
+#    on the character (blood, frost, a gold seam, runes) rides in the SAME
+#    `{subject}` noun rather than in a separate plate, because a mark plate
+#    would have to be measured onto a face that does not exist when this
+#    template is authored. A cover that hands the reader a full frontal face
+#    has thrown away the projection this shelf runs on.
+#
+# 3. SEVERED ENDS MUST LEAVE THE FRAME, AND OVERSHOOT WHEN THEY DO.
+#    Inherited verbatim from romantasy_organic rule 1, and doubly binding here
+#    because a wreath is nothing BUT severed ends. Every generated plate keeps
+#    a transparent margin inside its own frame, so a plate placed flush with
+#    the trim still stops its ink short; every `offset` below pushes the cut
+#    edge well past the trim. A cane that starts and stops in mid-air is the
+#    single fastest way to make this arrangement read as clip art.
+#
+# 4. THE WREATH IS ASYMMETRIC, BY KIND AS WELL AS BY PLACEMENT. `tangle_left`
+#    is long thin crossing lengths; `cluster_right` is repeated rounded forms.
+#    They sit at different scales and different heights, and the two halves
+#    must not be the same KIND of thing — cane left and bloom right, bone left
+#    and skull right. Two mirrored corners of one object make a laurel medal,
+#    not a wreath.
+#
+# 5. VALUE OPPOSITION, NOT SCRIMS. The title lands on the brightest part of
+#    the cover (the figure's back and shoulder) and survives because the ink
+#    is a cold pale ramp against warm cream, not because a bar was painted
+#    behind it. The title's halo therefore starts nearly inert at 0.12 and
+#    only rises if the legibility autopilot measures a real failure. If a
+#    render needs a strong scrim here, the PALETTE is wrong, not the type —
+#    take `accent` further from the skin, not the halo higher.
+#
+# -----------------------------------------------------------------------------
+# ROLES, NOT NOUNS
+# -----------------------------------------------------------------------------
+#
+#   field          the void everything is arranged in
+#   motes          the particle field, drifting behind everything
+#   keylight       the focal mass's own light on the field behind it
+#   canopy         the far tier, spreading down across the top
+#   tangle_left    long thin lengths, crossing — the upper-left mass
+#   cluster_right  repeated rounded forms — the upper-right mass
+#   subject        THE FOCAL MASS — turned away, centre axis
+#   sweep_front    the front tier's long diagonal, crossing the type
+#   feature_front  ONE big front-tier object at mid-right
+#   base_front     lengths rising from the bottom in FRONT of the type
+#   drift_front    loose detached fragments, lower right
+#
+# EVERY FRAME BELOW IS WRITTEN IN GEOMETRY, NOT IN NOUNS, AND MUST STAY THAT
+# WAY. The first draft of this template said "on long whipping CANES", "on
+# their own STEMS", "no stem, no leaves, no whole FLOWER" — so feeding it
+# chains, bone, coral, feathers or circuitry still produced a prompt about
+# stems, and the "ROLES, NOT NOUNS" heading above it was a lie. A slot asks
+# for A LONG THIN THING THAT CROSSES ITSELF, or A CLUSTER OF REPEATED ROUNDED
+# FORMS, or LOOSE DETACHED FRAGMENTS. What those things ARE is the art
+# direction's only say, and that is the whole point of the template.
+#
+# The cost is real and worth stating: the botany was doing work. "Furled",
+# "whipping canes" and "bruised at the edges" are why those plates came back
+# usable first try. Geometry buys reach and spends a little first-pull hit
+# rate; a slot that comes back wrong is one $0.03 repaint with a longer noun.
+#
+# Two books built from this template so far, sharing not one noun:
+#   winter air / dry snow / hoarfrosted blackthorn / thorned canes / ice-blue
+#   winter roses / a frost-marked woman / a caned rose / one rose / iced
+#   stems / frozen petals
+#   reliquary dark / down and gold leaf / crow wings / rib bones and cord /
+#   crow skulls and lockets / a hooded figure in a bone-white cope / feathers
+#   on a cord / a gilded skull / bound finger bones / black feathers
+#
+# -----------------------------------------------------------------------------
+# THE OCCLUSION BUDGET
+# -----------------------------------------------------------------------------
+# Three front plates cross the title zone (sweep_front lower-left, feature_front
+# mid-right, base_front bottom-centre) and one sits clear below it
+# (drift_front). That is the whole budget. The composer demotes a front plate
+# below the title the moment it buries too much of the title's ink, and a
+# demoted plate silently cancels the sandwich — so each of the three is small
+# and pinned hard against a margin. Two or three crossings is the target: less
+# and the wreath is a backdrop, more and the title stops being a title.
+# =============================================================================
+name: romantasy_vignette
+genres: [fantasy, romance]
+axis: center
+recipe: dark_academia
+recipe_strength: 0.32          # the vignette is the point — it IS the wreath
+                                # closing the frame; full strength cooks eleven
+                                # separately-lit plates into one sepia mass
+describe: >-
+  One figure turned away on the centre axis, standing inside a wreath of
+  thorned growth that closes on all four edges — mass behind a large display
+  title set across the figure's back, and more of the same growth drawn in
+  FRONT of it, casting shadows onto the letterforms. Series line at the top,
+  credit line and author at the foot over a feathered wash.
+composition_note: >-
+  Painted as a rich photoreal fantasy book-cover illustration, lit softly from
+  the front left with warm cream light and a cold rim light down the far edge
+  — deep shadow side, restrained specular highlights, full value range. No
+  scene, no horizon, no sky, no landscape, no buildings, no vignette, no cast
+  shadow on any surface.
+
+# =============================================================================
+art:
+# -- ground band --------------------------------------------------------------
+  - id: field
+    role: ground
+    generatable: true
+    procedural: gradient       # $0 fallback only; this slot is meant to be painted
+    fit: cover
+    prompt_frame: >-
+      A full-frame empty field of {subject}, nearly black in the corners and
+      lifting to a slightly warmer, slightly brighter tone toward the centre,
+      with a soft depth-of-field haze. Completely empty — nothing in it.
+
+  - id: motes
+    role: particles
+    # Rule 3 of romantasy_organic, inherited: ONE whole plate at the bottom of
+    # the stack, never `scatter`. Screen, because these emit light.
+    generatable: true
+    transparent: true
+    fit: cover
+    blend: screen
+    opacity: 0.55
+    prompt_frame: >-
+      A full-frame scattering of {subject} drifting through empty air at many
+      different sizes, some sharp and near, some tiny and far out of focus.
+      Irregular and sparse, no two alike, denser toward one corner and thinning
+      across the frame, with large empty gaps. On pure black.
+
+  - id: keylight
+    # The figure's own light falling on the field behind them — the only reason
+    # the centre is brighter than the corners before the recipe's vignette
+    # closes the edges down. This is what makes the wreath read as a ring.
+    generatable: false
+    fit: cover
+    procedural: radial_glow
+    opacity: 0.32
+    blend: screen
+
+# -- behind-the-figure tier ---------------------------------------------------
+  - id: canopy
+    role: far_tier
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: top
+    anchor: [0.50, 0.00]
+    offset: [0.00, -0.06]
+    scale: 0.78
+    opacity: 0.62
+    prompt_frame: >-
+      A wide fan of {subject}, spreading downward and outward like a canopy
+      across the top of the frame, thickest at the top and opening into gaps
+      as it descends.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.014, alpha: 0.40}
+
+  - id: tangle_left
+    role: tangle
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: left
+    anchor: [0.00, 0.16]
+    offset: [-0.07, 0.00]
+    scale: 0.66
+    prompt_frame: >-
+      A tangled mass of {subject} — many long thin lengths of it crossing
+      and overlapping each other at every angle, whipping and irregular,
+      packed dense at one end and opening out into gaps at the other.
+    effects:
+      - {kind: drop_shadow, dy: 0.005, blur: 0.011, alpha: 0.45}
+
+  - id: cluster_right
+    role: cluster
+    # Rule 4: deliberately a different size and a different height from
+    # tangle_left, and blooms where the left is foliage.
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: right
+    anchor: [1.00, 0.05]
+    offset: [0.07, 0.00]
+    scale: 0.58
+    prompt_frame: >-
+      A loose cluster of {subject} — a dozen of them at different sizes and
+      angles and in different states, some fully opened out and some still
+      closed, grouped so they read as one mass but no two alike.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.012, alpha: 0.50}
+
+  - id: subject
+    role: focal_subject
+    # Rule 1 and rule 2. Drawn AFTER the whole back tier. Cut at the bottom:
+    # this is a bust, and the crop leaves through the foot of the cover the
+    # same way a stem leaves through a trim — a torso that stops in mid-air
+    # inside the frame is the figure version of a floating branch.
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: bottom
+    anchor: [0.50, 1.00]
+    offset: [0.00, 0.045]
+    scale: 0.80
+    prompt_frame: >-
+      {subject}. A waist-up view from behind and slightly to one side, framed
+      loose with empty air all around it. Whatever carries the identity — the
+      head, the face — is SMALL, sits high in the upper third of the frame,
+      and is turned away so that it is never fully shown. Below it the broad
+      unbroken sweep of the back fills the middle and lower half of the frame,
+      brightly lit and completely clear of clutter: ONE large simple lit
+      shape, not a busy one. That expanse is the largest thing in the picture,
+      and the picture is the single brightest, sharpest, most detailed plate
+      in the cover.
+    effects:
+      - {kind: drop_shadow, dy: 0.008, blur: 0.014, alpha: 0.45}
+      - {kind: outer_glow, blur: 0.034, alpha: 0.30}
+
+# -- FRONT TIER: the sandwich, drawn AFTER the title --------------------------
+#
+# Each carries its own drop shadow — the shadow falling onto the letterforms IS
+# the depth illusion; without it a front plate reads as a sticker.
+#
+  - id: sweep_front
+    role: front_diagonal
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: bottom_left
+    anchor: [0.00, 1.00]
+    offset: [-0.08, 0.10]
+    scale: 0.44                # 0.56 buried a whole glyph and got DEMOTED
+                                # below the title, which cancels the sandwich
+    prompt_frame: >-
+      One long arching line of {subject} sweeping diagonally across the frame
+      from lower left toward upper right in a single continuous curve, the
+      heavier detail gathered toward its upper end; crisply lit and sharply
+      focused.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.010, alpha: 0.62}
+
+  - id: feature_front
+    role: front_feature
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: right
+    anchor: [1.00, 0.50]       # THE dependable title crossing — the front
+    offset: [0.05, 0.00]        # tier's other plates all sit below the type
+    scale: 0.22
+    prompt_frame: >-
+      One very large single {subject}, seen slightly from the side and cut
+      short where it would attach to anything else; crisply lit and sharply
+      focused.
+    effects:
+      - {kind: drop_shadow, dy: 0.007, blur: 0.012, alpha: 0.58}
+
+  - id: base_front
+    role: front_base
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: bottom
+    anchor: [0.27, 1.00]       # OFF the centre axis: at 0.50 it reads as
+    offset: [0.00, 0.06]        # growing out of the figure's spine, and it
+    scale: 0.34                 # out-shouts her, which breaks rule 1
+    prompt_frame: >-
+      Three separate lengths of {subject} rising from the bottom of the
+      frame, fanning slightly apart as they rise.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.011, alpha: 0.52}
+
+  - id: drift_front
+    role: corner_fill
+    # The lower right is this composition's one structurally dead corner and
+    # the wreath has to CLOSE, so the fallen matter goes there — the plate's
+    # cut is on its own left, so `mirror` turns that cut to the right and the
+    # anchor carries it out through the right trim. Mostly cropped away on
+    # purpose: a whole bloom's worth of loose petals in the corner reads as a
+    # second subject, and this plate is the one most likely to come back a
+    # saturated colour the rest of the cover does not have. Rule 4 still
+    # holds across the composition as a whole — foliage and stems left,
+    # blooms and petals right.
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: left
+    mirror: true
+    anchor: [1.00, 0.945]
+    offset: [0.10, 0.00]
+    opacity: 0.90
+    scale: 0.21
+    prompt_frame: >-
+      Three or four loose fallen pieces of {subject} lying overlapped where
+      they came to rest, curled and worn at the edges, one turned to show its
+      paler underside. Only the detached fragments — nothing whole, nothing
+      still attached to anything.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.011, alpha: 0.50}
+
+# =============================================================================
+adjust:
+  - id: field_grade
+    # A generated void comes back as a bright, saturated PHOTOGRAPH of haze.
+    # This sits on it before any art, so the whole cover is built on a quiet
+    # field and the figure has somewhere to be the brightest thing.
+    op: grade
+    brightness: -0.26
+    saturation: -0.28
+    contrast: 0.06
+
+  - id: haze_back
+    # Aerial perspective: the far tier fades and desaturates so it sits behind
+    # the arrangement rather than in it.
+    op: grade
+    brightness: 0.05
+    contrast: -0.26
+    saturation: -0.35
+    opacity: 0.90
+    mask: {from_layer: canopy, feather: 0.02}
+
+  - id: tonal_spine
+    # One shared colour spine under eleven separately-lit plates.
+    op: gradient_map
+    stops: [background, primary, text]
+    opacity: 0.15
+    blend: soft_light
+
+  - id: subject_bloom
+    # Rule 1's insurance: glow on the figure's lit edge and on the title.
+    op: bloom
+    threshold: 0.85
+    radius: 0.021
+    strength: 0.30
+
+  - id: foot_wash
+    # A feathered black wash over the lower fifth, fading out upward, so the
+    # credit line and author sit on something quiet. `color_wash` composites a
+    # solid fill AS a layer; the linear gradient mask (angle 90 = top
+    # transparent -> bottom opaque, held fully clear until `start`) is the
+    # feather.
+    op: color_wash
+    color: "#000000"
+    blend: normal
+    opacity: 0.60
+    mask:
+      gradient: {kind: linear, angle: 90.0, start: 0.70, end: 1.0}
+
+# =============================================================================
+scrims:
+  # All halo — a gradient_up/down scrim protecting anything not flush with a
+  # canvas edge paints a full-height slab with hard vertical sides
+  # (romantasy_organic rule 5). The title's starts near-inert per rule 5 above.
+  - {kind: halo, protects: title, strength: 0.12}
+  - {kind: halo, protects: author, strength: 0.16}
+  - {kind: halo, protects: subtitle, strength: 0.34}
+
+# =============================================================================
+text:
+  - id: subtitle
+    # The series line, top centre, over the densest part of the canopy — it
+    # carries its own shadow as well as the halo.
+    zone: {x: 0.10, y: 0.032, w: 0.80, h: 0.085}
+    case: upper
+    align: center
+    valign: top
+    tracking: 90
+    max_lines: 2
+    optional: true
+    size_min: 0.016
+    size_max: 0.026
+    effects:
+      - {kind: drop_shadow, dy: 0.0035, blur: 0.008, alpha: 0.78}
+
+  - id: title
+    # Lands on the figure's back — the brightest region on the cover — and is
+    # held by value opposition (rule 5), not by a bar. The gradient_overlay is
+    # what makes the ink a cold pale RAMP rather than flat white: it is the
+    # only place the accent role appears at size, and it is what separates the
+    # title from the author's plain near-white.
+    # THE binding constraint here is that the legibility measurement is
+    # WORST-REGION: a title wide enough to cross both the figure's lit skin
+    # and the dark field beside her fails on whichever half its single flat
+    # ink does not suit, and no scrim or ink flip recovers it — the autopilot
+    # then starts halving the finishing stack (the vignette included) trying.
+    # So the measure is deliberately narrow and the band deliberately high:
+    # the title sits on hair and dark field, ONE value regime, and the bright
+    # back stays clear beneath it as the cover's brightest note. Widen this
+    # zone and the render will tell you about it in warnings.
+    zone: {x: 0.115, y: 0.468, w: 0.77, h: 0.200}
+    case: upper
+    tracking: 18
+    max_lines: 2
+    size_min: 0.044
+    size_max: 0.078
+    effects:
+      # A tight dark contact shadow under a wide soft one — the pro type move.
+      - {kind: drop_shadow, dy: 0.003, blur: 0.004, alpha: 0.72}
+      - {kind: drop_shadow, dy: 0.013, blur: 0.030, alpha: 0.42}
+      - {kind: gradient_overlay, stops: [accent, text], angle: 90.0, opacity: 0.95}
+      # soft_light, NOT multiply: a stone plate at multiply pulls the type down
+      # to translucent.
+      - {kind: texture_overlay, texture_file: marble, blend: soft_light, opacity: 0.24}
+
+  - id: series
+    # The credit/eyebrow line above the author's name.
+    zone: {x: 0.10, y: 0.878, w: 0.80, h: 0.028}
+    case: upper
+    tracking: 70
+    max_lines: 1
+    optional: true
+    size_min: 0.011
+    size_max: 0.017
+
+  - id: author
+    # Deliberately NOT the display face. The one geometric, unornamented block
+    # of type on the cover is the counterweight to the title's flourish; give
+    # the author the title font as well and the cover has no anchor.
+    zone: {x: 0.08, y: 0.912, w: 0.84, h: 0.058}
+    case: upper
+    tracking: 55
+    max_lines: 1
+    size_min: 0.026
+    size_max: 0.050
+
+# =============================================================================
+# Z-ORDER, bottom first. The three that are easy to get wrong and fatal:
+# `motes` is at the BOTTOM, `subject` is drawn AFTER the whole back tier, and
+# the four front plates are drawn AFTER the title.
+layers: [field, motes, field_grade, keylight,
+        canopy, haze_back, tangle_left, cluster_right, subject,
+        "scrim:0", "scrim:2", subtitle, title,
+        sweep_front, feature_front, base_front, drift_front,
+        foot_wash, "scrim:1", series, author,
+        tonal_spine, subject_bloom]
+
+# =============================================================================
+# WHAT THE DIRECTOR STILL CHOOSES, AND NOTHING ELSE
+# =============================================================================
+#   * ten `{subject}` fills, one per generatable slot — and the `subject`
+#     slot's fill is the only long one: it carries the character AND the mark.
+#   * five palette hexes. `accent` is the title's dark stop and must be a cold
+#     mid-value at least 35 L* away from the figure's skin; `text` is the
+#     title's light stop and the author's ink, so take it near white — the
+#     finishing stack costs the type ~25% brightness on the way down.
+#   * title_font and author_font — a display face and a plain one.
+#   * the series line, the credit line, the tagline.
+#
+# It does NOT choose placement, scale, blend, opacity, masks, adjust layers,
+# effects, scrim kinds, recipe strength, or layer order.
+#
+# HONEST SCOPE: the skeleton is "one turned-away focal mass inside a closing
+# wreath of severed things". It fits romantasy, fae, gothic and dark fairy
+# tale. It does not fit a thriller, a memoir, or anything whose cover should
+# not have a figure on it, and it should not be stretched to. The riskiest
+# plate by far is `subject`: a figure cutout is the one generation here that
+# can come back unusable, and no template rule can fix that — repaint it.

@@ -158,6 +158,7 @@ def test_an_untagged_archetype_is_in_scope_for_every_genre():
 # doesn't silently drift the library's genre coverage.
 _EXPECTED_GENRES = {
     "romantasy_organic": ["fantasy", "romance"],
+    "romantasy_vignette": ["fantasy", "romance"],
 }
 
 
