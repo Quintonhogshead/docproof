@@ -1,0 +1,511 @@
+# =============================================================================
+# ARCHETYPE SIX — pale_reliquary
+# =============================================================================
+#
+# Reference DNA: the contemporary dark-romantasy trade paperback of the
+# Broadbent/Nyaxia shelf. A near-white misted ground; ONE long rigid relic on a
+# corner-to-corner diagonal, bleeding at both ends; an enormous near-black
+# display title occupying the top two-thirds; and a dense, saturated still-life
+# crowding the bottom third with white type reversed out of it.
+#
+# It is the PHOTOGRAPHIC INVERSE of Archetype One (romantasy_organic):
+# light ground / dark type above, dark mass / light type below. Two value regimes in one cover, and the
+# design lives or dies on keeping them separate.
+#
+# -----------------------------------------------------------------------------
+# THE EIGHT RULES THIS TEMPLATE ENCODES
+# -----------------------------------------------------------------------------
+#
+# 0. EVERY CONTAIN-FIT PLATE IS PLACED BY ITS INK, NOT BY ITS FRAME.
+#    `place_by: ink` on all nine of them, and the archetype is unbuildable
+#    without it. A generated cutout is a full-frame PNG with the subject
+#    somewhere inside and an arbitrary model-chosen transparent margin around
+#    it, so against the plate border `scale` sizes the margin as much as the
+#    subject and `anchor` flushes the MARGIN to the trim. That is what put the
+#    anemone half off the right edge while the tide-wrack it was supposed to
+#    sit in stopped two inches short of both sides: same bug, opposite
+#    symptom, depending on which way each plate's margin happened to fall.
+#    Measured on the ink, `scale: 1.0` means THE OBJECT spans the canvas and
+#    `anchor: [1.0, y]` puts THE OBJECT's edge on the trim — which is what
+#    every anchor comment in this file already claims to mean.
+#
+# 0b. NOT EVERY PLATE MAY BE CUT. Rule 1 of Archetype One — severed ends must
+#    leave the frame — governs a subject that GROWS OR HANGS: a stem, cane,
+#    chain or blade has a cut end, and carrying it out through the trim is what
+#    makes it read as a slice of a larger scene. A SCATTER OF DISCRETE WHOLE
+#    OBJECTS has no such end. A glass float sliced by the trim reads as a bulb
+#    cut in half, which is the exact failure the overshoot rule exists to
+#    prevent. Those slots take `keep_whole: true` and no `cut_edge`, and the
+#    engine clamps them fully inside the trim. Ask which kind of thing the
+#    plate holds before reaching for an overshooting anchor.
+#
+# 1. CHROMA IS A BUDGET, AND THE BUDGET IS TWO OBJECTS. The engine of this
+#    cover is not the coloured creature — it is that NOTHING ELSE IS COLOURED.
+#    Enforced structurally, not by asking the director nicely: `chroma_budget`
+#    is an unmasked desaturating grade sitting in the middle of the z-order.
+#    Everything drawn BEFORE it goes neutral; the two jewels are drawn AFTER
+#    it and keep full chroma. A third saturated object cannot happen by
+#    accident, because there is nowhere above the line to put one.
+#
+# 2. THE TOP TWO-THIRDS MUST BE GENUINELY, BORINGLY EMPTY. The title takes
+#    ~0.48 of frame height across four interlocking lines. Every upper plate's
+#    prompt_frame actively refuses to put anything interesting between y=0.06
+#    and y=0.62. Only the diagonal crosses that band, and it is deliberately
+#    quiet.
+#
+# 3. THE DIAGONAL BLEEDS AT BOTH ENDS, AND IT IS STRUCTURE, NOT SUBJECT.
+#    `relic` is generated already diagonal inside its own full frame and set
+#    `fit: cover`, so both ends leave the trim with no rotation engine needed.
+#    `relic_recede` then pushes it toward the field value: it should read at
+#    roughly 20-30% local contrast. A relic as loud as the title is a failed
+#    plate, not a bold choice.
+#
+# 4. NEVER SCRIM THE TITLE. Legibility on the top half comes from a pale field
+#    being value-opposite to near-black ink, full stop. No scrim is declared
+#    for `title` here. If the autopilot reports it wants one, the diagnosis is
+#    that `field` came back too dark or too busy — lift `field_grade` or
+#    repaint the plate. Do not paint a box.
+#
+# 5. THE FOOT MUST BE DARK ENOUGH TO REVERSE OUT OF — A FLOOR, NOT A TASTE
+#    CALL. Author and credit line are white. `foot_wash` guarantees the
+#    portion the collage does not.
+#
+# 6. REPEATED PARTICLES ARE ONE PLATE, NEVER `scatter`. `fall` (bright specks)
+#    and `drift` (dark translucent matter) are each a whole full-frame
+#    generated plate, cover-fit, low in the stack.
+#
+# -----------------------------------------------------------------------------
+# ROLES, NOT NOUNS
+# -----------------------------------------------------------------------------
+#   field        the luminous misted ground the cover is printed on
+#   fall         bright suspended specks
+#   drift        dark translucent falling matter
+#   relic        THE DIAGONAL — one long rigid object, corner to corner
+#   relic_head   its ornate terminal, the brightest thing in the top corner
+#   claw         hard structural prongs intruding from the top-left
+#   crown        the wide arcing structure across the bottom, tines past mid
+#   undergrowth  the dark tangle the white type sits on
+#   beast        ACCENT A — the coiled creature, lower left, saturated
+#   bloom        ACCENT B — the large glossy object, lower right, saturated
+#   berries_l/r  small spheres echoing the jewels into the bottom corners
+#   dew          suspended droplets in front of everything
+#
+# NOTE ON THE TYPE: the reference sets its title mixed-case with the nouns
+# 3-4x the connecting words, the small words tucked into the negative space
+# the big ones leave. Today that is reachable as fit_mode `justify_stack` plus
+# a `larger` emphasis run on the noun indices — set on the built spec, since
+# Direction.type_move carries only one word. See §15.12.
+# -----------------------------------------------------------------------------
+name: pale_reliquary
+genres: [fantasy, romance]
+axis: center
+recipe: ""                     # rule 4: every shelf recipe darkens and warms,
+                               # and both are fatal to a near-white ground
+describe: >-
+  A near-white misted field with one long relic lying corner to corner on a
+  diagonal behind an enormous near-black display title, and a dense saturated
+  still-life crowding the bottom third — exactly two coloured objects against
+  an otherwise neutral cover — with the author reversed out in white over it.
+composition_note: >-
+  Photorealistic, softly and evenly lit from the upper left, cool and
+  desaturated overall, shot against a pale near-white background. No scene, no
+  horizon, no sky, no landscape, no figures or faces, no vignette, no cast
+  shadow on any surface.
+
+# =============================================================================
+art:
+# -- the pale ground ----------------------------------------------------------
+  - id: field
+    role: ground
+    generatable: true
+    procedural: fog_gradient   # $0 fallback only; this slot is meant to be shot
+    fit: cover
+    prompt_frame: >-
+      A full-frame photograph of {subject}, near-white and luminous, brightest
+      at the upper centre and cooling very slightly toward the corners, with
+      fine atmospheric haze and no detail anywhere. Completely empty. Nothing
+      in it, nothing lying on it.
+
+  - id: fall
+    role: particles
+    # Rule 6. Whole plate, cover-fit, its own edges always outside the trim.
+    generatable: true
+    transparent: true
+    fit: cover
+    prompt_frame: >-
+      A full-frame scattering of {subject} suspended in empty air at many
+      different sizes and angles, some sharp and near, some tiny and far,
+      denser through the middle band of the frame and thinning at the corners,
+      with large empty gaps.
+
+  - id: drift
+    role: dark_particles
+    generatable: true
+    transparent: true
+    fit: cover
+    opacity: 0.30            # at 0.55 the fronds read as big grey leaf-shapes
+                             # fighting the title; rule 2 wants that band empty
+    prompt_frame: >-
+      A full-frame scattering of {subject}, unlit and translucent, drifting at
+      varied angles and sizes, sparse and irregular, with large empty gaps.
+
+# -- the diagonal -------------------------------------------------------------
+  - id: relic
+    role: diagonal
+    # Rule 3. Generated already diagonal and set `fit: cover`, so both ends
+    # leave the trim without a rotation feature. Graded back by `relic_recede`.
+    generatable: true
+    transparent: true
+    fit: cover
+    prompt_frame: >-
+      {subject}, photographed straight on and running the entire length of the
+      frame on a steep diagonal from the lower left corner to the upper right
+      corner, continuing past both corners and cut off by them. Cool polished
+      surface with one bright specular highlight running along its length.
+      Nothing else in the frame.
+    effects:
+      - {kind: drop_shadow, dy: 0.004, blur: 0.016, alpha: 0.22}
+
+  - id: relic_head
+    role: terminal
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: top_right
+    anchor: [1.00, 0.00]
+    offset: [0.005, 0.005]
+    scale: 0.30
+    prompt_frame: >-
+      {subject}, ornate and silvered, catching a hard bright light, oriented so
+      its shaft runs down and to the left and is cut off by the frame edge.
+    effects:
+      - {kind: drop_shadow, dy: 0.005, blur: 0.012, alpha: 0.35}
+      - {kind: outer_glow, blur: 0.026, alpha: 0.30}
+
+  - id: claw
+    role: upper_intrusion
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: top_left
+    anchor: [0.00, 0.00]
+    offset: [-0.03, -0.03]
+    scale: 0.26
+    prompt_frame: >-
+      {subject}, forking into two or three sharp tapering prongs that reach
+      down and to the right, its thick end cut off by the frame edge.
+    effects:
+      - {kind: drop_shadow, dy: 0.005, blur: 0.011, alpha: 0.35}
+
+  - id: grain
+    generatable: false
+    fit: cover
+    procedural: grain
+    opacity: 0.05
+    blend: overlay
+
+# -- the base structure, still inside the chroma budget -----------------------
+  - id: crown
+    role: base_structure
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: bottom
+    anchor: [0.50, 1.00]
+    offset: [0.00, 0.06]
+    scale: 0.58              # ink-measured on the BINDING axis, and this
+                             # plate's ink is a tall arc — 1.16 sized it by
+                             # height and ran ribs the full height of the
+                             # cover. Spanning the frame is `undergrowth`'s
+                             # job (wide ink, so width binds); this is only
+                             # the tines reaching up behind the type.
+    prompt_frame: >-
+      A wide arcing nest of {subject}, curving across the bottom of the frame
+      with individual tines tapering upward past the middle of the frame at
+      both the left and the right. Warm, waxy, polished, low in colour. Cut off
+      at the bottom edge.
+    effects:
+      - {kind: drop_shadow, dy: 0.008, blur: 0.014, alpha: 0.45}
+
+# =============================================================================
+# --- everything below this point in `layers` keeps its own colour (rule 1) ---
+# =============================================================================
+  - id: undergrowth
+    role: dark_base
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: bottom
+    anchor: [0.50, 1.00]
+    offset: [0.00, 0.045]
+    scale: 1.30            # the base band spans the full frame and bleeds
+                           # past both side trims; it is the floor of the
+                           # cover, not an object sitting on one
+    prompt_frame: >-
+      A dense dark tangle of {subject}, packed and overlapping, falling away
+      into deep shadow at the bottom, occupying only the lowest part of the
+      frame and nothing above it.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.012, alpha: 0.50}
+
+  - id: beast
+    role: accent_a
+    # ACCENT A. Fully saturated, drawn after `chroma_budget`, and the loudest
+    # colour on the lower left.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: left
+    anchor: [0.00, 0.815]
+    offset: [-0.05, 0.00]
+    scale: 0.46
+    prompt_frame: >-
+      {subject}, coiled into one thick continuous loop seen from slightly
+      above, its body passing out of the frame on the left. Photorealistic,
+      richly saturated, crisp surface detail, wet specular sheen along the top
+      of the coil.
+    effects:
+      - {kind: drop_shadow, dy: 0.007, blur: 0.013, alpha: 0.50}
+
+  - id: bloom
+    role: accent_b
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: right
+    anchor: [1.00, 0.795]
+    offset: [0.015, 0.00]  # ink-measured: a hair past the trim, not half off
+    scale: 0.34
+    prompt_frame: >-
+      One very large single {subject}, seen slightly from the side, with a
+      glossy near-liquid surface and water droplets beading along its edges.
+      Richly saturated and sharply focused, with a short cut stem leaving the
+      frame.
+    effects:
+      - {kind: drop_shadow, dy: 0.007, blur: 0.013, alpha: 0.50}
+
+  - id: berries_l
+    role: echo_left
+    # keep_whole, and NOT cut_edge. A glass float is a sphere: it has no
+    # severed end to carry out through the trim, so a bulb crossing the edge
+    # reads as sliced in half, never as continuing off the page. The overshoot
+    # doctrine governs things that grow or hang; this is the other kind.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    keep_whole: true
+    anchor: [0.02, 0.94]
+    offset: [0.00, 0.00]
+    scale: 0.17
+    prompt_frame: >-
+      Four or five separate {subject} at varied sizes, resting loosely against
+      one another with clear air and gaps between them, wet and glossy, each
+      one whole and complete with nothing cut off. Irregular outer silhouette,
+      no straight edges anywhere.
+    effects:
+      - {kind: drop_shadow, dy: 0.005, blur: 0.010, alpha: 0.50}
+
+  - id: berries_r
+    role: echo_right
+    # Same, and mirrored so the two corners are not the same photograph twice.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    keep_whole: true
+    mirror: true
+    anchor: [0.98, 0.93]
+    offset: [0.00, 0.00]
+    scale: 0.16
+    prompt_frame: >-
+      Three or four separate {subject} at varied sizes, resting loosely against
+      one another with clear air and gaps between them, wet and glossy, each
+      one whole and complete with nothing cut off. Irregular outer silhouette,
+      no straight edges anywhere.
+    effects:
+      - {kind: drop_shadow, dy: 0.005, blur: 0.010, alpha: 0.50}
+
+  - id: dew
+    role: front_droplets
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    anchor: [0.50, 0.85]
+    scale: 0.46
+    opacity: 0.85
+    prompt_frame: >-
+      A handful of {subject} hanging in mid-air at different sizes, a few
+      caught mid-fall with a bright highlight in each, widely separated with
+      large empty gaps between them.
+
+# =============================================================================
+adjust:
+  - id: field_grade
+    # A generated fog plate comes back as a grey, busy PHOTOGRAPH of fog, not
+    # as a ground. This makes it a ground. Rule 4 depends on it.
+    op: grade
+    brightness: 0.22         # 0.12 left the title at 4.00 against a 4.5
+    saturation: -0.45        # threshold, and rule 4 forbids the scrim fix
+    contrast: -0.16
+
+  - id: relic_recede
+    # Rule 3: the diagonal organises the composition, it does not shout.
+    op: grade
+    contrast: -0.30
+    saturation: -0.55
+    opacity: 0.80
+    mask: {from_layer: relic, feather: 0.012}
+
+  - id: chroma_budget
+    # RULE 1, AND THE WHOLE COVER. Unmasked, and positioned in `layers` after
+    # every neutral plate and before both jewels. Everything under it goes
+    # grey; everything over it keeps its colour. Moving this line is the one
+    # edit that cancels the archetype.
+    op: grade
+    saturation: -0.72
+    contrast: 0.04
+
+  - id: foot_wash
+    # Rule 5. A feathered black wash held fully clear until 0.76, so the
+    # credit line and the author sit on something the white can hold against.
+    op: color_wash
+    color: "#000000"
+    blend: normal
+    opacity: 0.64
+    mask:
+      gradient: {kind: linear, angle: 90.0, start: 0.76, end: 1.0}
+
+  - id: undergrowth_tame
+    # `undergrowth` is the one plate that has to live ABOVE the chroma budget
+    # without becoming a jewel: demote it under the line and the warm base the
+    # white type reverses out of bleaches to grey mush. So it stays above and
+    # takes its own masked grade instead — dark and warm, nowhere near jewel
+    # chroma. Rule 1 is about SALIENCE, not about a hard saturation ceiling.
+    op: grade
+    saturation: -0.42
+    brightness: -0.16
+    contrast: 0.05
+    mask: {from_layer: undergrowth, feather: 0.010}
+
+  - id: tonal_spine
+    # One shared colour spine under thirteen separately-generated plates.
+    op: gradient_map
+    stops: [background, primary, text]
+    opacity: 0.10
+    blend: soft_light
+
+  - id: top_bloom
+    op: bloom
+    threshold: 0.90
+    radius: 0.020
+    strength: 0.25
+
+# =============================================================================
+scrims:
+  # Rule 4: NOTHING for the title. The two below are for the white type only,
+  # and `halo` because gradient_up/down would paint bars (Archetype One rule 5).
+  - {kind: halo, protects: author, strength: 0.14}
+  - {kind: halo, protects: series, strength: 0.20}
+
+# =============================================================================
+text:
+  - id: subtitle
+    # The series eyebrow, centred at the very top in dark ink on the empty
+    # field. Widely tracked, deliberately quiet — shelf recognition, not voice.
+    zone: {x: 0.16, y: 0.030, w: 0.68, h: 0.085}
+    case: upper
+    align: center
+    valign: top
+    tracking: 170
+    max_lines: 3
+    optional: true
+    size_min: 0.013
+    size_max: 0.021
+
+  - id: title
+    # Mixed case ON PURPOSE — `upper` here collapses the whole hierarchy the
+    # archetype is built around. Left-aligned and ragged; the interlock comes
+    # from a `larger` emphasis run on the noun indices (§15.12).
+    #
+    # DO NOT reach for fit_mode `justify_stack` here. It fills EVERY line to
+    # the measure, so a title whose tail words are short ("...of Salt") sets
+    # the head enormous and crushes the rest onto one cramped line — it fought
+    # the ampersand into its neighbour on the first build. The uniform fit
+    # already breaks a title of this shape on the reference's own rhythm
+    # (The Wolf / & the / Lanterns / of Salt); the hierarchy is the emphasis
+    # run's job, not the fit's.
+    zone: {x: 0.045, y: 0.100, w: 0.910, h: 0.425}
+    case: as_is
+    align: left
+    valign: middle
+    tracking: -8
+    max_lines: 4
+    size_min: 0.050
+    size_max: 0.160
+    # No scrim, no shadow: near-black ink on a near-white field needs neither,
+    # and a shadow only smudges the edge of a high-contrast serif.
+
+  - id: series
+    zone: {x: 0.10, y: 0.838, w: 0.80, h: 0.032}
+    case: upper
+    align: center
+    tracking: 90
+    max_lines: 1
+    optional: true
+    size_min: 0.012
+    size_max: 0.019
+    effects:
+      - {kind: drop_shadow, dy: 0.003, blur: 0.007, alpha: 0.65}
+
+  - id: author
+    font_role: title           # the author wears the display face, as on the
+                               # reference cover
+    zone: {x: 0.075, y: 0.876, w: 0.850, h: 0.062}
+    case: upper
+    align: center
+    tracking: 40
+    max_lines: 1
+    size_min: 0.030
+    size_max: 0.058
+    effects:
+      - {kind: drop_shadow, dy: 0.004, blur: 0.009, alpha: 0.60}
+
+# =============================================================================
+# Z-ORDER, bottom first. THE LOAD-BEARING LINE IS `chroma_budget`: everything
+# before it is neutral, everything after it keeps its colour. Second: the title
+# is drawn AFTER the diagonal and BEFORE the still-life — the type occludes the
+# relic, and the collage sits below the type rather than over it. That inverted
+# sandwich is why this archetype is more one-shot-reliable than Archetype One.
+layers: [field, field_grade, fall, drift,
+         relic, relic_recede, relic_head, claw, grain, crown,
+         chroma_budget,
+         subtitle, title,
+         undergrowth, undergrowth_tame, beast, bloom, berries_l, berries_r, dew,
+         foot_wash, "scrim:0", "scrim:1", series, author,
+         tonal_spine, top_bloom]
+
+# =============================================================================
+# WHAT THE DIRECTOR CHOOSES, AND NOTHING ELSE
+# =============================================================================
+#   * thirteen `{subject}` fills, one per generatable slot
+#   * five palette hexes — `background` must be near-white (L* >= 88) and
+#     `text` near-black; `accent` is jewel A and the two jewels must sit at
+#     least 90 degrees apart on the wheel, which the director enforces in the
+#     `beast` and `bloom` prompts since the palette carries only one accent
+#   * title_font (a high-contrast transitional serif) and author_font
+#   * the series eyebrow and the credit line
+#
+# HONEST SCOPE: the skeleton is "empty bright field + one bleeding diagonal +
+# a dense jewelled foot". It fits romantasy, dark fantasy, gothic and mythic
+# historical. It is not a thriller, memoir or nonfiction template. The
+# stochastic part here is not occlusion (the type is drawn over an intentionally
+# quiet plate) but the FIELD: a fog plate that comes back mid-value costs the
+# whole light regime, and the fix is a repaint, never a scrim.

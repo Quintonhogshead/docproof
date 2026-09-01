@@ -718,3 +718,49 @@ def test_moves_compose_justify_stack_plus_emphasis_and_arc_plus_rotate():
     fit2, ink2, mask2 = _ink_and_mask_bboxes(arcrot)
     assert ink2 == mask2
     assert ink2[0] >= 0 and ink2[2] <= CANVAS[0]
+
+
+# -- §15.12 designed line breaks (TextSlot.line_breaks) -----------------------
+#
+# The regression these lock down is not "a break can be forced" but WHY it
+# had to be forcible: neither fit path's scorer can produce the four-line
+# poster stack (long / long / short connective / long), because the uniform
+# fit ranks by lowest width variance — which is exactly what a lone "AND"
+# maximizes — and justify_stack ranks by least wasted height, which prefers
+# whatever line count happens to fill the zone. Both are reasonable rules
+# and both are wrong here, so the author overrides them.
+
+def _title_slot(**kw):
+    from docproof.cover.model import TextSlot, Zone
+    return TextSlot(id="title", content="Beneath Brine and Bone",
+                    zone=Zone(x=0.055, y=0.150, w=0.89, h=0.505),
+                    font_family="Playfair Display SC", case="upper",
+                    tracking=8, max_lines=4, size_min=0.045, size_max=0.140,
+                    **kw)
+
+
+def test_justify_stack_searches_to_three_lines_without_designed_breaks():
+    got = fit_text(_title_slot(fit_mode="justify_stack"), (1600, 2560))
+    assert got.lines == ("BENEATH", "BRINE", "AND BONE")
+
+
+def test_designed_breaks_override_the_justify_stack_scorer():
+    got = fit_text(_title_slot(fit_mode="justify_stack",
+                               line_breaks=[1, 2, 3]), (1600, 2560))
+    assert got.lines == ("BENEATH", "BRINE", "AND", "BONE")
+
+
+def test_designed_breaks_apply_to_the_uniform_fit_too():
+    got = fit_text(_title_slot(fit_mode="uniform",
+                               line_breaks=[1, 3]), (1600, 2560))
+    assert got.lines == ("BENEATH", "BRINE AND", "BONE")
+
+
+def test_designed_breaks_still_size_the_stack_to_the_zone():
+    """Forcing the break must not disable the size solve — every line still
+    fills the measure, which is what makes this a stack and not a wrap."""
+    got = fit_text(_title_slot(fit_mode="justify_stack",
+                               line_breaks=[1, 2, 3]), (1600, 2560))
+    assert got.fits
+    assert len(got.line_sizes_px) == 4
+    assert all(s > 0 for s in got.line_sizes_px)

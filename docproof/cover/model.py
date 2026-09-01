@@ -104,6 +104,38 @@ def _validate_role_or_hex(value: str) -> str:
         f"hex color")
 
 
+# The paired token placements a Direction may pick from (§19.2). A
+# one-shot template fixes placement so no book pays for it twice — the right
+# trade for ONE cover, and a sameness generator across a catalogue: every
+# book off portrait_luminary put its two accent plates at exactly the same
+# two anchors, which is what made two covers with nothing else in common
+# still rhyme. This is the smallest fix that keeps the bargain: the template
+# still owns scale, opacity, effects and z-order, and the direction call gets
+# ONE closed choice over where the pair sits.
+#
+# Every entry keeps the arrangement's two load-bearing properties — the two
+# tokens are on OPPOSITE sides and at DIFFERENT heights — because that
+# diagonal, not the tokens themselves, is what carries the eye across the
+# face. A layout that stacked them would be a different composition, not a
+# variation, so there isn't one on the shelf.
+#
+# Names read as "where the FAR (smaller, higher-up-the-stack) token sits";
+# the near one always answers it from the opposite corner.
+TOKEN_LAYOUTS: dict[str, dict[str, tuple[float, float]]] = {
+    "far_high_left":  {"token_far": (0.10, 0.24), "token_near": (0.93, 0.50)},
+    "far_high_right": {"token_far": (0.90, 0.24), "token_near": (0.07, 0.50)},
+    "far_low_left":   {"token_far": (0.11, 0.60), "token_near": (0.90, 0.22)},
+    "far_low_right":  {"token_far": (0.89, 0.60), "token_near": (0.10, 0.22)},
+}
+
+# The conventional slot ids a token layout addresses, mirroring how
+# _intent_mask's "inside_focal" addresses the conventional `focal` id: an
+# archetype that doesn't declare them simply isn't a template this choice
+# applies to, and the pick is dropped with a log line rather than raising
+# (the §6.1 surplus-prompt precedent).
+TOKEN_SLOT_IDS: tuple[str, ...] = ("token_far", "token_near")
+
+
 # The slot treatments every ArtSlot/ArtPrompt may request (§7.4a): pure,
 # deterministic Pillow ops compose.py applies after fit/placement and before
 # compositing. "none" is the default on every launch archetype and every
@@ -433,6 +465,23 @@ class TextSlot(BaseModel):
     # against fonts.FAMILIES). Must stay "" for every other style — a set
     # value the renderer would ignore is authoring error, not a no-op.
     emphasis_font: str = ""
+    # Word indices (into the POST-CASE, whitespace-split content) that must
+    # START a new line — a hard, designed break, as opposed to the automatic
+    # search's opinion. [] (the default, and every slot that predates the
+    # field) keeps the search exactly as it was.
+    #
+    # WHY THIS HAD TO EXIST: both fit paths choose breaks by a scoring rule,
+    # and neither rule can express a designed one. The uniform fit ranks
+    # fitting splits by LOWEST WIDTH VARIANCE, which structurally refuses to
+    # put a short connective alone on a line ("AND" by itself is the highest
+    # variance a four-word title can produce). justify_stack ranks by least
+    # wasted VERTICAL space, which is a different opinion but still an
+    # opinion. The four-line poster stack — long / long / short connective /
+    # long, the shape half the dark-fantasy shelf is set in — is therefore
+    # unreachable by search at any zone width or size range. It is not a
+    # tuning problem; it is a "the designer knows and the scorer cannot"
+    # problem, so the fix is to let the designer say it.
+    line_breaks: list[int] = Field(default_factory=list)
 
     @field_validator("font_family")
     @classmethod
@@ -449,6 +498,38 @@ class TextSlot(BaseModel):
             raise ValueError(
                 f"size_min ({self.size_min}) exceeds size_max "
                 f"({self.size_max})")
+        return self
+
+    @model_validator(mode="after")
+    def _line_breaks_wellformed(self) -> TextSlot:
+        """Strictly increasing, every index at least 1 (a break BEFORE the
+        first word is not a break), and — when content is present, the same
+        condition the emphasis contract uses, since an archetype's slot has
+        none at load time — in range and within max_lines. A break list that
+        forces more lines than the slot allows is authoring error, not
+        something to silently clamp: the whole point of the field is that
+        the author gets exactly the stack they asked for."""
+        if any(i < 1 for i in self.line_breaks):
+            raise ValueError(
+                f"line_breaks indices must be >= 1 (a break before the "
+                f"first word is not a break), got {self.line_breaks}")
+        if self.line_breaks != sorted(set(self.line_breaks)):
+            raise ValueError(
+                f"line_breaks must be strictly increasing with no repeats, "
+                f"got {self.line_breaks}")
+        if self.line_breaks and len(self.line_breaks) + 1 > self.max_lines:
+            raise ValueError(
+                f"line_breaks {self.line_breaks} forces "
+                f"{len(self.line_breaks) + 1} lines but max_lines is "
+                f"{self.max_lines}")
+        if self.line_breaks and self.content.strip():
+            n_words = len(self.content.split())
+            bad = [i for i in self.line_breaks if i >= n_words]
+            if bad:
+                raise ValueError(
+                    f"line_breaks {bad} out of range — content has "
+                    f"{n_words} word(s), so the last legal break is "
+                    f"{n_words - 1}")
         return self
 
     @model_validator(mode="after")
@@ -651,6 +732,52 @@ class ArtSlot(BaseModel):
     # (`corners` mirrors too, but into all four corners at once, which is a
     # different move entirely.)
     mirror: bool = False
+    # WHAT `anchor` AND `scale` ARE MEASURED AGAINST.
+    #
+    # "frame" (the default, and every pre-existing spec's behaviour) measures
+    # the PLATE: scale 0.9 means the returned PNG is 90% of the canvas, and
+    # anchor [1.0, y] flushes the PNG's right border to the trim.
+    #
+    # That is very nearly never what an archetype means. A generated cutout
+    # comes back as a full-frame PNG with the subject somewhere inside it and
+    # a wide, arbitrary, model-chosen transparent margin around it. Against
+    # that plate both knobs are lies: `scale` sizes the margin as much as the
+    # subject, so a wide object that happens to sit small in its own frame
+    # never spans the cover no matter what you set; and `anchor` flushes the
+    # MARGIN to the trim, so an edge-anchored plate whose subject sits centred
+    # lands either stranded inside the frame or shoved half off it, depending
+    # on which way the margin fell. Archetype One's file already tells its
+    # author to choose `anchor` "from WHERE THE CUT IS on that plate" — a
+    # promise the frame measurement cannot keep, since the cut is a property
+    # of the ink and the plate border knows nothing about it.
+    #
+    # "ink" measures the subject: the source is cropped to its alpha bounding
+    # box before any fit runs, so scale 1.0 means THE OBJECT fills the canvas
+    # on its binding axis and anchor [1.0, y] puts THE OBJECT's own edge on
+    # the trim. Opt-in, and defaulted to "frame", so every spec and template
+    # written before this field renders byte-identically.
+    place_by: Literal["frame", "ink"] = "frame"
+    # WHETHER THIS PLATE'S SUBJECT MAY BE CUT BY THE TRIM AT ALL.
+    #
+    # "Severed ends must leave the frame" is doctrine for a plate whose
+    # subject GROWS OR HANGS: a stem, cane, chain, ribbon or blade has a cut
+    # end, and carrying that end out through the trim is what makes it read as
+    # a slice of a larger scene rather than an object lying on the cover. An
+    # overshooting anchor is right for those, and every such slot should keep
+    # keep_whole False.
+    #
+    # It is exactly wrong for a plate whose subject is a SCATTER OF DISCRETE
+    # WHOLE OBJECTS — glass floats, berries, pearls, stones. A sphere has no
+    # cut end to carry out. Sliced by the trim it does not read as continuing
+    # off the page; it reads as a bulb cut in half, which is the one thing the
+    # overshoot rule was invented to prevent. The doctrine is about severed
+    # ENDS, and a round thing has none.
+    #
+    # keep_whole clamps placement so the slot's ink lands entirely inside the
+    # trim, overriding an anchor or offset that would push it past. It is a
+    # CLAMP, not a re-anchor: a slot already inside is untouched, so this can
+    # only ever pull a plate back in, never move one that was placed correctly.
+    keep_whole: bool = False
     opacity: float = Field(default=1.0, ge=0.0, le=1.0)
     # The full BLEND_MODES table (deep-stack wave, §15.1) — hue/color/
     # luminosity deferred, see that constant's comment.
@@ -1205,6 +1332,8 @@ def _coerce_art_prompts(value: object) -> object:
     return value
 
 
+_TOKEN_LAYOUT_NAMES: tuple[str, ...] = ("",) + tuple(sorted(TOKEN_LAYOUTS))
+
 Direction = create_model(
     "Direction",
     __config__=ConfigDict(extra="forbid"),
@@ -1241,6 +1370,22 @@ Direction = create_model(
     # doesn't contain is dropped with a log line (the §6.1 surplus-prompt
     # precedent), never fatal.
     emphasis_word=(str, ""),
+    # Where the title's lines break, as word indices that START a new line
+    # (§15.12's missing half — see TextSlot.line_breaks for why no scorer
+    # can infer this). [] leaves the automatic search alone. Folded onto the
+    # title slot by build_spec, and dropped with a log line — never fatal,
+    # the §6.1 surplus-prompt posture — when the indices do not fit the
+    # title this book actually has.
+    title_breaks=(list[int], []),
+    # Where the two accent plates sit, from the closed TOKEN_LAYOUTS shelf
+    # (§19.2) — the one placement decision a template of that shape hands
+    # to the direction call, precisely so a catalogue of books built on one
+    # template does not put its accents in the same two spots every time.
+    # "" (the default) keeps whatever anchors the archetype itself declares,
+    # so every existing archetype and every existing Direction is unchanged.
+    # A pick naming slots the archetype doesn't declare is dropped with a log
+    # line in build_spec, never fatal.
+    token_layout=(Literal[*_TOKEN_LAYOUT_NAMES], ""),
     __validators__={
         "_art_prompts_dict_ok": field_validator(
             "art_prompts", mode="before")(_coerce_art_prompts),
@@ -1511,6 +1656,29 @@ def _title_type_move(direction: Direction, title: str) -> dict[str, Any]:
     return overrides
 
 
+def _token_anchors(direction: Direction, archetype: Archetype
+                   ) -> dict[str, tuple[float, float]]:
+    """Direction.token_layout as per-slot anchor overrides, or {} — either
+    "no pick" or "this archetype has no token pair", and the can't-honor
+    path logs and drops rather than raising (the §6.1 surplus-prompt
+    precedent: a multi-concept job must never die over one inapplicable
+    placement choice).
+
+    Only the two conventional TOKEN_SLOT_IDS are addressed, and only when
+    the archetype declares BOTH: half a layout is worse than none — it would
+    move one token off its diagonal and leave the other where the template
+    put it, which is the one arrangement TOKEN_LAYOUTS exists to prevent."""
+    name = getattr(direction, "token_layout", "")
+    if not name:
+        return {}
+    declared = {slot.id for slot in archetype.art}
+    if not set(TOKEN_SLOT_IDS) <= declared:
+        log.info("token_layout %r dropped: the %s archetype does not declare "
+                 "both of %s.", name, archetype.name, ", ".join(TOKEN_SLOT_IDS))
+        return {}
+    return dict(TOKEN_LAYOUTS[name])
+
+
 def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> CoverSpec:
     """Merge one art-direction concept into its chosen archetype's template.
 
@@ -1551,6 +1719,8 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
     intents = {p.slot: p.mask_intent for p in direction.art_prompts
                if getattr(p, "mask_intent", "")}
 
+    token_anchors = _token_anchors(direction, archetype)
+
     art: list[ArtSlot] = []
     for slot in archetype.art:
         if slot.id == "texture" and not include_texture:
@@ -1570,9 +1740,11 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             transparent=slot.transparent,
             fit=slot.fit,
             mirror=slot.mirror,
+            place_by=slot.place_by,
+            keep_whole=slot.keep_whole,
             opacity=slot.opacity,
             blend=slot.blend,
-            anchor=slot.anchor,
+            anchor=list(token_anchors.get(slot.id, slot.anchor)),
             scale=slot.scale,
             offset=slot.offset,
             treatment=prompt_treatments.get(slot.id, slot.treatment),
@@ -1603,12 +1775,35 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
     # fields haven't landed yet.
     title_move = _title_type_move(direction, brief.title)
 
+    # Designed line breaks for the title (§15.12). Validated against THIS
+    # book's title here rather than left to TextSlot's own validator, so a
+    # break list that fits the last book but not this one drops with a log
+    # line instead of failing the whole job — the same surplus-prompt
+    # posture _title_type_move takes for an emphasis_word the title lacks.
+    title_breaks = list(getattr(direction, "title_breaks", []) or [])
+    if title_breaks and "line_breaks" in TextSlot.model_fields:
+        n_words = len(brief.title.split())
+        ok = (title_breaks == sorted(set(title_breaks))
+              and all(1 <= i < n_words for i in title_breaks))
+        if ok:
+            title_move = {**title_move, "line_breaks": title_breaks}
+        else:
+            log.info("Direction %r set title_breaks=%s, which is not a valid "
+                     "set of break points for the %d-word title %r; dropped.",
+                     direction.concept_name, title_breaks, n_words, brief.title)
+
     text: list[TextSlot] = []
     for slot in archetype.text:
         role = getattr(slot, "font_role", "") or (
             "title" if slot.id == "title" else "author")
         font = direction.title_font if role == "title" else direction.author_font
-        text.append(TextSlot(
+        # The archetype's own §15.12 fields first, then the direction's move
+        # folded OVER them — `update`, not a second `**` — so a template that
+        # arcs its title and a concept that asks for `tilt` resolve by
+        # precedence (the concept wins) instead of raising TypeError on a
+        # duplicate keyword. Read through getattr for the same reason
+        # font_role is: a template that predates the fields still builds.
+        fields: dict[str, Any] = dict(
             id=slot.id,
             content=getattr(brief, slot.id, ""),
             zone=Zone(x=slot.zone.x, y=slot.zone.y, w=slot.zone.w, h=slot.zone.h),
@@ -1626,7 +1821,12 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             optional=slot.optional,
             mode=slot.mode,
             mask_from=slot.mask_from,
-            **(title_move if slot.id == "title" else {})))
+            fit_mode=getattr(slot, "fit_mode", "uniform"),
+            arc=getattr(slot, "arc", 0.0),
+            rotate=getattr(slot, "rotate", 0.0))
+        if slot.id == "title":
+            fields.update(title_move)
+        text.append(TextSlot(**fields))
 
     art_ids = {a.id for a in archetype.art}
     adjust_ids = {a.id for a in archetype.adjust}
@@ -1674,6 +1874,7 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
 
 __all__ = [
     "ART_SLOT_IDS", "ART_TREATMENTS", "BLEND_MODES", "FX_PREFIX",
+    "TOKEN_LAYOUTS", "TOKEN_SLOT_IDS",
     "PROCEDURAL_KINDS",
     "Brief", "PaletteRole", "Palette", "Zone", "Shadow", "Stroke", "Effect",
     "GradientMask", "MaskSpec", "AdjustLayer",
