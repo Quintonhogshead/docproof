@@ -259,13 +259,25 @@ duotone-ramp + grain treatment that makes a photograph shelf-safe) or with \
 treatment: "duotone"/"silhouette" — an untreated (treatment: "none") \
 photographic prompt is never allowed, brief or no brief. Stylized media \
 hide generation artifacts, and a raw, untreated photoreal image is the \
-single biggest "AI-generated" tell. The composition note that keeps room \
-for the type is appended by code afterward — do not write it yourself.
+single biggest "AI-generated" tell. THE ONE EXEMPTION: an archetype marked \
+[PHOTOREAL TEMPLATE] in the list above is photographic by construction and \
+carries its own discipline instead — its composition note fixes the medium, \
+the key light and the saturation identically for every plate, and its \
+finishing recipe grades, blooms and grains them onto one piece of film. On \
+those archetypes, and ONLY those, prompt every plate photoreal and leave \
+treatment "none": photo_soft there is a mistake, not a safety net, because \
+it is a duotone and will flatten the whole cover into one sepia mass. On \
+every other archetype the rule above stands unchanged. The composition note \
+that keeps room for the type is appended by code afterward — do not write \
+it yourself.
 
 Image simplicity is not a vague preference — simple shapes and silhouettes \
-hide AI-generation artifacts far better than rendered detail does. For \
-every generatable art prompt, reach for the SIMPLEST form on this list that \
-still serves the concept, in order:
+hide AI-generation artifacts far better than rendered detail does. This \
+ladder does not apply on a [PHOTOREAL TEMPLATE], whose plates are \
+photographs by construction; there, describe the real thing in real light \
+and let the template's own note and finishing recipe do the unifying. \
+Everywhere else, for every generatable art prompt, reach for the SIMPLEST \
+form on this list that still serves the concept, in order:
 1. Flat SILHOUETTE — one flat color, a pure shape, no interior detail at \
 all (pair it with treatment: "silhouette").
 2. DUOTONE single subject — one subject rendered tone-on-tone against the \
@@ -302,7 +314,8 @@ graphic look), "sticker" (outlines a transparent cutout with a text-\
 colored edge — collage looks want this), or "photo_soft" (blurs, fully \
 desaturates, and maps a photographic image through the same duotone ramp \
 plus a light grain overlay — the treatment that makes a photographic or \
-photoreal prompt allowed at all; see the photorealism rule above). \
+photoreal prompt allowed at all on an ordinary archetype, and a mistake on \
+a [PHOTOREAL TEMPLATE]; see the photorealism rule above). \
 `treatment` is the ONLY effects-rack field you ever set. Mirrored corners \
 (ornamental-frame \
 conventions), motif scatter (repeating-pattern conventions), and \

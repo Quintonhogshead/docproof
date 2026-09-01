@@ -688,6 +688,45 @@ class Archetype(BaseModel):
     # printed. Dialling the shelf entry itself is not an option — other
     # templates share it.
     recipe_strength: float = Field(default=1.0, ge=0.0, le=1.0)
+    # Whether this template's plates are PHOTOGRAPHIC by construction, and
+    # may therefore be prompted photoreal with `treatment: "none"` —
+    # the one exemption from direction.py's shelf-wide ban on untreated
+    # photorealism (docs/cover_designer_spec.md §18.4).
+    #
+    # That ban is not squeamishness: a raw, untreated photoreal plate is the
+    # single biggest "AI-generated" tell, and the shelf's mitigation is
+    # stylization — silhouette, duotone, posterize, or the photo_soft
+    # blur+desaturate+ramp. A photoreal TEMPLATE cannot use any of them.
+    # photo_soft is a duotone: it greyscales each plate and maps it onto the
+    # background->primary ramp, which across eight separately-lit plates
+    # flattens a whole cover into one sepia mass — the same reason
+    # romantasy_organic forbids it outright.
+    #
+    # So this flag is not "this archetype likes photographs". It ASSERTS that
+    # the template carries its own photoreal discipline in place of the
+    # stylization it cannot use: one `composition_note` fixing the medium,
+    # the key, the fill and the saturation for every plate identically, and a
+    # finishing `recipe` (grade + bloom + grain) unifying them afterward.
+    # Those are what make eight separate generations read as one photograph
+    # rather than as eight stock images in a pile, and the validator below
+    # holds the template to the second half of that bargain.
+    photoreal: bool = False
+
+    @model_validator(mode="after")
+    def _photoreal_has_a_finish(self) -> Archetype:
+        """A photoreal template must declare a finishing `recipe`. The grade,
+        the bloom and above all the GRAIN are what put eight separately
+        generated plates on one piece of film; without them the exemption is
+        just permission to ship untreated stock photography, which is the
+        thing the shelf-wide rule exists to prevent."""
+        if self.photoreal and not self.recipe:
+            raise ValueError(
+                f"{self.name}: photoreal: true requires a finishing `recipe` "
+                f"— it is the grade/bloom/grain that unifies separately "
+                f"generated photographic plates, and it is half of what the "
+                f"flag asserts (known recipes: "
+                f"{', '.join(sorted(RECIPES)) or 'none'})")
+        return self
 
     @field_validator("recipe")
     @classmethod
@@ -1059,7 +1098,17 @@ def describe_archetypes(genre: str | None = None) -> str:
                  for s in gen]
         slots = (f" (art slots to prompt, by exact id: {'; '.join(pairs)})"
                  if gen else " (no generated art — fully procedural)")
-        lines.append(f"- {a.name} — {' '.join(a.describe.split())}{slots}")
+        # A photoreal template is the ONE exemption from the shelf-wide ban
+        # on untreated photorealism, and the exemption is worthless if the
+        # call cannot tell which templates hold it: told only "never ship an
+        # untreated photoreal prompt", a model picking this archetype either
+        # refuses its own plates or pairs them with photo_soft, which is a
+        # duotone and destroys the template. Marked here, at the point of
+        # choice, rather than left to be inferred from the describe line.
+        mark = (" [PHOTOREAL TEMPLATE — prompt these plates photographically "
+                "and leave treatment \"none\"; see the photorealism rule]"
+                if a.photoreal else "")
+        lines.append(f"- {a.name} — {' '.join(a.describe.split())}{mark}{slots}")
     return "\n".join(lines)
 
 

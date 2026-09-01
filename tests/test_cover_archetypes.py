@@ -8,6 +8,8 @@ loads through at import — see docs/cover_designer_spec.md §5.1 and §11.
 """
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 from pydantic import ValidationError
 
@@ -906,3 +908,63 @@ def test_retrofitted_default_render_passes_autopilot_and_balance(name):
         assert ratio >= _CONTRAST_THRESHOLDS[slot_id], (name, slot_id, ratio)
     assert not any("still" in w and "threshold" in w for w in report.warnings)
     assert report.adjustments == []
+
+
+# -- photoreal templates (§18.4) ----------------------------------------------
+
+def test_photoreal_archetype_is_marked_for_the_director():
+    """direction.py bans untreated photorealism across the whole shelf. The
+    exemption is worthless if the art-direction call cannot tell which
+    templates hold it: told only "never ship an untreated photoreal prompt",
+    a model picking one either refuses its own plates or reaches for
+    photo_soft — which is a duotone, and destroys a multi-plate photographic
+    template. The mark has to be at the point of choice."""
+    text = describe_archetypes()
+    for name, archetype in ARCHETYPES.items():
+        marked = "[PHOTOREAL TEMPLATE" in _archetype_line(text, name)
+        assert marked == archetype.photoreal, (
+            f"{name}: photoreal={archetype.photoreal} but marked={marked}")
+
+
+def _archetype_line(text: str, name: str) -> str:
+    for line in text.split("\n"):
+        if line.startswith(f"- {name} "):
+            return line
+    raise AssertionError(f"{name} not described")
+
+
+def test_photoreal_requires_a_finishing_recipe():
+    """Half of what the flag ASSERTS: the grade, the bloom and above all the
+    grain are what put separately generated plates on one piece of film.
+    Without them the exemption is permission to ship untreated stock."""
+    base = dict(
+        name="probe_photoreal", describe="d", composition_note="c",
+        art=[{"id": "a", "generatable": True}],
+        text=[{"id": "title", "zone": {"x": 0, "y": 0, "w": 1, "h": 1},
+               "size_min": 0.01, "size_max": 0.1}],
+        layers=["a", "title"], photoreal=True)
+    with pytest.raises(ValidationError):
+        Archetype(**base)
+    assert Archetype(**base, recipe="cinematic_duotone").photoreal
+
+
+def test_photoreal_defaults_off_so_the_shelf_rule_still_binds():
+    """Every archetype that does not opt in stays under the shelf-wide ban —
+    the exemption is opt-in, never a silent widening."""
+    assert Archetype(
+        name="probe_default", describe="d", composition_note="c",
+        art=[{"id": "a", "generatable": True}],
+        text=[{"id": "title", "zone": {"x": 0, "y": 0, "w": 1, "h": 1},
+               "size_min": 0.01, "size_max": 0.1}],
+        layers=["a", "title"]).photoreal is False
+    assert ARCHETYPES["romantasy_organic"].photoreal is False
+
+
+def test_the_photoreal_exemption_reaches_the_direction_prompt():
+    """The mark in the archetype list means nothing unless the rule the call
+    reads actually carves the exemption out — the two halves ship together
+    or the call is told to obey a rule it has been marked exempt from."""
+    from docproof.cover import direction as direction_module
+    source = pathlib.Path(direction_module.__file__).read_text(encoding="utf-8")
+    assert "THE ONE EXEMPTION" in source
+    assert source.count("[PHOTOREAL TEMPLATE]") >= 3

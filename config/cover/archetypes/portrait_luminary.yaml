@@ -126,7 +126,21 @@ name: portrait_luminary
 genres: [fantasy, romance]
 axis: center
 recipe: cinematic_duotone
-recipe_strength: 0.50          # the full grade maps eight plates onto two
+recipe_strength: 0.50
+# This template is PHOTOGRAPHIC by construction, and says so, because
+# direction.py bans untreated photorealism across the whole shelf and would
+# otherwise refuse to fill it (§18.4). The ban's own mitigation is
+# stylization, and none of it is available here: photo_soft is a duotone —
+# it greyscales each plate and maps it onto the background->primary ramp,
+# which across eight separately-lit plates flattens the entire cover into one
+# sepia mass and takes the two accent tokens with it. duotone and silhouette
+# do the same thing more bluntly, and a silhouetted face is not a portrait.
+#
+# What stands in for stylization here is the pair below and the recipe above:
+# ONE composition_note fixing medium, key, fill and saturation identically
+# for every plate, and cinematic_duotone's grade + bloom + grain putting all
+# eight on one piece of film afterward. The grain is the load-bearing part.
+photoreal: true          # the full grade maps eight plates onto two
                                 # colours and eats the tokens; wanted here for
                                 # its unify, its bloom and its grain
 describe: >-

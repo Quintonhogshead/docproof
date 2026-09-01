@@ -1716,14 +1716,41 @@ still owns scale, opacity, effects and z-order; placement is the one decision it
 Addressed by the conventional slot ids `token_far` / `token_near`, exactly as `_intent_mask`'s
 `"inside_focal"` addresses the conventional `focal` id.
 
-### 18.3 Two known conflicts this wave did NOT fix
+### 18.3 One known conflict this wave did NOT fix
 
-- `CUTOUT_SUFFIX` tells every transparent plate it is *"fully visible and complete"* while
-  `_cut_edge_clause` tells the same plate it is severed and runs out of the picture. Every
-  `cut_edge` slot on both shipped archetypes carries the contradiction; the plates come back right
-  by weight of emphasis, not by agreement. The suffix should be cut-edge aware.
-- `direction.py` forbids untreated photoreal art outright (`treatment: "none"` on a photoreal
-  prompt is "never allowed, brief or no brief"), and `photo_soft` is a duotone that
-  `portrait_luminary` cannot use — it flattens eight separately-lit plates into one sepia mass.
-  The archetype is photoreal by construction, so the live director would refuse to fill it as
-  written. The shelf-wide rule needs an archetype-scoped exemption.
+`CUTOUT_SUFFIX` tells every transparent plate it is *"fully visible and complete"* while
+`_cut_edge_clause` tells the same plate it is severed and runs out of the picture. Every
+`cut_edge` slot on both shipped archetypes carries the contradiction; the plates come back right
+by weight of emphasis, not by agreement. The suffix should be cut-edge aware.
+
+### 18.4 The photoreal exemption — `Archetype.photoreal`
+
+`direction.py` forbade untreated photoreal art across the whole shelf: `treatment: "none"` on a
+photoreal prompt was *"never allowed, brief or no brief."* `portrait_luminary` is photoreal by
+construction, so **the live director would have refused to fill the archetype this wave shipped.**
+It worked only because it was hand-directed.
+
+The ban is not squeamishness — a raw, untreated photoreal plate is the single biggest
+"AI-generated" tell — and its mitigation is stylization. None of that stylization is available to
+a multi-plate photographic template. `photo_soft` is a **duotone**: it greyscales each plate and
+maps it onto the background→primary ramp, which across eight separately-lit plates flattens the
+whole cover into one sepia mass and takes the two accent tokens with it. That is the same reason
+`romantasy_organic` forbids `photo_soft` outright. `duotone` and `silhouette` do it more bluntly,
+and a silhouetted face is not a portrait.
+
+**Fix:** `Archetype.photoreal` (default `False`, so the shelf-wide rule still binds everywhere it
+did before — the exemption is opt-in, never a silent widening). The flag does not mean "this
+archetype likes photographs." It **asserts** that the template carries its own photoreal discipline
+in place of the stylization it cannot use: one `composition_note` fixing medium, key, fill and
+saturation identically for every plate, and a finishing `recipe` grading, blooming and graining
+them onto one piece of film. A validator holds the template to the second half — `photoreal: true`
+without a `recipe` is refused at load, because without the grain the exemption is just permission
+to ship untreated stock photography.
+
+**Both halves ship together or neither works.** `describe_archetypes()` marks an exempt archetype
+`[PHOTOREAL TEMPLATE]` at the point of choice, and the rule in `direction.py` carves the exemption
+out by that exact marker in all three places it bites: the photorealism rule, the
+simplest-form-wins ladder (which pushes silhouettes and does not apply to a photographic template),
+and the `treatment` vocabulary. Marked but not carved out, the call obeys a rule it has been told
+it is exempt from; carved out but not marked, it cannot tell which archetypes hold the exemption.
+A test asserts the marker and the rule stay in step.
