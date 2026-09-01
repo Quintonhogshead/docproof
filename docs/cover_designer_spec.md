@@ -1560,7 +1560,7 @@ gradient into it (this cover: 83.6 unshadowed → 81.5 → 67.5 at the contact).
   conditioning, not at seat time.
 
 
-### 15.24 Placement measures the INK — `place_by` and `keep_whole` (the Saltmere addendum)
+### 15.25 Placement measures the INK — `place_by` and `keep_whole` (the Saltmere addendum)
 
 Two additive `ArtSlot` fields, both defaulting to the old behaviour, both found
 by building Archetype Six (`pale_reliquary`) and both fixing faults that had
