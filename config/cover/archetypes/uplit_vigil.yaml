@@ -1,0 +1,624 @@
+# =============================================================================
+# ARCHETYPE EIGHT — uplit_vigil
+# =============================================================================
+#
+# Reference DNA: the special-edition dark romantasy hardcover in its THIRD
+# dominant arrangement. Not a hanging object on a cloth ground
+# (romantasy_organic), not a bust inside a closing wreath
+# (romantasy_vignette), but ONE FULL-LENGTH FIGURE, turned away, standing in
+# a LUMINOUS HAZARD FLOOR that fills the bottom band and is the only light
+# source on the cover. Raven Kennedy's THE SWEETEST FIEND is the canonical
+# shelf example; the whole Bloom / illumicrate / sprayed-edge shelf is full
+# of it.
+#
+# The composition is a STAGE, not a proscenium. The top two thirds are an
+# empty black sky with a sparse particle field; the bottom quarter is a hot,
+# busy, self-illuminated floor; and one tall pale figure bridges the two.
+# The frame is OPEN — vapor enters from the top corners and runs partway down
+# the sides, and the bottom is closed by LIGHT rather than by objects.
+#
+# At thumbnail size the whole design must read as ONE TALL PALE SHAPE
+# STANDING IN A BAND OF LIGHT UNDER A BLACK SKY. Everything below exists to
+# protect that read.
+#
+# Like its two siblings this template is written to be ONE-SHOT. The art
+# direction chooses TEN NOUNS, five hexes, two fonts, a series line and a
+# tagline. Placement, scale, cut edges, masks, effects, adjust layers,
+# scrims, occlusion budget and layer order are decided here, once.
+#
+# -----------------------------------------------------------------------------
+# THE SEVEN RULES THIS TEMPLATE ENCODES
+# -----------------------------------------------------------------------------
+#
+# 1. THE LIGHT COMES FROM THE FLOOR. This is the template. `hazard` is the
+#    only emitting thing in the frame; `ember_wash` throws its colour back up
+#    onto the void; every plate above it is prompted LIT FROM BELOW, with the
+#    warm edge on its underside and the cold edge on top. A plate that comes
+#    back lit from the front reads as pasted on and no amount of grading
+#    rescues it — repaint it with the light direction restated. The palette
+#    follows the same logic: `primary` is the floor's glow and is the only
+#    saturated colour on the cover.
+#
+# 2. THE FIGURE STANDS *IN* THE FLOOR, NOT ON IT. This is spec §15.23's
+#    cardinal rule (a standing figure must look like it is standing on
+#    something) taken one step further, because §15.23's own failure mode —
+#    a cutout resting on a generated ground like a sticker on a table — is
+#    exactly what this arrangement invites. Three mechanisms, all mandatory
+#    and all wired below: `subject` carries a gradient mask that dissolves its
+#    own hem into the floor rather than ending on a cut line; `hazard_front`
+#    is a piece of the SAME floor drawn AFTER the figure, so matter passes in
+#    front of her feet; and `foot_shadow` is a masked darkening pooled where
+#    she meets the ground. Delete any one of the three and she hovers.
+#
+# 3. THE FRAME IS OPEN, NOT CLOSED. Three vapor plates, entering from the top
+#    edge and the two upper side edges, running at most halfway down. A
+#    fourth plate closing the bottom makes this a wreath, which is
+#    romantasy_vignette's composition and not this one. The bottom of the
+#    frame is closed by the hazard's LIGHT.
+#
+# 4. ONE PALE VERTICAL, ONE WARM BAND, ONE BLACK VOID — and nothing else
+#    above the hazard line may be as bright as the figure. `vapor_*` all
+#    carry opacity ceilings and `haze_back` desaturates the far tier for
+#    exactly this reason. `subject_bloom` is the insurance once the finishing
+#    stack has run.
+#
+# 5. SEVERED ENDS MUST LEAVE THE FRAME, AND OVERSHOOT WHEN THEY DO.
+#    Inherited verbatim from romantasy_organic rule 1 and binding on all
+#    three vapor plates and on `hazard_front`. Every generated plate keeps a
+#    transparent margin inside its own frame, so a plate placed flush with
+#    the trim still stops its ink short; every `offset` below pushes the cut
+#    edge well past the trim. `ember_front` is the one exception — it is a
+#    scatter of discrete whole fragments, so it carries `keep_whole: true`
+#    (spec §15.25: a round thing has no cut end, and slicing one at the trim
+#    reads as a bulb cut in half).
+#
+# 6. THE AUTHOR'S NAME IS THE SECOND TITLE. It sits ON the hazard band, in
+#    the DISPLAY face (`font_role: title`), at near-title scale. That is a
+#    real decision and it costs something: white ink on a hot busy floor is
+#    the hardest legibility problem on the cover, so the author slot carries
+#    the heaviest effect stack here (a tight dark contact shadow under a wide
+#    soft one) and the strongest halo. If a render still fights it, the fix
+#    is `primary` — take the floor's glow DARKER, not the halo higher.
+#
+# 7. THE TAGLINE LIVES IN THE DEAD FIELD, LEFT, AND IS NEVER CENTRED. An open
+#    frame with a centred figure creates one structurally dead region: the
+#    black mid-left. `subtitle` is the tagline and it exists to fill it. A
+#    centred tagline lands on the figure's back, competes with the title, and
+#    leaves the dead band dead.
+#
+# -----------------------------------------------------------------------------
+# ROLES, NOT NOUNS
+# -----------------------------------------------------------------------------
+#
+#   field          the void everything is arranged in
+#   motes          the far particle field, drifting behind everything
+#   vapor_crown    the ribboned mass arcing across the top
+#   vapor_left     ribbons running down the upper-LEFT edge
+#   vapor_right    ribbons running down the RIGHT edge, lower and smaller
+#   hazard         THE LUMINOUS FLOOR — the bottom band, the only light source
+#   subject        THE FOCAL FIGURE — full length, turned away, one arm raised
+#   drift          small bright things rising through the middle air
+#   hazard_front   a tongue of the floor drawn in FRONT of the figure's feet
+#   ember_front    loose whole fragments crossing the author's name
+#
+# EVERY FRAME BELOW IS WRITTEN IN GEOMETRY AND IN LIGHT, NOT IN NOUNS, AND
+# MUST STAY THAT WAY (romantasy_vignette's hardest-won lesson). A slot asks
+# for A BROKEN CRUST WITH BRIGHT SEAMS RUNNING BETWEEN THE PIECES, or LONG
+# CURLING RIBBONS THAT HOOK BACK ON THEMSELVES, or SMALL BRIGHT THINGS RISING
+# AND THINNING AS THEY GO. What those things ARE is the art direction's only
+# say, and that is the whole point of the template.
+#
+# The floor does not have to be fire. It has to be a BROKEN PLANE THAT GLOWS
+# FROM ITS SEAMS. Cracked lava crust, fissured ice over a lit deep, a shattered
+# mirror floor over a furnace, a cracked salt pan over bioluminescence, a
+# collapsed circuit board — all of them are the same plate, and only the first
+# is warm. Two books built from this template so far, sharing not one noun:
+#
+#   ember void / drifting sparks / oxblood smoke ribbons / cracked volcanic
+#   crust with molten seams / a veiled bride in a corseted ivory gown, arm
+#   raised, a moth at her fingertips / rising cinders / a tongue of molten
+#   crust / broken clinker
+#
+#   drowned dark / suspended salt crystals / pale sea-fog ribbons / cracked
+#   black ice lit cyan from beneath by a sunken city / a figure in a heavy
+#   verdigris greatcoat, arm raised, a small pale bird lifting from the hand /
+#   rising luminous jellyfish / a shelf of split ice / broken ice shards
+#
+# -----------------------------------------------------------------------------
+# THE OCCLUSION BUDGET
+# -----------------------------------------------------------------------------
+# Two front plates cross type and one does not. `drift` crosses the TITLE
+# (small, sparse, screened — it must never bury a glyph); `ember_front`
+# crosses the AUTHOR; `hazard_front` sits between the two and crosses the
+# figure's feet only. That is the whole budget. The composer demotes a front
+# plate below its text the moment it buries too much ink, and a demoted plate
+# silently cancels the sandwich — so each of the three is small and pinned
+# hard against a margin. Two or three crossings is the target.
+# =============================================================================
+name: uplit_vigil
+genres: [fantasy, romance, horror]
+axis: center
+recipe: airbrushed_glow
+recipe_strength: 0.30          # this cover is ALREADY lit from within — the
+                                # hazard does it for real. Full strength blooms
+                                # the floor into a flat orange slab and takes
+                                # the figure's rim light with it.
+describe: >-
+  One full-length figure turned away on the centre axis, one arm raised,
+  standing in a broken luminous floor that fills the bottom of the frame and
+  lights the whole cover from below. Empty black sky above with drifting
+  particles and ribbons of vapor entering from the top corners; a large
+  display title high in the void, a left-aligned tagline in the dead field
+  beside the figure, and the author's name at near-title scale set across
+  the glowing floor.
+composition_note: >-
+  Painted as a rich photoreal fantasy book-cover illustration, LIT FROM
+  BELOW by the glowing floor — warm light on every downward-facing surface,
+  a cold rim on every upward-facing one, deep crushed blacks, restrained
+  specular highlights, full value range. No scene, no horizon, no sky
+  detail, no landscape, no buildings, no vignette, no cast shadow on any
+  surface.
+
+# =============================================================================
+art:
+# -- the void -----------------------------------------------------------------
+  - id: field
+    role: ground
+    generatable: true
+    procedural: gradient       # $0 fallback only; this slot is meant to be painted
+    fit: cover
+    prompt_frame: >-
+      A full-frame empty field of {subject}, almost completely black across
+      the top two thirds and lifting only slightly toward the very bottom
+      edge, with a soft depth-of-field haze. Completely empty — nothing in
+      it, no horizon, no objects.
+
+  - id: motes
+    role: particles
+    # romantasy_organic rule 3, inherited: ONE whole plate at the bottom of
+    # the stack, never `scatter`. Screen, because these emit light.
+    generatable: true
+    transparent: true
+    fit: cover
+    blend: screen
+    opacity: 0.60
+    prompt_frame: >-
+      A full-frame scattering of {subject} suspended in empty air at many
+      different sizes, some sharp and near, some tiny and far out of focus.
+      Irregular and sparse, no two alike, denser across the upper half and
+      thinning downward, with large empty gaps. On pure black.
+
+# -- the open frame: three vapor plates, rule 3 -------------------------------
+  - id: vapor_crown
+    role: far_tier
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: top
+    anchor: [0.50, 0.00]
+    offset: [0.00, -0.05]
+    scale: 0.72                 # 0.98 filled the whole sky and killed rule 4
+    opacity: 0.52
+    prompt_frame: >-
+      A band of {subject} entering from the top of the frame and reaching
+      down into it — long curling ribbons that hook back on themselves, a
+      few of them only, thick where they enter and breaking apart into
+      separate thinning tendrils as they descend, with LARGE GAPS OF EMPTY
+      BLACK between them. The lower half of the frame is completely empty.
+      Lit from below along the undersides of the curls, dark on top. On pure
+      black.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.016, alpha: 0.38}
+
+  - id: vapor_left
+    role: edge_tangle
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: left
+    anchor: [0.00, 0.20]
+    offset: [-0.09, 0.00]
+    scale: 0.56
+    opacity: 0.55
+    prompt_frame: >-
+      A tangle of {subject} entering from one side of the frame — several
+      long curling lengths crossing and overlapping each other at different
+      angles, hooking back on themselves, packed dense where they enter and
+      opening into gaps as they reach across. Lit from below.
+    effects:
+      - {kind: drop_shadow, dy: 0.005, blur: 0.013, alpha: 0.40}
+
+  - id: vapor_right
+    role: edge_tangle
+    # Rule 3's asymmetry clause, inherited from romantasy_vignette rule 4:
+    # deliberately LOWER, SMALLER and FAINTER than vapor_left. Two matched
+    # side masses at the same height make a proscenium arch, which closes the
+    # frame this template needs open.
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: right
+    anchor: [1.00, 0.36]
+    offset: [0.09, 0.00]
+    scale: 0.44
+    opacity: 0.46
+    prompt_frame: >-
+      A looser, sparser drift of {subject} entering from one side of the
+      frame — two or three long curling lengths only, well separated, thinner
+      and more broken up than a dense mass, trailing away into nothing. Lit
+      from below.
+    effects:
+      - {kind: drop_shadow, dy: 0.005, blur: 0.014, alpha: 0.36}
+
+# -- THE FLOOR: rule 1 --------------------------------------------------------
+  - id: hazard
+    role: luminous_floor
+    # Generated full-bleed (fit: cover) and then CUT by a gradient mask
+    # rather than placed as a contained plate: the top edge of a floor is not
+    # a severed end, it is a fade into distance, and a contained plate would
+    # give it a hard horizontal line. The mask holds it fully transparent
+    # above 0.58 and fully opaque from 0.79 down — that ramp IS the
+    # aerial-perspective recession, and it is why no `horizon` appears
+    # anywhere in the prompt.
+    generatable: true
+    fit: cover
+    mask:
+      gradient: {kind: linear, angle: 90.0, start: 0.58, end: 0.79}
+    prompt_frame: >-
+      A full-frame broken plane of {subject} seen from a low oblique angle —
+      a crust of dark irregular slabs and chunks with bright glowing seams
+      running between every piece, brightest and widest at the very bottom of
+      the frame and closing to thin dark cracks as the plane recedes upward
+      into darkness. The glow comes from BENEATH the crust and is the only
+      light in the picture. No horizon line, no sky, no objects standing on
+      it.
+
+# -- THE FIGURE: rules 2 and 4 ------------------------------------------------
+  - id: subject
+    role: focal_subject
+    # Drawn AFTER the floor and after the whole back tier — romantasy_organic's
+    # buried-lantern lesson.
+    #
+    # place_by: ink (spec §15.24) is load-bearing here and was the fix for
+    # the whole arrangement: a figure cutout comes back with a wide transparent
+    # margin, so anchoring the FRAME put her feet a random distance above the
+    # floor. Anchoring the INK lands the bottom of the painted figure on the
+    # measured point every time, whatever margin the generator left.
+    #
+    # cut_edge: bottom and the hem mask are rule 2. The mask (angle 270 =
+    # bottom-transparent, top-opaque) holds her fully solid above y=0.80 and
+    # fades her out entirely by y=0.93 — she does not END, she goes INTO the
+    # floor. start/end are in that ramp's own coordinates: t runs 0 at the
+    # canvas bottom to 1 at the top, so 0.07/0.20 are canvas y 0.93 and 0.80.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: bottom
+    anchor: [0.50, 0.88]
+    offset: [0.00, 0.00]
+    scale: 0.82
+    mask:
+      gradient: {kind: linear, angle: 270.0, start: 0.07, end: 0.20}
+    prompt_frame: >-
+      {subject}. A full-length standing view from BEHIND and slightly to one
+      side, framed loose with empty air all around it. Whatever carries the
+      identity — the head, the face — is SMALL, sits high in the upper
+      quarter of the frame, and is turned away so that it is never fully
+      shown. One arm is raised clear of the body, held high and away, with
+      something small at the open hand. Below that, the broad unbroken sweep
+      of the back and the fall of the garment make ONE large simple pale
+      shape filling the middle and lower half of the frame — brightly lit and
+      completely clear of clutter, not a busy one. Lit from BELOW: the warm
+      light is strongest on the lowest part of the figure and falls off
+      upward, with a cold rim down the far edge. That pale expanse is the
+      largest thing in the picture, and the picture is the single brightest,
+      sharpest, most detailed plate in the cover.
+    effects:
+      - {kind: drop_shadow, dy: 0.008, blur: 0.016, alpha: 0.42}
+      - {kind: outer_glow, blur: 0.038, alpha: 0.34}
+
+# -- FRONT TIER: drawn AFTER the type, rule 6's sandwich ----------------------
+#
+# Each carries its own drop shadow — the shadow falling onto the letterforms
+# IS the depth illusion; without it a front plate reads as a sticker.
+#
+  - id: drift
+    role: front_rise
+    # Crosses the TITLE. Screened and sparse on purpose: this is the one
+    # front plate over the cover's largest type, and a solid plate here gets
+    # demoted below the title, which cancels the sandwich.
+    generatable: true
+    transparent: true
+    fit: contain
+    blend: screen
+    opacity: 0.85
+    anchor: [0.62, 0.30]
+    scale: 0.52
+    prompt_frame: >-
+      A loose vertical trail of {subject} rising through empty air, large and
+      bright and well separated at the bottom and getting smaller, fainter
+      and more thinly scattered toward the top until they disappear. Only a
+      couple of dozen in all, with big empty gaps between them. On pure
+      black.
+    effects:
+      - {kind: outer_glow, blur: 0.020, alpha: 0.45}
+
+  - id: hazard_front
+    role: front_floor
+    # Rule 2, mechanism three: a piece of the SAME floor, drawn after the
+    # figure, so matter passes in front of her feet. Pinned OFF the centre
+    # axis so it reads as ground she is standing among rather than as a plinth
+    # she is standing on.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink               # §15.24, and NOT optional here: the prompt
+                                # below deliberately empties the upper three
+                                # quarters of the plate, so anchoring the
+                                # FRAME parks the whole strip below the trim
+                                # and the slot renders as nothing at all —
+                                # exactly the failure place_by exists to kill,
+                                # and the same one `subject` has.
+    cut_edge: bottom
+    anchor: [0.42, 1.00]
+    offset: [0.00, 0.04]
+    scale: 1.10                 # of the CROPPED strip, so this reads as
+                                # ~0.22 of canvas height and bleeds both
+                                # sides. 0.62 of the whole frame was a
+                                # boulder field, not a near kerb.
+    prompt_frame: >-
+      A low, wide, shallow strip of {subject} lying across the VERY BOTTOM
+      EDGE of the frame and nothing else — three or four flat broken pieces
+      overlapping each other, seen close up and almost edge-on, no taller
+      than a low kerb, with bright glowing seams between them. The upper
+      three quarters of the frame are COMPLETELY EMPTY. On pure black.
+    effects:
+      - {kind: drop_shadow, dy: 0.007, blur: 0.012, alpha: 0.58}
+
+  - id: ember_front
+    role: front_fragments
+    # Crosses the AUTHOR's name — rule 6's sandwich. Rule 5's exception:
+    # discrete whole fragments, so keep_whole clamps the plate inside the
+    # trim (§15.25) instead of overshooting it. Mirrored so the plate's own
+    # cut turns outward.
+    generatable: true
+    transparent: true
+    fit: contain
+    mirror: true
+    keep_whole: true
+    blend: screen
+    opacity: 0.80
+    anchor: [0.78, 0.80]
+    scale: 0.20
+    prompt_frame: >-
+      Five or six separate SMALL whole pieces of {subject} at different sizes
+      and angles, drifting far apart with wide empty black space around and
+      between them, each glowing along one edge. Together they take up no
+      more than a fifth of the frame; the rest is empty. Nothing attached to
+      anything, nothing cut off. On pure black.
+    effects:
+      - {kind: outer_glow, blur: 0.016, alpha: 0.50}
+
+# =============================================================================
+adjust:
+  - id: field_grade
+    # A generated void comes back as a bright, saturated PHOTOGRAPH of haze.
+    # This sits on it before any art, so the whole cover is built on a quiet
+    # field and the floor has somewhere to be the only bright thing.
+    op: grade
+    brightness: -0.42
+    saturation: -0.42
+    contrast: 0.10
+
+  - id: haze_back
+    # Aerial perspective: the vapor crown fades and desaturates so it sits
+    # behind the arrangement rather than in it (rule 4).
+    op: grade
+    brightness: -0.10
+    contrast: -0.28
+    saturation: -0.38
+    opacity: 0.90
+    mask: {from_layer: vapor_crown, feather: 0.025}
+
+  - id: ember_wash
+    # RULE 1 MADE LITERAL: the floor's colour thrown back up onto the void.
+    # A `primary` wash at `screen`, masked radially from a centre one frame
+    # BELOW the bottom edge (0.5, 1.02) and inverted — inverted, because a
+    # radial mask is transparent at its core and opaque at its rim by
+    # default, and what this needs is the opposite: solid at the bottom
+    # centre, gone by the upper corners. This is the single layer that makes
+    # the sky and the floor belong to one photograph.
+    op: color_wash
+    color: primary
+    blend: screen
+    opacity: 0.38
+    mask:
+      gradient: {kind: radial, center: [0.50, 1.02], start: 0.00, end: 0.72}
+      invert: true
+
+  - id: foot_shadow
+    # Rule 2, mechanism two: contact. A dark pool where the figure meets the
+    # floor, masked to the figure's own silhouette and feathered wide, so the
+    # darkening spreads a little beyond her into the crust. Without it the
+    # hem dissolve reads as a fade-out rather than as an occlusion.
+    op: grade
+    brightness: -0.34
+    contrast: 0.05
+    opacity: 0.75
+    mask:
+      from_layer: subject
+      feather: 0.030
+      gradient: {kind: linear, angle: 90.0, start: 0.72, end: 0.90}
+
+  - id: tonal_spine
+    # One shared colour spine under ten separately-lit plates.
+    op: gradient_map
+    stops: [background, primary, text]
+    opacity: 0.16
+    blend: soft_light
+
+  - id: subject_bloom
+    # Rule 4's insurance: glow on the figure's lit edge, on the floor's seams
+    # and on the type, after everything else has run.
+    op: bloom
+    threshold: 0.84
+    radius: 0.022
+    strength: 0.32
+
+  - id: floor_shade
+    # The very bottom edge settles so the frame closes on something dark
+    # rather than on the brightest pixels in the composition. Held clear of
+    # the author's zone (which ends at 0.875) by starting at 0.90.
+    op: color_wash
+    color: "#000000"
+    blend: normal
+    opacity: 0.42
+    mask:
+      gradient: {kind: linear, angle: 90.0, start: 0.90, end: 1.0}
+
+# =============================================================================
+scrims:
+  # All halo — a gradient_up/down scrim protecting anything not flush with a
+  # canvas edge paints a full-height slab with hard vertical sides
+  # (romantasy_organic rule 5).
+  - {kind: halo, protects: title, strength: 0.10}     # black void: near-inert
+  - {kind: halo, protects: author, strength: 0.38}    # hot busy floor: rule 6
+  - {kind: halo, protects: series, strength: 0.30}    # over the vapor crown
+  - {kind: halo, protects: subtitle, strength: 0.14}  # black void: near-inert
+
+# =============================================================================
+text:
+  - id: series
+    # The eyebrow line, hard against the top trim, over the densest part of
+    # the vapor crown — it carries its own shadow as well as the halo.
+    zone: {x: 0.10, y: 0.028, w: 0.80, h: 0.030}
+    case: upper
+    align: center
+    valign: top
+    tracking: 120
+    max_lines: 1
+    optional: true
+    size_min: 0.010
+    size_max: 0.016
+    effects:
+      - {kind: drop_shadow, dy: 0.0035, blur: 0.008, alpha: 0.78}
+
+  - id: title
+    # High in the void, directly under the eyebrow. This is the ONE place on
+    # the cover where the legibility measurement is easy: the whole zone sits
+    # on near-black field and vapor, one value regime, no skin and no floor —
+    # which is the entire reason the figure is placed low and the title is
+    # placed high. The gradient_overlay makes the ink a cool RAMP rather than
+    # flat white and is the only place `accent` appears at size.
+    zone: {x: 0.075, y: 0.070, w: 0.85, h: 0.240}
+    case: upper
+    align: center
+    valign: middle
+    tracking: 12
+    max_lines: 3
+    size_min: 0.048
+    size_max: 0.092
+    effects:
+      # A tight dark contact shadow under a wide soft one — the pro type move.
+      - {kind: drop_shadow, dy: 0.003, blur: 0.004, alpha: 0.70}
+      - {kind: drop_shadow, dy: 0.014, blur: 0.032, alpha: 0.40}
+      - {kind: gradient_overlay, stops: [accent, text], angle: 90.0, opacity: 0.95}
+      # soft_light, NOT multiply: a stone plate at multiply pulls the type
+      # down to translucent.
+      - {kind: texture_overlay, texture_file: marble, blend: soft_light, opacity: 0.22}
+
+  - id: subtitle
+    # THE TAGLINE — rule 7. Left-aligned, in the dead black band beside the
+    # figure, deliberately small and deliberately not centred. Narrow zone on
+    # purpose: it must break into three or four short lines, because a single
+    # long line reaches the figure and the whole point is that it does not.
+    zone: {x: 0.085, y: 0.395, w: 0.31, h: 0.150}
+    case: upper
+    align: left
+    valign: middle
+    tracking: 65
+    max_lines: 4
+    optional: true
+    size_min: 0.015
+    size_max: 0.027
+    effects:
+      - {kind: drop_shadow, dy: 0.003, blur: 0.009, alpha: 0.70}
+
+  - id: author
+    # RULE 6: the display face, at near-title scale, set across the glowing
+    # floor. This is the opposite of romantasy_vignette's convention (a plain
+    # geometric author block as the counterweight to an ornate title) and it
+    # is a deliberate difference: here the counterweight is the FLOOR, which
+    # is busy enough that a quiet author name would simply vanish into it.
+    # The stack below is the heaviest on the cover for exactly that reason.
+    font_role: title
+    zone: {x: 0.055, y: 0.720, w: 0.89, h: 0.155}
+    case: upper
+    align: center
+    valign: middle
+    tracking: 8
+    max_lines: 2
+    size_min: 0.050
+    size_max: 0.088
+    effects:
+      - {kind: drop_shadow, dy: 0.0025, blur: 0.0035, alpha: 0.82}
+      - {kind: drop_shadow, dy: 0.016, blur: 0.038, alpha: 0.52}
+
+# =============================================================================
+# Z-ORDER, bottom first. The five that are easy to get wrong and fatal:
+# `motes` is at the BOTTOM; `hazard` is drawn BEFORE the figure but
+# `hazard_front` AFTER her; `ember_wash` sits between the floor and the figure
+# so she is rimmed by it rather than washed over; `drift` is drawn after the
+# TITLE and `ember_front` after the AUTHOR (the two sandwiches); and
+# `foot_shadow` must come after `hazard_front` or the front slabs paint over
+# the contact it just made.
+layers: [field, motes, field_grade,
+        vapor_crown, haze_back, vapor_left, vapor_right,
+        hazard, ember_wash, subject,
+        "scrim:0", "scrim:2", series, title, drift,
+        "scrim:3", subtitle,
+        hazard_front, foot_shadow,
+        "scrim:1", author, ember_front,
+        floor_shade, tonal_spine, subject_bloom]
+
+# =============================================================================
+# WHAT THE DIRECTOR STILL CHOOSES, AND NOTHING ELSE
+# =============================================================================
+#   * ten `{subject}` fills, one per generatable slot. Two are load-bearing
+#     and long: `subject` carries the character, the garment, the raised-arm
+#     gesture's small object and any mark the premise puts on them (a mark
+#     plate would have to be measured onto a body that does not exist when
+#     this template is authored); `hazard` carries what the floor is made of
+#     AND what colour it glows, and `hazard_front` must name the SAME material
+#     or the near shelf reads as a different substance.
+#   * five palette hexes. `primary` is the floor's glow and the only saturated
+#     colour on the cover — `ember_wash` paints the whole void with it, so it
+#     sets the cover's entire temperature. `accent` is the title's dark stop
+#     and must be a mid-value that holds against near-black, at least 30 L*
+#     off `background`. `text` is the title's light stop and the author's ink,
+#     so take it near white: the finishing stack costs the type ~25%
+#     brightness on the way down.
+#   * title_font and author_font — a display face and a plain one. Note that
+#     `author` wears the DISPLAY face here (rule 6), so `author_font` dresses
+#     only the eyebrow and the tagline.
+#   * the series line and the tagline.
+#
+# It does NOT choose placement, scale, blend, opacity, masks, adjust layers,
+# effects, scrim kinds, recipe strength, or layer order.
+#
+# HONEST SCOPE: the skeleton is "one turned-away full-length figure standing
+# in a broken plane that glows from its seams, under an open dark sky". It
+# fits romantasy, dark fantasy, fae, gothic and quiet horror. It does not fit
+# a memoir, a thriller with no figure, or any book whose cover should not be
+# lit from one direction — and it should not be stretched to.
+#
+# TWO KNOWN LIMITS, STATED RATHER THAN HIDDEN:
+#   1. There is no foot credit line ("New York Times bestselling author of
+#      ___"). The engine has four text slots and this arrangement spends them
+#      on eyebrow / title / tagline / author, because the tagline in the dead
+#      field (rule 7) does structural work that a foot credit does not. A book
+#      that must carry a brag line should fold it into `series` at the top.
+#   2. `subject` is by far the riskiest plate: a full-length figure cutout,
+#      lit from below, with a raised arm, is the one generation here that can
+#      come back unusable, and no template rule fixes that — repaint it.

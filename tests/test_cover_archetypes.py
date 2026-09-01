@@ -216,6 +216,7 @@ _EXPECTED_GENRES = {
     "portrait_luminary": ["fantasy", "romance"],
     "elemental_aperture": ["fantasy", "science_fiction", "romance",
                           "mystery_thriller", "horror"],
+    "uplit_vigil": ["fantasy", "romance", "horror"],
 }
 
 
@@ -1070,3 +1071,117 @@ def test_pale_reliquary_keeps_its_discrete_object_plates_whole():
     for sid in ("crown", "undergrowth", "beast", "bloom", "claw"):
         assert not by_id[sid].keep_whole
         assert by_id[sid].cut_edge
+
+
+# -- uplit_vigil (archetype eight): the three mechanisms of rule 2 -----------
+#
+# "A standing figure must look like it is standing on something" (spec
+# §15.23) is the one rule this arrangement is most likely to break, and it is
+# enforced by three cooperating pieces rather than by one. Each is cheap to
+# delete by accident during a tidy-up and none of them fails loudly — the
+# render just quietly goes back to a cutout hovering over a texture. Guard all
+# three, and guard the ordering that makes them work.
+
+def test_uplit_vigil_dissolves_its_figures_hem_rather_than_cutting_it():
+    """Mechanism one: the figure fades INTO the floor. Without the mask her
+    plate ends on a hard horizontal cut line partway up the hazard band."""
+    subject = next(s for s in ARCHETYPES["uplit_vigil"].art if s.id == "subject")
+    assert subject.cut_edge == "bottom"
+    assert subject.mask is not None and subject.mask.gradient is not None
+    # angle 270 = bottom-transparent, top-opaque: the fade runs the right way.
+    assert subject.mask.gradient.angle == 270.0
+    # place_by ink (§15.24) is what lands her painted feet on the measured
+    # point instead of her plate's transparent margin.
+    assert subject.place_by == "ink"
+
+
+def test_uplit_vigil_draws_floor_matter_in_front_of_its_figure():
+    """Mechanism two: `hazard_front` is drawn AFTER `subject`, off the centre
+    axis, so ground passes in front of her feet. Demote it below her and she
+    is standing on a picture of a floor."""
+    a = ARCHETYPES["uplit_vigil"]
+    order = a.layers
+    assert order.index("hazard_front") > order.index("subject")
+    assert order.index("hazard") < order.index("subject")
+    front = next(s for s in a.art if s.id == "hazard_front")
+    assert front.anchor[0] != 0.5, "a plinth on the axis is not ground"
+
+
+def test_uplit_vigil_pools_a_contact_shadow_after_the_front_floor():
+    """Mechanism three: the contact darkening is masked to the figure's own
+    silhouette and drawn after `hazard_front`, or the near slabs paint over
+    the contact it just made."""
+    a = ARCHETYPES["uplit_vigil"]
+    shadow = next(x for x in a.adjust if x.id == "foot_shadow")
+    assert shadow.mask is not None
+    assert shadow.mask.from_layer == "subject"
+    assert shadow.mask.feather > 0.0
+    assert a.layers.index("foot_shadow") > a.layers.index("hazard_front")
+
+
+def test_uplit_vigil_keeps_its_front_type_sandwiches():
+    """Rule 6 / the occlusion budget: `drift` crosses the title and
+    `ember_front` crosses the author, both drawn after their own text."""
+    order = ARCHETYPES["uplit_vigil"].layers
+    assert order.index("drift") > order.index("title")
+    assert order.index("ember_front") > order.index("author")
+
+
+def test_uplit_vigil_throws_the_floors_colour_back_onto_the_void():
+    """Rule 1: `ember_wash` is the layer that makes sky and floor one
+    photograph. It must screen `primary` from a centre below the bottom trim,
+    inverted — a non-inverted radial mask lights the CORNERS instead."""
+    a = ARCHETYPES["uplit_vigil"]
+    wash = next(x for x in a.adjust if x.id == "ember_wash")
+    assert wash.op == "color_wash" and wash.blend == "screen"
+    assert wash.color == "primary"
+    assert wash.mask is not None and wash.mask.gradient is not None
+    assert wash.mask.gradient.kind == "radial"
+    assert wash.mask.gradient.center[1] > 1.0
+    assert wash.mask.invert is True
+    # Between the floor and the figure, so she is rimmed by it, not washed over.
+    assert a.layers.index("hazard") < a.layers.index("ember_wash") < a.layers.index("subject")
+
+
+def test_uplit_vigil_sets_its_author_in_the_display_face():
+    """Rule 6: the author's name is the second title. `font_role: title` is
+    the only thing that puts it in the display face, and dropping it silently
+    demotes the name to the eyebrow's supporting font."""
+    author = next(t for t in ARCHETYPES["uplit_vigil"].text if t.id == "author")
+    assert author.font_role == "title"
+    title = next(t for t in ARCHETYPES["uplit_vigil"].text if t.id == "title")
+    # near-title scale, not a caption
+    assert author.size_max >= title.size_max * 0.9
+
+
+def test_uplit_vigil_keeps_its_tagline_off_the_centre():
+    """Rule 7: the tagline fills the dead left band. Centre it and it lands on
+    the figure's back and competes with the title."""
+    tagline = next(t for t in ARCHETYPES["uplit_vigil"].text if t.id == "subtitle")
+    assert tagline.align == "left"
+    assert tagline.zone.x + tagline.zone.w < 0.5
+
+
+def test_uplit_vigil_leaves_its_frame_open_at_the_bottom():
+    """Rule 3: three vapor plates, all entering from the top or the upper
+    sides. A fourth closing the bottom makes this romantasy_vignette's wreath."""
+    a = ARCHETYPES["uplit_vigil"]
+    vapor = [s for s in a.art if s.id.startswith("vapor_")]
+    assert len(vapor) == 3
+    assert {s.cut_edge for s in vapor} == {"top", "left", "right"}
+    # Asymmetry clause: the two side masses differ in height AND in scale.
+    left = next(s for s in vapor if s.id == "vapor_left")
+    right = next(s for s in vapor if s.id == "vapor_right")
+    assert left.anchor[1] != right.anchor[1]
+    assert left.scale != right.scale
+
+
+def test_uplit_vigil_clamps_only_its_whole_fragment_plate():
+    """Rule 5 and its one exception (§15.25): severed ends overshoot the trim,
+    but the scatter of discrete whole pieces is clamped inside it."""
+    a = ARCHETYPES["uplit_vigil"]
+    whole = [s.id for s in a.art if s.keep_whole]
+    assert whole == ["ember_front"]
+    for slot in a.art:
+        if slot.cut_edge:
+            assert not slot.keep_whole, f"{slot.id} both severs and clamps"
