@@ -1073,7 +1073,7 @@ def test_pale_reliquary_keeps_its_discrete_object_plates_whole():
         assert by_id[sid].cut_edge
 
 
-# -- uplit_vigil (archetype eight) ------------------------------------------
+# -- uplit_vigil (archetype ten) ------------------------------------------
 #
 # Two rules here fight each other and the resolution is the whole design, so
 # both halves are guarded. Rule 2 puts the figure on the TOP layer, which
