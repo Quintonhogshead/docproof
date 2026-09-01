@@ -348,6 +348,8 @@ class ArchetypeArt(BaseModel):
     # horizontally before fit and placement, so a severed stem that points
     # into the frame can be turned to run out of it.
     mirror: bool = False
+    place_by: Literal["frame", "ink"] = "frame"
+    keep_whole: bool = False
     fit: Literal["cover", "contain"] = "cover"
     transparent: bool = False
     opacity: float = Field(default=1.0, ge=0.0, le=1.0)

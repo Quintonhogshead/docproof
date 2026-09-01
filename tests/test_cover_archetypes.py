@@ -208,6 +208,7 @@ def test_an_untagged_archetype_is_in_scope_for_every_genre():
 # doesn't silently drift the library's genre coverage.
 _EXPECTED_GENRES = {
     "romantasy_organic": ["fantasy", "romance"],
+    "pale_reliquary": ["fantasy", "romance"],
     "crossed_relics": ["fantasy", "romance", "mystery_thriller",
                               "science_fiction", "historical"],
     "romantasy_enclosure": ["fantasy", "romance"],
@@ -1021,3 +1022,50 @@ def test_the_photoreal_exemption_reaches_the_direction_prompt():
     source = pathlib.Path(direction_module.__file__).read_text(encoding="utf-8")
     assert "THE ONE EXEMPTION" in source
     assert source.count("[PHOTOREAL TEMPLATE]") >= 3
+
+
+# -- place_by (ink vs frame) --------------------------------------------------
+
+def test_place_by_defaults_to_frame_everywhere_it_is_not_declared():
+    # The whole point of the field being opt-in: every slot written before it
+    # existed keeps the plate-frame placement it was tuned against.
+    for archetype in ARCHETYPES.values():
+        for slot in archetype.art:
+            if slot.place_by == "ink":
+                assert slot.fit == "contain", (
+                    f"{archetype.name}.{slot.id}: ink placement is meaningless "
+                    f"on a cover fit, which fills the canvas either way")
+
+
+def test_pale_reliquary_places_every_contain_slot_by_its_ink():
+    # Archetype Six's rule 0. A contain-fit slot here is anchored on a severed
+    # edge, and the frame measurement cannot honour that: it flushes the
+    # plate's transparent margin to the trim instead of the subject's cut.
+    a = ARCHETYPES["pale_reliquary"]
+    contain = [s for s in a.art if s.fit == "contain"]
+    assert contain
+    assert all(s.place_by == "ink" for s in contain), [
+        s.id for s in contain if s.place_by != "ink"]
+
+
+def test_a_keep_whole_slot_declares_no_cut_edge():
+    # The two are contradictory instructions: keep_whole says this subject has
+    # no severed end to carry out through the trim, cut_edge says which end to
+    # carry out. A slot asserting both is an authoring mistake.
+    for archetype in ARCHETYPES.values():
+        for slot in archetype.art:
+            if slot.keep_whole:
+                assert not slot.cut_edge, (
+                    f"{archetype.name}.{slot.id}: keep_whole and "
+                    f"cut_edge={slot.cut_edge!r} contradict each other")
+
+
+def test_pale_reliquary_keeps_its_discrete_object_plates_whole():
+    a = ARCHETYPES["pale_reliquary"]
+    by_id = {s.id: s for s in a.art}
+    for sid in ("berries_l", "berries_r"):
+        assert by_id[sid].keep_whole, f"{sid} is a scatter of spheres"
+    # ...and the plates that DO have a severed end still overshoot.
+    for sid in ("crown", "undergrowth", "beast", "bloom", "claw"):
+        assert not by_id[sid].keep_whole
+        assert by_id[sid].cut_edge

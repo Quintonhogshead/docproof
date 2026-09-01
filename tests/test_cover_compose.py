@@ -1673,3 +1673,168 @@ def test_real_ink_across_a_row_still_reads_as_alive():
             d.rectangle((x, y, x + 8, y + 1), fill=(10, 10, 10))
     assert _dead_band_frac(field)[0] < 0.9
 
+
+
+# -- place_by: measuring the ink, not the plate -------------------------------
+#
+# A generated cutout comes back as a full-frame PNG with the subject somewhere
+# inside it and an arbitrary, model-chosen transparent margin around it. Placed
+# by the plate border, `scale` sizes that margin as much as the subject and
+# `anchor` flushes the MARGIN to the trim — so an edge-anchored plate whose
+# subject sits centred lands either stranded inside the frame or shoved half
+# off it, depending on which way the margin happened to fall. Both symptoms of
+# one bug, and both showed up on the same cover.
+
+from docproof.cover.balance import ink_bbox as _ink_bbox
+from docproof.cover.compose import _crop_to_ink
+
+
+def _plate_with_margin(size=(200, 200), box=(60, 40, 110, 90)):
+    """A transparent plate whose ink is a small opaque rect well inside it."""
+    img = Image.new("RGBA", size, (0, 0, 0, 0))
+    ImageDraw.Draw(img).rectangle(box, fill=(200, 30, 30, 255))
+    return img
+
+
+def test_crop_to_ink_is_a_no_op_when_the_slot_places_by_frame():
+    src = _plate_with_margin()
+    slot = ArtSlot(id="focal", fit="contain", transparent=True)
+    assert slot.place_by == "frame"          # the default, and it must stay
+    assert _crop_to_ink(slot, src) is src
+
+
+def test_crop_to_ink_crops_to_the_alpha_box_when_the_slot_places_by_ink():
+    src = _plate_with_margin(box=(60, 40, 110, 90))
+    slot = ArtSlot(id="focal", fit="contain", transparent=True, place_by="ink")
+    out = _crop_to_ink(slot, src)
+    # PIL's box is exclusive on the far edge, so a 60..110 inclusive rect is 51px.
+    assert out.size == (51, 51)
+    assert _ink_bbox(out) == (0, 0, 51, 51)
+
+
+def test_crop_to_ink_leaves_a_fully_inked_plate_alone():
+    # An opaque ground has no ink box distinct from its frame; the crop is a
+    # no-op there rather than an error.
+    src = Image.new("RGBA", (64, 64), (10, 20, 30, 255))
+    slot = ArtSlot(id="background", fit="cover", place_by="ink")
+    assert _crop_to_ink(slot, src) is src
+
+
+def test_crop_to_ink_leaves_an_empty_plate_alone():
+    src = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    slot = ArtSlot(id="focal", fit="contain", transparent=True, place_by="ink")
+    assert _crop_to_ink(slot, src) is src
+
+
+def _one_art_spec(tmp_path, place_by):
+    src = _plate_with_margin(size=(200, 200), box=(60, 40, 110, 90))
+    (tmp_path / "assets").mkdir(exist_ok=True)
+    src.save(tmp_path / "assets" / "f.png")
+    return CoverSpec(
+        archetype="probe", concept_name="c", rationale="r",
+        palette=Palette(background="#ffffff", primary="#888888",
+                        accent="#ff0000", text="#000000", scrim="#000000"),
+        art=[ArtSlot(id="focal", fit="contain", transparent=True,
+                     asset="assets/f.png", anchor=[1.0, 0.5], scale=1.0,
+                     place_by=place_by)],
+        scrims=[], text=[], layers=[LayerRef(kind="art", ref="focal")])
+
+
+def _red_bbox(image):
+    """Where the probe plate's opaque red subject landed on the finished
+    render. Measured on colour, not alpha: compose() returns a flat composited
+    image whose every pixel is opaque, so an alpha box there is just the
+    canvas."""
+    rgb = image.convert("RGB")
+    r, g, b = rgb.split()
+    from PIL import ImageChops
+    hot = ImageChops.subtract(r, ImageChops.lighter(g, b)).point(
+        lambda v: 255 if v > 60 else 0)
+    return hot.getbbox()
+
+
+def test_ink_placement_puts_the_subjects_own_edge_on_the_trim(tmp_path):
+    # The reported fault, both halves. Under "frame" the plate's right border
+    # is flushed to the trim, so the subject strands well inside it; under
+    # "ink" the subject's own edge lands on the trim, which is what
+    # `anchor: [1.0, y]` has always claimed to mean.
+    framed, _ = compose(_one_art_spec(tmp_path, "frame"), tmp_path)
+    inked, _ = compose(_one_art_spec(tmp_path, "ink"), tmp_path)
+    fx, ix = _red_bbox(framed), _red_bbox(inked)
+    assert fx is not None and ix is not None
+    assert ix[2] >= EBOOK_W - 2, "ink placement should reach the right trim"
+    assert fx[2] < ix[2] - 100, "frame placement strands the subject inside"
+    # And `scale` now sizes the SUBJECT, so the same 1.0 covers far more width.
+    assert (ix[2] - ix[0]) > (fx[2] - fx[0]) * 2
+
+
+# -- keep_whole: the plate whose subject may not be cut ------------------------
+#
+# The overshoot doctrine ("severed ends must leave the frame") governs a
+# subject that GROWS OR HANGS — a stem, cane, chain or blade has a cut end, and
+# carrying it out through the trim is what sells the larger scene. A scatter of
+# discrete whole objects has no such end: a glass float sliced by the trim
+# reads as a bulb cut in half, the exact failure the rule exists to prevent.
+
+def _keep_whole_spec(tmp_path, keep_whole):
+    src = _plate_with_margin(size=(200, 200), box=(60, 40, 110, 90))
+    (tmp_path / "assets").mkdir(exist_ok=True)
+    src.save(tmp_path / "assets" / "k.png")
+    return CoverSpec(
+        archetype="probe", concept_name="c", rationale="r",
+        palette=Palette(background="#ffffff", primary="#888888",
+                        accent="#ff0000", text="#000000", scrim="#000000"),
+        # An anchor AND an offset that both shove the plate past the right trim.
+        art=[ArtSlot(id="focal", fit="contain", transparent=True,
+                     asset="assets/k.png", anchor=[1.0, 0.5], scale=0.3,
+                     offset=[0.15, 0.0], place_by="ink",
+                     keep_whole=keep_whole)],
+        scrims=[], text=[], layers=[LayerRef(kind="art", ref="focal")])
+
+
+def test_without_keep_whole_an_overshooting_offset_cuts_the_subject(tmp_path):
+    image, _ = compose(_keep_whole_spec(tmp_path, False), tmp_path)
+    box = _red_bbox(image)
+    assert box is not None
+    assert box[2] >= EBOOK_W - 1, "the probe should be running off the trim"
+
+
+def test_keep_whole_clamps_the_subject_back_inside_the_trim(tmp_path):
+    # "Whole" is a claim about how much of the subject survived, not about a
+    # gap: the clamp pulls back exactly far enough and no further, so the ink
+    # ends up flush against the trim rather than inset from it. Measured as
+    # width against a placement that was never in danger of being cut.
+    safe = _keep_whole_spec(tmp_path, False)
+    safe.art[0].anchor, safe.art[0].offset = [0.5, 0.5], [0.0, 0.0]
+    whole_w = _red_bbox(compose(safe, tmp_path)[0])
+    cut = _red_bbox(compose(_keep_whole_spec(tmp_path, False), tmp_path)[0])
+    kept = _red_bbox(compose(_keep_whole_spec(tmp_path, True), tmp_path)[0])
+    assert None not in (whole_w, cut, kept)
+    w = lambda b: b[2] - b[0]
+    assert w(cut) < w(whole_w), "the probe should be losing ink off the trim"
+    assert w(kept) == w(whole_w), "keep_whole should preserve the whole subject"
+    # And it clamps rather than re-anchoring: still hard right, just not cut.
+    assert kept[2] > EBOOK_W * 0.75
+
+
+def test_keep_whole_leaves_an_already_inside_plate_exactly_where_it_was(tmp_path):
+    # A clamp may only ever pull inward. A slot the archetype already placed
+    # correctly must render identically with the flag on.
+    def spec(keep_whole):
+        s = _keep_whole_spec(tmp_path, keep_whole)
+        s.art[0].anchor = [0.5, 0.5]
+        s.art[0].offset = [0.0, 0.0]
+        return s
+    off, _ = compose(spec(False), tmp_path)
+    on, _ = compose(spec(True), tmp_path)
+    assert _red_bbox(off) == _red_bbox(on)
+
+
+def test_keep_whole_gives_up_on_an_axis_it_cannot_satisfy(tmp_path):
+    # Ink wider than the canvas has no placement that keeps it whole. Leaving
+    # it alone is the honest answer; silently shrinking it would be a different
+    # decision than the archetype asked for.
+    spec = _keep_whole_spec(tmp_path, True)
+    spec.art[0].scale = 3.0
+    image, _ = compose(spec, tmp_path)
+    assert _red_bbox(image) is not None

@@ -732,6 +732,52 @@ class ArtSlot(BaseModel):
     # (`corners` mirrors too, but into all four corners at once, which is a
     # different move entirely.)
     mirror: bool = False
+    # WHAT `anchor` AND `scale` ARE MEASURED AGAINST.
+    #
+    # "frame" (the default, and every pre-existing spec's behaviour) measures
+    # the PLATE: scale 0.9 means the returned PNG is 90% of the canvas, and
+    # anchor [1.0, y] flushes the PNG's right border to the trim.
+    #
+    # That is very nearly never what an archetype means. A generated cutout
+    # comes back as a full-frame PNG with the subject somewhere inside it and
+    # a wide, arbitrary, model-chosen transparent margin around it. Against
+    # that plate both knobs are lies: `scale` sizes the margin as much as the
+    # subject, so a wide object that happens to sit small in its own frame
+    # never spans the cover no matter what you set; and `anchor` flushes the
+    # MARGIN to the trim, so an edge-anchored plate whose subject sits centred
+    # lands either stranded inside the frame or shoved half off it, depending
+    # on which way the margin fell. Archetype One's file already tells its
+    # author to choose `anchor` "from WHERE THE CUT IS on that plate" — a
+    # promise the frame measurement cannot keep, since the cut is a property
+    # of the ink and the plate border knows nothing about it.
+    #
+    # "ink" measures the subject: the source is cropped to its alpha bounding
+    # box before any fit runs, so scale 1.0 means THE OBJECT fills the canvas
+    # on its binding axis and anchor [1.0, y] puts THE OBJECT's own edge on
+    # the trim. Opt-in, and defaulted to "frame", so every spec and template
+    # written before this field renders byte-identically.
+    place_by: Literal["frame", "ink"] = "frame"
+    # WHETHER THIS PLATE'S SUBJECT MAY BE CUT BY THE TRIM AT ALL.
+    #
+    # "Severed ends must leave the frame" is doctrine for a plate whose
+    # subject GROWS OR HANGS: a stem, cane, chain, ribbon or blade has a cut
+    # end, and carrying that end out through the trim is what makes it read as
+    # a slice of a larger scene rather than an object lying on the cover. An
+    # overshooting anchor is right for those, and every such slot should keep
+    # keep_whole False.
+    #
+    # It is exactly wrong for a plate whose subject is a SCATTER OF DISCRETE
+    # WHOLE OBJECTS — glass floats, berries, pearls, stones. A sphere has no
+    # cut end to carry out. Sliced by the trim it does not read as continuing
+    # off the page; it reads as a bulb cut in half, which is the one thing the
+    # overshoot rule was invented to prevent. The doctrine is about severed
+    # ENDS, and a round thing has none.
+    #
+    # keep_whole clamps placement so the slot's ink lands entirely inside the
+    # trim, overriding an anchor or offset that would push it past. It is a
+    # CLAMP, not a re-anchor: a slot already inside is untouched, so this can
+    # only ever pull a plate back in, never move one that was placed correctly.
+    keep_whole: bool = False
     opacity: float = Field(default=1.0, ge=0.0, le=1.0)
     # The full BLEND_MODES table (deep-stack wave, §15.1) — hue/color/
     # luminosity deferred, see that constant's comment.
@@ -1694,6 +1740,8 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             transparent=slot.transparent,
             fit=slot.fit,
             mirror=slot.mirror,
+            place_by=slot.place_by,
+            keep_whole=slot.keep_whole,
             opacity=slot.opacity,
             blend=slot.blend,
             anchor=list(token_anchors.get(slot.id, slot.anchor)),
