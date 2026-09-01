@@ -216,6 +216,7 @@ _EXPECTED_GENRES = {
     "portrait_luminary": ["fantasy", "romance"],
     "elemental_aperture": ["fantasy", "science_fiction", "romance",
                           "mystery_thriller", "horror"],
+    "burning_cartouche": ["fantasy", "romance", "horror"],
 }
 
 
@@ -1070,3 +1071,85 @@ def test_pale_reliquary_keeps_its_discrete_object_plates_whole():
     for sid in ("crown", "undergrowth", "beast", "bloom", "claw"):
         assert not by_id[sid].keep_whole
         assert by_id[sid].cut_edge
+
+
+# -- Archetype Eight (burning_cartouche): the two laws §20 paid for -----------
+
+def test_burning_cartouche_places_every_contain_slot_by_its_ink():
+    # Same reasoning as pale_reliquary's rule 0 (§15.25): every contain-fit
+    # slot here is anchored on a severed edge or clamped whole, and the frame
+    # measurement can honour neither — it flushes the model's arbitrary
+    # transparent margin to the trim instead of the subject.
+    a = ARCHETYPES["burning_cartouche"]
+    contain = [s for s in a.art if s.fit == "contain"]
+    assert contain
+    assert all(s.place_by == "ink" for s in contain), [
+        s.id for s in contain if s.place_by != "ink"]
+
+
+def test_burning_cartouche_border_is_two_trim_pinned_columns_not_a_ring():
+    """§20.1. The border was ONE cover-fit plate asked for "a ring with a large
+    empty hole through the centre"; the generator filled the hole twice, the
+    second time while honouring every other clause in the frame, and buried the
+    field, the floor, the chain and the title's ground under one reef texture.
+
+    A plate pinned to a side trim cannot fill the middle whatever comes back,
+    so the hole is geometry now instead of a request. Guard the geometry: two
+    columns, opposite trims, both cut on the edge they are anchored to."""
+    by_id = {s.id: s for s in ARCHETYPES["burning_cartouche"].art}
+    assert "bower" not in by_id, "the full-frame ring is the bug, not the design"
+    left, right = by_id["bower_left"], by_id["bower_right"]
+    assert (left.cut_edge, left.anchor[0]) == ("left", 0.0)
+    assert (right.cut_edge, right.anchor[0]) == ("right", 1.0)
+    # ...and the surplus width leaves through the trim (§20.2's visible-width
+    # law): the offset pushes OUT, it does not pull the column inboard.
+    assert left.offset[0] < 0 and right.offset[0] > 0
+    # Rule 1: the organic half is asymmetric BY KIND as well as by placement.
+    assert left.scale != right.scale
+    assert left.anchor[1] != right.anchor[1]
+
+
+def test_burning_cartouche_metal_is_symmetric_and_the_organic_is_not():
+    """Rule 1, the whole design. `filigree` is one ornament kaleidoscoped into
+    four byte-identical corners; nothing organic may wear `corners`."""
+    by_id = {s.id: s for s in ARCHETYPES["burning_cartouche"].art}
+    assert by_id["filigree"].corners
+    assert by_id["filigree"].corners_flip_vertical, (
+        "a rocaille scroll is top/bottom symmetric and wants the full mirror")
+    for sid in ("bower_left", "bower_right", "bough", "strewn"):
+        assert not by_id[sid].corners, f"{sid} is the irregular half of rule 1"
+
+
+def test_burning_cartouche_blaze_is_the_whole_occlusion_budget():
+    """Rule 6. Exactly one plate is drawn after the title, it is on `screen`
+    (which can only ADD light, so it glows over the byline instead of eating
+    it), and §20.1's gradient mask fades its top out whatever shape the
+    generator returns."""
+    a = ARCHETYPES["burning_cartouche"]
+    after_title = a.layers[a.layers.index("title") + 1:]
+    art_ids = {s.id for s in a.art}
+    crossing = [ref for ref in after_title if ref in art_ids]
+    assert crossing == ["blaze"], crossing
+    blaze = {s.id: s for s in a.art}["blaze"]
+    assert blaze.blend == "screen"
+    assert blaze.mask is not None and blaze.mask.gradient is not None
+
+
+def test_burning_cartouche_hides_the_chains_cut_behind_the_relic():
+    """§20.3. `pendant`'s severed end leaves through no trim — the relic's own
+    body covers it — which only works if the chain is drawn FIRST. This
+    ordering looks wrong in the layers list and is right on the page, so it
+    gets a guard rather than a comment."""
+    layers = ARCHETYPES["burning_cartouche"].layers
+    assert layers.index("pendant") < layers.index("relic")
+
+
+def test_burning_cartouche_keeps_the_relic_larger_than_the_debris():
+    """Rule 3: a scatter of fragments may never out-mass the thing on the
+    altar. The first build ran `strewn` at 0.68 against a 0.46 relic, which
+    buried the pendant outright and turned the middle of the cover into more
+    border."""
+    by_id = {s.id: s for s in ARCHETYPES["burning_cartouche"].art}
+    assert by_id["strewn"].scale < by_id["relic"].scale
+    # Both rest rather than grow, hang or span, so neither may be trim-cut.
+    assert by_id["relic"].keep_whole and by_id["strewn"].keep_whole

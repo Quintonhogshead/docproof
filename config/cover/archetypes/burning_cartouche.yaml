@@ -1,0 +1,774 @@
+# =============================================================================
+# ARCHETYPE EIGHT — burning_cartouche
+# =============================================================================
+#
+# Reference DNA: the maximalist dark-romantasy hardcover — Kaylie Smith's
+# PHANTASMA and the Ace/Bramble shelf that grew around it. A patterned
+# near-black wall; a symmetrical gilt ornament entering from the top, the
+# bottom and all four corners; a heavy ring of one repeated organic object
+# crowding every edge; ONE pale relic sitting dead-centre on a polished floor
+# with a token hanging from it on a chain; a huge foil display title across the
+# lower third; and a band of live fire licking up over the author's name from
+# the bottom trim.
+#
+# It is the LOUD one. Every other template on this shelf earns its cover by
+# subtraction — romantasy_enclosure's whole revision history is objects being
+# removed, crossed_relics deleted a second scatter slot rather than govern it,
+# pale_reliquary spends two-thirds of its canvas on deliberate emptiness. This
+# one is the opposite arrangement and has to be governed differently: the
+# density IS the pitch. A quiet render of this template is a failed render.
+#
+# The danger is therefore not emptiness but MUSH. Thirteen plates, every one of
+# them ornate, is four plates away from a rug pattern. What keeps it a cover is
+# a single structural idea, and it is the first rule below.
+#
+# -----------------------------------------------------------------------------
+# THE SEVEN RULES THIS TEMPLATE ENCODES
+# -----------------------------------------------------------------------------
+#
+# 1. THE METAL IS SYMMETRIC. THE ORGANIC IS NOT. THIS IS THE WHOLE DESIGN.
+#    The gilt (`filigree`, `crest`, `finial`) is mirror-exact about the centre
+#    axis — `filigree` is ONE generated ornament kaleidoscoped into all four
+#    corners by `corners: true`, which is byte-for-byte symmetry no generator
+#    can produce and the eye reads instantly as MADE. The growth
+#    (`bower_left`, `bower_right`, `bough`) is deliberately, visibly
+#    irregular — and asymmetric BY KIND as well as by placement
+#    (romantasy_vignette rule 4): the two columns sit at different scales and
+#    different heights, and `bough` exists only to make sure one upper corner
+#    is heavier than the other.
+#
+#    That opposition is what stops the density reading as wallpaper. Make the
+#    ornament irregular and the cover loses its spine; make the growth
+#    symmetric and the whole thing becomes a damask swatch with a title on it.
+#    Both halves are structural and neither is re-decided per book.
+#
+# 2. THE HOLE IN THE MIDDLE IS STRUCTURAL. IT IS NEVER ASKED FOR.
+#    The organic border is TWO COLUMN PLATES cut at the left and right trims,
+#    not one full-frame ring, and that is a correction paid for in renders.
+#    The first draft of this template asked a single cover-fit plate for "a
+#    ring with a LARGE EMPTY HOLE through the centre"; the generator filled the
+#    hole both times, the second time while honouring every other clause in the
+#    frame. A cover-fit plate anchored nowhere has no reason not to, and the
+#    whole cover came back as one continuous reef texture with the field, the
+#    floor, the chain and the title's ground all buried under it.
+#
+#    A plate anchored to a side trim CANNOT fill the middle — its own geometry
+#    forbids it, whatever the generator paints. Same lesson elemental_aperture
+#    learned about its matte: when a composition depends on a shape, get the
+#    shape from the ENGINE, not from a sentence. `crest` and `finial` hold the
+#    top and bottom the same way. Nothing but the relic, the chain and the type
+#    is ever allowed into the middle column, which is why a cover carrying this
+#    much furniture still has somewhere to put a face-height title.
+#
+#    Two plates, not `scatter: 10` (crossed_relics rule 4, inherited: stamping
+#    one cutout ten times reads as a rendering defect). Each column is one
+#    generation of thirty things, no two alike.
+#
+# 3. ONE PALE RELIC, DEAD CENTRE, AND IT IS THE ONLY BRIGHT OBJECT.
+#    The composition is a shrine: everything else is a border around a thing on
+#    an altar. `relic` is the brightest value, the highest local contrast and
+#    the most detail on the cover, it is `keep_whole` (it does not grow, hang or
+#    span — it RESTS, and a relic sliced by a trim is a relic cut in half:
+#    §15.25), and it is drawn AFTER the entire border tier so nothing can bury
+#    it. If a render comes back with the border out-shouting the middle, the
+#    fault is a border fill that is too pale, not a relic that is too small.
+#
+# 4. THE RELIC IS STANDING ON SOMETHING, AND THAT SOMETHING IS GENERATED.
+#    §15.23, verbatim and load-bearing. `floor` is a real plate — a polished
+#    plane in steep perspective, receding to a soft horizon behind the relic —
+#    and it exists because a pale object floating on a patterned wall is the
+#    single fastest way to make this arrangement read as a sticker sheet. The
+#    floor is also what makes the fire at the foot legible as fire IN THE ROOM
+#    rather than a gradient across the bottom of a JPEG.
+#
+# 5. THE CHAIN IS THE LADDER FROM THE RELIC TO THE TITLE, AND ITS CUT IS
+#    HIDDEN BY A PLATE INSTEAD OF BY THE TRIM. `pendant` hangs on the centre
+#    axis, and it is the ONE slot here whose severed end does not leave the
+#    frame: it is drawn BEFORE `relic`, so the relic's own body covers the
+#    join. That is the legitimate second answer to §15.21 rule 1 — a cut end
+#    is fine when something opaque is in front of it — and it is why the layer
+#    order has pendant under relic rather than over it, which looks wrong in
+#    the list and is right on the page. Without this slot the eye jumps a dead
+#    inch between the relic and the type and the cover comes apart in the
+#    middle.
+#
+# 6. THE FIRE IS DRAWN LAST, ON `screen`, AND IT IS ALLOWED TO CROSS THE TYPE.
+#    `blaze` is the only plate in front of the type, and `screen` is why that
+#    is safe: it can only ADD light, so it glows over the author's name instead
+#    of eating it. Set it to `normal` and it becomes an opaque orange bar
+#    across the byline; give it to any other slot on this template and the
+#    occlusion budget blows out immediately. One crossing, one plate, one blend
+#    mode.
+#
+# 7. THE TITLE IS FOIL, AND FOIL IS A THREE-STOP RAMP, NOT A COLOUR.
+#    `gradient_overlay` with `stops: [accent, text, accent]` puts a bright band
+#    across the middle of the letterforms and lets both ends fall away — the
+#    stamped-metal read the whole shelf is built on. A flat gold fill is a
+#    yellow title; the ramp is what makes it look pressed into the board. The
+#    `bevel` under it is deliberately shallow (0.0022): at any real depth the
+#    cheap emboss turns a display serif's hairlines to porridge at thumbnail.
+#
+# -----------------------------------------------------------------------------
+# ROLES, NOT NOUNS
+# -----------------------------------------------------------------------------
+#
+#   field      the patterned wall everything hangs on
+#   floor      the reflective plane the relic rests on
+#   keylight   the relic's own light, thrown on the wall behind it
+#   motes      the airborne particle field
+#   bower_left   THE BORDER, left: a tall column of one repeated organic form
+#   bower_right  THE BORDER, right: the same form, different scale and height
+#   bough        the asymmetry breaker: one heavy mass crowding ONE upper corner
+#   filigree   the corner ornament, mirrored into all four
+#   crest      the top-centre ornament, carrying an EMPTY medallion
+#   finial     the bottom-centre ornament, free-standing between title and byline
+#   pendant    the token on a chain, hanging from the relic toward the title
+#   relic      THE FOCAL OBJECT — pale, centred, resting on the floor
+#   strewn     detached fragments come to rest on the floor
+#   blaze      the light-emitting band along the bottom trim
+#
+# EVERY FRAME BELOW IS WRITTEN IN GEOMETRY AND LIGHT, NEVER IN NOUNS —
+# romantasy_vignette's hard-won lesson, inherited whole. A slot asks for A TALL
+# CROWDED COLUMN OF REPEATED ROUNDED FORMS, or ONE SYMMETRICAL ORNAMENT SPRAY
+# THAT SITS AGAINST ITS OWN TOP EDGE. What those things are made of is the art
+# direction's only say.
+#
+# The reference reaches this arrangement with roses, gold rocaille, a skull, a
+# locket and rose petals. So would a dozen other books, and that is exactly the
+# failure mode. The same skeleton, cast honestly out of the manuscript:
+#
+#   brass gears / engine filigree / a cracked porcelain mask / a fob watch
+#   sea-ivory / scrimshaw scroll / a whale's eardrum bone / a brass float
+#   circuit tracery / heat-sink fins / a burnt-out server blade / a dog tag
+#   pressed ferns / lead came / a wren's skull under glass / a locket
+#   prayer beads / hammered tin milagros / a saint's finger / a censer
+#
+# -----------------------------------------------------------------------------
+# WHAT IS DELIBERATELY NOT HERE
+# -----------------------------------------------------------------------------
+#
+# THE BESTSELLER CREDIT LINE. The reference sets "#1 NEW YORK TIMES BESTSELLING
+# AUTHOR" above the byline, and this template has no slot for it — the same
+# ruling crossed_relics made about the gold SPECIAL EDITION seal. A credit line
+# is marketing for one printing, not a piece of the design, and a template that
+# ships one puts a laurel on every debut. The engine's four text ids are spent
+# on things the DESIGN needs, and the fourth one is spent on rule 8 below.
+#
+# THE VOLUME NUMERAL IS TYPE, NOT ART. The reference's crest holds a roman "I".
+# No generator can be asked for it — the pipeline's negative suffix exists
+# precisely to keep lettering out of the plates — so `crest` is prompted for an
+# EMPTY smooth medallion at its own centre and the `series` text slot is set
+# into it. That is diegetic type on a generated host (§15.22), and it carries
+# the known hazard that comes with it: the medallion's real position is not
+# measured, only dictated by the prompt and matched by a fixed zone. The slot
+# is `optional`, so a standalone novel simply leaves it empty, and the zone is
+# small enough that a medallion landing a few percent off still reads as
+# deliberate. If a render puts the numeral on gold rather than in the boss,
+# repaint `crest` — do not move the zone, or the next book's crest will be
+# wrong in the other direction.
+#
+# -----------------------------------------------------------------------------
+# THE OCCLUSION BUDGET
+# -----------------------------------------------------------------------------
+# ONE plate crosses the type: `blaze`, on screen, over the byline. That is the
+# entire budget and it is smaller than any other template's here on purpose,
+# because this cover already spends its complexity on the border. The two
+# border columns are pinned to the side trims; `strewn` sits above the title
+# band and must stay smaller than the relic; `finial`
+# lives in the gap between the title and the byline and must not grow into
+# either. If the composer reports occlusion on anything but `blaze`, a plate
+# has drifted inward and the fix is its anchor, not the title's scrim.
+# =============================================================================
+name: burning_cartouche
+genres: [fantasy, romance, horror]
+axis: center
+photoreal: true
+recipe: dark_academia
+recipe_strength: 0.38          # the warm temperature and the closing vignette
+                                # are doing real work here — the vignette is
+                                # what seats the gilt border against the trim.
+                                # Full strength greys the border's one hue out
+                                # and takes the fire with it.
+describe: >-
+  A patterned near-black wall inside a symmetrical gilt ornament that enters
+  from the top, the bottom and all four corners, with a heavy ring of repeated
+  organic forms crowding every edge; one pale relic centred on a polished
+  reflective floor with a token hanging from it on a chain; a huge foil display
+  title across the lower third; and a band of live fire rising over the
+  author's name from the bottom trim.
+casting: >-
+  Cast this template as a SHRINE the book itself would build. `relic` is the
+  one object the story is actually about — the thing a reader would recognise
+  on the last page — and it must be pale, hard-edged and able to sit on a
+  floor. `bower` is the material the world is MADE of, repeated a hundred
+  times: whatever crowds the edges of this story in quantity. `pendant` is the
+  thing the protagonist carries. `filigree` and `crest` are the ornament of the
+  book's own institution — its church, its guild, its empire, its machine —
+  and they must be the same metal as each other. `blaze` is what is coming for
+  them. Do not reach for roses, skulls and gold rocaille unless the manuscript
+  put them there; the arrangement is the template, the props are the book's.
+composition_note: >-
+  Photographed as a rich, ornate hardcover book-jacket still life, lit warm
+  from the front and slightly above with a cold rim light down one far edge —
+  deep crushed shadow, restrained specular highlights, shallow depth of field,
+  full value range on a near-black ground. No scene, no horizon line, no sky,
+  no landscape, no buildings, no people, no vignette.
+
+# =============================================================================
+art:
+# -- ground band --------------------------------------------------------------
+  - id: field
+    role: ground
+    # The wall. Patterned, not void — the one thing that separates this shelf
+    # from every flat-black romantasy on the table — but the pattern must be
+    # TONAL: it is read at 8% contrast under the grade below, and a generated
+    # "damask" comes back as a bright, high-contrast wallpaper photograph
+    # every single time. `damask_faint` is the $0 fallback for the same look.
+    generatable: true
+    fit: cover
+    texture_file: damask_faint
+    prompt_frame: >-
+      A full-frame wall of {subject} in a dense repeating pattern, seen flat
+      and straight on, nearly black throughout and reading only as a faint
+      tonal relief — no bright passages, no strong colour, no highlights,
+      nothing else in the frame.
+
+  - id: floor
+    role: ground_plane
+    # Rule 4. The relic rests ON this, and the fire at the foot reflects IN it.
+    # Wide ink, so `scale` reads against the canvas WIDTH (§15.25): 1.30 runs
+    # the plane out past both side trims, which is what stops the plane
+    # reading as a rug laid on the wall.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: bottom
+    anchor: [0.50, 1.00]
+    offset: [0.00, 0.03]
+    scale: 1.30
+    opacity: 0.94
+    prompt_frame: >-
+      A wide polished reflective plane of {subject} seen in steep perspective
+      from just above, filling the bottom half of the frame and receding to a
+      soft dark horizon across the middle; wet-looking and mirror-dark, holding
+      one low warm glow along its far edge, fading to nothing at the top of the
+      frame. Empty — nothing standing on it.
+
+  - id: keylight
+    # The relic's own light thrown onto the wall behind it, before the recipe's
+    # vignette closes the border down. This is what makes the gilt ring read as
+    # a ring rather than as four ornaments on a black rectangle.
+    generatable: false
+    fit: cover
+    procedural: radial_glow
+    anchor: [0.50, 0.33]
+    opacity: 0.34
+    blend: screen
+
+  - id: motes
+    role: particles
+    # ONE plate at the bottom of the stack, never `scatter` (romantasy_organic
+    # rule 3). Screen, because these emit.
+    generatable: true
+    transparent: true
+    fit: cover
+    blend: screen
+    opacity: 0.50
+    prompt_frame: >-
+      A full-frame scattering of {subject} drifting through empty air at many
+      different sizes, some sharp and near, most tiny and far out of focus,
+      denser toward the bottom of the frame and thinning upward, with large
+      empty gaps. On pure black.
+
+# -- the border tier: organic (asymmetric) ------------------------------------
+  - id: bower_left
+    role: border_column
+    # Rule 2. Pinned to the left trim, so the middle of the cover is protected
+    # by geometry rather than by a sentence a generator is free to ignore.
+    #
+    # THE VISIBLE-WIDTH LAW, and it is the one arithmetic every column slot on
+    # this template has to obey. Tall ink binds on HEIGHT (§15.25), so a column
+    # run to full height is as wide as its own ink aspect makes it — a plate
+    # that came back 0.30 aspect at scale 0.96 is 0.46 of the CANVAS WIDTH, and
+    # two of those leave a cover that is 92% border. The fix is `offset`, NOT
+    # `scale`: push the surplus out through the trim and keep the column
+    # reaching top and bottom. Shrink it instead and the column stops touching
+    # the top and bottom edges, and a border that floats is not a border.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: left
+    anchor: [0.00, 0.34]
+    offset: [-0.175, 0.00]
+    scale: 0.94
+    prompt_frame: >-
+      A tall narrow column of {subject} — thirty or more of them at wildly
+      different sizes and angles and in different states, crowded and
+      overlapping into one dense vertical mass that runs the full height of the
+      frame, biggest at one end and thinning toward the other. The column is
+      NARROW — it occupies only the left QUARTER of the frame's width and runs
+      off its left edge; the right three quarters of the frame are completely
+      empty and transparent.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.013, alpha: 0.50}
+
+  - id: bower_right
+    role: border_column
+    # Rule 1's other half: the SAME material as bower_left, deliberately at a
+    # different scale and a different height. Two matched columns make a
+    # laurel medal, not a border.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: right
+    anchor: [1.00, 0.62]
+    offset: [0.185, 0.00]
+    scale: 0.80
+    prompt_frame: >-
+      A tall narrow column of {subject} — twenty or more of them at wildly
+      different sizes and angles and in different states, crowded and
+      overlapping into one dense vertical mass, biggest in the middle of the
+      column and thinning at both ends. The column is NARROW — it occupies
+      only the right QUARTER of the frame's width and runs off its right edge;
+      the left three quarters of the frame are completely empty and
+      transparent.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.012, alpha: 0.50}
+
+  - id: bough
+    role: asymmetry_breaker
+    # Rule 1's other half. The ring comes back near-even because generators
+    # like even; this is the plate that deliberately unbalances it. ONE upper
+    # corner, heavier than anything opposite it. Never mirrored, never paired.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: top_right
+    anchor: [1.00, 0.00]
+    offset: [0.07, -0.05]
+    scale: 0.46
+    prompt_frame: >-
+      One heavy gathered mass of {subject} — six or eight of them crowded
+      together at very different sizes, the biggest in front — bunched into one
+      corner of the frame and thinning to nothing as it reaches away from that
+      corner, cut short where it would attach to anything else.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.013, alpha: 0.52}
+
+# -- the border tier: metal (byte-exact symmetric) ----------------------------
+  - id: filigree
+    role: corner_ornament
+    # Rule 1. ONE generation, kaleidoscoped into all four corners —
+    # `corners_flip_vertical: true` because a rocaille scroll IS top/bottom
+    # symmetric and wants the full mirror (a hanging or bottom-heavy ornament
+    # would not: see _place_corners' gravity note). `scale` here is read
+    # DIRECTLY against canvas height, not against a contain baseline, and the
+    # engine insets each copy 2% from the trim on purpose — a generated
+    # ornament placed flush reads as chopped off rather than as placed.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    corners: true
+    corners_flip_vertical: true
+    scale: 0.30
+    prompt_frame: >-
+      One ornate scrolling corner ornament of {subject}, drawn as the TOP LEFT
+      corner piece of a frame: a dense knot of curl at the corner itself with
+      two arms of diminishing scrollwork running away from it along the top
+      edge and down the left edge, tapering to points. Hard-edged, brightly
+      specular, one material throughout, on transparent, nothing else in the
+      frame.
+    effects:
+      - {kind: drop_shadow, dy: 0.005, blur: 0.010, alpha: 0.55}
+
+  - id: crest
+    role: top_ornament
+    # The cartouche the template is named for. Wide ink, so `scale` reads
+    # against canvas WIDTH. The EMPTY medallion is not decoration — the
+    # `series` text slot is set into it (see "WHAT IS DELIBERATELY NOT HERE").
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: top
+    anchor: [0.50, 0.00]
+    offset: [0.00, -0.025]
+    scale: 0.86
+    prompt_frame: >-
+      One wide symmetrical ornament of {subject}, perfectly mirrored left to
+      right about its own centre line, spreading outward and downward from the
+      top edge of the frame in two matching sprays of scrollwork. At its exact
+      centre, near the top, a single small smooth EMPTY oval medallion — a
+      plain blank polished boss with nothing on it and nothing in it. Sits
+      hard against the top edge of the frame, nothing below it.
+    effects:
+      - {kind: drop_shadow, dy: 0.007, blur: 0.013, alpha: 0.55}
+
+  - id: finial
+    role: foot_ornament
+    # Free-standing in the gap between the title's last line and the byline —
+    # NOT cut by the bottom trim, which is where the fire lives. A discrete
+    # whole object with no severed end, so `keep_whole` and no `cut_edge`
+    # (§15.25). It must stay SMALL: this is the one plate that can grow into
+    # the title band and start costing occlusion.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    keep_whole: true
+    anchor: [0.50, 0.845]
+    scale: 0.30
+    opacity: 0.92
+    prompt_frame: >-
+      One small symmetrical ornament of {subject}, perfectly mirrored left to
+      right about its own centre line, widest at the top and tapering to a
+      single point at the bottom, floating alone with empty space all around
+      it and not touching any edge of the frame.
+    effects:
+      - {kind: drop_shadow, dy: 0.005, blur: 0.010, alpha: 0.50}
+
+# -- the shrine: drawn AFTER the whole border tier -----------------------------
+#
+# `pendant` BEFORE `relic` is rule 5 and it is the one ordering here that looks
+# wrong in the list. The chain's cut end is hidden by the relic's own body.
+#
+  - id: pendant
+    role: hanging_token
+    # Tall narrow ink, so `scale` reads against canvas HEIGHT.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: top
+    anchor: [0.50, 0.575]
+    offset: [0.012, 0.00]      # a hair off the axis: dead-centre reads as a
+                                # printed rule dropped down the middle
+    scale: 0.13
+    prompt_frame: >-
+      One single {subject} hanging straight down on a fine slack line in the
+      middle of the frame, the line running up out of the top edge of the frame
+      and the object itself hanging at the bottom of it, lit hard from the
+      front. Nothing else in the frame.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.011, alpha: 0.55}
+
+  - id: relic
+    role: focal_subject
+    # Rule 3. Brightest, sharpest, most detailed plate on the cover, drawn
+    # after everything that could bury it. `keep_whole`: it rests, it does not
+    # grow or hang, so it has no severed end and must never be cut by a trim.
+    # Roughly square ink, so `scale` reads against canvas WIDTH.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    keep_whole: true
+    # The relic's ink is nearly always taller than it is wide, so `scale`
+    # reading on WIDTH still buys ~0.41 of canvas HEIGHT. Sized and seated so
+    # its foot lands around y=0.54: any lower and `pendant` has nowhere to hang
+    # between it and the tagline, which is how rule 5's ladder goes missing.
+    anchor: [0.50, 0.22]
+    scale: 0.44
+    prompt_frame: >-
+      One single {subject}, seen straight on and very slightly from above,
+      resting on a flat surface, filling its frame with a little empty air all
+      round it. Pale and hard-edged against nothing, lit warmly and strongly
+      from the front and slightly above with a cold rim of light down one side;
+      every surface mark, crack and pit sharply in focus. It is the brightest,
+      sharpest, most detailed thing in the whole picture. Nothing else in the
+      frame.
+    effects:
+      - {kind: drop_shadow, dy: 0.010, blur: 0.017, alpha: 0.50}
+      - {kind: outer_glow, blur: 0.036, alpha: 0.28}
+
+  - id: strewn
+    role: fallen_fragments
+    # Detached pieces come to rest on the floor between the relic and the type.
+    # Discrete whole things lying flat: `keep_whole`, no cut edge. Off the
+    # centre axis, because a symmetric spill under a symmetric relic under a
+    # symmetric crest is three bullseyes in a column.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    keep_whole: true
+    anchor: [0.43, 0.700]
+    # HARD CEILING: this scale must stay well under `relic`'s. At 0.68 the
+    # first render put fragments BIGGER than the focal object across the middle
+    # of the cover, which buried `pendant` outright and broke rule 3 — a
+    # scatter of debris cannot out-mass the thing on the altar.
+    scale: 0.26
+    opacity: 0.85
+    prompt_frame: >-
+      Five or six SMALL loose detached pieces of {subject} lying flat and
+      scattered apart where they came to rest on a level surface, seen from
+      just above, each at a different angle, one turned to show its paler
+      underside, with plenty of empty space between and around them.
+      Only the detached fragments — nothing whole, nothing still attached to
+      anything, nothing standing up.
+    effects:
+      - {kind: drop_shadow, dy: 0.004, blur: 0.009, alpha: 0.48}
+
+# -- the one plate in front of the type ---------------------------------------
+  - id: blaze
+    role: front_band
+    # Rule 6. `screen` is load-bearing: it can only add light, so it glows over
+    # the byline instead of eating it. Wide ink — `scale` reads against canvas
+    # WIDTH, and 1.25 carries it past both side trims so the band has no ends.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: bottom
+    anchor: [0.50, 1.00]
+    offset: [0.00, 0.045]
+    # THE ASPECT TRAP, and it is worth a paragraph because it cost a render.
+    # `place_by: ink` sizes a contain-fit slot on the ink's BINDING axis
+    # (§15.25), and which axis binds is a property of the plate, not of the
+    # slot. A scale over 1.0 here assumes the ink is WIDE — a band. The first
+    # generation came back as a full-frame column of flame instead, so the ink
+    # bound on HEIGHT and 1.25 ran it to 125% of the CANVAS HEIGHT: fire up
+    # past the title, 88% of the byline covered, and the whole legibility
+    # autopilot burning the finishing stack down trying to rescue a title that
+    # was simply underwater. The fix is in the prompt, not the number: the
+    # frame below dictates the band's height as a fraction of its own frame,
+    # so the ink is wide BY CONSTRUCTION and this scale means what it says.
+    scale: 1.15
+    blend: screen
+    # 0.95 put the byline at 2.49 contrast against a 4.5 threshold: `screen`
+    # protects type from being ERASED, not from being washed out, and a pale
+    # flame behind pale type is still pale on pale.
+    opacity: 0.72
+    # And the same ruling as rule 2, applied to this plate: the SHAPE comes
+    # from the engine, never from the sentence. The frame below asks for a band
+    # no taller than a fifth of its own frame; generators return a third, and
+    # `place_by: ink` then faithfully scales that third to 37% of the cover.
+    # This mask makes the top of the band fade out whatever comes back, and it
+    # is deliberately still ramping where the byline sits — so the fire is
+    # dimmest exactly where the name needs the contrast and full-strength at
+    # the trim, which is the read the reference shelf actually has.
+    mask:
+      gradient: {kind: linear, angle: 90.0, start: 0.78, end: 0.99}
+    prompt_frame: >-
+      A wide, LOW band of {subject} lying along the very bottom edge of the
+      frame and running its full width, tallest and brightest at two or three
+      points and dropping to almost nothing between them, tearing into a few
+      sparks as it reaches upward. At its very tallest point it reaches no more
+      than ONE FIFTH of the way up the frame; the entire upper four fifths of
+      the frame is completely empty and black. Nothing else in the frame.
+
+# =============================================================================
+adjust:
+  - id: field_grade
+    # A generated pattern comes back as a bright, saturated PHOTOGRAPH of
+    # wallpaper. This lands before any other plate, so the entire cover is
+    # assembled on a wall the relic can be the brightest thing against.
+    op: grade
+    brightness: -0.30
+    saturation: -0.18
+    contrast: 0.08
+
+  - id: floor_recede
+    # Aerial perspective on the plane: darker and flatter than the objects
+    # standing on it, so it reads as depth rather than as another plate.
+    op: grade
+    brightness: -0.22
+    contrast: -0.12
+    saturation: -0.10
+    opacity: 0.90
+    mask: {from_layer: floor, feather: 0.02}
+
+  - id: foot_wash
+    # A feathered black wash over the lower THIRD, fading out upward, so BOTH
+    # the title and the byline sit on something quiet. It starts at 0.58 —
+    # above the title band, not below it — and that is deliberate: the first
+    # tuning started it at 0.74, which protected the byline and left the title
+    # standing on a lit floor at 4.4 against a 4.5 threshold, whereupon the
+    # legibility autopilot went after the finishing stack instead. The wash is
+    # the cheap fix and the scrim is the expensive one; spend the cheap one
+    # first (doctrine rules 8/9: a title that needs a scrim is a failed value
+    # direction).
+    #
+    # It also has to land BEFORE `blaze`: `screen` brightens the ground under a
+    # name as much as the name, so the contrast has to already exist when the
+    # fire arrives.
+    op: color_wash
+    color: "#000000"
+    blend: normal
+    opacity: 0.74
+    mask:
+      gradient: {kind: linear, angle: 90.0, start: 0.58, end: 0.94}
+
+  - id: tonal_spine
+    # One shared colour spine under thirteen separately-lit plates — the price
+    # of a maximalist template, and the cheapest way to pay it.
+    op: gradient_map
+    stops: [background, primary, text]
+    opacity: 0.16
+    blend: soft_light
+
+  - id: gild_bloom
+    # Insurance on rules 3 and 7: glow on the relic's lit edge, on the gilt's
+    # speculars and on the title's foil band, once the finishing stack has run.
+    op: bloom
+    threshold: 0.80
+    radius: 0.020
+    strength: 0.34
+
+# =============================================================================
+scrims:
+  # All halo — a gradient_up/down scrim protecting anything not flush with a
+  # canvas edge paints a full-height slab with hard vertical sides
+  # (romantasy_organic rule 5). The title's starts low: it lands on graded wall
+  # and the foil ramp carries it. The subtitle's is the highest because it is
+  # the one line that sits on the floor's own reflected glow.
+  - {kind: halo, protects: title, strength: 0.12}
+  - {kind: halo, protects: author, strength: 0.18}
+  - {kind: halo, protects: subtitle, strength: 0.32}
+  - {kind: halo, protects: series, strength: 0.22}
+
+# =============================================================================
+text:
+  - id: series
+    # The volume numeral, set INTO the crest's blank medallion — diegetic type
+    # on a generated host (§15.22). Optional: a standalone novel leaves it
+    # empty and the boss simply stays blank, which is a perfectly good
+    # ornament. Tiny and heavily tracked, because a medallion is a circle and
+    # anything longer than "BOOK ONE" will not sit in one.
+    # y is tuned to where a crest anchored at the top trim at scale 0.86
+    # actually puts its boss — measured off a real render at ~7.5% of canvas
+    # height, not guessed. See the medallion hazard note at the head of the
+    # file before touching it.
+    zone: {x: 0.395, y: 0.058, w: 0.21, h: 0.034}
+    case: upper
+    align: center
+    valign: middle
+    tracking: 130
+    max_lines: 1
+    optional: true
+    size_min: 0.008
+    size_max: 0.015
+    effects:
+      - {kind: drop_shadow, dy: 0.002, blur: 0.005, alpha: 0.70}
+
+  - id: subtitle
+    # The tagline, sitting on the floor's glow just above the title. Two lines,
+    # centred, in the supporting face — this is the one place on the cover
+    # where a sentence is read rather than recognised, and the display face
+    # cannot carry a sentence at 1.6% of canvas height.
+    zone: {x: 0.155, y: 0.576, w: 0.69, h: 0.064}
+    case: as_is
+    align: center
+    valign: bottom
+    tracking: 24
+    max_lines: 2
+    optional: true
+    size_min: 0.013
+    size_max: 0.021
+    effects:
+      - {kind: drop_shadow, dy: 0.003, blur: 0.007, alpha: 0.80}
+
+  - id: title
+    # Rule 7. The three-stop ramp IS the foil: bright band across the middle of
+    # the letterforms, both ends falling away. `marble` at soft_light gives the
+    # ink its tooth (NEVER multiply — a stone plate at multiply pulls type to
+    # translucent), and the bevel stays shallow so a display serif's hairlines
+    # survive thumbnail.
+    #
+    # The zone is wide because this shelf's titles run edge to edge, and it can
+    # afford to be: the band beneath it is graded wall and reflected floor, ONE
+    # value regime, so the worst-region legibility measure has nothing to trip
+    # on. Do not slide it up into the strewn fragments.
+    zone: {x: 0.100, y: 0.650, w: 0.80, h: 0.118}
+    case: upper
+    align: center
+    valign: middle
+    tracking: 4
+    max_lines: 2
+    size_min: 0.048
+    size_max: 0.098
+    effects:
+      # A tight dark contact shadow under a wide soft one — the pro type move.
+      - {kind: drop_shadow, dy: 0.003, blur: 0.004, alpha: 0.75}
+      - {kind: drop_shadow, dy: 0.014, blur: 0.032, alpha: 0.44}
+      - {kind: gradient_overlay, stops: [accent, text, accent], angle: 90.0, opacity: 0.96}
+      - {kind: bevel, width: 0.0022, alpha: 0.38}
+      - {kind: texture_overlay, texture_file: marble, blend: soft_light, opacity: 0.22}
+
+  - id: author
+    # `font_role: title` — the deliberate break from romantasy_organic and
+    # romantasy_vignette, where the author's plain block is the counterweight
+    # to an ornate title. This shelf does the opposite and is right to: on a
+    # cover this crowded, a second typeface is a fourteenth object. The two big
+    # words are cut from the same metal, and the size difference alone carries
+    # the hierarchy. No foil ramp here, though — a second gradient would make
+    # the byline compete with the title instead of answering it.
+    font_role: title
+    zone: {x: 0.07, y: 0.886, w: 0.86, h: 0.064}
+    case: upper
+    align: center
+    valign: middle
+    tracking: 34
+    max_lines: 1
+    size_min: 0.028
+    size_max: 0.052
+    effects:
+      - {kind: drop_shadow, dy: 0.004, blur: 0.006, alpha: 0.78}
+      - {kind: drop_shadow, dy: 0.016, blur: 0.034, alpha: 0.40}
+
+# =============================================================================
+# Z-ORDER, bottom first. The four that are easy to get wrong and fatal:
+# `motes` is at the BOTTOM; the whole border tier is drawn BEFORE `relic`;
+# `pendant` is drawn BEFORE `relic` so the relic hides the chain's cut (rule 5);
+# and `blaze` is the ONLY plate after the type.
+layers: [field, field_grade, floor, floor_recede, keylight, motes,
+        bower_left, bower_right, bough, filigree, crest, finial,
+        pendant, relic, strewn,
+        "scrim:3", series,
+        "scrim:2", subtitle,
+        "scrim:0", title,
+        foot_wash, "scrim:1", author,
+        blaze,
+        tonal_spine, gild_bloom]
+
+# =============================================================================
+# WHAT THE DIRECTOR STILL CHOOSES, AND NOTHING ELSE
+# =============================================================================
+#   * twelve `{subject}` fills, one per generatable slot. `bower_left` and
+#     `bower_right` must be given the SAME material — they are one border in
+#     two pieces, and the asymmetry is in their scale and height, never in
+#     their species. `filigree` and
+#     `crest` must be given the SAME material — they are one frame in two
+#     pieces, and two metals reads as a mistake, not as variety.
+#   * five palette hexes. `accent` is the foil ramp's DARK stop and must be a
+#     deep metal at least 30 L* below `text`; `text` is the ramp's bright stop,
+#     the byline's ink and the tagline's — take it near white, because the
+#     finishing stack costs the type roughly a quarter of its brightness on the
+#     way down. `background` should be the wall's own hue, not black: the
+#     gradient map runs through it and a pure-black background stop flattens
+#     the border's chroma out of the cover.
+#   * title_font and author_font — an ornate display face and a legible serif.
+#     Note that `author` wears the TITLE face here; `author_font` dresses the
+#     tagline and the volume numeral only.
+#   * the tagline, and the volume line for the medallion.
+#
+# It does NOT choose placement, scale, blend, opacity, masks, adjust layers,
+# effects, scrim kinds, recipe strength, or layer order.
+#
+# HONEST SCOPE: the skeleton is "an object on an altar inside an ornamented
+# border, on fire". It fits romantasy, gothic, dark fantasy, horror and the
+# ornate end of historical. It does not fit a thriller, a literary novel, a
+# memoir, or anything whose cover should be quiet — and it should not be
+# stretched to, because everything that makes this template work is volume.
+#
+# THE RISKIEST PLATE is `blaze`: if it comes back as a column of fire rather
+# than a low band, the ink binds on the wrong axis and it runs to 115% of the
+# CANVAS HEIGHT — see the aspect-trap note on that slot. Check its asset's
+# shape, not the render, and repaint for $0.03 if it is taller than it is wide.
+# THE SECOND RISKIEST is `crest`'s medallion landing off-centre — see "WHAT IS
+# DELIBERATELY NOT HERE" for why the answer is a repaint, never a moved zone.

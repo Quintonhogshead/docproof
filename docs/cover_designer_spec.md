@@ -1908,3 +1908,89 @@ simplest-form-wins ladder (which pushes silhouettes and does not apply to a phot
 and the `treatment` vocabulary. Marked but not carved out, the call obeys a rule it has been told
 it is exempt from; carved out but not marked, it cannot tell which archetypes hold the exemption.
 A test asserts the marker and the rule stay in step.
+
+## 20. Archetype Eight — `burning_cartouche`, and the two laws it paid for (2026-09-01)
+
+`config/cover/archetypes/burning_cartouche.yaml` — the maximalist dark-romantasy hardcover
+(Kaylie Smith's PHANTASMA and the shelf around it). A patterned near-black wall; a symmetrical
+gilt ornament entering from the top, the bottom and all four corners; two heavy columns of one
+repeated organic form pinned to the side trims; one pale relic centred on a polished floor with a
+token hanging from it on a chain; a foil display title across the lower third; and a band of live
+fire rising over the byline from the bottom trim. Fourteen art slots, twelve of them generated.
+
+**Numbering note:** five sibling sessions drew a template from the same brief on the same day and all five claimed "Archetype Eight" at v0.176.0 (`engraved_specimen`, `sable_regalia`, `gilded_descent`, `gilded_cartouche`, `uplit_vigil`). Whichever merges first owns the number and the version; the rest renumber on rebase. The file name here was changed from `gilded_cartouche` for exactly this reason — two different templates cannot ship under one stem.
+
+It is the first template on the shelf whose design argument is **addition**. Every other one earns
+its cover by subtraction — `romantasy_enclosure`'s whole revision history is objects being removed,
+`crossed_relics` deleted a second scatter slot rather than govern it, `pale_reliquary` spends
+two-thirds of its canvas on deliberate emptiness. Here the density *is* the pitch, and the thing
+that keeps it a cover instead of a rug is one structural idea: **the metal is byte-exact symmetric
+and the organic is deliberately not.** `filigree` is ONE generated ornament kaleidoscoped into all
+four corners by `corners: true` — symmetry no generator can produce, which the eye reads instantly
+as *made* — while the two border columns sit at different scales and different heights and `bough`
+exists only to make one upper corner heavier than the other. Make the ornament irregular and the
+cover loses its spine; make the growth symmetric and the whole thing is a damask swatch with a
+title on it.
+
+Two engine laws came out of building it, both learned the expensive way, both worth stealing.
+
+### 20.1 When a composition depends on a shape, get the shape from the ENGINE
+
+The first draft asked a single cover-fit plate for *"a ring of them massed around all four edges…
+through the centre of the frame a LARGE EMPTY HOLE."* The generator filled the hole. Hardening the
+sentence (*"cut out on a FULLY TRANSPARENT background… no fill in the empty middle"*) bought a real
+alpha channel and the hole was still filled — the second render came back as one continuous reef
+texture with the field, the floor, the chain and the title's ground all buried under it.
+
+A cover-fit plate anchored nowhere has no reason to leave a hole. A plate **pinned to a side trim
+cannot fill the middle**, whatever the generator paints. So the ring became two column slots —
+`bower_left` and `bower_right`, `cut_edge` left and right, anchored to their own trims — and rule 2
+of the template stopped being a request and became geometry. This is `elemental_aperture`'s matte
+lesson in a second costume: *the aperture is a matte, not artwork.*
+
+The same ruling applies to `blaze`. Its frame asks for a band *"no more than ONE FIFTH of the way
+up the frame"*; generators return a third, and `place_by: ink` then faithfully scales that third to
+37% of the cover. A linear gradient mask (`start: 0.78, end: 0.99`) fades the band's top out
+whatever comes back — and because the ramp is still climbing where the byline sits, the fire is
+dimmest exactly where the name needs contrast and full strength at the trim. Byline contrast went
+2.49 → 5.84 on that one mask, with no scrim escalation and no finishing attenuation at all.
+
+### 20.2 The visible-width law, and the aspect trap under it
+
+§15.25 established that a contain-fit slot sizes on the ink's **binding axis**. This template made
+the consequence concrete twice in one build, in opposite directions:
+
+- **`blaze` at `scale: 1.25`** assumed wide ink. The plate came back a full-frame *column* of
+  flame, so the ink bound on HEIGHT and 1.25 ran it to 125% of the **canvas height** — fire past
+  the title, 88% of the byline covered, and the legibility autopilot halving the entire finishing
+  stack five times trying to rescue a title that was simply underwater. The fix is in the prompt,
+  not the number: dictate the band's height *as a fraction of its own frame* so the ink is wide by
+  construction, then mask the remainder (§20.1).
+- **`bower_left` at `scale: 0.96`** assumed a narrow column. A 0.30-aspect plate run to full canvas
+  height is **0.46 of the canvas width**, and two of those leave a cover that is 92% border.
+
+Hence the law, which every column slot on this template now carries in a comment: *a full-height
+column is as wide as its own ink aspect makes it; push the surplus out through the trim with
+`offset`, never with `scale`.* Shrinking the plate instead is the tempting move and it is wrong — a
+border that stops short of the top and bottom edges is not a border.
+
+### 20.3 Two smaller rulings
+
+**The chain's cut is hidden by a plate, not by the trim.** `pendant` hangs on the centre axis and
+is the one slot here whose severed end does not leave the frame: it is drawn *before* `relic`, so
+the relic's own body covers the join. That is the legitimate second answer to §15.21 rule 1 — a cut
+end is fine when something opaque is in front of it — and it is why the layer order reads wrong in
+the list and right on the page. It also forces an arithmetic on the two slots above it: the relic
+has to be sized and seated so its foot lands around y=0.54, because any lower and the chain has
+nowhere to hang between it and the tagline. The first build lost the pendant entirely that way.
+
+**A fourth text slot spent on the design, not on marketing.** The reference sets `#1 NEW YORK TIMES
+BESTSELLING AUTHOR` above the byline; this template has no slot for it, on the same ruling
+`crossed_relics` made about the gold SPECIAL EDITION seal — a credit line is marketing for one
+printing, not a piece of the design. The `series` slot is spent instead on the volume numeral,
+set into an **empty medallion** the `crest` prompt asks for at its own centre. That is diegetic
+type on a generated host (§15.22) and it carries the matching hazard: the boss's real position is
+dictated, not measured. The zone's `y` is tuned off a real render rather than guessed, the slot is
+`optional` so a standalone novel leaves the boss blank, and a medallion that lands off-centre is a
+$0.03 repaint of `crest` — **never** a moved zone, or the next book's crest is wrong in the other
+direction.
