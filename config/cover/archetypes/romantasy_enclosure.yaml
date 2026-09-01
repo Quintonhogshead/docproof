@@ -177,7 +177,7 @@ art:
     cut_edge: bottom           # they are cropped at the thigh: the cut is the
     anchor: [0.50, 1.00]       # bottom of their own plate, pushed past trim
     offset: [0.00, 0.04]
-    scale: 0.54
+    scale: 0.66
     prompt_frame: >-
       Two figures together in one image: {subject}. Render each of them
       exactly as described AND pose them exactly as described — who they are

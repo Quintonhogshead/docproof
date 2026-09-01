@@ -19,7 +19,15 @@ the loop to iterate typography, zones, scrims and recipes in. Only re-run
 Direction JSON keys: concept_name, rationale, archetype, palette
 {background, primary, accent, text, scrim}, title_font, author_font,
 art_prompts [{slot, prompt, treatment}], texture, recipe, type_move,
-emphasis_word. Run `list` to see every legal value.
+emphasis_word, title_breaks, token_layout, text_overrides. Run `list` to see
+every legal value.
+
+`text_overrides` is per-book typography, keyed by text slot id ("title",
+"author", "subtitle", "series"): any of zone {x, y, w, h}, align, valign,
+case, tracking, max_lines, size_min, size_max, color_role and font_family.
+Anything omitted keeps the archetype's shipped value, so this is how one
+book moves its byline or tagline off the template's default perch without
+editing the template for every other book that uses it.
 """
 from __future__ import annotations
 
