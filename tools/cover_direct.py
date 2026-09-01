@@ -95,7 +95,7 @@ def cmd_build(args) -> int:
                  f"(run `cover_direct.py list`)")
     spec = build_spec(direction, brief, archetype)
 
-    tier = "2K" if args.full else DRAFT
+    tier = args.tier or ("2K" if args.full else DRAFT)
     key = get_api_key("openai")
     if not key:
         sys.exit("No OpenAI key: set OPENAI_API_KEY.")
@@ -150,6 +150,8 @@ def main() -> int:
     p.add_argument("--direction", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--full", action="store_true", help="2K art, ~$0.05/image")
+    p.add_argument("--tier", choices=sorted(IMAGE_COST), default="",
+                   help="explicit art tier (1K/2K/4K); overrides --full")
     p.add_argument("--repaint", action="store_true",
                    help="regenerate art even where an asset already exists")
     p = sub.add_parser("compose")
