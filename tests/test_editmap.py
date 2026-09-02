@@ -207,3 +207,52 @@ def test_build_editmap_tolerates_an_overlapping_sub_row_pair():
     assert m.skipped["p"] == ["f-1b"]
     assert m.accepted("p") == "Bodhi, you know what I am talking about my love."
 
+
+# --- collapse_region_siblings: a report read back as input --------------------
+
+def _decision(fid, start, end, delete, insert, corrected="freaking idiots"):
+    return _row(fid, "p", start, end, delete, insert,
+                original="frekin idiots", corrected=corrected)
+
+
+def test_collapse_region_siblings_folds_a_split_pair_to_its_base_row():
+    base = _decision("f-0077", 3, 3, "", "a")
+    sib = _decision("f-0077b", 6, 6, "", "g")
+    kept, dropped = em.collapse_region_siblings([base, sib])
+    assert [r["finding_id"] for r in kept] == ["f-0077"]
+    assert dropped == ["f-0077b"]
+
+
+def test_collapse_region_siblings_prefers_the_base_id_whatever_the_order():
+    base = _decision("f-0077", 3, 3, "", "a")
+    sib = _decision("f-0077b", 6, 6, "", "g")
+    other = _row("g-0001", "q", 0, 1, "x", "y")
+    kept, dropped = em.collapse_region_siblings([sib, other, base])
+    # the decision keeps the group's first position but the base row's id
+    assert [r["finding_id"] for r in kept] == ["f-0077", "g-0001"]
+    assert dropped == ["f-0077b"]
+
+
+def test_collapse_region_siblings_keeps_a_sibling_that_became_a_different_decision():
+    base = _decision("f-0077", 3, 3, "", "a")
+    edited = _decision("f-0077b", 6, 6, "", "g", corrected="freakin idiots")
+    kept, dropped = em.collapse_region_siblings([base, edited])
+    assert [r["finding_id"] for r in kept] == ["f-0077", "f-0077b"]
+    assert dropped == []
+
+
+def test_collapse_region_siblings_leaves_agreeing_rows_of_other_origins_alone():
+    # two detectors agreeing under different ids is the validator's call
+    a = _decision("f-0077", 3, 3, "", "a")
+    b = _decision("a-0967", 3, 3, "", "a")
+    kept, dropped = em.collapse_region_siblings([a, b, "not a row", {"para_id": "p"}])
+    assert [r.get("finding_id") if isinstance(r, dict) else r for r in kept] == \
+        ["f-0077", "a-0967", "not a row", None]
+    assert dropped == []
+
+
+def test_collapse_region_siblings_drops_a_verbatim_repeat_of_one_id():
+    a = _decision("f-0077", 3, 3, "", "a")
+    kept, dropped = em.collapse_region_siblings([a, dict(a), _decision("f-0077b", 6, 6, "", "g")])
+    assert [r["finding_id"] for r in kept] == ["f-0077"]
+    assert dropped == ["f-0077", "f-0077b"]

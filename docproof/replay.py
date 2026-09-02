@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
+import logging
 import json
 from pathlib import Path
 from typing import Any, Mapping
@@ -51,6 +52,9 @@ from .error_registry import ErrorType, load_error_types, shipped_keys
 from .models import Finding
 from .normalize import normalize_text
 from .variants import Variant
+
+
+log = logging.getLogger("docproof.replay")
 
 DEFAULT_IMPORT_TYPE = "imported_edit"
 
@@ -264,6 +268,16 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
     format_registry = registry or load_error_types(
         error_dir, sorted(shipped_keys(error_dir)))
     format_keys = {k for k, et in format_registry.items() if et.is_format}
+
+    # A findings.json lists a split decision as its row plus lettered
+    # siblings quoting the same span; replayed as two rows they become one
+    # fresh finding and one rejected duplicate of it. Fold them first.
+    from .editmap import collapse_region_siblings
+    rows, folded = collapse_region_siblings(rows)
+    if folded:
+        log.info("folded %d split-region sibling row(s) back into their "
+                 "decisions before replay (%s)", len(folded),
+                 ", ".join(folded[:8]) + (", ..." if len(folded) > 8 else ""))
 
     ids = itertools.count(1)
     findings: list[Finding] = []

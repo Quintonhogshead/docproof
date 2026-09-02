@@ -62,6 +62,58 @@ def row_key(row: Mapping[str, Any]) -> tuple:
             str(row.get("corrected_text", "")), str(row.get("error_type", "")))
 
 
+def collapse_region_siblings(rows: Iterable[Any]) -> tuple[list[Any], list[str]]:
+    """Fold a findings.json REPORT back into the decisions it reports.
+
+    finish() writes one row per tracked change, so a decision the validator
+    split into minimal regions is serialized as its row plus a lettered
+    sibling per extra region ("f-0077", "f-0077b"): same paragraph, quote,
+    correction, and error type, differing only in id and anchor. Read back
+    as INPUT (the merge desk, replay/import-findings, a synthesized case
+    file), those siblings are not two decisions. The validator re-splits the
+    first on its own, and the sibling, quoting the same whole span, either
+    contests its own base row (a phantom same-lane overlap in the merge
+    ledger) or lands as `rejected_duplicate` carrying the WHOLE shrunk diff
+    under the very id the re-split just minted for a minimal region. The
+    Redding final build (2026-09-01) shipped 16 such pairs, and the edit map
+    could not tell which "f-0077b" was the real one.
+
+    One row survives per (base id, decision): the one with the shortest id
+    (the base row when present, whatever order the file lists them in), at
+    the position of the group's first row. Dropped are its lettered siblings
+    and any verbatim repeat of the same id (a checkpoint row beside its
+    findings.json copy). A sibling whose text DIFFERS from its base is a
+    different decision (someone edited one of them) and stays for the
+    validator to arbitrate; so do two rows with different base ids that
+    agree (the validator's own `rejected_duplicate` covers those, under
+    distinct ids). Items that are not rows, or carry no id, pass through.
+    Returns (kept, dropped_ids)."""
+    slots: list[tuple[str, Any]] = []
+    chosen: dict[tuple, Mapping[str, Any]] = {}
+    ids: dict[tuple, list[str]] = {}
+    for r in rows:
+        fid = str(r.get("finding_id") or "") if isinstance(r, Mapping) else ""
+        if not fid:
+            slots.append(("item", r))
+            continue
+        key = (base_id(fid), row_key(r))
+        if key not in chosen:
+            chosen[key] = r
+            ids[key] = [fid]
+            slots.append(("key", key))
+            continue
+        ids[key].append(fid)
+        if len(fid) < len(str(chosen[key].get("finding_id") or "")):
+            chosen[key] = r
+    kept = [it if tag == "item" else chosen[it] for tag, it in slots]
+    dropped: list[str] = []
+    for key, fids in ids.items():
+        rest = list(fids)
+        rest.remove(str(chosen[key].get("finding_id") or ""))
+        dropped.extend(rest)
+    return kept, dropped
+
+
 def _anchor(row: Mapping[str, Any]) -> dict[str, Any] | None:
     a = row.get("anchor")
     if (isinstance(a, dict) and isinstance(a.get("start"), int)
@@ -576,8 +628,8 @@ def load_or_build(run_dir: str | Path, source_paras: Mapping[str, str],
 
 __all__ = [
     "EDITMAP_NAME", "Composite", "EditMap", "EditMapError", "Resolution",
-    "Segment", "accepted_of", "as_row", "base_id", "build_editmap", "compose",
-    "edit_rows", "load_or_build", "locate", "owners_index", "paragraph_map",
+    "Segment", "accepted_of", "as_row", "base_id", "build_editmap",
+    "collapse_region_siblings", "compose", "edit_rows", "load_or_build", "locate", "owners_index", "paragraph_map",
     "row_applied", "row_key", "rows_from_findings", "sentence_bounds",
     "write_editmap",
 ]
