@@ -40,6 +40,7 @@ RUN_STATES = (
     "mechanical_complete",
     "copyedit_complete",
     "audited",
+    "settled",
     "certified",
     "delivered",
 )

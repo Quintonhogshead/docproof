@@ -241,6 +241,9 @@ def content_hash(doc: DocumentModel) -> str:
     return h.hexdigest()
 
 
+_NEVER_COLLAPSE_QUERIES = frozenset({"galley_settle"})
+
+
 def _collapse_repeated_comments(validated: list, doc: DocumentModel,
                                 threshold: int) -> int:
     """Leave one comment where the same rule explanation would repeat past
@@ -286,6 +289,11 @@ def _collapse_repeated_comments(validated: list, doc: DocumentModel,
     qgroups: dict[str, list[int]] = {}
     for i, f in enumerate(validated):
         if f.status != "query" or f.silent or not f.explanation:
+            continue
+        # A settlement question is never one of a family: each carries its
+        # own residual and its own wording, so collapsing them per type
+        # (galley_settle) silenced 32 of 33 on the Redding trial.
+        if f.error_type in _NEVER_COLLAPSE_QUERIES:
             continue
         qgroups.setdefault(f.error_type, []).append(i)
     for _etype, idxs in qgroups.items():
@@ -2643,6 +2651,20 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                         # that predates them constructing rather than crashing.
                         queried_ids=getattr(stats, "queried", ()),
                         unplaced_ids=getattr(stats, "unplaced", ()))
+    # The edit map beside findings.json: the source->accepted record of
+    # every applied change, in the engine's own offsets, so a residual found
+    # in the ACCEPTED text can be translated back to the source exactly
+    # (docproof/editmap.py; the settle loop and import-findings --anchor
+    # accepted read it). Best-effort: a map that cannot be written must not
+    # take the deliverable down with it.
+    try:
+        from .editmap import rows_from_findings, write_editmap
+        write_editmap(out, {p.para_id: p.text for p in prepared.doc.paragraphs},
+                      rows_from_findings(validated, stats.applied,
+                                         getattr(stats, "queried", ())))
+    except Exception:                                   # noqa: BLE001
+        log.exception("editmap.json could not be written; the deliverable "
+                      "is unaffected")
     write_summary_md(out / "summary.md", doc=prepared.doc, findings=validated,
                      usage=usage, cfg=cfg, applied_ids=stats.applied,
                      batch=batch, fmt=fmt, sweeps=prepared.sweep_reports,

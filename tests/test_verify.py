@@ -133,15 +133,23 @@ def test_certify_change_verify_passes_when_clean_and_skips_when_absent(tmp_path)
     assert _certify_change_verify(tmp_path).status == "pass"
 
 
-def test_certify_finished_walk_fails_only_on_a_high_severity_residual(tmp_path):
+def test_certify_finished_walk_fails_on_any_unsettled_residual(tmp_path):
+    """Residual settlement (I7): a residual of ANY severity with no settlement
+    record blocks delivery; once settlement.json records it, the walk passes.
+    (Before settlement existed, low/medium residuals were mere notes.)"""
+    from galley.settle import Settlement, SettlementRecord
+    from galley.verify import residual_id
     (tmp_path / "finished_walk.json").write_text(json.dumps({
         "residuals": [{"para_id": "p1", "severity": "low", "quote": "q",
                        "problem": "p", "suggestion": "s"}]}), encoding="utf-8")
+    check = _certify_finished_walk(tmp_path)
+    assert check.status == "fail" and "galley settle" in check.detail
+    st = Settlement(run_dir=str(tmp_path), rounds=1)
+    st.records.append(SettlementRecord(residual_id("p1", "q"), 1, "query",
+                                       None, "", "", "unresolved_after_1",
+                                       "deterministic", para_id="p1"))
+    st.save(tmp_path)
     assert _certify_finished_walk(tmp_path).status == "pass"
-    (tmp_path / "finished_walk.json").write_text(json.dumps({
-        "residuals": [{"para_id": "p1", "severity": "high", "quote": "q",
-                       "problem": "p", "suggestion": "s"}]}), encoding="utf-8")
-    assert _certify_finished_walk(tmp_path).status == "fail"
 
 
 # --- P0 fixes: anchor-located context, deletions, a result that says it ran --

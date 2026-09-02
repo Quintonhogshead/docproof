@@ -24,6 +24,7 @@ parsing — is deterministic and unit-tested with a fake provider.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass
@@ -41,9 +42,14 @@ DEFAULT_MAX_TOKENS = 12000
 # finished-text-walk read. Kept modest so one truncation loses little.
 DEFAULT_CHANGE_BATCH = 30
 DEFAULT_WALK_CHARS = 6000
-# Hard caps so a runaway reply can never blow a downstream budget.
+# Hard caps so a runaway reply can never blow a downstream budget. The
+# residual caps are PER READ (a 6k-char window with more than 80 findings is a
+# hallucinating reply) plus a book-wide ceiling far above any real count —
+# the Redding walk hit an earlier global cap of 200 at read 36 of 42 and
+# silently left six windows unread.
 MAX_PROBLEMS = 200
-MAX_RESIDUALS = 200
+MAX_RESIDUALS_PER_READ = 80
+MAX_RESIDUALS = 5000
 
 _CHANGE_VERDICTS = (
     "breaks_meaning", "breaks_grammar", "voice_damage", "artifact", "wrong_rule")
@@ -51,6 +57,26 @@ _SEVERITIES = ("high", "medium", "low")
 
 
 # ---- contracts ---------------------------------------------------------------
+
+def residual_id(para_id: str, quote: str, problem: str = "") -> str:
+    """A stable id for one residual: the paragraph and the verbatim quote (the
+    problem text is NOT part of it — two walks describing one residual
+    differently must still be one item to settle). The settle loop keys its
+    records on this, and certify matches records to residuals by it; an older
+    finished_walk.json without ids gets the same id recomputed."""
+    norm = " ".join((quote or "").split())
+    h = hashlib.sha1(f"{para_id}\x00{norm}".encode("utf-8")).hexdigest()
+    return f"r-{h[:10]}"
+
+
+def problem_id(para_id: str, original_text: str, corrected_text: str) -> str:
+    """A stable id for one change-verifier problem: the applied edit it is
+    about (paragraph, original, corrected)."""
+    h = hashlib.sha1(
+        f"{para_id}\x00{original_text}\x00{corrected_text}".encode("utf-8")
+    ).hexdigest()
+    return f"c-{h[:10]}"
+
 
 @dataclass(frozen=True)
 class ChangeProblem:
@@ -63,8 +89,13 @@ class ChangeProblem:
     detail: str
     fix: str
 
+    @property
+    def id(self) -> str:
+        return problem_id(self.para_id, self.original_text, self.corrected_text)
+
     def to_json(self) -> dict[str, Any]:
-        return {"para_id": self.para_id, "original_text": self.original_text,
+        return {"problem_id": self.id, "para_id": self.para_id,
+                "original_text": self.original_text,
                 "corrected_text": self.corrected_text, "verdict": self.verdict,
                 "detail": self.detail, "fix": self.fix}
 
@@ -79,10 +110,14 @@ class ResidualFinding:
     suggestion: str
     severity: str
 
+    @property
+    def id(self) -> str:
+        return residual_id(self.para_id, self.quote)
+
     def to_json(self) -> dict[str, Any]:
-        return {"para_id": self.para_id, "quote": self.quote,
-                "problem": self.problem, "suggestion": self.suggestion,
-                "severity": self.severity}
+        return {"residual_id": self.id, "para_id": self.para_id,
+                "quote": self.quote, "problem": self.problem,
+                "suggestion": self.suggestion, "severity": self.severity}
 
 
 # ---- deterministic inputs (no model) -----------------------------------------
@@ -424,6 +459,51 @@ def _context_block(context: str) -> str:
 
 # ---- the gates ---------------------------------------------------------------
 
+# Every reply a gate could not use, in order: (gate, stop_reason, error).
+# verify_run reads it to tell a gate that read NOTHING (every reply lost — a
+# lane that cannot answer at all) from a gate that lost one batch: the first
+# must never write a clean-looking artifact, which is exactly what a run of
+# failed subagent turns would otherwise produce (0 residuals, ran: true).
+_LOSSES: list[tuple[str, str, str]] = []
+
+
+# Paragraph ids the last walk could not read (a lost reply after its retry,
+# or the reads past the book-wide ceiling). The CLI writes them into
+# finished_walk.json as `unread_paragraphs` so the next verb (a --paragraphs
+# re-read, or settle) can see the hole instead of taking silence for clean.
+UNREAD: list[str] = []
+
+
+def _ask_with_retry(provider, *, model: str, system: str, user: str,
+                    schema: dict[str, Any], schema_name: str, max_tokens: int,
+                    usage: Usage, what: str):
+    """One structured call, retried ONCE when the reply did not come back
+    clean. A lost reply is usually transient (a truncated or malformed answer
+    from the subagent lane, a dropped connection); the Redding walk lost six
+    of 42 windows that way, and every one read fine on a second try."""
+    result = provider.complete_structured(
+        model=model, system=system, user=user, schema=schema,
+        schema_name=schema_name, max_tokens=max_tokens)
+    if result.usage is not None:
+        usage.add(result.usage, model=model)
+    if result.stop_reason == "ok":
+        return result
+    log.warning("%s: reply not ok (%s%s) — retrying once", what,
+                result.stop_reason,
+                f": {str(result.error)[:120]}" if result.error else "")
+    retry = provider.complete_structured(
+        model=model, system=system, user=user, schema=schema,
+        schema_name=schema_name, max_tokens=max_tokens)
+    if retry.usage is not None:
+        usage.add(retry.usage, model=model)
+    return retry
+
+
+def _take_losses(gate: str) -> list[tuple[str, str, str]]:
+    mine = [l for l in _LOSSES if l[0] == gate]
+    _LOSSES[:] = [l for l in _LOSSES if l[0] != gate]
+    return mine
+
 def verify_changes(edits: Sequence[dict[str, Any]], accepted: dict[str, str],
                    provider, model: str, usage: Usage, *,
                    context: str = "", batch_size: int = DEFAULT_CHANGE_BATCH,
@@ -440,18 +520,27 @@ def verify_changes(edits: Sequence[dict[str, Any]], accepted: dict[str, str],
     problems: list[ChangeProblem] = []
     edits = list(edits)
     acc_starts = _accepted_starts(edits)
-    for batch_idx in _chunks(list(range(len(edits))), batch_size):
+    batches = _chunks(list(range(len(edits))), batch_size)
+    for n, batch_idx in enumerate(batches, 1):
         batch = [edits[i] for i in batch_idx]
         user = _change_user(batch, accepted, original,
                             [acc_starts[i] for i in batch_idx])
-        result = provider.complete_structured(
-            model=model, system=system, user=user,
-            schema=schema, schema_name=schema_name, max_tokens=max_tokens)
-        if result.usage is not None:
-            usage.add(result.usage, model=model)
+        # Progress for a headless run: each call is a model turn (a whole
+        # subprocess on the subagent lane), and a 2,000-edit book is ~80 of
+        # them in silence otherwise.
+        log.info("change verifier: batch %d/%d (%d edit(s)) on %s — %d "
+                 "problem(s) so far", n, len(batches), len(batch), model,
+                 len(problems))
+        result = _ask_with_retry(provider, model=model, system=system,
+                                 user=user, schema=schema,
+                                 schema_name=schema_name, max_tokens=max_tokens,
+                                 usage=usage,
+                                 what=f"change batch {n}/{len(batches)}")
         if result.stop_reason != "ok":
-            log.warning("verify_changes: reply not ok (stop_reason=%s) — %d "
-                        "edit(s) unread this batch", result.stop_reason, len(batch))
+            log.warning("verify_changes: reply not ok (stop_reason=%s%s) — %d "
+                        "edit(s) unread this batch", result.stop_reason,
+                        f": {result.error}" if result.error else "", len(batch))
+            _LOSSES.append(("changes", result.stop_reason, result.error or ""))
             continue
         for row in (result.parsed or {}).get("problems", []):
             if not isinstance(row, dict):
@@ -483,20 +572,32 @@ def walk_finished_text(accepted: dict[str, str], provider, model: str,
     system = _WALK_SYSTEM + _context_block(context)
     valid_ids = set(accepted)
     found: list[ResidualFinding] = []
-    for read in _walk_reads(accepted, char_budget):
-        result = provider.complete_structured(
-            model=model, system=system, user=_walk_user(read),
-            schema=schema, schema_name=schema_name, max_tokens=max_tokens)
-        if result.usage is not None:
-            usage.add(result.usage, model=model)
+    reads = _walk_reads(accepted, char_budget)
+    unread_paragraphs: list[str] = []
+    UNREAD.clear()
+    for n, read in enumerate(reads, 1):
+        log.info("finished-text walk: read %d/%d (%d paragraph(s), %s..%s) "
+                 "on %s — %d residual(s) so far", n, len(reads), len(read),
+                 read[0][0], read[-1][0], model, len(found))
+        result = _ask_with_retry(provider, model=model, system=system,
+                                 user=_walk_user(read), schema=schema,
+                                 schema_name=schema_name, max_tokens=max_tokens,
+                                 usage=usage, what=f"walk read {n}/{len(reads)}")
         if result.stop_reason != "ok":
-            log.warning("walk_finished_text: reply not ok (stop_reason=%s) — a "
+            log.warning("walk_finished_text: reply not ok (stop_reason=%s%s) — a "
                         "read of %d paragraph(s) went unread", result.stop_reason,
-                        len(read))
+                        f": {result.error}" if result.error else "", len(read))
+            _LOSSES.append(("walk", result.stop_reason, result.error or ""))
+            unread_paragraphs.extend(pid for pid, _t in read)
             continue
-        for row in (result.parsed or {}).get("findings", []):
-            if not isinstance(row, dict):
-                continue
+        rows = [r for r in (result.parsed or {}).get("findings", [])
+                if isinstance(r, dict)]
+        if len(rows) > MAX_RESIDUALS_PER_READ:
+            log.warning("walk_finished_text: read %d/%d returned %d rows; "
+                        "keeping the first %d (a runaway reply)", n,
+                        len(reads), len(rows), MAX_RESIDUALS_PER_READ)
+            rows = rows[:MAX_RESIDUALS_PER_READ]
+        for row in rows:
             pid = row.get("para_id")
             if pid not in valid_ids:       # a hallucinated id is not a finding
                 continue
@@ -508,7 +609,18 @@ def walk_finished_text(accepted: dict[str, str], provider, model: str,
                 problem=str(row.get("problem", "")),
                 suggestion=str(row.get("suggestion", "")), severity=sev))
             if len(found) >= MAX_RESIDUALS:
+                log.error("walk_finished_text: book-wide residual ceiling "
+                          "(%d) reached at read %d/%d — the remaining reads "
+                          "were NOT made", MAX_RESIDUALS, n, len(reads))
+                unread_paragraphs.extend(
+                    pid for rest in reads[n:] for pid, _t in rest)
+                UNREAD.extend(unread_paragraphs)
                 return found
+    UNREAD.extend(unread_paragraphs)
+    if unread_paragraphs:
+        log.error("walk_finished_text: %d paragraph(s) in %d read(s) stayed "
+                  "unread after a retry — re-run with --paragraphs on them",
+                  len(unread_paragraphs), len(_LOSSES))
     return found
 
 
@@ -552,19 +664,76 @@ def verify_run(run_dir: str | Path, provider, model: str, usage: Usage, *,
         log.warning("verify_run: %s", reason)
         return VerifyRunResult(problems, residuals, ran_changes=False,
                                ran_walk=False, reason=reason)
+    ran_changes, ran_walk, reason = run_changes, run_walk, ""
     if run_changes:
-        problems = verify_changes(applied_edits(run_dir), accepted, provider,
-                                  model, usage, context=context,
-                                  max_tokens=max_tokens, original=original)
+        edits = applied_edits(run_dir)
+        _take_losses("changes")
+        problems = verify_changes(edits, accepted, provider, model, usage,
+                                  context=context, max_tokens=max_tokens,
+                                  original=original)
+        lost = _take_losses("changes")
+        n_calls = -(-len(edits) // DEFAULT_CHANGE_BATCH) if edits else 0
+        if n_calls and len(lost) >= n_calls:
+            ran_changes = False
+            reason = (f"change verifier: every one of {n_calls} read(s) "
+                      f"failed ({lost[0][1]}: {lost[0][2][:200]})")
+            log.error("verify_run: %s", reason)
     if run_walk:
+        _take_losses("walk")
         residuals = walk_finished_text(accepted, provider, model, usage,
                                        context=context, max_tokens=max_tokens)
+        lost = _take_losses("walk")
+        n_calls = len(_walk_reads(accepted, DEFAULT_WALK_CHARS))
+        if n_calls and len(lost) >= n_calls:
+            ran_walk = False
+            reason = (reason + "; " if reason else "") + (
+                f"finished-text walk: every one of {n_calls} read(s) failed "
+                f"({lost[0][1]}: {lost[0][2][:200]})")
+            log.error("verify_run: %s", reason)
+    return VerifyRunResult(problems, residuals, ran_changes=ran_changes,
+                           ran_walk=ran_walk, reason=reason)
+
+
+def verify_delta(run_dir: str | Path, para_ids: Sequence[str], provider,
+                 model: str, usage: Usage, *, context: str = "",
+                 run_changes: bool = True, run_walk: bool = True,
+                 max_tokens: int = DEFAULT_MAX_TOKENS,
+                 char_budget: int = DEFAULT_WALK_CHARS) -> VerifyRunResult:
+    """Both gates over ONLY the named paragraphs of a run — what the settle
+    loop re-reads after a round touched them. Same packets and prompts as the
+    full run (an applied edit in its finished context; the accepted text of
+    the paragraphs), so a delta verdict is comparable to a full one. Reads
+    nothing when the paragraph set is empty."""
+    wanted = {str(p) for p in para_ids}
+    original, accepted = paragraph_views(run_dir)
+    if not accepted:
+        reason = ("no accepted text could be read from the deliverable — "
+                  "neither gate ran")
+        return VerifyRunResult([], [], ran_changes=False, ran_walk=False,
+                               reason=reason)
+    acc = {pid: t for pid, t in accepted.items() if pid in wanted}
+    orig = {pid: t for pid, t in original.items() if pid in wanted}
+    problems: list[ChangeProblem] = []
+    residuals: list[ResidualFinding] = []
+    if run_changes:
+        edits = [e for e in applied_edits(run_dir)
+                 if str(e.get("para_id", "")) in wanted]
+        if edits:
+            problems = verify_changes(edits, acc, provider, model, usage,
+                                      context=context, max_tokens=max_tokens,
+                                      original=orig)
+    if run_walk and acc:
+        residuals = walk_finished_text(acc, provider, model, usage,
+                                       context=context, max_tokens=max_tokens,
+                                       char_budget=char_budget)
     return VerifyRunResult(problems, residuals, ran_changes=run_changes,
                            ran_walk=run_walk)
 
 
 __all__ = [
     "ChangeProblem", "ResidualFinding", "VerifyRunResult", "accepted_text",
+    "problem_id", "residual_id", "verify_delta", "MAX_RESIDUALS_PER_READ",
+    "UNREAD",
     "applied_edits", "deliverable_docx", "paragraph_views", "verify_changes",
     "walk_finished_text", "verify_run", "MAX_PROBLEMS", "MAX_RESIDUALS",
 ]

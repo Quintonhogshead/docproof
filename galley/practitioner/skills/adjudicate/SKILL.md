@@ -48,6 +48,8 @@ write rules; the engine writes the document.
    verbs are absent), sweeps and normalize regenerating, all paid passes off.
 5. Then the merge-desk closing checks: artifact scan to clean, reject-all
    round trip byte-identical.
+6. What verify raises on the rebuilt text is NOT re-adjudicated by hand: run
+   `/settle`. Never patch an owning row's replacement to fit a residual in.
 
 ## Memory
 

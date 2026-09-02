@@ -79,6 +79,23 @@ skill; follow the skill, record what you learned.
    a word, part of a longer phrase). Read each pair's sites in context before
    letting it ride; a pair whose two spellings are both correct in their own
    sentences is not an inconsistency and must be dropped, not queried.
+8. **Zero open candidates.** Every finding a lane ever raised ends as an
+   APPLIED tracked edit, a DROPPED row with a recorded reason, or an author
+   QUERY — never a "candidate slips" list, a note for the next wave, or a
+   certify check left failing for open items. The finished-text walk and the
+   change verifier raise the last items; `docproof galley settle` closes them
+   through the engine (one owner per span — a second fix inside an owned span
+   REVISES the owner as a composite; replacements are text, never notes;
+   facts are queries; rounds are bounded and leftovers ship as questions).
+   Certify is the only definition of done: a run with any unsettled item, a
+   non-terminal finding, or a stale verify artifact cannot certify. Never
+   hand-patch an owning row's replacement to fit a residual in.
+9. **Two stopping points, and a verdict.** A run ends `done` (no more errors
+   the loop can find or decide) or `needs_human` (the book has major
+   grammatical problems and most sentences must be rewritten — ideally a
+   quarter of books at most), with the reason written to `outcome.json` for
+   DocWatch to flip the HubSpot toggle. `galley outcome --set … --reason …`
+   overrules with a stated reason.
 
 ## The instrument rack
 
@@ -90,18 +107,21 @@ skill; follow the skill, record what you learned.
 | `docproof cites IN --config C` | Citation & cross-ref check (nonfiction): author-date citations vs the reference list both ways, chapter/figure/table refs vs the book's own headings and captions. Report-only; auto-skips what the book lacks. | $0 |
 | `docproof galley audit RESULTS IN` | The missed-error audit: density table + sampled pages → hypotheses. | 1 call |
 | `docproof galley verify RESULTS` | The finished-text SENSE gates certify cannot run: the **change verifier** re-reads every APPLIED edit in its accepted context (breaks_meaning/grammar/voice_damage/artifact/wrong_rule → `change_verify.json`), and the **finished-text walk** proofreads the ACCEPTED text for residual errors (`finished_walk.json`). `certify` then reads those artifacts (a recorded problem fails delivery; a missing artifact skips loudly). `--context BRIEF` feeds voice notes; `--changes-only`/`--walk-only` split for $0 subagents. Nonzero exit on any problem. | paid (or $0 subagents) |
+| `docproof galley settle RESULTS --source IN --config C` | **Residual settlement**: closes EVERY open item verify raised — translates each residual to a source span through the build's `editmap.json`, absorbs into the owning edit (a composite), adds a new edit, drops with a reason, or queries the author; rebuilds at $0, re-verifies the touched paragraphs, repeats to `--rounds` (leftovers become `unresolved_after_N` queries). Writes `settlement.json` + `outcome.json`. `--engine auto` = the $0 subscription subagent lane when available, else the API model (`--approval`/`--budget`), else deterministic-only. | $0 / judge |
+| `docproof galley residuals RESULTS [--source IN]` | Every open residual / flagged edit with its owner resolution — what settle will face. | $0 |
+| `docproof galley outcome RESULTS [--set done\|needs_human --reason …]` | The terminal verdict from the run's own numbers (or a stated overrule): `done` / `needs_human` + reason + the HubSpot property/value, to `outcome.json`. | $0 |
 | `docproof galley letter` / `seed` / `score` | Editor's letter render; seeded-copy recall calibration. | $0 |
 | `docproof galley flights` | The copy-edit flight deck: 6 focused lenses → union → posture-judged clusters (lenient by default — the lane offers, the author decides). `--models "" --external-proposals P.json` takes session-subagent flights in at $0; `--propose-only` / `--judge-only` split off the judge (default `gpt-5.6-luna`; a Claude judge named here BILLS via the API). `--approval`/`--budget` refuse an unapproved model or an over-cap projection. | paid/judge |
 | `docproof galley export-judgments` / `import-judgments` | The **model-free** external-judge route: export a clusters file as a canonical judgment packet, a session agent (or human) fills each `decision`, import rebuilds the findings with **no model call** (unlike `--judge-only`, which still calls the judge model). Import refuses on bad anchoring, broken atomicity, an unknown channel, or an intent-zone edit. | $0 |
 | `docproof merge` | The merge desk: mechanical + copy-edit lanes → span-claimed, artifact-scanned, two-author deliverable. | $0 |
-| `docproof import-findings` / `replay` | Inject externally produced or archived findings and rebuild a deliverable through `finish()`. | $0 |
+| `docproof import-findings` / `replay` | Inject externally produced or archived findings and rebuild a deliverable through `finish()`. `import-findings --anchor accepted --run RUN` takes rows quoted from a build's ACCEPTED text and folds them in through its edit map (a row inside an applied edit revises it; a fact change becomes a query; an editorial note is stripped). | $0 |
 | `docproof galley profile` / `genre-pack` / `calibrate` | Book profile, genre posture materialization (`--stage`, `--genre`, `--era`, `--profile`), recall/cost calibration. | ~$0 |
 | `docproof galley routes` | The effective-config **egress report**: every model the config would call, its provider, active/off. `--deny PROVIDER` exits non-zero if a prohibited vendor is reachable. Run it before spending. | $0 |
 | `docproof galley approve` / `certify` | The reproducibility gate: `approve` writes the immutable `approval.json` (source + config hashes, allowed models/providers, stage, lanes, max spend); `certify` re-checks a finished run against it plus the structural invariants (hashes, routes, checkpoint, zero-cost anomaly, budget, artifact scan, duplicate-merged edits, insertion collisions, two-author attribution, run state) before delivery. `docproof review --approval A` REFUSES to run if the manuscript, config, or routes deviate. | $0 |
 | `docproof galley intent-zones` | Resolve an intent-zones file (selectors: para ids/range, terms, regex, quotes) against a manuscript and preview the protected spans + permission classes (locked / punctuation / open). Set `intent_zones_file` in the config and the sweep layer downgrades any forbidden edit to a query BEFORE it can auto-apply. | $0 |
 | `docproof galley triage-nouns` | Group a profile's proper nouns into protect/enforce/reject/suspect (near-matches like Deut/Deute flagged), and write a correction-overlay starter. `genre-pack --corrections` then seeds only the vetted names. | $0 |
 | `docproof galley ledger` | The finding lifecycle ledger: every finding's stable id + state history (detected→merged/queried/rejected/dropped) reconstructed from a run, with a duplicate report. | $0 |
-| `docproof galley state` | The resumable run state machine (intake→profiled→…→certified→delivered). `--advance` stamps source/config hashes — pass BOTH `--source` and `--config` at every stage; `--verify-resume` (same two flags) proves nothing changed underneath before you continue (exit 6 on drift, strict about a missing hash). | $0 |
+| `docproof galley state` | The resumable run state machine (intake→profiled→…→audited→settled→certified→delivered). `--advance settled --results RUN` REFUSES (exit 7) while any finding is non-terminal or any verify item is unsettled. `--advance` stamps source/config hashes — pass BOTH `--source` and `--config` at every stage; `--verify-resume` (same two flags) proves nothing changed underneath before you continue (exit 6 on drift, strict about a missing hash). | $0 |
 | `docproof capabilities` | The whole command tree + config sections + genres + stages, as JSON. Your map of the rack — read this, not `--help`. | $0 |
 
 Verbs marked here that are missing in your checkout are still being built; do
@@ -292,8 +312,8 @@ context ~150 times. Keep your window lean:
    while marginal cost per finding stays sane. A quiet audit converges the loop.
 7. **Adjudicate** (`skills/adjudicate`) with the screening rulebook, then
    rebuild the deliverable at $0 via replay/merge.
-8. **Verify the finished text, certify, then deliver.** Run `docproof galley
-   verify RESULTS --context BRIEF` FIRST — it re-reads every applied edit and
+8. **Verify the finished text, settle, certify, then deliver.** Run `docproof
+   galley verify RESULTS --context BRIEF` FIRST — it re-reads every applied edit and
    proofreads the accepted text for sense, the one thing `certify` cannot do
    (`--dry-run` prints the priced call count first; `--approval`/`--budget`
    gate the spend; it exits nonzero only for a flagged applied edit or a
@@ -302,11 +322,16 @@ context ~150 times. Keep your window lean:
    These are standard delivery stages, not an optional extra: certify's checks
    are integrity (hashes, routes, artifact regexes, reject-all round trip) and a
    corrupted build passes all of them — the Purpura beta's 35 real-word LT
-   corruptions were caught ONLY by this re-read. Then `docproof galley certify
-   RESULTS --approval approval.json --source BOOK --config CONFIG` must pass —
+   corruptions were caught ONLY by this re-read. Then **settle** (`skills/
+   settle`): `docproof galley settle RESULTS --source BOOK --config CONFIG`
+   closes every item verify raised — absorb / add / drop / query — rebuilding
+   at $0 and re-verifying the touched paragraphs until nothing is open, then
+   writes `settlement.json` and the `outcome.json` verdict. Then `docproof
+   galley certify RESULTS --approval approval.json --source BOOK --config
+   CONFIG` must pass —
    hashes, approved routes, checkpoint completeness, no zero-cost anomaly, budget
-   reconciled, artifact scan clean, AND the recorded change-verify/finished-walk
-   verdict (a flagged edit or a high-severity residual fails delivery). A failing
+   reconciled, artifact scan clean, every finding in a terminal state, every
+   verify item settled, AND the recorded outcome. A failing
    certificate blocks delivery; fix the failing check, don't ship around it. Then
    deliver: tracked-changes docx (two authors when both lanes ran), margin-comment
    queries within the comment budget, editor's letter with the honest residual
@@ -338,6 +363,10 @@ context ~150 times. Keep your window lean:
   replace the cluster with standalone rows instead.
 - **Regenerate, don't reuse.** Delete `change_verify.json`/`finished_walk.json` before a rebuild;
   certify now marks older-than-build artifacts stale, but a fresh verify is the only real gate.
+- **Residuals inside owned spans are settled, not hand-patched.** 79 walk residuals sat inside spans
+  other tracked edits owned; the fix is `galley settle` (v0.183.0): the engine's edit map translates
+  each one to the source, the owner is REVISED as a composite, and a verifier flag on the composite
+  reverts it to a query. Your pen never edits an owning row's replacement.
 
 ## The traps ledger (all paid for in blood)
 

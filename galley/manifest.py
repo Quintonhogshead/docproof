@@ -475,12 +475,101 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
     cert.checks.append(_certify_text_hygiene(run))
 
     # 9. Finished-text SENSE gates. certify itself reads no text for meaning;
-    # `galley verify` does and records its verdict here. A recorded problem fails
-    # delivery; a clean record passes; no record skips loudly (run `galley
-    # verify`) so an unread deliverable never reads as a certified-clean one.
+    # `galley verify` does and records its verdict here. An item without a
+    # settlement record fails delivery (run `galley settle`); a settled record
+    # passes; no record skips loudly (run `galley verify`) so an unread
+    # deliverable never reads as a certified-clean one.
     cert.checks.append(_certify_change_verify(run))
     cert.checks.append(_certify_finished_walk(run))
+
+    # 10. Residual settlement (I1/I7): every finding in a terminal state, and
+    # every residual/problem the verify gates raised carrying a settlement
+    # record. Certify is the only definition of done.
+    if envelope is not None:
+        cert.checks.append(_certify_terminal_states(envelope))
+    cert.checks.append(_certify_settlement(run))
+    cert.checks.append(_certify_outcome(run))
     return cert
+
+
+def _certify_terminal_states(envelope: dict[str, Any]) -> Check:
+    """I1 — terminal states only. Every findings row must read as applied,
+    dropped, or query; a `pending` row (never validated) or an explicitly
+    non-terminal `state` fails."""
+    from galley.settle import TERMINAL_STATES, terminal_state
+    rows = [r for r in (envelope.get("findings") or []) if isinstance(r, dict)]
+    counts: dict[str, int] = {}
+    bad: list[str] = []
+    for r in rows:
+        state, _reason = terminal_state(r)
+        counts[state] = counts.get(state, 0) + 1
+        # "unknown" (no status at all) is a row the validator never saw, not
+        # a lifecycle state; only a genuinely non-terminal state fails.
+        if state not in TERMINAL_STATES and state != "unknown":
+            bad.append(f"{r.get('finding_id', '?')}:{state}")
+    summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+    if bad:
+        return Check("terminal states", "fail",
+                     f"{len(bad)} finding(s) not in a terminal state ("
+                     + ", ".join(bad[:6]) + ("…" if len(bad) > 6 else "")
+                     + f") — {summary}")
+    return Check("terminal states", "pass",
+                 f"every finding applied/dropped/query ({summary or 'no rows'})")
+
+
+def _certify_settlement(run: Path) -> Check:
+    """settlement.json present, nothing left open, and every residual/problem
+    the verify artifacts hold carrying a record. Skips (loudly) when the run
+    never verified — there is nothing to settle yet; fails when verify raised
+    items and settle never ran."""
+    from galley.settle import Settlement, unsettled
+    have_walk = (run / "finished_walk.json").is_file()
+    have_cv = (run / "change_verify.json").is_file()
+    settlement = Settlement.load(run)
+    open_res, open_prob = unsettled(run)
+    n_open = len(open_res) + len(open_prob)
+    if settlement is None:
+        if not (have_walk or have_cv):
+            return Check("residual settlement", "skip",
+                         "no verify artifacts and no settlement.json — run "
+                         "`galley verify` then `galley settle`")
+        if n_open:
+            return Check("residual settlement", "fail",
+                         f"{n_open} item(s) raised by verify have no settlement "
+                         f"record ({len(open_res)} residual(s), "
+                         f"{len(open_prob)} flagged edit(s)) — run `galley "
+                         f"settle`")
+        return Check("residual settlement", "pass",
+                     "verify raised nothing to settle")
+    if settlement.open:
+        return Check("residual settlement", "fail",
+                     f"settlement.json leaves {len(settlement.open)} item(s) "
+                     f"open after {settlement.rounds} round(s)")
+    if n_open:
+        return Check("residual settlement", "fail",
+                     f"{n_open} item(s) in the verify artifacts have no "
+                     f"settlement record — re-run `galley settle`")
+    counts = settlement.counts()
+    return Check("residual settlement", "pass",
+                 f"{len(settlement.latest())} item(s) settled in "
+                 f"{settlement.rounds} round(s): "
+                 + (", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+                    or "none raised"))
+
+
+def _certify_outcome(run: Path) -> Check:
+    """The terminal verdict (galley/outcome.py). Informational: both `done`
+    and `needs_human` are legitimate ends; absence is a skip that names the
+    verb."""
+    from galley.outcome import Outcome
+    oc = Outcome.load(run)
+    if oc is None:
+        return Check("outcome", "skip",
+                     "no outcome.json — run `galley outcome` (or `galley "
+                     "settle`, which writes it) to record done / needs_human")
+    if oc.outcome not in ("done", "needs_human"):
+        return Check("outcome", "fail", f"unknown outcome {oc.outcome!r}")
+    return Check("outcome", "pass", f"{oc.outcome}: {oc.reason[:160]}")
 
 
 def _certify_change_verify(run: Path) -> Check:
@@ -502,15 +591,21 @@ def _certify_change_verify(run: Path) -> Check:
         return Check("change verifier", "skip",
                      f"{why}; change verifier did not run — re-run `galley "
                      f"verify` without --walk-only before delivery")
-    problems = payload.get("problems") or []
+    problems = [p for p in (payload.get("problems") or []) if isinstance(p, dict)]
     if problems:
-        from collections import Counter
-        counts = Counter(p.get("verdict", "?") for p in problems
-                         if isinstance(p, dict))
-        return Check("change verifier", "fail",
-                     f"{len(problems)} applied edit(s) flagged ("
-                     + ", ".join(f"{v}={n}" for v, n in counts.most_common())
-                     + ") — see change_verify.json")
+        from galley.settle import unsettled
+        _res, open_prob = unsettled(run)
+        if open_prob:
+            from collections import Counter
+            counts = Counter(p.get("verdict", "?") for p in problems)
+            return Check("change verifier", "fail",
+                         f"{len(open_prob)} of {len(problems)} flagged edit(s) "
+                         f"unsettled ("
+                         + ", ".join(f"{v}={n}" for v, n in counts.most_common())
+                         + ") — run `galley settle`; see change_verify.json")
+        return Check("change verifier", "pass",
+                     f"{len(problems)} flagged edit(s), every one settled "
+                     f"(see settlement.json)")
     return Check("change verifier", "pass",
                  f"{payload.get('applied_edits', 0)} applied edit(s) re-read, "
                  f"no meaning/grammar/voice damage")
@@ -534,15 +629,18 @@ def _certify_finished_walk(run: Path) -> Check:
                      f"{why}; finished-text walk did not run — re-run `galley "
                      f"verify` without --changes-only before delivery")
     residuals = [r for r in (payload.get("residuals") or []) if isinstance(r, dict)]
-    highs = [r for r in residuals if r.get("severity") == "high"]
-    if highs:
-        return Check("finished-text walk", "fail",
-                     f"{len(highs)} high-severity residual error(s) of "
-                     f"{len(residuals)} — see finished_walk.json")
     if residuals:
+        from galley.settle import unsettled
+        open_res, _prob = unsettled(run)
+        if open_res:
+            highs = sum(1 for r in residuals if r.get("severity") == "high")
+            return Check("finished-text walk", "fail",
+                         f"{len(open_res)} unsettled residual(s) of "
+                         f"{len(residuals)} ({highs} high) — run `galley "
+                         f"settle`; see finished_walk.json")
         return Check("finished-text walk", "pass",
-                     f"{len(residuals)} low/medium residual(s), none high — "
-                     f"review finished_walk.json before the next wave")
+                     f"{len(residuals)} residual(s), every one settled "
+                     f"(see settlement.json)")
     return Check("finished-text walk", "pass",
                  "accepted text read, no residual errors")
 
