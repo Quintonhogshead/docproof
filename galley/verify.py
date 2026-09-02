@@ -730,8 +730,47 @@ def verify_delta(run_dir: str | Path, para_ids: Sequence[str], provider,
                            ran_walk=run_walk)
 
 
+def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
+                    walk: VerifyRunResult, *, model: str, engine: str,
+                    usage_changes: Usage, usage_walk: Usage,
+                    applied: int, paragraphs: int,
+                    para_ids: Sequence[str] | None = None) -> tuple[Path, Path]:
+    """Write change_verify.json and finished_walk.json in the shape the CLI
+    writes and certify reads (generated_at, ran/reason, cost). Shared by the
+    `galley verify` verb and the settle loop's fresh sweep."""
+    from datetime import datetime, timezone
+
+    from docproof.contract import build_envelope
+    now = datetime.now(timezone.utc).isoformat()
+    run = Path(run_dir)
+    run.mkdir(parents=True, exist_ok=True)
+    cv = {"generated_at": now, "results_dir": str(run), "model": model,
+          "engine": engine, "paragraphs_verified": list(para_ids or []) or None,
+          "ran": changes.ran_changes, "reason": changes.reason,
+          "applied_edits": applied,
+          "problems": [p.to_json() for p in changes.problems],
+          "cost": build_envelope(findings=(), usage=usage_changes,
+                                 fallback_model=model)["cost"]}
+    fw = {"generated_at": now, "results_dir": str(run), "model": model,
+          "engine": engine, "paragraphs_verified": list(para_ids or []) or None,
+          "ran": walk.ran_walk, "reason": walk.reason,
+          "paragraphs": paragraphs,
+          "residuals": [r.to_json() for r in walk.residuals],
+          "unread_paragraphs": list(UNREAD),
+          "cost": build_envelope(findings=(), usage=usage_walk,
+                                 fallback_model=model)["cost"]}
+    cv_path = run / "change_verify.json"
+    fw_path = run / "finished_walk.json"
+    cv_path.write_text(json.dumps(cv, indent=2, ensure_ascii=False),
+                       encoding="utf-8")
+    fw_path.write_text(json.dumps(fw, indent=2, ensure_ascii=False),
+                       encoding="utf-8")
+    return cv_path, fw_path
+
+
 __all__ = [
     "ChangeProblem", "ResidualFinding", "VerifyRunResult", "accepted_text",
+    "write_artifacts",
     "problem_id", "residual_id", "verify_delta", "MAX_RESIDUALS_PER_READ",
     "UNREAD",
     "applied_edits", "deliverable_docx", "paragraph_views", "verify_changes",

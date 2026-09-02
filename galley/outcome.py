@@ -44,10 +44,15 @@ class Thresholds:
     rate; the FIRST one crossed names the reason."""
 
     # Share of reviewable paragraphs that needed a rewrite-class touch: a
-    # repair cluster, three or more applied edits, or a residual the walk
-    # still found after every lane. "Most sentences must be rewritten."
+    # repair cluster, three or more WORDING edits, or two or more real
+    # residuals after every lane. "Most sentences must be rewritten."
     rewrite_share: float = 0.50
-    # Applied edits per 1,000 words. 60 is roughly one edit every 17 words.
+    # WORDING edits per 1,000 words — edits that change words, not the
+    # punctuation/spacing/case mechanics house style generates by the
+    # thousand on a sound book. Redding Book 1 carried 61 edits per 1,000
+    # words of which 46% were mechanics; counting those as "rewriting"
+    # flagged a proofread-shaped book as needing a human. 60 wording edits
+    # per 1,000 is roughly one reworded phrase every 17 words.
     edit_density_per_kword: float = 60.0
     # Questions the settle loop had to leave for the author because it could
     # not decide, as a share of reviewable paragraphs.
@@ -144,9 +149,16 @@ def evidence_of(run_dir: str | Path, source_paras: Mapping[str, str] | None
     queries = [r for r in rows if r.get("queried") is True]
     edits_per_para: dict[str, int] = {}
     cluster_paras: set[str] = set()
+    from galley.settle import edit_kind
+    wording = 0
     for r in applied:
         pid = str(r.get("para_id", ""))
-        edits_per_para[pid] = edits_per_para.get(pid, 0) + 1
+        a = r.get("anchor") or {}
+        kind = edit_kind(str(a.get("delete_text", "")),
+                         str(a.get("insert_text", ""))) if a else "wording"
+        if kind == "wording":
+            wording += 1
+            edits_per_para[pid] = edits_per_para.get(pid, 0) + 1
         if r.get("cluster_id"):
             cluster_paras.add(pid)
 
@@ -231,8 +243,11 @@ def evidence_of(run_dir: str | Path, source_paras: Mapping[str, str] | None
         else rewrite_paras
     return {
         "paragraphs": n_paras, "words": words,
-        "applied_edits": len(applied), "queries": len(queries),
-        "edit_density_per_kword": (len(applied) / words * 1000.0) if words
+        "applied_edits": len(applied), "wording_edits": wording,
+        "mechanical_edits": len(applied) - wording, "queries": len(queries),
+        "edit_density_per_kword": (wording / words * 1000.0) if words
+        else 0.0,
+        "all_edits_per_kword": (len(applied) / words * 1000.0) if words
         else 0.0,
         "rewrite_paragraphs": len(rewrite_paras),
         "rewrite_share": (len(rewrite_paras) / n_paras) if n_paras else 0.0,
@@ -246,6 +261,7 @@ def evidence_of(run_dir: str | Path, source_paras: Mapping[str, str] | None
         "settled": settlement is not None,
         "settle_rounds": settlement.rounds if settlement else 0,
         "open_items": len(settlement.open) if settlement else None,
+        "convergence": dict(settlement.convergence) if settlement else {},
     }
 
 
@@ -267,14 +283,24 @@ def assess(run_dir: str | Path, *, thresholds: Thresholds | None = None,
             f"sentences must be rewritten, which is a human proofreader's job")
     if ev["words"] and ev["edit_density_per_kword"] >= th.edit_density_per_kword:
         reasons.append(
-            f"{ev['applied_edits']} edits over {ev['words']} words "
-            f"({ev['edit_density_per_kword']:.0f} per 1,000) — the manuscript "
-            f"has major grammatical problems throughout")
+            f"{ev['wording_edits']} wording edits over {ev['words']} words "
+            f"({ev['edit_density_per_kword']:.0f} per 1,000, mechanics "
+            f"excluded) — the manuscript has major grammatical problems "
+            f"throughout")
     if ev["paragraphs"] and ev["unresolved_share"] >= th.unresolved_share:
         reasons.append(
             f"{ev['unresolved_queries']} residuals could not be decided after "
             f"{ev['settle_rounds']} settle round(s) and ship as author "
             f"questions ({ev['unresolved_share']:.0%} of paragraphs)")
+    conv = ev.get("convergence") or {}
+    if conv and conv.get("stopped") in ("turn_budget", "round_cap", "rounds") \
+            and not conv.get("quiet", True) and conv.get("rounds", 0) >= 2:
+        reasons.append(
+            f"the settle sweep was still finding {conv.get('last_new_items')} "
+            f"new error(s) per round after {conv.get('rounds')} round(s) "
+            f"(re-reading {conv.get('last_reread')} edits and paragraphs) "
+            f"when it had to stop — the book is not converging on clean and "
+            f"needs a human proofreader")
     if ev["applied_edits"] and ev["damage_share"] >= th.damage_share:
         reasons.append(
             f"the change verifier flagged {ev['edit_damage']} of "

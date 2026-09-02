@@ -18,6 +18,15 @@ ESCALATION (the knob may not exist), not a reason to go read the source.
   on every findings row, writes `outcome.json`. `--engine auto|subagent|
   provider|none`; `--no-verify` skips the delta re-read; `--dry-run` lists
   the open items with owner resolution.
+- **`--until-clean`** on settle: keep sweeping while rounds keep finding real
+  work; stop after a QUIET round (new items ≤ `--quiet-floor` 3, or ≤
+  `--quiet-share` 0.02 of the edits+paragraphs the round re-read), or when
+  `--max-turns` (400) is spent, never past 12 rounds. A sweep that has to
+  stop while still noisy after 2+ rounds makes `outcome.json` say
+  **needs_human** ("still finding N new errors per round"). Settlement rows
+  on untouched text PROPAGATE to the identical word-shaped surface in the
+  same and neighbouring paragraphs (`--no-propagate` to disable); a quote
+  repeated in one paragraph settles all its sites.
 - **`docproof galley residuals RUN [--source BOOK --config C] [--json]`** —
   the open-items list (residual / edit_damage, owner, resolution).
 - **`docproof galley outcome RUN [--set done|needs_human --reason …]`** — the

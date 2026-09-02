@@ -223,6 +223,11 @@ class Settlement:
     cost: dict[str, Any] = field(default_factory=dict)
     generated_at: str = ""
     notes: list[str] = field(default_factory=list)
+    # How the loop ended: {"stopped": clean|quiet|turn_budget|round_cap|
+    # rounds, "last_new_items": n, "last_reread": m, "rounds": r}. The
+    # outcome reads it: a sweep that was still finding a pile of new errors
+    # when it had to stop is a book for a human proofreader.
+    convergence: dict[str, Any] = field(default_factory=dict)
 
     def record_ids(self) -> set[str]:
         return {r.residual_id for r in self.records}
@@ -249,7 +254,8 @@ class Settlement:
                 "records": [r.to_json() for r in self.records],
                 "open": list(self.open),
                 "residuals_seen": list(self.residuals_seen),
-                "cost": dict(self.cost), "notes": list(self.notes)}
+                "cost": dict(self.cost), "notes": list(self.notes),
+                "convergence": dict(self.convergence)}
 
     @classmethod
     def from_json(cls, d: Mapping[str, Any]) -> "Settlement":
@@ -265,6 +271,7 @@ class Settlement:
                 cost=dict(d.get("cost") or {}),
                 generated_at=str(d.get("generated_at", "")),
                 notes=list(d.get("notes") or []))
+        s.convergence = dict(d.get("convergence") or {})
         return s
 
     def save(self, run_dir: str | Path) -> Path:
@@ -507,13 +514,52 @@ def _norm_words(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+(?:['’][a-z]+)?", text.lower())
 
 
+# Words that betray an editor's aside living inside the manuscript text — a
+# parenthetical a copy-edit lane leaked ("(parallel with X; breaks tense
+# agreement as written)"). Deleting such a parenthetical is a repair, never
+# a fact change, however many numbers or quoted strings it contains.
+_ASIDE_WORDS_RE = re.compile(
+    r"\b(?:editorial|editor|as written|breaks|parallel with|agreement|"
+    r"tense|revision note|query|should be|needs? (?:a|to)|missing|stray|"
+    r"consider|reword|rephrase|clarif|ambiguous|antecedent|dangling|"
+    r"comma splice|run-on|fragment|subject and verb)\b", re.IGNORECASE)
+
+
+def deletes_an_aside(before: str, after: str) -> bool:
+    """`after` is `before` with one parenthetical or bracketed span removed,
+    and that span reads as an editor's aside rather than the author's."""
+    if len(after) >= len(before):
+        return False
+    for opener, closer in (("(", ")"), ("[", "]")):
+        start = 0
+        while True:
+            i = before.find(opener, start)
+            if i == -1:
+                break
+            j = before.find(closer, i + 1)
+            if j == -1:
+                break
+            inner = before[i + 1:j]
+            candidate = (before[:i].rstrip() + before[j + 1:]) \
+                if before[:i].endswith(" ") and before[j + 1:j + 2] in (" ", "") \
+                else before[:i] + before[j + 1:]
+            if _ASIDE_WORDS_RE.search(inner) and (
+                    " ".join(candidate.split()) == " ".join(after.split())):
+                return True
+            start = i + 1
+    return False
+
+
 def _fact(before: str, after: str) -> str | None:
     """flights.fact_change, minus two false alarms a settlement raises: a
     case/punctuation-only change inside quoted speech reads to that check as
     a rewritten title, and a re-cased word ("just" -> "Just") as a new proper
     noun. Only a change in the WORDS of a quoted passage, a number, or a
-    genuinely new capitalized word counts here."""
+    genuinely new capitalized word counts here. Removing an editor's aside
+    that leaked into the text is never a fact change."""
     from docproof.flights import _titles, fact_change
+    if deletes_an_aside(before, after):
+        return None
     try:
         why = fact_change(before, after)
     except Exception:                                    # noqa: BLE001
@@ -567,7 +613,14 @@ def resolve(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
         # does not hold cannot be settled by arithmetic.
         return "unanchorable"
     if n > 1:
-        return "ambiguous_anchor"
+        # The same word-shaped surface more than once in the paragraph: a
+        # misspelling repeated. Settle the first site; propagation applies
+        # the identical fix to the others (the walker flags one and ignores
+        # its twin). Anything else that repeats is genuinely ambiguous.
+        if not (_WORD_SHAPED.search(res.quote) and res.suggestion.strip()
+                and " " not in res.quote.strip()):
+            return "ambiguous_anchor"
+        res.raw["multi"] = n
     lo = acc.index(res.quote)
     r = emap.locate(segs, lo, lo + len(res.quote))
     res.source_span = r.source_span or r.source_widened
@@ -831,6 +884,17 @@ def _query_row(res: Residual, source: Mapping[str, str], question: str,
     return row
 
 
+def restore_rows(working: dict[str, dict[str, Any]], rid: str,
+                 rows: Any) -> int:
+    """Put previously removed rows back into the working set under keys that
+    cannot collide with any current finding id. Returns how many."""
+    n = 0
+    for row in rows:
+        n += 1
+        working[f"restore-{rid}-{n}"] = row
+    return n
+
+
 def apply_decision(res: Residual, dec: Decision,
                    working: dict[str, dict[str, Any]],
                    source: Mapping[str, str], round_no: int, *,
@@ -995,6 +1059,23 @@ def fold_accepted_rows(run_dir: Path, rows: Sequence[Mapping[str, Any]], *,
 
 # ---- the loop (A1–A7) ---------------------------------------------------------
 
+# --until-clean: keep sweeping while a round is still finding real work, stop
+# when a round comes back quiet. "Quiet" is judged against how much the round
+# re-read, never by a fixed count alone: 100 new items after re-reading 2,000
+# edits is a signal to keep looking; 3 after re-reading 150 is noise (the
+# verifier flags ~5% of anything it re-reads, and would churn forever).
+DEFAULT_QUIET_FLOOR = 3          # new items at or below this are always quiet
+DEFAULT_QUIET_SHARE = 0.02       # ...or at or below this share of items re-read
+DEFAULT_MAX_TURNS = 400          # subagent/API calls per settle invocation
+HARD_MAX_ROUNDS = 12             # the ceiling --until-clean can never pass
+# Propagation: a settled fix on untouched text is applied to the SAME surface
+# elsewhere in the paragraph and its neighbours (the walker flags one site
+# and ignores the twin two lines down). Word-shaped quotes only.
+PROPAGATE_REACH = 1              # paragraphs either side
+PROPAGATE_MAX = 40               # sites per residual
+_WORD_SHAPED = re.compile(r"[A-Za-z]{3,}")
+
+
 @dataclass
 class SettleOptions:
     rounds: int = DEFAULT_ROUNDS
@@ -1004,6 +1085,11 @@ class SettleOptions:
     max_tokens: int = 12000
     verify_delta: bool = True           # A5 (needs an engine)
     keep_snapshots: bool = True
+    until_clean: bool = False
+    quiet_floor: int = DEFAULT_QUIET_FLOOR
+    quiet_share: float = DEFAULT_QUIET_SHARE
+    max_turns: int = DEFAULT_MAX_TURNS
+    propagate: bool = True
 
 
 @dataclass
@@ -1140,6 +1226,14 @@ class Settler:
             if removed_by.get(res.id):
                 self.touched.add(res.para_id)
 
+        # Propagate: the same surface, untouched, in the paragraph and its
+        # neighbours gets the same fix — recorded, never silent.
+        if self.opt.propagate:
+            propagated = self._propagate(items, records, em, source, working,
+                                         new_rows, round_no)
+            new_rows.extend(propagated[0])
+            records.extend(propagated[1])
+
         rows = list(working.values()) + new_rows
         result = self._rebuild(rows, snapshot=f"round{round_no}")
         env = load_envelope(self.run_dir)
@@ -1174,11 +1268,16 @@ class Settler:
             f"{len(failed)} reverted")
 
         # A5 — delta verify over the touched paragraphs
+        self.last_reread = 0
         if self.provider is None or not self.opt.verify_delta \
                 or not self.touched:
             return []
-        from galley.verify import verify_delta
+        from galley.verify import applied_edits, verify_delta
         touched = sorted(self.touched)
+        self.last_reread = (
+            sum(1 for e in applied_edits(self.run_dir)
+                if str(e.get("para_id", "")) in self.touched)
+            + len(touched))
         vr = verify_delta(self.run_dir, touched, self.provider, self.opt.model,
                           self.usage, context=self.opt.context,
                           max_tokens=self.opt.max_tokens)
@@ -1215,8 +1314,13 @@ class Settler:
                 for key in [k for k, row in working.items()
                             if settle_residual_of(row) == rid]:
                     working.pop(key)
-                for key, row in removed_by.get(rid, {}).items():
-                    working[key] = row
+                # Restore what the composite absorbed — under FRESH keys.
+                # `removed_by` is keyed by finding ids from BEFORE the
+                # rebuild, and every rebuild re-mints ids, so writing them
+                # back by their old key overwrote whatever unrelated row now
+                # held that id (Redding lost a number_style row and two
+                # galley_read rows that way).
+                restore_rows(working, rid, removed_by.get(rid, {}).values())
                 q = _query_row(res, source, _question(res))
                 extra_rows = [q] if q is not None else []
                 self.settlement.records.append(SettlementRecord(
@@ -1234,17 +1338,182 @@ class Settler:
         self.touched = set()
         return fresh
 
+    def _propagate(self, items, records, em, source, working, new_rows,
+                   round_no):
+        """For every `add` this round on a word-shaped quote, find the same
+        surface in untouched text of the paragraph and its neighbours and
+        add the same fix there. Returns (rows, records)."""
+        order = list(source.keys())
+        index = {pid: i for i, pid in enumerate(order)}
+        by_id = {res.id: res for res in items}
+        out_rows: list[dict[str, Any]] = []
+        out_recs: list[SettlementRecord] = []
+        claimed: set[tuple[str, int]] = set()
+        for rec in list(records):
+            if rec.action != "add" or rec.kind != "residual":
+                continue
+            res = by_id.get(rec.residual_id)
+            if res is None or not _WORD_SHAPED.search(res.quote):
+                continue
+            quote, repl = res.quote, rec.after_replacement
+            if not repl or repl == quote or " " in quote.strip() and \
+                    len(quote) > 40:
+                continue
+            i = index.get(res.para_id)
+            if i is None:
+                continue
+            n = 0
+            for j in range(max(0, i - PROPAGATE_REACH),
+                           min(len(order), i + PROPAGATE_REACH + 1)):
+                pid = order[j]
+                segs = em.paragraphs.get(pid)
+                if not segs:
+                    continue
+                acc = emap.accepted_of(segs)
+                start = 0
+                while n < PROPAGATE_MAX:
+                    lo = acc.find(quote, start)
+                    if lo == -1:
+                        break
+                    start = lo + 1
+                    hi = lo + len(quote)
+                    if pid == res.para_id and res.source_span is not None:
+                        # skip the site the residual itself settled
+                        try:
+                            r0 = emap.locate(segs, lo, hi)
+                        except ValueError:
+                            continue
+                        if r0.source_span == res.source_span:
+                            continue
+                    try:
+                        r = emap.locate(segs, lo, hi)
+                    except ValueError:
+                        continue
+                    if r.case != "untouched" or r.source_span is None:
+                        continue
+                    key = (pid, r.source_span[0])
+                    if key in claimed:
+                        continue
+                    # a word boundary on both sides, so "form" never edits
+                    # "formal"
+                    if (lo > 0 and acc[lo - 1].isalnum()) or \
+                            (hi < len(acc) and acc[hi].isalnum()):
+                        continue
+                    comp = emap.compose(segs, lo, hi, repl)
+                    row = emap.as_row(source[pid], comp, para_id=pid,
+                                      error_type=SETTLE_TYPE,
+                                      explanation=f"same as {res.para_id}: "
+                                                  f"{res.problem}",
+                                      extra={"chunk_id": f"{SETTLE_CHUNK_PREFIX}"
+                                             f"{res.id}+{n + 1}"})
+                    out_rows.append(row)
+                    claimed.add(key)
+                    n += 1
+                    out_recs.append(SettlementRecord(
+                        f"{res.id}+{n}", round_no, "add", None, quote, repl,
+                        f"propagated:{res.id}", self.verified_by,
+                        para_id=pid, kind="residual"))
+                    self.touched.add(pid)
+        if out_rows:
+            log.info("settle: propagated %d fix(es) to identical untouched "
+                     "sites nearby", len(out_rows))
+        return out_rows, out_recs
+
     # -- the whole loop -----------------------------------------------------
+
+    def _quiet(self, new_items: int) -> bool:
+        """--until-clean's stop rule: a round is quiet when the new items it
+        raised are within the floor OR within the share of what it re-read."""
+        if new_items <= self.opt.quiet_floor:
+            return True
+        return new_items <= self.opt.quiet_share * max(self.last_reread, 1)
+
+    def fresh_sweep(self) -> list[Residual]:
+        """A FULL verify (both gates) over the current build, written as the
+        run's artifacts, and the open items it raises. This is what
+        `--until-clean` does when it starts with nothing open: a sweep must
+        read the book as it is now, not restamp a read of an earlier build.
+        Counts toward the turn budget like every other call."""
+        from galley.verify import (accepted_text, applied_edits, verify_run,
+                                   write_artifacts)
+        uc, uw = Usage(), Usage()
+        changes = verify_run(self.run_dir, self.provider, self.opt.model, uc,
+                             context=self.opt.context, run_changes=True,
+                             run_walk=False, max_tokens=self.opt.max_tokens)
+        walk = verify_run(self.run_dir, self.provider, self.opt.model, uw,
+                          context=self.opt.context, run_changes=False,
+                          run_walk=True, max_tokens=self.opt.max_tokens)
+        for u in (uc, uw):
+            for f in ("input_tokens", "output_tokens",
+                      "cache_creation_input_tokens", "cache_read_input_tokens",
+                      "api_calls"):
+                setattr(self.usage, f, getattr(self.usage, f) + getattr(u, f))
+            for mdl, bucket in u.by_model.items():
+                dst = self.usage.by_model.setdefault(mdl, {"api_calls": 0})
+                for k, v in bucket.items():
+                    dst[k] = dst.get(k, 0) + v
+        acc = accepted_text(self.run_dir)
+        write_artifacts(self.run_dir, changes, walk, model=self.opt.model,
+                        engine=self.opt.engine, usage_changes=uc,
+                        usage_walk=uw, applied=len(applied_edits(self.run_dir)),
+                        paragraphs=sum(1 for t in acc.values() if t.strip()))
+        self.settlement.notes.append(
+            f"fresh sweep: {len(changes.problems)} flagged edit(s), "
+            f"{len(walk.residuals)} residual(s) over the whole book")
+        # Every earlier record stays; the new artifacts carry only what this
+        # sweep raised, so completeness is judged against the current read.
+        return open_items(self.run_dir)
 
     def run(self) -> SettleResult:
         items = open_items(self.run_dir)
         round_no = self.settlement.rounds
-        while items and round_no < self.opt.rounds:
+        self.last_reread = 0
+        if not items and self.opt.until_clean and self.provider is not None:
+            log.info("settle: nothing open — --until-clean starts with a "
+                     "fresh sweep of the whole book")
+            items = self.fresh_sweep()
+            self.last_reread = (len(items) or 1) * 50   # a whole-book read
+        limit = HARD_MAX_ROUNDS if self.opt.until_clean else self.opt.rounds
+        stopped = "clean"
+        while items and round_no < limit:
             round_no += 1
             log.info("settle: round %d over %d item(s)", round_no, len(items))
             items = self.round(round_no, items)
             self.settlement.rounds = round_no
             self.settlement.save(self.run_dir)
+            if not items:
+                stopped = "clean"
+                break
+            stopped = "rounds"
+            if not self.opt.until_clean:
+                continue
+            if self.usage.api_calls >= self.opt.max_turns:
+                stopped = "turn_budget"
+                note = (f"round {round_no}: turn budget reached "
+                        f"({self.usage.api_calls} of {self.opt.max_turns}); "
+                        f"{len(items)} item(s) ship as questions")
+                log.warning("settle: %s", note)
+                self.settlement.notes.append(note)
+                break
+            if self._quiet(len(items)):
+                stopped = "quiet"
+                note = (f"round {round_no}: quiet — {len(items)} new item(s) "
+                        f"after re-reading {self.last_reread}; converged, "
+                        f"leftovers ship as questions")
+                log.info("settle: %s", note)
+                self.settlement.notes.append(note)
+                break
+            self.settlement.notes.append(
+                f"round {round_no}: {len(items)} new item(s) after "
+                f"re-reading {self.last_reread} — still finding work, "
+                f"another round")
+            if round_no >= limit:
+                stopped = "round_cap"
+        self.settlement.convergence = {
+            "stopped": stopped, "last_new_items": len(items),
+            "last_reread": self.last_reread, "rounds": round_no,
+            "quiet": self._quiet(len(items)) if items else True,
+            "turns": self.usage.api_calls}
         if items:
             # I5 — bounded and honest: leftovers ship as questions.
             round_no += 1
@@ -1260,7 +1529,7 @@ class Settler:
                 self.settlement.records.append(SettlementRecord(
                     res.id, round_no, "query" if q is not None else "drop",
                     res.owner_finding_id, "", "",
-                    f"unresolved_after_{self.opt.rounds}" if q is not None
+                    f"unresolved_after_{self.settlement.rounds}" if q is not None
                     else "unanchorable", self.verified_by,
                     para_id=res.para_id, question=_question(res),
                     kind=res.kind))
@@ -1395,12 +1664,14 @@ def unsettled(run_dir: str | Path) -> tuple[list[str], list[str]]:
 
 
 __all__ = [
-    "ACTIONS", "DEFAULT_ROUNDS", "Decision", "Folded", "NON_TERMINAL",
+    "ACTIONS", "DEFAULT_ROUNDS", "DEFAULT_QUIET_FLOOR", "DEFAULT_QUIET_SHARE",
+    "DEFAULT_MAX_TURNS", "HARD_MAX_ROUNDS", "Decision", "Folded", "NON_TERMINAL",
     "Residual", "SETTLEMENT_NAME", "SETTLE_TYPE", "SettleOptions",
     "SettleResult", "Settlement", "SettlementRecord", "Settler",
     "TERMINAL_STATES", "apply_decision", "decide", "fold_accepted_rows",
-    "artifact_in", "judge", "kept_rows", "looks_like_instruction",
+    "artifact_in", "deletes_an_aside", "judge", "kept_rows",
+    "looks_like_instruction",
     "align_to_sentence",
-    "open_items", "resolve", "rewrite_verify_artifacts",
+    "open_items", "resolve", "restore_rows", "rewrite_verify_artifacts",
     "stamp_states", "terminal_state", "unsettled",
 ]

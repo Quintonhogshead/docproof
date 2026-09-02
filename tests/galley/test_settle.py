@@ -562,3 +562,202 @@ def test_typographic_parentheticals_are_notes_not_text():
     # the author's own parenthetical, present in the quote, survives
     q = "my husband (a comma fan) laughed"
     assert strip_note(q, q) == (q, False)
+
+
+def test_deleting_a_leaked_editorial_aside_is_not_a_fact_change():
+    from galley.settle import _fact, deletes_an_aside
+    before = ('actresses who we were going to be when we grew up (parallel '
+              'with "were going to be"; breaks tense agreement as written)')
+    after = 'actresses who we were going to be when we grew up'
+    assert deletes_an_aside(before, after)
+    assert _fact(before, after) is None
+    # the author's own parenthetical is not an aside
+    assert not deletes_an_aside("we left (all three of us) at noon",
+                                "we left at noon")
+
+
+def test_restore_rows_never_overwrites_a_current_row():
+    from galley.settle import restore_rows
+    # after a rebuild "f-0003" names an unrelated row; the old owner that
+    # was absorbed also used to be "f-0003"
+    working = {"f-0003": {"para_id": "p9", "original_text": "keep me"}}
+    removed = {"f-0003": {"para_id": "p1", "original_text": "old owner"}}
+    assert restore_rows(working, "r-abc", removed.values()) == 1
+    assert working["f-0003"]["original_text"] == "keep me"
+    assert any(v["original_text"] == "old owner" for v in working.values())
+
+
+# --- propagation: the same fix at identical untouched sites nearby ----------
+
+def test_a_settled_fix_propagates_to_the_same_surface_nearby(tmp_path):
+    paras = [
+        "I will recieve the letter, and you will recieve the reply.",
+        "Nobody could recieve it in time, though formal receipts came later.",
+        "The end.",
+    ]
+    src = _manuscript(tmp_path, paras)
+    ids, _doc = _para_ids(src)
+    run = _build(tmp_path, src, [
+        {"para_id": ids[2], "original_text": "end", "corrected_text": "End",
+         "confidence": "high"}])
+    _walk(run, [{"para_id": ids[0], "quote": "recieve", "problem": "sp",
+                 "suggestion": "receive", "severity": "high"}])
+    assert _settle(tmp_path, run, src) == 0
+    acc = _accepted(run)
+    assert acc[ids[0]].count("receive") == 2 and "recieve" not in acc[ids[0]]
+    assert "could receive it" in acc[ids[1]]            # the neighbour too
+    assert "formal receipts" in acc[ids[1]]             # word boundary held
+    recs, _st = _records(run)
+    prop = [r for r in recs.values() if r.reason.startswith("propagated:")]
+    assert len(prop) == 2 and {r.action for r in prop} == {"add"}
+
+
+# --- --until-clean: keep sweeping while rounds find work, stop when quiet --
+
+def _fake_engine(monkeypatch, prov):
+    monkeypatch.setattr(m, "_resolve_engine",
+                        lambda args, cfg, default_model=None:
+                        ("provider", prov, "fake-model"))
+
+
+def test_until_clean_stops_after_a_quiet_round(tmp_path, monkeypatch):
+    src = _manuscript(tmp_path)
+    ids, _doc = _para_ids(src)
+    run = _build(tmp_path, src, [
+        {"para_id": ids[0], "original_text": "teh", "corrected_text": "the",
+         "confidence": "high"}])
+    _walk(run, [{"para_id": ids[1], "quote": "recieve", "problem": "sp",
+                 "suggestion": "receive", "severity": "high"}])
+    # round 1 verify: clean changes, walk raises ONE new item (quiet) ->
+    # round 2 settles it, its verify is clean -> stop. Never a third round.
+    prov = _Provider(
+        {"problems": []},
+        {"findings": [{"para_id": ids[1], "quote": "was thin",
+                       "problem": "x", "suggestion": "was faint",
+                       "severity": "low"}]},
+        {"problems": []}, {"findings": []})
+    _fake_engine(monkeypatch, prov)
+    rc = main(["galley", "settle", str(run), "--source", str(src), "--config",
+               _replay_config(tmp_path), "--engine", "provider",
+               "--until-clean"])
+    assert rc == 0
+    _recs, st = _records(run)
+    assert st.rounds == 2 and st.open == []
+    assert any("quiet" in n for n in st.notes)
+
+
+def test_until_clean_respects_the_turn_budget(tmp_path, monkeypatch):
+    src = _manuscript(tmp_path)
+    ids, _doc = _para_ids(src)
+    run = _build(tmp_path, src, [
+        {"para_id": ids[0], "original_text": "teh", "corrected_text": "the",
+         "confidence": "high"}])
+    _walk(run, [{"para_id": ids[1], "quote": "recieve", "problem": "sp",
+                 "suggestion": "receive", "severity": "high"}])
+    # every verify keeps raising a fresh item; the budget of 2 turns ends it
+    # after round 1 and the leftover ships as a question.
+    prov = _Provider(
+        {"problems": []},
+        {"findings": [{"para_id": ids[1], "quote": "Its light",
+                       "problem": "x", "suggestion": "Its glow",
+                       "severity": "low"},
+                      {"para_id": ids[1], "quote": "was thin",
+                       "problem": "y", "suggestion": "was faint",
+                       "severity": "low"},
+                      {"para_id": ids[1], "quote": "was enough",
+                       "problem": "z", "suggestion": "was sufficient",
+                       "severity": "low"},
+                      {"para_id": ids[1], "quote": "by tonight",
+                       "problem": "w", "suggestion": "by nightfall",
+                       "severity": "low"}]})
+    _fake_engine(monkeypatch, prov)
+    rc = main(["galley", "settle", str(run), "--source", str(src), "--config",
+               _replay_config(tmp_path), "--engine", "provider",
+               "--until-clean", "--max-turns", "2"])
+    assert rc == 0
+    recs, st = _records(run)
+    assert st.rounds == 2 and st.open == []
+    assert any("turn budget" in n for n in st.notes)
+    assert sum(1 for r in recs.values()
+               if r.reason.startswith("unresolved_after_")) == 4
+
+
+def test_a_sweep_that_will_not_converge_flags_needs_human(tmp_path, monkeypatch):
+    src = _manuscript(tmp_path)
+    ids, _doc = _para_ids(src)
+    run = _build(tmp_path, src, [
+        {"para_id": ids[0], "original_text": "teh", "corrected_text": "the",
+         "confidence": "high"}])
+    _walk(run, [{"para_id": ids[1], "quote": "recieve", "problem": "sp",
+                 "suggestion": "receive", "severity": "high"}])
+    # the walk raises four new items every round; with a 2-turn budget the
+    # sweep stops noisy -> the outcome says a human proofreader is needed
+    def noisy(pairs):
+        return {"findings": [{"para_id": ids[1], "quote": q, "problem": "x",
+                              "suggestion": r, "severity": "low"}
+                             for q, r in pairs]}
+    prov = _Provider(
+        {"problems": []},
+        noisy((("Its light", "Its glow"), ("was thin", "was faint"),
+               ("was enough", "was sufficient"), ("by tonight", "by nightfall"))),
+        {"problems": []},
+        noisy((("Its glow", "Its shine"), ("was faint", "was dim"),
+               ("was sufficient", "was ample"), ("by nightfall", "by dusk"))))
+    _fake_engine(monkeypatch, prov)
+    # two noisy rounds fit in a 4-turn budget; the sweep stops still noisy
+    assert main(["galley", "settle", str(run), "--source", str(src),
+                 "--config", _replay_config(tmp_path), "--engine", "provider",
+                 "--until-clean", "--max-turns", "4"]) == 0
+    oc = json.loads((run / "outcome.json").read_text("utf-8"))
+    assert oc["outcome"] == "needs_human"
+    assert "still finding" in oc["reason"]
+    _recs, st = _records(run)
+    assert st.convergence["stopped"] == "turn_budget"
+
+
+def test_until_clean_with_nothing_open_starts_with_a_fresh_sweep(tmp_path,
+                                                                  monkeypatch):
+    src = _manuscript(tmp_path)
+    ids, _doc = _para_ids(src)
+    run = _build(tmp_path, src, [
+        {"para_id": ids[0], "original_text": "teh", "corrected_text": "the",
+         "confidence": "high"}])
+    _walk(run, [])                                   # nothing open
+    # the fresh sweep: 1 change batch (clean) + 1 walk read raising one item;
+    # round 1 settles it; its delta verify is clean -> quiet, done.
+    prov = _Provider(
+        {"problems": []},
+        {"findings": [{"para_id": ids[1], "quote": "recieve", "problem": "sp",
+                       "suggestion": "receive", "severity": "high"}]},
+        {"problems": []}, {"findings": []})
+    _fake_engine(monkeypatch, prov)
+    assert main(["galley", "settle", str(run), "--source", str(src),
+                 "--config", _replay_config(tmp_path), "--engine", "provider",
+                 "--until-clean"]) == 0
+    assert "receive the letter" in _accepted(run)[ids[1]]
+    _recs, st = _records(run)
+    assert any(n.startswith("fresh sweep") for n in st.notes)
+    assert len(prov.calls) == 4
+    fw = json.loads((run / "finished_walk.json").read_text("utf-8"))
+    assert fw["ran"] is True and fw["engine"] == "provider"
+
+
+def test_outcome_density_counts_wording_edits_not_mechanics(tmp_path, capsys):
+    src = _manuscript(tmp_path)
+    ids, _doc = _para_ids(src)
+    # lots of punctuation/case edits, few wording edits: a sound book with
+    # a heavy house style, not one that needs rewriting
+    rows = []
+    for pid, text in zip(ids, PARAGRAPHS):
+        for w in ("lamp", "light", "coins", "gate", "note"):
+            if w in text:
+                rows.append({"para_id": pid, "original_text": w,
+                             "corrected_text": w.capitalize(),
+                             "confidence": "high"})
+    run = _build(tmp_path, src, rows)
+    assert main(["galley", "outcome", str(run), "--json"]) == 0
+    out = capsys.readouterr().out
+    oc = json.loads([l for l in out.splitlines() if l.startswith("{")][-1])
+    assert oc["outcome"] == "done"
+    assert oc["evidence"]["mechanical_edits"] >= 4
+    assert oc["evidence"]["wording_edits"] == 0

@@ -905,7 +905,28 @@ def _galley_parser(sub) -> None:
     _genre_arg(gse)
     gse.add_argument("--rounds", type=int, default=3,
                      help="settle rounds before leftovers become queries "
-                          "(default 3)")
+                          "(default 3; ignored by --until-clean, which runs "
+                          "to a quiet round or the turn budget, never past "
+                          "12)")
+    gse.add_argument("--until-clean", action="store_true",
+                     help="keep sweeping while rounds keep finding real work: "
+                          "stop after a QUIET round (new items at or below "
+                          "--quiet-floor, or at or below --quiet-share of what "
+                          "the round re-read), or when --max-turns is spent; "
+                          "leftovers ship as questions either way")
+    gse.add_argument("--quiet-floor", type=int, default=3,
+                     help="a round raising this many new items or fewer is "
+                          "quiet (default 3)")
+    gse.add_argument("--quiet-share", type=float, default=0.02,
+                     help="a round raising at most this share of the edits + "
+                          "paragraphs it re-read is quiet (default 0.02)")
+    gse.add_argument("--max-turns", type=int, default=400,
+                     help="model calls this invocation may make before it "
+                          "stops and ships leftovers as questions (default "
+                          "400)")
+    gse.add_argument("--no-propagate", action="store_true",
+                     help="do not apply a settled fix to identical untouched "
+                          "occurrences in the same and neighbouring paragraphs")
     _engine_arg(gse)
     gse.add_argument("--context", help="a file of house-style / voice notes "
                                        "for the judge and the delta verify")
@@ -2520,7 +2541,12 @@ def _galley_settle(args) -> int:
 
     opts = SettleOptions(rounds=max(0, int(args.rounds)), engine=engine,
                          model=model, context=context,
-                         verify_delta=not args.no_verify)
+                         verify_delta=not args.no_verify,
+                         until_clean=bool(args.until_clean),
+                         quiet_floor=int(args.quiet_floor),
+                         quiet_share=float(args.quiet_share),
+                         max_turns=int(args.max_turns),
+                         propagate=not args.no_propagate)
     settler = Settler(run, cfg=cfg, manuscript=args.source,
                       error_dir=error_dir, provider=provider, options=opts)
     from .agent_lane import AgentLaneUnavailable

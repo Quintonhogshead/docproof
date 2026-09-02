@@ -41,6 +41,13 @@ Redding).
      on a composite reverts it to the owner's previous text and queries;
    - repeats until nothing is open or `--rounds` is spent; leftovers ship as
      `unresolved_after_N` queries carrying the walker's suggestion.
+   For an unattended sweep add **`--until-clean`**: she keeps going while a
+   round still finds real work (100 new items after re-reading 2,000 edits
+   means keep looking) and stops after a quiet round (≤3 new, or ≤2% of what
+   the round re-read) or the turn budget (`--max-turns 400`). A sweep that
+   is STILL noisy when it has to stop is itself evidence: the outcome flips
+   to `needs_human`. A settled fix propagates to the same word in the same
+   and neighbouring paragraphs, so one flagged "recieve" fixes its twin.
 3. **Read the counts** in `settlement.json` (`counts`, `notes`, `open` must
    be `[]`) and the verdict in `outcome.json`.
 4. **Advance** — `galley state WS --advance settled --results RUN --source
