@@ -140,13 +140,16 @@ def test_bad_novel_needs_human_through_the_real_run_path(tmp_path, capsys,
     assert oc["outcome"] == "needs_human"
     assert "rewrite-class" in oc["reason"]
     ev = oc["evidence"]
-    # measured margins, for the record: 13 paragraphs (1 heading + 12 body),
-    # 10 of them rewrite-class -> ~77% rewrite share, well past the 50%
-    # threshold; a real proofread's per-sentence-level correction volume
-    # would push edit density up further still.
-    assert ev["paragraphs"] == 13
+    # measured margins, for the record: 12 REVIEWABLE paragraphs (the 13th
+    # is the chapter heading — swept, never reviewed, so not the model's to
+    # rewrite and not in the denominator), 10 of them rewrite-class -> 83%
+    # rewrite share, well past the 50% threshold; a real proofread's
+    # per-sentence-level correction volume would push edit density up
+    # further still.
+    assert ev["paragraphs"] == 12
+    assert ev["paragraphs_not_reviewable"] == 1
     assert ev["rewrite_paragraphs"] == 10
-    assert ev["rewrite_share"] == pytest.approx(10 / 13, abs=1e-6)
+    assert ev["rewrite_share"] == pytest.approx(10 / 12, abs=1e-6)
     assert ev["rewrite_share"] >= 0.50
     assert ev["wording_edits"] == 10
     # outcome.json is on disk with a verdict a human/DocWatch can read, no
@@ -237,3 +240,114 @@ def test_bad_novel_mechanical_only_pass_is_not_flagged_by_density(tmp_path,
     # what it did, not what it left undone.
     assert oc["outcome"] == "done"
     assert "per 1,000" not in oc["reason"]
+
+
+# --- the denominator is the REVIEWABLE prose, not every paragraph -------------
+
+def test_heading_is_not_in_the_rewrite_share_denominator(tmp_path, bad_gen):
+    """Thresholds documents rewrite_share as a share of REVIEWABLE
+    paragraphs. The bad novel carries one chapter heading (style Heading 1,
+    sweep-only per config/default.yaml) among its 13 paragraphs; the
+    deliverable walk counted it, so the share read 10/13 = 76.9% instead of
+    10/12 = 83.3%. Both the post-settle write (assess() with no source) and
+    `galley outcome --source` must exclude it."""
+    from galley.outcome import evidence_of
+    from galley.settle import _source_paragraphs
+
+    src = tmp_path / "bad_novel.docx"
+    bad_gen.build().save(src)
+    ids, doc = _para_ids(src)
+    heading = [p for p in doc.paragraphs if not p.reviewable]
+    assert len(heading) == 1 and heading[0].style.startswith("Heading")
+    rows = [{"para_id": ids[entry["paragraph"]],
+             "original_text": entry["quote"],
+             "corrected_text": entry["correction"],
+             "confidence": "high",
+             "cluster_id": f"repair-{entry['id']}"}
+            for entry in bad_gen.manifest()]
+    run = _build(tmp_path, src, rows)
+    cfg = load_config(CONFIG)
+
+    # the production path: no source, the run's config
+    ev = evidence_of(run, cfg=cfg)
+    assert ev["paragraphs"] == 12
+    assert ev["paragraphs_not_reviewable"] == 1
+    assert ev["rewrite_share"] == pytest.approx(10 / 12)
+    # no config at all: the shipped skip defaults give the same answer
+    assert evidence_of(run)["paragraphs"] == 12
+    # the --source path (canonical text) excludes the heading the same way
+    from docproof.__main__ import _resolve_error_dir
+    source, _z = _source_paragraphs(cfg, src, _resolve_error_dir(CONFIG))
+    assert heading[0].para_id in source          # the walk still knows it
+    ev_src = evidence_of(run, source, cfg=cfg)
+    assert ev_src["paragraphs"] == 12
+    assert ev_src["rewrite_share"] == pytest.approx(10 / 12)
+    # the old denominator, for the record: a config that reviews headings
+    # counts all 13 (this is what every paragraph share used to be taken over)
+    cfg.skip.sweep_only = []
+    before = evidence_of(run, cfg=cfg)
+    assert before["paragraphs"] == 13
+    assert before["paragraphs_not_reviewable"] == 0
+    assert before["rewrite_share"] == pytest.approx(10 / 13)
+
+
+def test_front_matter_padding_no_longer_hides_a_needs_human_book(tmp_path,
+                                                                 capsys):
+    """The false margin of safety: a title page, a subtitle and a chapter
+    heading are three paragraphs the review never reads, yet the deliverable
+    walk counted them. With three of four body paragraphs rewrite-class the
+    book is 75% rewritten — but 3/7 = 43% read as `done`. Now 3/4 -> the
+    verdict flips to needs_human, as it should."""
+    from galley.outcome import Thresholds, evidence_of
+
+    body = [
+        "The lamp on the desk flickered, then finally caught, and Maria "
+        "sighed at the letter she had not yet opened.",
+        "Its light was thin, but it was enough to read the letter by "
+        "tonight, if she read it slowly and did not think too hard.",
+        "David counted the coins twice, sure the total would not change "
+        "again no matter how many times he tried.",
+        "The garden gate creaked open, and the old dog limped out to greet "
+        "her the way it always had.",
+    ]
+    d = docx.Document()
+    d.add_paragraph("A Bad Novel", style="Title")
+    d.add_paragraph("Being a Cautionary Tale", style="Subtitle")
+    d.add_paragraph("Chapter One", style="Heading 1")
+    for text in body:
+        d.add_paragraph(text)
+    src = tmp_path / "front.docx"
+    d.save(src)
+    ids, doc = _para_ids(src)
+    # Title/Subtitle are skipped outright (not in the model); the heading is
+    # in it but not reviewable; the four body paragraphs are the prose.
+    assert len(ids) == 5
+    assert [p.reviewable for p in doc.paragraphs] == [False] + [True] * 4
+    body_ids = [p.para_id for p in doc.paragraphs if p.reviewable]
+
+    # three whole-sentence rewrites, each its own repair cluster
+    rows = []
+    for i, pid in enumerate(body_ids[:3]):
+        rows.append({"para_id": pid, "original_text": body[i],
+                     "corrected_text": body[i].replace("the", "a", 1),
+                     "confidence": "high", "cluster_id": f"repair-{i}"})
+    run = _build(tmp_path, src, rows)
+    cfg = load_config(CONFIG)
+
+    # the deliverable walk sees all seven paragraphs...
+    from galley.verify import paragraph_views
+    orig, _acc = paragraph_views(run)
+    assert len([t for t in orig.values() if t.strip()]) == 7
+    # ...the evidence counts the four reviewable ones
+    ev = evidence_of(run, cfg=cfg)
+    assert ev["paragraphs"] == 4
+    assert ev["paragraphs_not_reviewable"] == 3
+    assert ev["rewrite_paragraphs"] == 3
+    assert ev["rewrite_share"] == pytest.approx(3 / 4)
+
+    # before/after on the verdict itself: 3/7 (43%) cleared the 50% bar;
+    # 3/4 (75%) does not
+    assert 3 / 7 < Thresholds().rewrite_share <= 3 / 4
+    oc = _outcome(run, capsys)
+    assert oc["outcome"] == "needs_human"
+    assert "3 of 4 reviewable paragraphs (75%)" in oc["reason"]

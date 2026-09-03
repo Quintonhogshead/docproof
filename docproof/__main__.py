@@ -2564,7 +2564,8 @@ def _galley_settle(args) -> int:
     cost = cost_of_usage(result.usage, fallback_model=model or None) or 0.0
     _galley_over_budget(args, cost)
 
-    outcome = assess(run, done_value=args.done_value or DEFAULT_DONE_VALUE,
+    outcome = assess(run, cfg=cfg,
+                     done_value=args.done_value or DEFAULT_DONE_VALUE,
                      needs_human_value=(args.needs_human_value
                                         or DEFAULT_NEEDS_HUMAN_VALUE))
     outcome.save(run)
@@ -2631,11 +2632,20 @@ def _galley_outcome(args) -> int:
     run = Path(args.run)
     done_value = args.done_value or DEFAULT_DONE_VALUE
     needs_value = args.needs_human_value or DEFAULT_NEEDS_HUMAN_VALUE
+    # The config's skip rules decide which paragraphs are reviewable (the
+    # denominator of every share); the shipped defaults stand in when it
+    # cannot be read.
+    try:
+        cfg = load_config(args.config)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"note: could not read the config ({e}); default skip rules",
+              file=sys.stderr)
+        cfg = None
     if args.set:
         if not args.reason:
             print("error: --set needs --reason", file=sys.stderr)
             return 2
-        prior = assess(run, done_value=done_value,
+        prior = assess(run, cfg=cfg, done_value=done_value,
                        needs_human_value=needs_value)
         oc = Outcome(outcome=args.set, reason=args.reason,
                      evidence=prior.evidence,
@@ -2649,16 +2659,15 @@ def _galley_outcome(args) -> int:
         if args.edit_density is not None:
             th.edit_density_per_kword = args.edit_density
         source_paras = None
-        if getattr(args, "source", None):
+        if getattr(args, "source", None) and cfg is not None:
             try:
-                cfg = load_config(args.config)
                 from galley.settle import _source_paragraphs
                 source_paras, _z = _source_paragraphs(
                     cfg, args.source, _resolve_error_dir(args.config))
             except Exception as e:                          # noqa: BLE001
                 print(f"note: could not read the source ({e}); counting "
                       f"from the deliverable", file=sys.stderr)
-        oc = assess(run, thresholds=th, source_paras=source_paras,
+        oc = assess(run, thresholds=th, source_paras=source_paras, cfg=cfg,
                     done_value=done_value, needs_human_value=needs_value)
     path = oc.save(run)
     print(f"outcome: {oc.outcome} — {oc.reason}")
