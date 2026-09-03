@@ -19,6 +19,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from docproof.editmap import collapse_region_siblings
 from galley.casefile import CaseFile
 from galley.contracts import GFinding, Provenance, Span, Verdict, WaveRecord
 
@@ -43,6 +44,10 @@ def casefile_from_run(run_dir: str | Path, *, book: str = "") -> CaseFile:
     path = run / "findings.json"
     payload = json.loads(path.read_text(encoding="utf-8"))   # FileNotFoundError propagates
     rows = payload.get("findings", []) if isinstance(payload, dict) else []
+    # One GFinding per decision: a row the validator split into minimal
+    # regions is reported as lettered siblings, which are not separate
+    # findings to adjudicate (docproof.editmap.collapse_region_siblings).
+    rows, _folded = collapse_region_siblings(rows)
     cost = float(((payload.get("cost") or {}).get("total_usd")) or 0.0)
 
     if not book:

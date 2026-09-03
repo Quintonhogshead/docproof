@@ -323,3 +323,19 @@ def test_word_count_delta_guard_passes_a_clean_document(tmp_path):
     pkg.save(out)
     reject_words, accept_words = word_count_delta_guard(str(out))
     assert reject_words == accept_words
+
+
+def test_build_findings_folds_a_findings_json_split_pair_into_one_finding():
+    """A findings.json lists a decision the validator split as its row plus a
+    lettered sibling quoting the same span; replayed as two rows they became
+    one fresh finding and one rejected duplicate of it."""
+    row = {"finding_id": "f-0077", "para_id": "body-0000",
+           "original_text": "a bunch of frekin idiots",
+           "corrected_text": "a bunch of freaking idiots",
+           "error_type": "spelling", "status": "validated"}
+    sib = dict(row, finding_id="f-0077b")
+    findings, rejects, _ = build_findings(
+        [sib, row], variant=None, error_dir=ERROR_DIR, remap_unchanneled=False)
+    assert not rejects
+    assert len(findings) == 1
+    assert findings[0].corrected_text == "a bunch of freaking idiots"

@@ -1,0 +1,33 @@
+key: galley_settle
+name: Settlement (residual closed by Galley)
+version: 1
+channel: change
+# Never sent to a model. `docproof galley settle` (galley/settle.py) constructs
+# rows under this key when it closes a residual the finished-text walk or the
+# change verifier raised: a composite that revises an applied edit's
+# replacement, a new edit on untouched text, or — with force_query — the
+# author question a residual becomes when it cannot be decided. The key is
+# what lets the ledger, the change log, and the audit see what the settlement
+# stage contributed, apart from every detector's rows.
+detection_prompt: |
+  Not used by any detection pass. No config ever enables this type for a
+  model to find errors with; the settle loop is the only code that constructs
+  a finding under this key — see galley/settle.py.
+
+  Do NOT flag anything with this type from a detection prompt.
+fix_guidance: |
+  Not used by any detection pass. corrected_text arrives already decided by
+  the settle loop's deterministic composition (docproof/editmap.py) or its
+  narrow judge, and is written as-is after quote sanitizing.
+confidence_guidance: |
+  Not used by any detection pass. A settlement row's confidence rides through
+  unchanged (default "high": it was composed from a verified residual).
+examples:
+  # Present only to satisfy the shipped-registry contract (every type needs a
+  # calibration example that anchors and survives the validator).
+  - text: "The lamp on the desk flickered, then finally caught."
+    finding:
+      original_text: "The lamp on the desk flickered, then finally caught."
+      corrected_text: "The lamp on the desk flickered, then finally held."
+      confidence: high
+      explanation: "Placeholder calibration example; this type is never detected."

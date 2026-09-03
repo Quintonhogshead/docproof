@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
+import logging
 import json
 from pathlib import Path
 from typing import Any, Mapping
@@ -51,6 +52,9 @@ from .error_registry import ErrorType, load_error_types, shipped_keys
 from .models import Finding
 from .normalize import normalize_text
 from .variants import Variant
+
+
+log = logging.getLogger("docproof.replay")
 
 DEFAULT_IMPORT_TYPE = "imported_edit"
 
@@ -265,6 +269,16 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
         error_dir, sorted(shipped_keys(error_dir)))
     format_keys = {k for k, et in format_registry.items() if et.is_format}
 
+    # A findings.json lists a split decision as its row plus lettered
+    # siblings quoting the same span; replayed as two rows they become one
+    # fresh finding and one rejected duplicate of it. Fold them first.
+    from .editmap import collapse_region_siblings
+    rows, folded = collapse_region_siblings(rows)
+    if folded:
+        log.info("folded %d split-region sibling row(s) back into their "
+                 "decisions before replay (%s)", len(folded),
+                 ", ".join(folded[:8]) + (", ..." if len(folded) > 8 else ""))
+
     ids = itertools.count(1)
     findings: list[Finding] = []
     rejects: list[dict] = []
@@ -368,6 +382,36 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
         except (TypeError, ValueError):
             occurrence = 1
 
+        # I3 — replacements are text, never notes. An externally produced
+        # row whose correction carries an aside to the editor ("(spell out
+        # and hyphenate)") would ship that aside into the manuscript. The
+        # note is stripped at intake, the same way the flight deck repairs
+        # its proposals; a row that is NOTHING but a note is malformed.
+        if remap_unchanneled and not force_query and not is_format_row:
+            from .flights import strip_editorial_note
+            cleaned, had_note = strip_editorial_note(corrected_text)
+            if had_note:
+                if not cleaned.strip() or cleaned == original_text:
+                    rejects.append({"index": i, "row": item,
+                                    "reason": "editorial note in place of a "
+                                    "correction (nothing usable remains once "
+                                    "the note is removed)"})
+                    continue
+                corrected_text = cleaned
+
+        # Provenance a rebuilt deliverable must keep: which tracked-changes
+        # author a lane's edit carries, a repair cluster's atomicity tag, and
+        # the two margin-note flags. A replay that dropped `lane` re-attributed
+        # a merged run's copy-edits to the proofreader.
+        keep: dict[str, Any] = {}
+        for field in ("lane", "cluster_id"):
+            v = item.get(field)
+            if isinstance(v, str) and v:
+                keep[field] = v
+        for field in ("silent", "withheld"):
+            if item.get(field) is True:
+                keep[field] = True
+
         findings.append(Finding(
             finding_id=f"f-{next(ids):04d}",
             chunk_id=str(item.get("chunk_id") or id_prefix),
@@ -385,8 +429,98 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
             # content_hash may not even hold the same offsets). finish() and
             # validate_findings re-derive both fresh, the same as any other
             # source of findings.
+            **keep,
         ))
     return findings, rejects, remapped
+
+
+@dataclasses.dataclass
+class RebuildResult:
+    """What `rebuild_from_rows` did. `outputs` is None on a dry run."""
+
+    prepared: Any
+    findings: list[Finding]
+    rejects: list[dict]
+    remapped: int
+    checked: list[Finding]
+    tally: dict[str, int]
+    reanchored: int = 0
+    outputs: Any = None
+
+
+def rebuild_from_rows(cfg: Config, *, manuscript: str | Path, rows: list[dict],
+                      error_dir: str | Path, remap_unchanneled: bool,
+                      id_prefix: str, after_sweeps: bool = False,
+                      dry_run: bool = False) -> RebuildResult:
+    """The $0 rebuild both `import-findings`/`replay` and the settle loop
+    share: silence every paid pass, prepare the manuscript, shape the rows into
+    findings, validate them, and (unless `dry_run`) run finish() to write the
+    deliverable, guarding the word count afterwards. `cfg.output_dir` is where
+    it writes. Raises IngestError/FileNotFoundError/ValueError from prepare and
+    WordCountDelta from the guard; the caller reports."""
+    from .pipeline import finish, prepare
+    from .validator import validate_findings
+
+    # Zeroed BEFORE prepare(): storysheet and candidate_screening are the two
+    # stages prepare() itself can spend on, and both must be off no matter what
+    # the loaded config says — see zero_paid_passes' docstring.
+    zero_paid_passes(cfg)
+    # Imported/replayed rows are curated input — hand-written, or a prior run's
+    # output that already faced the guard once. The overreach guard's threat
+    # model (a live model fabricating a rewrite mid-run) does not apply, and a
+    # composed multi-fix row legitimately spans more than 64 characters. The
+    # word-count delta guard below stays as the prose-eating backstop.
+    cfg.edit_guard.enabled = False
+
+    # Rows on a SHIPPED format-channel type (title_italics) round-trip by
+    # loading that type into the run, so validate/finish route them down the
+    # format channel — a mark, never a deletion.
+    registry = load_error_types(error_dir, sorted(shipped_keys(error_dir)))
+    fmt_in_rows = sorted({str(r.get("error_type") or "") for r in rows
+                          if isinstance(r, dict)
+                          and registry.get(str(r.get("error_type") or ""))
+                          is not None
+                          and registry[str(r.get("error_type"))].is_format})
+    missing_fmt = [k for k in fmt_in_rows if k not in set(cfg.error_type_keys)]
+    if missing_fmt:
+        cfg.error_types = list(cfg.error_types) + [missing_fmt]
+
+    prepared = prepare(cfg, str(manuscript), error_dir, dry_run=dry_run)
+
+    reanchored = 0
+    if after_sweeps:
+        swept = validate_findings(
+            list(prepared.sweep_findings), prepared.doc, cfg.min_confidence,
+            query_types=prepared.query_types, format_types=prepared.format_types)
+        rows, reanchored = reanchor_after_sweeps(rows, prepared.doc.paragraphs,
+                                                 swept)
+
+    findings, rejects, remapped = build_findings(
+        rows, variant=prepared.variant, error_dir=error_dir,
+        remap_unchanneled=remap_unchanneled, id_prefix=id_prefix,
+        format_round_trip=True,
+        paragraphs={p.para_id: p.text for p in prepared.doc.paragraphs})
+    checked = validate_findings(findings, prepared.doc, cfg.min_confidence,
+                                query_types=prepared.query_types,
+                                format_types=prepared.format_types)
+    tally: dict[str, int] = {}
+    for f in checked:
+        tally[f.status] = tally.get(f.status, 0) + 1
+    result = RebuildResult(prepared=prepared, findings=findings,
+                           rejects=rejects, remapped=remapped, checked=checked,
+                           tally=tally, reanchored=reanchored)
+    if dry_run:
+        return result
+    from .models import Usage
+    usage = Usage()
+    outputs = finish(prepared, findings, usage, cfg,
+                     out_dir=Path(cfg.output_dir), source_path=str(manuscript))
+    # A formatting row that reached the change channel deletes the sentence it
+    # should only have marked, and the reject-all audit cannot see it. Catch it
+    # by word count before calling the deliverable done.
+    word_count_delta_guard(outputs.reviewed_path)
+    result.outputs = outputs
+    return result
 
 
 class WordCountDelta(Exception):

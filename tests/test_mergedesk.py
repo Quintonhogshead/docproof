@@ -449,3 +449,44 @@ def test_iterate_until_clean_carries_the_claim_rules_rejects_through():
     assert reports == []
     statuses = {f.finding_id: f.status for f in merged.validated}
     assert statuses == {"m-1": "validated", "c-1": "rejected_overlap"}
+
+
+# --- a prior run's split siblings read back as input ----------------------------
+
+def _report_row(fid, original="a b", corrected="A B"):
+    return {"finding_id": fid, "chunk_id": "c", "para_id": "p", "error_type": "x",
+            "original_text": original, "occurrence": 1,
+            "corrected_text": corrected, "explanation": "e",
+            "confidence": "high", "status": "validated"}
+
+
+def test_tag_lane_folds_a_prior_run_s_split_siblings_into_one_row():
+    out = md.tag_lane([_report_row("f-1"), _report_row("f-1b")], md.MECHANICAL)
+    assert [f.finding_id for f in out] == ["f-1"]
+    # ... on Finding objects too, and a sibling with its own correction stays
+    out = md.tag_lane([_finding("f-1", "p", "a b", "A B"),
+                       _finding("f-1b", "p", "a b", "A B"),
+                       _finding("f-1c", "p", "a b", "A b")], md.MECHANICAL)
+    assert [f.finding_id for f in out] == ["f-1", "f-1c"]
+
+
+def test_a_pre_split_pair_lands_once_as_disjoint_regions_under_unique_ids():
+    """The Redding final build: f-0077 and f-0077b (its second minimal region
+    from the earlier run) both re-read as input. The pair must become ONE
+    decision the validator re-splits itself; before the fold the sibling was
+    ledgered as a same-lane overlap of its own base row, and before that rule
+    it reached finish() as a rejected_duplicate carrying the whole diff under
+    the very id the re-split minted for the second region."""
+    original = "It was late and teh dog was sleeping."
+    corrected = "It was late, and the dog was sleeping."
+    doc = _doc(original)
+    merged = md.merge_lanes([_finding("f-7", "body-0000", original, corrected),
+                             _finding("f-7b", "body-0000", original, corrected)],
+                            [], doc)
+    assert merged.ledger == [] and merged.rejected == []
+    assert all(f.status == "validated" for f in merged.validated)
+    ids = [f.finding_id for f in merged.validated]
+    assert ids == ["f-7", "f-7b"]
+    spans = [(f.anchor.start, f.anchor.end, f.anchor.insert_text)
+             for f in merged.validated]
+    assert spans == [(11, 11, ","), (17, 19, "he")]

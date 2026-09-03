@@ -7,6 +7,45 @@ cache-read cost we've measured. Everything you need to write a run config is
 here. If a knob you need genuinely isn't documented here, that is an
 ESCALATION (the knob may not exist), not a reason to go read the source.
 
+## What changed in v0.183.0 (residual settlement)
+
+- **`docproof galley settle RUN --source BOOK --config C`** — the settlement
+  loop. Reads `finished_walk.json` + `change_verify.json`, closes every item
+  (absorb / add / drop / query), rebuilds at $0, re-verifies the touched
+  paragraphs, repeats to `--rounds` (default 3); leftovers ship as
+  `unresolved_after_N` queries. Writes `settlement.json`, restamps the two
+  verify artifacts for the final build, stamps `state`/`disposition_reason`
+  on every findings row, writes `outcome.json`. `--engine auto|subagent|
+  provider|none`; `--no-verify` skips the delta re-read; `--dry-run` lists
+  the open items with owner resolution.
+- **`--until-clean`** on settle: keep sweeping while rounds keep finding real
+  work; stop after a QUIET round (new items ≤ `--quiet-floor` 3, or ≤
+  `--quiet-share` 0.02 of the edits+paragraphs the round re-read), or when
+  `--max-turns` (400) is spent, never past 12 rounds. A sweep that has to
+  stop while still noisy after 2+ rounds makes `outcome.json` say
+  **needs_human** ("still finding N new errors per round"). Settlement rows
+  on untouched text PROPAGATE to the identical word-shaped surface in the
+  same and neighbouring paragraphs (`--no-propagate` to disable); a quote
+  repeated in one paragraph settles all its sites.
+- **`docproof galley residuals RUN [--source BOOK --config C] [--json]`** —
+  the open-items list (residual / edit_damage, owner, resolution).
+- **`docproof galley outcome RUN [--set done|needs_human --reason …]`** — the
+  verdict + HubSpot fields to `outcome.json` (`--done-value`,
+  `--needs-human-value`, `--rewrite-share`, `--edit-density`).
+- **`galley verify --engine subagent`** runs both gates on the $0
+  subscription lane; **`--paragraphs a,b,c` / `@FILE`** verifies a delta.
+- **`galley state --advance settled --results RUN`** — new state between
+  `audited` and `certified`; refuses (exit 7) while anything is open.
+- **`import-findings --anchor accepted --run RUN`** — rows quoted from the
+  ACCEPTED text fold into that build through its edit map.
+- Every build now writes **`editmap.json`** (source→accepted segments per
+  paragraph with the owning row ids). Replay/import now carry `lane`,
+  `cluster_id`, `silent`, `withheld` through a rebuild, and strip editorial
+  notes from imported corrections at intake (a note-only row is rejected).
+- certify gained **terminal states**, **residual settlement**, and
+  **outcome** checks; the walk check fails on ANY unsettled residual (not
+  just high), the change-verifier check on any unsettled flagged edit.
+
 ## What changed in v0.182.0 (Redding run fixes)
 
 - **`docproof merge` enforces strict cross-lane non-overlap** — a copy-edit row overlapping any
@@ -370,6 +409,29 @@ comment is a pure author question. Rows on a shipped format-channel type
 minimal per-touch tracked changes, so a full-paragraph O→C with three fixes
 lands as three small marks, not a block replace. The edit guard does not apply
 on this path (rows are curated); the word-count delta guard still does.
+
+### Settlement artifacts (v0.183.0)
+
+- **`editmap.json`** (every build): `{"paragraphs": {para_id: [{"src":
+  [s0,s1], "acc": [a0,a1], "text": …, "owner": key_id|null, "rows": [ids]}]},
+  "owner_of": {finding_id: key_id}, "unmapped": {para_id: why}}`. The
+  accepted paragraph is the concatenation of `text`; `owner` null = untouched.
+- **`settlement.json`**: `{"rounds", "engine", "model", "counts": {action:
+  n}, "records": [{"residual_id", "round", "action": absorb|add|revise|drop|
+  query, "owner_finding_id", "before_replacement", "after_replacement",
+  "reason", "verified_by", "para_id", "question", "kind": residual|
+  edit_damage}], "open": [], "residuals_seen": [...], "cost", "notes"}`.
+  Reason prefixes: `duplicate | overlap_loser | voice | intent_zone |
+  style_only | fact | unanchorable | walker_wrong | unresolved_after_N |
+  ambiguous_anchor | editorial_note | verifier_reverted | oversize |
+  space_deletion | rejected_* | no_suggestion | edit_damage:<verdict>`.
+- **`outcome.json`**: `{"outcome": done|needs_human, "reason", "evidence":
+  {words, applied_edits, edit_density_per_kword, rewrite_share,
+  unresolved_queries, edit_damage, …}, "hubspot": {"object": "0-970",
+  "property": "docproof", "value": …}, "set_by": assess|human}`.
+- Settlement rows in `findings.json` ride `error_type: galley_settle` with
+  `chunk_id: settle:<residual_id>`; every row carries `state`
+  (applied|dropped|query) and `disposition_reason` after settle.
 
 ## Bespoke sweep contract (so you never read `sweeps.py`)
 

@@ -181,7 +181,7 @@ def _is_number_label(para, start: int, end: int) -> bool:
 
 def _is_imported(f: Finding) -> bool:
     return (f.finding_id.split("-", 1)[0] in _IMPORT_ID_PREFIXES
-            or f.error_type == "imported_edit")
+            or f.error_type in ("imported_edit", "galley_settle"))
 
 
 def validate_findings(findings: list[Finding], doc: DocumentModel,

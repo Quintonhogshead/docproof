@@ -137,14 +137,29 @@ def tag_lane(raw: Sequence[dict | Finding], default_lane: str) -> list[Finding]:
     dropped: every finding re-anchors from scratch at merge time (the source
     run's own anchoring is not trusted across two independent runs, e.g. of
     a manuscript in a different revision), so those fields are always
-    "pending", None on the way in."""
+    "pending", None on the way in.
+
+    A prior run's findings.json is a REPORT, one row per tracked change: a
+    decision the validator split into minimal regions arrives as its row
+    plus lettered siblings ("f-0077", "f-0077b") quoting the same span. Those
+    fold back into one row here (`editmap.collapse_region_siblings`) before
+    anything is placed. Left in, the sibling contested its own base row as a
+    same-lane overlap, and before that rule existed it reached finish() as a
+    `rejected_duplicate` carrying the whole shrunk diff under the id the
+    re-split had just minted for a minimal region: the 16 same-start pairs
+    on the Redding final build."""
+    from .editmap import collapse_region_siblings
+
+    items = [dataclasses.asdict(i) if isinstance(i, Finding) else i
+             for i in raw]
+    items, folded = collapse_region_siblings(items)
+    if folded:
+        log.info("merge desk: folded %d split-region sibling row(s) back into "
+                 "their decisions on the %s lane (%s)", len(folded),
+                 default_lane, ", ".join(folded[:8])
+                 + (", ..." if len(folded) > 8 else ""))
     out: list[Finding] = []
-    for item in raw:
-        if isinstance(item, Finding):
-            out.append(dataclasses.replace(
-                item, lane=item.lane or default_lane,
-                status="pending", anchor=None))
-            continue
+    for item in items:
         if not isinstance(item, dict):
             raise MergeError(f"a finding must be an object, got {type(item).__name__}")
         d = dict(item)

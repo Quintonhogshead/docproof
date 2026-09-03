@@ -124,3 +124,46 @@ def test_mechanical_only_run_is_a_normal_single_author_merge(tmp_path):
                   "{http://schemas.openxmlformats.org/wordprocessingml/"
                   "2006/main}ins")}
     assert authors == {"Atmosphere Press Proofreader"}
+
+
+def test_a_findings_json_carrying_a_split_pair_rebuilds_to_disjoint_anchors(tmp_path):
+    """Replay a prior build's report through `docproof merge` on the fixture
+    novel: the pre-split pair (f-0077 / f-0077b, identical text) must come
+    out as two disjoint minimal regions under unique ids, and the edit map
+    finish() writes beside findings.json must map the paragraph with nothing
+    skipped (the Redding final build had 16 pairs the map had to tolerate)."""
+    from docproof.config import Config
+    from docproof.editmap import EDITMAP_NAME, EditMap
+    from docproof.ingest import build_document_model, preflight
+
+    doc = build_document_model(preflight(FIXTURES / "tiny_novel.docx", "abort"),
+                               Config())
+    para = next(p for p in doc.paragraphs if p.text.startswith("Kathryn had lived"))
+    original = para.text
+    corrected = (original.replace("lived", "LIVED", 1)
+                 .replace("her whole", "HER whole", 1))
+    mech = _write(tmp_path / "mech.json", {"findings": [
+        _row("f-0077", para.para_id, original, corrected,
+             error_type="capitalization", status="validated"),
+        _row("f-0077b", para.para_id, original, corrected,
+             error_type="capitalization", status="validated"),
+    ]})
+    out = tmp_path / "out"
+    rc = main(["merge", str(FIXTURES / "tiny_novel.docx"),
+               "--mechanical", str(mech), "--out", str(out),
+               "--config", _CONFIG])
+    assert rc == 0
+
+    rows = json.loads((out / "findings.json").read_text(encoding="utf-8"))["findings"]
+    ids = [r["finding_id"] for r in rows]
+    assert len(ids) == len(set(ids))
+    mine = [r for r in rows if r["finding_id"].startswith("f-0077")]
+    assert [(r["finding_id"], r["status"], r["applied"]) for r in mine] == \
+        [("f-0077", "validated", True), ("f-0077b", "validated", True)]
+    (s1, e1), (s2, e2) = [(r["anchor"]["start"], r["anchor"]["end"]) for r in mine]
+    assert s1 < e1 <= s2 < e2
+    assert [r["anchor"]["insert_text"] for r in mine] == ["LIVED", "HER"]
+
+    em = EditMap.load(out / EDITMAP_NAME)
+    assert em.skipped == {}
+    assert para.para_id in em.paragraphs and para.para_id not in em.unmapped

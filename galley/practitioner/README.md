@@ -39,7 +39,9 @@ BOOK=/path/to/Book.docx SLUG=book-slug ./launch.sh
 the permission allowlist, drops the source in place, and starts a headless
 session with the intake prompt. The session then follows the loop in
 CLAUDE.md: profile → plan → **gate (it stops and waits for a human reply)** →
-execute → audit → adjudicate → verify → certify → deliver.
+execute → audit → adjudicate → verify → **settle** → certify → deliver, ending
+at one of two stopping points recorded in `outcome.json`: `done`, or
+`needs_human` with the reason (for DocWatch to flip the HubSpot toggle).
 
 ### Key isolation (both launchers)
 
@@ -70,9 +72,10 @@ from workspace files and advances the state machine.
 | `flights` | Copy-edit flights on the proofread text (`/flight-deck`, `--approval --budget`) | paid judge |
 | `audit` | `/audit`: density table, sampled pages, hypotheses to `runs/audit.json`; recommend a wave-2, STOP for approval | one call |
 | `reread` | Gated wave-2: targeted chapter × error-class re-reads from the audit's hypotheses, under the marginal-cost ceiling; refuses without recorded approval | paid |
-| `verify` | `galley verify --context BRIEF --approval` (`--dry-run` first for the call count): re-reads every applied edit + proofreads the accepted text; nonzero on a flagged edit or a high-severity residual | paid |
-| `certify` | `galley certify --approval --source --config`: the delivery gate; every check must PASS | $0 |
-| `deliver` | Requires `runs/verify.log` passed AND `runs/certify.txt` PASSED, else stops; `/adjudicate` + `/merge-desk`, $0 rebuild, reject-all round trip, letter + style sheet to `deliverable/` | $0 |
+| `verify` | `galley verify --context BRIEF --approval` (`--dry-run` first for the call count; `--engine subagent` for the $0 lane): re-reads every applied edit + proofreads the accepted text; nonzero on a flagged edit or a high-severity residual | paid / $0 |
+| `settle` | `/settle`: `galley settle RUN --source --config --engine auto` closes every item verify raised (absorb / add / drop / query), rebuilding at $0 and re-verifying the touched paragraphs until nothing is open; writes `settlement.json` + `outcome.json`; `galley state --advance settled --results RUN` | $0 / judge |
+| `certify` | `galley certify --approval --source --config`: the delivery gate; every check must PASS (now including terminal states, residual settlement, outcome) | $0 |
+| `deliver` | Requires `runs/certify.txt` PASSED, else stops. The CERTIFIED build is what ships — deliver copies it, renders letter + style sheet to `deliverable/`, and records the outcome; it never rebuilds after certify (adjudicate + merge-desk run BEFORE verify) | $0 |
 
 `PROMPT="…"` overrides a phase's prompt; `MODEL`/`PERM` override the brain
 model and permission mode.

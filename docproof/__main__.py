@@ -323,6 +323,22 @@ def main(argv=None) -> int:
     imf.add_argument("--dry-run", action="store_true",
                      help="anchor and channel every row and report what would "
                           "happen; write nothing")
+    imf.add_argument("--anchor", choices=["source", "accepted"],
+                     default="source",
+                     help="what text the rows quote: the SOURCE manuscript "
+                          "(default), or the ACCEPTED text of an earlier build "
+                          "(--run) — a row found while reading the finished "
+                          "text. Accepted rows are translated through that "
+                          "build's edit map: one on untouched text becomes a "
+                          "new edit, one inside an applied edit's span REVISES "
+                          "that edit (a composite), one that changes a "
+                          "number/name/title/date becomes a query, and one "
+                          "that is only an editorial note is dropped")
+    imf.add_argument("--run", metavar="RUN",
+                     help="with --anchor accepted: the finished build (dir "
+                          "holding findings.json + the .docx) whose accepted "
+                          "text the rows quote; its kept rows are replayed "
+                          "with yours folded in")
     imf.add_argument("--after-sweeps", action="store_true",
                      help="the rows were captured AFTER the deterministic sweeps "
                           "ran (an en-dash, a lowered am, an added :00), so "
@@ -503,6 +519,11 @@ def _galley_parser(sub) -> None:
                     help="count and price the model calls the two gates would "
                          "make (one per 30 applied edits, one per ~6k chars of "
                          "accepted text); no API call, no keys, nothing written")
+    _engine_arg(gv)
+    gv.add_argument("--paragraphs", metavar="IDS",
+                    help="verify ONLY these paragraphs (comma-separated para "
+                         "ids, or @FILE holding one per line) — the delta "
+                         "re-read the settle loop runs after a round")
     _galley_spend_args(gv)
     gv.add_argument("--json", action="store_true",
                     help="also print the machine-readable result to stdout")
@@ -859,7 +880,109 @@ def _galley_parser(sub) -> None:
     gst.add_argument("--verify-resume", action="store_true",
                      help="check the current source/config hashes still match "
                           "what the state was recorded against; exit 6 on drift")
+    gst.add_argument("--results", metavar="RUN",
+                     help="the finished run dir; with --advance settled (or "
+                          "later) the advance REFUSES (exit 7) while any "
+                          "finding is non-terminal or any verify item has no "
+                          "settlement record")
     gst.add_argument("--json", action="store_true")
+
+    gse = gsub.add_parser(
+        "settle",
+        help="residual settlement: close EVERY open item the verify gates "
+             "raised — absorb into the owning edit, add a new edit, drop with "
+             "a reason, or query the author — rebuilding at $0 and re-verifying "
+             "the touched paragraphs, until nothing is open or --rounds is "
+             "spent (leftovers ship as questions). Writes settlement.json and "
+             "outcome.json; leaves the run in a state certify can pass")
+    gse.add_argument("run", help="the finished run dir (findings.json, the "
+                                 ".docx, finished_walk.json/change_verify.json)")
+    gse.add_argument("--source", required=True,
+                     help="the manuscript the run reviewed (.docx/.idml)")
+    gse.add_argument("--config", default="config/default.yaml",
+                     help="the $0 replay config the rebuilds run under")
+    _stage_arg(gse)
+    _genre_arg(gse)
+    gse.add_argument("--rounds", type=int, default=3,
+                     help="settle rounds before leftovers become queries "
+                          "(default 3; ignored by --until-clean, which runs "
+                          "to a quiet round or the turn budget, never past "
+                          "12)")
+    gse.add_argument("--until-clean", action="store_true",
+                     help="keep sweeping while rounds keep finding real work: "
+                          "stop after a QUIET round (new items at or below "
+                          "--quiet-floor, or at or below --quiet-share of what "
+                          "the round re-read), or when --max-turns is spent; "
+                          "leftovers ship as questions either way")
+    gse.add_argument("--quiet-floor", type=int, default=3,
+                     help="a round raising this many new items or fewer is "
+                          "quiet (default 3)")
+    gse.add_argument("--quiet-share", type=float, default=0.02,
+                     help="a round raising at most this share of the edits + "
+                          "paragraphs it re-read is quiet (default 0.02)")
+    gse.add_argument("--max-turns", type=int, default=400,
+                     help="model calls this invocation may make before it "
+                          "stops and ships leftovers as questions (default "
+                          "400)")
+    gse.add_argument("--no-propagate", action="store_true",
+                     help="do not apply a settled fix to identical untouched "
+                          "occurrences in the same and neighbouring paragraphs")
+    _engine_arg(gse)
+    gse.add_argument("--context", help="a file of house-style / voice notes "
+                                       "for the judge and the delta verify")
+    gse.add_argument("--no-verify", action="store_true",
+                     help="skip the per-round delta re-read (deterministic "
+                          "settlement only; the run keeps its last verify "
+                          "verdicts)")
+    gse.add_argument("--dry-run", action="store_true",
+                     help="list the open items with their owner resolution "
+                          "and the upper-bound call count; nothing written")
+    gse.add_argument("--done-value", default=None,
+                     help="HubSpot value outcome.json carries for done "
+                          "(default 'Proofing Complete')")
+    gse.add_argument("--needs-human-value", default=None,
+                     help="HubSpot value for needs_human (default 'Needs "
+                          "Human Proofreader')")
+    _galley_spend_args(gse)
+    gse.add_argument("--json", action="store_true")
+
+    grs = gsub.add_parser(
+        "residuals",
+        help="list every open item — residual or flagged edit — with its "
+             "owner resolution, so a practitioner (or a test) can see what "
+             "`galley settle` will face. $0")
+    grs.add_argument("run", help="the finished run dir")
+    grs.add_argument("--source", help="the manuscript, to resolve owners "
+                                      "through the edit map (optional)")
+    grs.add_argument("--config", default="config/default.yaml")
+    _stage_arg(grs)
+    _genre_arg(grs)
+    grs.add_argument("--json", action="store_true")
+
+    goc = gsub.add_parser(
+        "outcome",
+        help="the terminal verdict: done (no more errors the loop can find or "
+             "decide) or needs_human (major grammatical problems; most "
+             "sentences must be rewritten) with the reason, written to "
+             "outcome.json with the HubSpot property/value for the watch to "
+             "flip. $0")
+    goc.add_argument("run", help="the finished (settled) run dir")
+    goc.add_argument("--source", help="the manuscript (for word/paragraph "
+                                      "counts; else read from the deliverable)")
+    goc.add_argument("--config", default="config/default.yaml")
+    goc.add_argument("--set", choices=["done", "needs_human"],
+                     help="overrule the assessment with this verdict "
+                          "(requires --reason)")
+    goc.add_argument("--reason", help="why, when overruling")
+    goc.add_argument("--rewrite-share", type=float, default=None,
+                     help="needs_human threshold: share of paragraphs needing "
+                          "rewrite-class work (default 0.50)")
+    goc.add_argument("--edit-density", type=float, default=None,
+                     help="needs_human threshold: applied edits per 1,000 "
+                          "words (default 60)")
+    goc.add_argument("--done-value", default=None)
+    goc.add_argument("--needs-human-value", default=None)
+    goc.add_argument("--json", action="store_true")
 
 
 def _galley_spend_args(p: argparse.ArgumentParser) -> None:
@@ -878,6 +1001,50 @@ def _galley_spend_args(p: argparse.ArgumentParser) -> None:
         help="a spend ceiling for this verb: refuse (exit 5) when the "
              "projected spend exceeds it, and say so loudly afterwards if the "
              "real spend did")
+
+
+def _engine_arg(p: argparse.ArgumentParser) -> None:
+    """Which lane answers a galley verb's model calls: a vendor API provider,
+    the $0 Claude-subscription subagent lane (docproof/providers/subagent.py),
+    none (deterministic only), or auto (subagent when this machine can run
+    it, else provider when a model is configured, else none)."""
+    p.add_argument(
+        "--engine", choices=["auto", "provider", "subagent", "none"],
+        default="auto",
+        help="model lane: 'subagent' = a Claude Code turn on the subscription "
+             "($0, needs the Agent SDK + a login); 'provider' = the configured "
+             "vendor API (bills); 'none' = deterministic only; 'auto' (default) "
+             "= subagent if available, else provider, else none")
+
+
+def _resolve_engine(args, cfg, *, default_model: str | None = None
+                    ) -> tuple[str, Any, str]:
+    """(engine, provider, model) for --engine. `provider` is None for the
+    deterministic lane. A model named with --model picks the lane when
+    --engine is auto: a Claude id/alias -> subagent, anything else ->
+    provider."""
+    from .providers.subagent import (SubagentProvider, available,
+                                     is_subagent_model, resolve_model)
+    engine = getattr(args, "engine", None) or "auto"
+    model = getattr(args, "model", None) or ""
+    if engine == "auto":
+        if model and not is_subagent_model(model):
+            engine = "provider"
+        elif available():
+            engine = "subagent"
+        elif model or default_model:
+            engine = "provider"
+            model = model or default_model or ""
+        else:
+            engine = "none"
+    if engine == "subagent":
+        prov = SubagentProvider(model=model or None)
+        return "subagent", prov, f"subagent:{resolve_model(model or None)}"
+    if engine == "provider":
+        model = model or default_model or cfg.api.model
+        prov = build_provider(cfg, model=model)
+        return "provider", prov, model
+    return "none", None, ""
 
 
 def _genre_choices() -> tuple[str, ...]:
@@ -1994,18 +2161,12 @@ def cmd_replay(args) -> int:
 
 
 def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
-    from .replay import (DEFAULT_IMPORT_TYPE, WordCountDelta, build_findings,
-                        load_findings_file, word_count_delta_guard,
-                        zero_paid_passes)
-    from .validator import validate_findings
+    from .replay import (DEFAULT_IMPORT_TYPE, WordCountDelta,
+                        load_findings_file, rebuild_from_rows)
 
     cfg = load_config(args.config)
     if args.out:
         cfg.output_dir = args.out
-    # Zeroed BEFORE prepare(): storysheet and candidate_screening are the two
-    # stages prepare() itself can spend on, and both must be off no matter what
-    # the loaded config says — see zero_paid_passes' docstring.
-    zero_paid_passes(cfg)
     out = Path(cfg.output_dir)
     setup_logging(out)
     error_dir = _resolve_error_dir(args.config)
@@ -2019,69 +2180,63 @@ def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
         print(f"error: {args.findings}: not valid JSON ({e})", file=sys.stderr)
         return 2
 
-    # Imported/replayed rows are curated input — hand-written, or a prior run's
-    # output that already faced the guard once. The overreach guard's threat
-    # model (a live model fabricating a rewrite mid-run) does not apply, and a
-    # composed multi-fix row legitimately spans more than 64 characters. The
-    # word-count delta guard below stays as the prose-eating backstop.
-    cfg.edit_guard.enabled = False
-
-    # Rows on a SHIPPED format-channel type (title_italics) round-trip by
-    # loading that type into the run, so validate/finish route them down the
-    # format channel — a mark, never a deletion. Detection never runs on this
-    # path, so the extra group costs nothing.
-    from .error_registry import load_error_types as _load_types
-    from .error_registry import shipped_keys as _shipped
-    _registry = _load_types(error_dir, sorted(_shipped(error_dir)))
-    _fmt_in_rows = sorted({str(r.get("error_type") or "") for r in rows
-                           if isinstance(r, dict)
-                           and _registry.get(str(r.get("error_type") or ""))
-                           is not None
-                           and _registry[str(r.get("error_type"))].is_format})
-    _missing_fmt = [k for k in _fmt_in_rows
-                    if k not in set(cfg.error_type_keys)]
-    if _missing_fmt:
-        cfg.error_types = list(cfg.error_types) + [_missing_fmt]
+    anchor_mode = getattr(args, "anchor", None) or "source"
+    settled_note = ""
+    if anchor_mode == "accepted":
+        # Rows quoted from the ACCEPTED text of an earlier build: translate
+        # them to the source through that build's edit map and fold each into
+        # the build's own kept rows (a row inside an owned span revises that
+        # owner). The result is the whole deliverable's row set, so the
+        # rebuild below replays it in full.
+        from galley.settle import fold_accepted_rows
+        run_dir = getattr(args, "run", None)
+        if not run_dir:
+            print("error: --anchor accepted needs --run RUN (the build whose "
+                  "accepted text the rows quote)", file=sys.stderr)
+            return 2
+        try:
+            folded = fold_accepted_rows(Path(run_dir), rows, cfg=cfg,
+                                        manuscript=args.manuscript,
+                                        error_dir=error_dir)
+        except (OSError, ValueError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        rows = folded.rows
+        settled_note = (f"  --anchor accepted: {folded.absorbed} row(s) revise "
+                        f"an applied edit, {folded.added} land on untouched "
+                        f"text, {folded.queried} became queries, "
+                        f"{folded.dropped} dropped; replaying {len(rows)} "
+                        f"row(s) in all")
+        for line in folded.notes[:10]:
+            settled_note += f"\n    {line}"
 
     try:
-        prepared = prepare(cfg, args.manuscript, error_dir,
-                           dry_run=bool(getattr(args, "dry_run", False)))
+        result = rebuild_from_rows(
+            cfg, manuscript=args.manuscript, rows=rows, error_dir=error_dir,
+            remap_unchanneled=remap_unchanneled, id_prefix=id_prefix,
+            after_sweeps=bool(getattr(args, "after_sweeps", False)),
+            dry_run=bool(args.dry_run))
     except (IngestError, FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+    except WordCountDelta as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
-    if getattr(args, "after_sweeps", False):
-        # The rows were written against text the sweeps had already touched.
-        # Resolve the sweeps' own spans first (validate_findings assigns their
-        # anchors), then re-express each row from post-sweep to pre-sweep coords
-        # so it anchors against the manuscript the deliverable is tracked against.
-        from .replay import reanchor_after_sweeps
-        swept = validate_findings(
-            list(prepared.sweep_findings), prepared.doc, cfg.min_confidence,
-            query_types=prepared.query_types, format_types=prepared.format_types)
-        rows, adjusted = reanchor_after_sweeps(rows, prepared.doc.paragraphs, swept)
-        if adjusted:
-            print(f"  --after-sweeps: re-anchored {adjusted} row(s) from "
-                  f"post-sweep to pre-sweep text")
-
-    findings, rejects, remapped = build_findings(
-        rows, variant=prepared.variant, error_dir=error_dir,
-        remap_unchanneled=remap_unchanneled, id_prefix=id_prefix,
-        format_round_trip=True,
-        paragraphs={p.para_id: p.text for p in prepared.doc.paragraphs})
-
-    checked = validate_findings(findings, prepared.doc, cfg.min_confidence,
-                                query_types=prepared.query_types,
-                                format_types=prepared.format_types)
-    tally: dict[str, int] = {}
-    for f in checked:
-        tally[f.status] = tally.get(f.status, 0) + 1
+    if result.reanchored:
+        print(f"  --after-sweeps: re-anchored {result.reanchored} row(s) from "
+              f"post-sweep to pre-sweep text")
+    findings, rejects, remapped, checked, tally = (
+        result.findings, result.rejects, result.remapped, result.checked,
+        result.tally)
 
     verb = "import-findings" if remap_unchanneled else "replay"
     print(f"\n`docproof {verb}`: {len(rows)} row(s) read — {len(findings)} "
           f"usable, {len(rejects)} malformed"
           + (f", {remapped} remapped onto '{DEFAULT_IMPORT_TYPE}' (no reliable "
              f"channel on the row)" if remap_unchanneled else "") + ".")
+    if settled_note:
+        print(settled_note)
     for status in sorted(tally):
         print(f"  {status:<24} {tally[status]}")
     if rejects:
@@ -2103,23 +2258,7 @@ def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
                              ensure_ascii=False))
         return 0
 
-    usage = Usage()
-    try:
-        outputs = finish(prepared, findings, usage, cfg, out_dir=out,
-                         source_path=args.manuscript)
-    except (IngestError, ValueError) as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 2
-
-    # A formatting row that reached the change channel deletes the sentence it
-    # should only have marked, and the reject-all audit cannot see it. Catch it
-    # by word count before calling the deliverable done.
-    try:
-        word_count_delta_guard(outputs.reviewed_path)
-    except WordCountDelta as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 2
-
+    outputs = result.outputs
     print(f"\n{_result_line(outputs)}.")
     for p in (outputs.reviewed_path, outputs.change_log, outputs.summary_md,
               outputs.findings_json, out / "run.log"):
@@ -2128,7 +2267,7 @@ def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
     if args.json:
         payload = json.loads(outputs.findings_json.read_text("utf-8"))
         print(json.dumps(_envelope(findings=payload.get("findings", []),
-                                   usage=usage, model=cfg.api.model,
+                                   usage=Usage(), model=cfg.api.model,
                                    extra=extra), ensure_ascii=False))
     return 0
 
@@ -2309,7 +2448,232 @@ def cmd_galley(args) -> int:
             "triage-nouns": _galley_triage_nouns,
             "intent-zones": _galley_intent_zones,
             "ledger": _galley_ledger,
-            "state": _galley_state}[args.galley_cmd](args)
+            "state": _galley_state,
+            "settle": _galley_settle,
+            "residuals": _galley_residuals,
+            "outcome": _galley_outcome}[args.galley_cmd](args)
+
+
+def _paragraph_ids(spec: str | None) -> list[str] | None:
+    """`--paragraphs`: comma-separated ids, or @FILE with one per line."""
+    if not spec:
+        return None
+    if spec.startswith("@"):
+        text = Path(spec[1:]).read_text(encoding="utf-8")
+        return [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return [x.strip() for x in spec.split(",") if x.strip()]
+
+
+def _galley_settle(args) -> int:
+    """`docproof galley settle`: the residual-settlement loop (galley/settle.py).
+    Reads the run's verify artifacts, closes every open item through the
+    engine, rebuilds at $0, re-verifies the touched paragraphs, repeats until
+    nothing is open or --rounds is spent, then writes settlement.json and
+    outcome.json. Exit 0 when every item is terminal; nonzero only on an
+    engine error."""
+    from galley.outcome import (DEFAULT_DONE_VALUE, DEFAULT_NEEDS_HUMAN_VALUE,
+                                assess)
+    from galley.settle import (SettleOptions, Settler, kept_rows, open_items,
+                               resolve)
+    from .providers import cost_of_usage
+
+    run = Path(args.run)
+    if not (run / "findings.json").exists():
+        print(f"error: no findings.json in {run}", file=sys.stderr)
+        return 2
+    from galley.verify import deliverable_docx
+    if deliverable_docx(run) is None:
+        print(f"error: no manuscript .docx in {run} — settle reads the "
+              f"ACCEPTED deliverable", file=sys.stderr)
+        return 2
+    try:
+        cfg = _effective_cfg(args)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    setup_logging(run)
+    error_dir = _resolve_error_dir(args.config)
+    context = ""
+    if args.context:
+        try:
+            context = Path(args.context).read_text(encoding="utf-8")
+        except OSError as e:
+            print(f"error: --context {args.context}: {e}", file=sys.stderr)
+            return 2
+
+    items = open_items(run)
+    if args.dry_run:
+        print(f"dry run — {len(items)} open item(s) in {run}")
+        try:
+            from galley.settle import _source_paragraphs, load_envelope
+            from docproof import editmap as _em
+            env = load_envelope(run)
+            working, _ = kept_rows(env.get("findings") or [])
+            source, _zones = _source_paragraphs(cfg, args.source, error_dir)
+            em = _em.load_or_build(run, source, env.get("findings") or [])
+            from galley.verify import paragraph_views
+            _o, accepted = paragraph_views(run)
+            for it in items:
+                why = resolve(it, em, accepted, working)
+                owner = it.owner_finding_id or "-"
+                print(f"  {it.kind:12} {it.para_id:10} {it.quote[:40]!r:44} "
+                      f"owner={owner:10} {why or 'resolvable'}")
+        except Exception as e:                              # noqa: BLE001
+            print(f"  (owner resolution unavailable: {e})")
+        print(f"\nupper bound: {len(items)} judge call(s) + a delta verify per "
+              f"round × {args.rounds} round(s); nothing written.")
+        return 0
+
+    default_model = cfg.continuity.model or cfg.api.model
+    try:
+        engine, provider, model = _resolve_engine(args, cfg,
+                                                 default_model=default_model)
+    except ProviderError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    except Exception as e:                                  # noqa: BLE001
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if engine == "provider":
+        guard = _galley_spend_guard(args, cfg, [model], projected_usd=None)
+        if guard is not None:
+            return guard
+
+    opts = SettleOptions(rounds=max(0, int(args.rounds)), engine=engine,
+                         model=model, context=context,
+                         verify_delta=not args.no_verify,
+                         until_clean=bool(args.until_clean),
+                         quiet_floor=int(args.quiet_floor),
+                         quiet_share=float(args.quiet_share),
+                         max_turns=int(args.max_turns),
+                         propagate=not args.no_propagate)
+    settler = Settler(run, cfg=cfg, manuscript=args.source,
+                      error_dir=error_dir, provider=provider, options=opts)
+    from .agent_lane import AgentLaneUnavailable
+    try:
+        result = settler.run()
+    except (IngestError, FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    except AgentLaneUnavailable as e:
+        print(f"error: {e}", file=sys.stderr)
+        print("  the run's settlement.json records the rounds completed so "
+              "far; re-run the same command once the lane is available.",
+              file=sys.stderr)
+        return 2
+    cost = cost_of_usage(result.usage, fallback_model=model or None) or 0.0
+    _galley_over_budget(args, cost)
+
+    outcome = assess(run, done_value=args.done_value or DEFAULT_DONE_VALUE,
+                     needs_human_value=(args.needs_human_value
+                                        or DEFAULT_NEEDS_HUMAN_VALUE))
+    outcome.save(run)
+    st = result.settlement
+    counts = st.counts()
+    print(f"\nsettle: {len(items)} open item(s) at start → "
+          f"{len(st.latest())} settled in {st.rounds} round(s) "
+          f"({', '.join(f'{k}={v}' for k, v in sorted(counts.items())) or 'none'}), "
+          f"{len(st.open)} open; engine={engine} "
+          f"({result.usage.api_calls} model call(s), ${cost:.4f}).")
+    for note in st.notes[-args.rounds - 1:]:
+        print(f"  {note}")
+    print(f"  outcome: {outcome.outcome} — {outcome.reason[:200]}")
+    print(f"\n  {run / 'settlement.json'}\n  {run / 'outcome.json'}")
+    if args.json:
+        print(json.dumps(_envelope(findings=(), usage=result.usage,
+                                   model=model or cfg.api.model,
+                                   extra={"settlement": st.to_json(),
+                                          "outcome": outcome.to_json()}),
+                         ensure_ascii=False))
+    return 0 if not st.open else 1
+
+
+def _galley_residuals(args) -> int:
+    from galley.settle import kept_rows, open_items, resolve
+    run = Path(args.run)
+    items = open_items(run)
+    resolved = False
+    if getattr(args, "source", None):
+        try:
+            cfg = _effective_cfg(args)
+            from galley.settle import _source_paragraphs, load_envelope
+            from docproof import editmap as _em
+            env = load_envelope(run)
+            working, _ = kept_rows(env.get("findings") or [])
+            error_dir = _resolve_error_dir(args.config)
+            source, _z = _source_paragraphs(cfg, args.source, error_dir)
+            em = _em.load_or_build(run, source, env.get("findings") or [])
+            from galley.verify import paragraph_views
+            _o, accepted = paragraph_views(run)
+            for it in items:
+                why = resolve(it, em, accepted, working)
+                it.raw["resolution"] = why or "resolvable"
+            resolved = True
+        except Exception as e:                              # noqa: BLE001
+            print(f"note: owner resolution unavailable ({e})", file=sys.stderr)
+    print(f"{len(items)} open item(s) in {run}"
+          + ("" if resolved else " (pass --source to resolve owners)"))
+    for it in items:
+        owner = it.owner_finding_id or "-"
+        print(f"  {it.kind:12} {it.para_id:10} sev={it.severity:6} "
+              f"{it.quote[:40]!r} → {it.suggestion[:40]!r} owner={owner} "
+              f"{it.raw.get('resolution', '')}")
+    if args.json:
+        print(json.dumps({"run": str(run), "open": [
+            {**it.to_json(), "resolution": it.raw.get("resolution")}
+            for it in items]}, ensure_ascii=False))
+    return 0
+
+
+def _galley_outcome(args) -> int:
+    from galley.outcome import (DEFAULT_DONE_VALUE, DEFAULT_NEEDS_HUMAN_VALUE,
+                                Outcome, Thresholds, assess, hubspot_fields)
+    run = Path(args.run)
+    done_value = args.done_value or DEFAULT_DONE_VALUE
+    needs_value = args.needs_human_value or DEFAULT_NEEDS_HUMAN_VALUE
+    if args.set:
+        if not args.reason:
+            print("error: --set needs --reason", file=sys.stderr)
+            return 2
+        prior = assess(run, done_value=done_value,
+                       needs_human_value=needs_value)
+        oc = Outcome(outcome=args.set, reason=args.reason,
+                     evidence=prior.evidence,
+                     hubspot=hubspot_fields(args.set, done_value=done_value,
+                                            needs_human_value=needs_value),
+                     set_by="human")
+    else:
+        th = Thresholds()
+        if args.rewrite_share is not None:
+            th.rewrite_share = args.rewrite_share
+        if args.edit_density is not None:
+            th.edit_density_per_kword = args.edit_density
+        source_paras = None
+        if getattr(args, "source", None):
+            try:
+                cfg = load_config(args.config)
+                from galley.settle import _source_paragraphs
+                source_paras, _z = _source_paragraphs(
+                    cfg, args.source, _resolve_error_dir(args.config))
+            except Exception as e:                          # noqa: BLE001
+                print(f"note: could not read the source ({e}); counting "
+                      f"from the deliverable", file=sys.stderr)
+        oc = assess(run, thresholds=th, source_paras=source_paras,
+                    done_value=done_value, needs_human_value=needs_value)
+    path = oc.save(run)
+    print(f"outcome: {oc.outcome} — {oc.reason}")
+    ev = oc.evidence
+    print(f"  {ev.get('words', 0)} words, {ev.get('applied_edits', 0)} edits "
+          f"({ev.get('edit_density_per_kword', 0.0):.1f}/1k), rewrite share "
+          f"{ev.get('rewrite_share', 0.0):.0%}, unresolved "
+          f"{ev.get('unresolved_queries', 0)}, damage {ev.get('edit_damage', 0)}")
+    print(f"  hubspot: {oc.hubspot.get('property')} = {oc.hubspot.get('value')!r}"
+          f" (object {oc.hubspot.get('object')})")
+    print(f"  {path}")
+    if args.json:
+        print(json.dumps(oc.to_json(), ensure_ascii=False))
+    return 0
+
 
 
 def _galley_ask(args) -> int:
@@ -2582,25 +2946,69 @@ def _galley_verify(args) -> int:
                               "projected_usd": projected}, ensure_ascii=False))
         return 0
 
-    guard = _galley_spend_guard(args, cfg, [model], projected_usd=projected)
-    if guard is not None:
-        return guard
-    try:
-        provider = build_provider(cfg, model=model)
-    except ProviderError as e:
-        print(f"error: {e}", file=sys.stderr)
+    engine = getattr(args, "engine", None) or "auto"
+    if engine == "auto":
+        # verify's historical default is the configured provider; the
+        # subagent lane is chosen when asked for, or when the model named is
+        # a Claude alias/id (which would otherwise bill through the API).
+        from .providers.subagent import is_subagent_model
+        engine = "subagent" if (args.model and is_subagent_model(args.model)) \
+            else "provider"
+    if engine == "none":
+        print("error: `galley verify` needs a model lane (--engine provider "
+              "or subagent)", file=sys.stderr)
         return 2
+    if engine == "subagent":
+        from .providers.subagent import SubagentProvider, resolve_model
+        try:
+            provider = SubagentProvider(model=args.model or None)
+        except Exception as e:                              # noqa: BLE001
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        # Recorded under a name the price catalog does not know, so the
+        # artifact's cost is $0 with the tokens still counted — a
+        # subscription read, distinguishable from a lane that never ran.
+        model = f"subagent:{resolve_model(args.model or None)}"
+        projected = 0.0
+    else:
+        guard = _galley_spend_guard(args, cfg, [model], projected_usd=projected)
+        if guard is not None:
+            return guard
+        try:
+            provider = build_provider(cfg, model=model)
+        except ProviderError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+
+    para_ids = _paragraph_ids(getattr(args, "paragraphs", None))
 
     # One verify_run per gate with its own Usage, so each artifact carries
     # ITS OWN bill and `ran`/`reason` verdict, and certify can sum the run's
     # cost-bearing artifacts without double-counting. The deterministic
     # re-read of the deliverable's views is cheap; the model calls are not.
     usage_changes, usage_walk = Usage(), Usage()
-    changes = verify_run(results, provider, model, usage_changes,
-                         context=context, run_changes=run_changes,
-                         run_walk=False)
-    walk = verify_run(results, provider, model, usage_walk, context=context,
-                      run_changes=False, run_walk=run_walk)
+    from .agent_lane import AgentLaneUnavailable
+    try:
+        if para_ids is not None:
+            from galley.verify import verify_delta
+            changes = verify_delta(results, para_ids, provider, model,
+                                   usage_changes, context=context,
+                                   run_changes=run_changes, run_walk=False)
+            walk = verify_delta(results, para_ids, provider, model, usage_walk,
+                                context=context, run_changes=False,
+                                run_walk=run_walk)
+        else:
+            changes = verify_run(results, provider, model, usage_changes,
+                                 context=context, run_changes=run_changes,
+                                 run_walk=False)
+            walk = verify_run(results, provider, model, usage_walk,
+                              context=context, run_changes=False,
+                              run_walk=run_walk)
+    except AgentLaneUnavailable as e:
+        # The lane's own refusal (no SDK, no login, no CLI) is a sentence
+        # with the fix in it; a stack trace would bury it.
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     problems, residuals = changes.problems, walk.residuals
     usage = Usage()
     for u in (usage_changes, usage_walk):
@@ -2612,7 +3020,8 @@ def _galley_verify(args) -> int:
         # Stamped so certify can tell a verdict on THIS build from a previous
         # build's (see galley.manifest._is_stale).
         "generated_at": _now_iso(),
-        "results_dir": str(results), "model": model,
+        "results_dir": str(results), "model": model, "engine": engine,
+        "paragraphs_verified": para_ids,
         "ran": changes.ran_changes, "reason": changes.reason,
         "applied_edits": len(edits),
         "problems": [p.to_json() for p in problems],
@@ -2620,19 +3029,34 @@ def _galley_verify(args) -> int:
     }
     payload_walk = {
         "generated_at": _now_iso(),
-        "results_dir": str(results), "model": model,
+        "results_dir": str(results), "model": model, "engine": engine,
+        "paragraphs_verified": para_ids,
         "ran": walk.ran_walk, "reason": walk.reason,
         "paragraphs": sum(1 for t in accepted.values() if t.strip()),
         "residuals": [r.to_json() for r in residuals],
+        # Paragraphs no read covered (a reply lost twice, or reads past the
+        # ceiling). Empty on a complete walk; a re-read with --paragraphs on
+        # these closes the hole.
+        "unread_paragraphs": list(__import__("galley.verify",
+                                             fromlist=["UNREAD"]).UNREAD),
         "cost": _cost_field(usage_walk, model),
     }
     out.mkdir(parents=True, exist_ok=True)
     cv_path = out / "change_verify.json"
     fw_path = out / "finished_walk.json"
-    cv_path.write_text(json.dumps(payload_changes, indent=2, ensure_ascii=False),
-                       encoding="utf-8")
-    fw_path.write_text(json.dumps(payload_walk, indent=2, ensure_ascii=False),
-                       encoding="utf-8")
+    # A gate that did not actually read anything (every reply lost) must not
+    # replace an earlier verdict with an empty one; it is written only when
+    # there is nothing there to lose, so certify still sees `ran: false`.
+    for path, payload, ran in ((cv_path, payload_changes, changes.ran_changes),
+                               (fw_path, payload_walk, walk.ran_walk)):
+        if not ran and path.exists() and not (
+                (path is cv_path and args.walk_only)
+                or (path is fw_path and args.changes_only)):
+            print(f"  kept the previous {path.name}: this gate read nothing",
+                  file=sys.stderr)
+            continue
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
+                        encoding="utf-8")
 
     # Four decimals: a re-read on a cheap model is sub-cent, and "$0.00" reads
     # exactly like the silently-didn't-run anomaly.
@@ -3523,6 +3947,33 @@ def _galley_state(args) -> int:
         return 0
 
     if getattr(args, "advance", None):
+        if args.advance in ("settled", "certified", "delivered") \
+                and getattr(args, "results", None):
+            from galley.settle import open_items, terminal_state
+            results = Path(args.results)
+            problems: list[str] = []
+            try:
+                env = json.loads((results / "findings.json").read_text("utf-8"))
+            except (OSError, ValueError) as e:
+                print(f"error: --results {results}: no readable findings.json "
+                      f"({e})", file=sys.stderr)
+                return 2
+            for row in env.get("findings") or []:
+                if isinstance(row, dict):
+                    st, _r = terminal_state(row)
+                    if st not in ("applied", "dropped", "query"):
+                        problems.append(f"{row.get('finding_id', '?')} is "
+                                        f"{st}")
+            for item in open_items(results):
+                problems.append(f"{item.kind} {item.id} in {item.para_id} has "
+                                f"no settlement record")
+            if problems:
+                print(f"REFUSED: cannot advance to {args.advance!r} — "
+                      f"{len(problems)} open item(s):", file=sys.stderr)
+                for line in problems[:10]:
+                    print(f"  - {line}", file=sys.stderr)
+                print("  run `docproof galley settle` first.", file=sys.stderr)
+                return 7
         try:
             rec = machine.advance(args.advance, at=args.at, by=args.by,
                                   source_sha256=src_hash, config_sha256=cfg_hash)
