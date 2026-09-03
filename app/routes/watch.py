@@ -46,6 +46,14 @@ class WatchUpdate(BaseModel):
     # Subfolder mode's one book-to-book knob (the mode itself is CLI-set):
     # prepare only "<surname> - Book Original" in each author's folder.
     require_source_label: bool | None = None
+    # The proofing stage's two switches: whether it runs at all, and who reads
+    # the book — DocWatch itself ("app") or the Mac-side practitioner loop
+    # ("external"), which DocWatch only waits on. Its HubSpot values stay
+    # CLI-only, exactly like the formatting pair they sit beside: the CRM
+    # vocabulary is set up once, and the panel is where a person changes their
+    # mind about a run.
+    proofing_enabled: bool | None = None
+    proof_runner: str | None = None
     # Bounds so a slip in the UI cannot spend a morning's worth of manuscripts
     # in one pass, or set a clock that never stops going off.
     max_files_per_tick: int | None = Field(default=None, ge=1, le=50)
@@ -182,8 +190,14 @@ def register(app: FastAPI) -> None:
                 except schedulelib.ScheduleError as e:
                     raise HTTPException(400, str(e)) from None
             ws.tick_timezone = tz
+        if update.proof_runner is not None:
+            if update.proof_runner not in ("app", "external"):
+                raise HTTPException(400, "proof_runner must be 'app' (DocWatch "
+                                         "reads the book) or 'external' (a "
+                                         "practitioner does).")
+            ws.proof_runner = update.proof_runner
         for name in ("upload_failure_note",
-                     "require_source_label",
+                     "require_source_label", "proofing_enabled",
                      "max_files_per_tick", "auto_ticks", "tick_every_minutes",
                      "archive_enabled", "archive_include_source"):
             value = getattr(update, name)

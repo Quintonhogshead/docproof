@@ -442,12 +442,35 @@ def test_outcome_needs_human_when_most_paragraphs_need_rewrite(tmp_path, capsys)
     oc = json.loads([l for l in out.splitlines() if l.startswith("{")][-1])
     assert oc["outcome"] == "needs_human"
     assert "rewrite-class" in oc["reason"]
-    assert oc["hubspot"]["value"] == "Needs Human Proofreader"
+    # needs_human names NO HubSpot write: there is no option for it on the
+    # property, so the book stays at "Ready for Proofing" for a person to pick
+    # up rather than being moved anywhere (or, worse, blanked).
+    assert oc["hubspot"] == {}
     # a human overrule is recorded as such
     assert main(["galley", "outcome", str(run), "--set", "done",
                  "--reason", "reviewed by hand"]) == 0
     assert json.loads((run / "outcome.json").read_text("utf-8"))["set_by"] \
         == "human"
+
+
+def test_hubspot_fields_writes_for_done_and_nothing_for_needs_human():
+    """The whole HubSpot contract, in one place. `done` names the property and
+    the value a watch may PATCH; `needs_human` names nothing at all, because
+    there is no option for it — writing "" would blank the status rather than
+    move it, and leaving the book at "Ready for Proofing" is what tells a human
+    proofreader to pick it up.
+
+    A caller that really does have an option to write can still say so, which
+    is what keeps `--needs-human-value` meaningful."""
+    from galley.outcome import DEFAULT_NEEDS_HUMAN_VALUE, hubspot_fields
+
+    assert DEFAULT_NEEDS_HUMAN_VALUE == ""
+    assert hubspot_fields("done") == {"object": "0-970", "property": "docproof",
+                                      "value": "Proofing Complete"}
+    assert hubspot_fields("needs_human") == {}
+    assert hubspot_fields("done", done_value="") == {}
+    assert hubspot_fields("needs_human", needs_human_value="Send To Human") == {
+        "object": "0-970", "property": "docproof", "value": "Send To Human"}
 
 
 # --- import-findings --anchor accepted -----------------------------------------

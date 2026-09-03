@@ -85,7 +85,9 @@ def summary(report) -> tuple[str, str] | None:
     flagged ready with no Book Original in the folder — rides along too, so a
     file that needs uploading or renaming is seen the same morning; and a
     `stuck_ready` — a book already formatted whose HubSpot status never moved —
-    so a stalled record is caught rather than sitting ready forever.
+    so a stalled record is caught rather than sitting ready forever; and
+    `awaiting_proof` — a book flagged for proofing that an external practitioner
+    has to read — because nobody would otherwise know a book is waiting on them.
 
     The body closes with the pass's success tally — how many jobs finished
     cleanly (formatting, promo and plan together) — so an alert about a handful
@@ -93,7 +95,7 @@ def summary(report) -> tuple[str, str] | None:
     "two need a look" lands differently beside twelve that went through than
     beside none."""
     if not (report.needs_human or report.failed or report.missing_source
-            or report.stuck_ready):
+            or report.stuck_ready or report.awaiting_proof):
         return None
     lines: list[str] = []
     if report.needs_human:
@@ -113,19 +115,27 @@ def summary(report) -> tuple[str, str] | None:
                      "(move the status on):")
         lines += [f"  - {name}: {reason}"
                   for name, reason in report.stuck_ready]
+    if report.awaiting_proof:
+        if lines:
+            lines.append("")
+        lines.append("Books waiting on the proofreading practitioner:")
+        lines += [f"  - {name}: {reason}"
+                  for name, reason in report.awaiting_proof]
     if report.failed:
         if lines:
             lines.append("")
         lines.append("Manuscripts that failed to prepare:")
         lines += [f"  - {name}: {reason}" for name, reason in report.failed]
     count = (len(report.needs_human) + len(report.missing_source)
-             + len(report.stuck_ready) + len(report.failed))
-    # Successful jobs across all three stages. Each list is appended to only once
-    # the job reached "done" (see tick.run_prep / run_promo / run_plans), and a
-    # book is never in two stages in one pass, so the sum is a true job count with
-    # no double-counting. `uploaded` is deliberately left out: it is one entry per
-    # delivered output, not per job.
-    succeeded = len(report.prepped) + len(report.promoted) + len(report.planned)
+             + len(report.stuck_ready) + len(report.awaiting_proof)
+             + len(report.failed))
+    # Successful jobs across all four stages. Each list is appended to only once
+    # the job reached "done" (see tick.run_prep / run_proof / run_promo /
+    # run_plans), and a book is never in two stages in one pass, so the sum is a
+    # true job count with no double-counting. `uploaded` is deliberately left
+    # out: it is one entry per delivered output, not per job.
+    succeeded = (len(report.prepped) + len(report.proofed)
+                 + len(report.promoted) + len(report.planned))
     subject = f"{ALERT_TAGS} {count} item(s) need a look"
     body = ("DocProof finished a pass over the Drive folder and left the "
             "following for a person:\n\n" + "\n".join(lines) +
@@ -697,7 +707,8 @@ def maybe_notify(token: str, ws, report, *, opener=drive._open_url) -> None:
         log.info("Emailed %s about %d item(s) needing a look.",
                  ws.notify_email,
                  len(report.needs_human) + len(report.missing_source)
-                 + len(report.stuck_ready) + len(report.failed))
+                 + len(report.stuck_ready) + len(report.awaiting_proof)
+                 + len(report.failed))
     except DriveError as e:
         log.warning("Could not email %s about a pass that needs a person (%s). "
                     "If Gmail refused the scope, run `docproof-watch auth` again "

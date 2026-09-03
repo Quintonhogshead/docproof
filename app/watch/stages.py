@@ -10,6 +10,12 @@ files DocProof wrote beside them, so the interesting answer is
 been through developmental edits, recognised by the subfolder an editor drops
 it into, and later by asking HubSpot what stage the book is at. Both are a
 branch in `classify`, not a change anywhere else.
+
+The `is_*_candidate` functions beside `classify` are the other shape a stage
+takes. `classify` answers "what is this file" once, for the formatting pass that
+owns `STATE_PROP`; promo, the marketing plan and proofing each run over the same
+book on their own marker, so each asks its own question and none of them may
+read another's "done".
 """
 from __future__ import annotations
 
@@ -65,6 +71,12 @@ PROMO_PROP = "docproof.promo"
 # owns its own "done". "pending" waits for panel approval in hold mode; "done"
 # once the plan is in the folder and HubSpot has moved on.
 PLAN_PROP = "docproof.plan"
+# Proofing's own marker, separate again for the same reason: formatting and
+# proofing are two passes over one manuscript, gated on two values of the same
+# dropdown, so neither may read the other's "done". Unlike the others this one
+# has a non-terminal value — "awaiting", written when an external practitioner
+# has the book and the watcher is waiting for the hand-off files to appear.
+PROOF_PROP = "docproof.proof"
 
 FORMATTED = "formatted"
 FAILED = "failed"
@@ -74,6 +86,17 @@ PROMO_FAILED = "failed"
 PLAN_PENDING = "pending"
 PLAN_DONE = "done"
 PLAN_FAILED = "failed"
+# Proofing's marker values. "awaiting" is deliberately NOT terminal: a book an
+# external practitioner is holding must stay a candidate, or the tick that
+# finds its outcome.json would never look at it again.
+PROOF_AWAITING = "awaiting"
+PROOF_DONE = "done"
+# The book needs a human proofreader. Terminal for DocProof — it will not be
+# re-run and re-charged — and deliberately NOT a HubSpot write: the record stays
+# at "Ready for Proofing", which is what tells a person to pick it up.
+PROOF_HUMAN = "human"
+PROOF_FAILED = "failed"
+PROOF_TERMINAL = (PROOF_DONE, PROOF_HUMAN, PROOF_FAILED)
 
 
 class Stage(Enum):
@@ -142,6 +165,33 @@ def is_plan_candidate(file: DriveFile) -> bool:
         return False
     props = file.app_properties
     if props.get(OUTPUT_PROP) or props.get(PLAN_PROP):
+        return False
+    if _looks_like_output(file.name):
+        return False
+    return file.is_google_doc or _is_manuscript(file.name)
+
+
+def is_proof_candidate(file: DriveFile) -> bool:
+    """Whether the proofing stage should consider this file — a manuscript it
+    has not already finished with.
+
+    Blind to the formatting marker (`STATE_PROP`) on purpose, exactly as promo
+    and the plan are: proofing runs *after* formatting on the same intake file,
+    so a book marked `formatted` is precisely the book to proofread. The two
+    stages gate on different values of the same HubSpot dropdown, which is the
+    real control over which of them runs.
+
+    What it does exclude is anything DocProof wrote (the marker or the "- book
+    0"/"- book 1" name), and anything proofing has finished with — `PROOF_PROP`
+    at a *terminal* value. "awaiting" is not terminal: an external practitioner
+    is holding that book, and the tick that finds its outcome.json has to be
+    able to see the manuscript to apply it."""
+    if file.is_folder:
+        return False
+    props = file.app_properties
+    if props.get(OUTPUT_PROP):
+        return False
+    if props.get(PROOF_PROP) in PROOF_TERMINAL:
         return False
     if _looks_like_output(file.name):
         return False

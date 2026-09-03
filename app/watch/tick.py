@@ -1,14 +1,21 @@
 """One pass over the watched folder.
 
-A tick is three slots run in order — collect what finished, submit what is
-ready, prepare what is new — and today only the third does anything. The
-other two are not placeholders in the apologetic sense: they are the order
-this has to happen in, written down now, while the reason is obvious.
+A tick is a series of slots run in order — collect what finished, submit what is
+ready, prepare what is new, proofread what is flagged for it, then promo and the
+marketing plan. The first two do nothing yet. They are not placeholders in the
+apologetic sense: they are the order this has to happen in, written down now,
+while the reason is obvious.
 
 The order matters because it is the order that costs least. Collecting first
 means work paid for last night is in the folder before anything new is
 started; submitting before preparing means an overnight batch is with the
 vendor while the synchronous work runs, rather than an hour behind it.
+
+Each stage owns one value of the CRM's status dropdown and one Drive marker of
+its own, so a book is only ever in one of them at a time and none of them can
+read or overwrite another's "done". Formatting and proofing go further and each
+get their own *listing*: `run_prep` works every candidate in its listing without
+gating again, so a book flagged for proofing must never appear in it.
 
 Nothing here runs on a clock of its own. `launchd` decides when a tick
 happens, the tick does what it finds, and the process exits.
@@ -19,19 +26,21 @@ import logging
 import queue
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Callable
 
 from app.jobs import Job, JobRunner, JobStore
 from app.settings import Paths, get_api_key, resource_root
 
-from . import drive, folders, hubspot, naming, notify, plan, prep, promo
+from . import drive, folders, hubspot, naming, notify, plan, prep, promo, proof
 from .drive import DriveError, DriveFile
 from .hubspot import HubSpotAuthError, HubSpotError
 from .keys import key_from_name
 from .settings import GOOGLE_KEY, HUBSPOT_KEY, WatchSettings
-from .stages import (JOB_PROP, OUTPUT_PROP, PLAN_DONE, PLAN_FAILED,
+from .stages import (FORMATTED, JOB_PROP, OUTPUT_PROP, PLAN_DONE, PLAN_FAILED,
                      PLAN_PENDING, PROMO_DONE, PROMO_FAILED, PROMO_PENDING,
-                     SOURCE_PROP, Stage, classify, is_plan_candidate,
-                     is_promo_candidate)
+                     PROOF_AWAITING, PROOF_DONE, PROOF_FAILED, PROOF_HUMAN,
+                     PROOF_PROP, PROOF_TERMINAL, SOURCE_PROP, Stage, classify,
+                     is_plan_candidate, is_promo_candidate, is_proof_candidate)
 from .state import WatchState, note_tick
 
 log = logging.getLogger("docproof.app.watch.tick")
@@ -72,6 +81,16 @@ class TickReport:
     # with `plan` below, which is the file-by-file classification a dry run
     # returns.)
     planned: list[str] = field(default_factory=list)
+    # Books the proofing stage delivered a proofread for this pass — a run the
+    # app finished, or an external practitioner's hand-off DocWatch picked up
+    # and acted on. Its own list again, so a pass reports each stage separately.
+    proofed: list[str] = field(default_factory=list)
+    # Books handed to an external practitioner and not answered yet: discovered
+    # at "Ready for Proofing", recorded, and waiting for the hand-off files to
+    # appear in the author's folder. Nothing is wrong and nothing failed — but a
+    # person is expected to act, so it earns a status line and the owner email
+    # the same way `missing_source` does. Each is (book, reason).
+    awaiting_proof: list[tuple[str, str]] = field(default_factory=list)
     uploaded: list[str] = field(default_factory=list)
     failed: list[tuple[str, str]] = field(default_factory=list)
     # Manuscripts a person must sort out before DocProof can act — chiefly a file
@@ -732,8 +751,345 @@ def _finish_hubspot_plan(hs_token: str | None, ws: WatchSettings,
     state.record(rec)
 
 
+# --- proofing (Galley) --------------------------------------------------------
+#
+# The second pass over a book, on the same status dropdown as formatting moved
+# to its own value pair: "Ready for Proofing" -> "Proofing Complete". Scope is
+# the mechanical proofread — the review ladder, its sweeps and verify — and
+# nothing else; copy-edit flights and the merge desk are not wired here.
+#
+# Two runners, one contract. `proof_runner="app"` runs the read here, through
+# the app's galley job. `proof_runner="external"` runs nothing and waits for the
+# Mac-side practitioner to leave the four hand-off files in the author's folder
+# (see `proof.hand_off_names`). Either way the pass ends at the same place: read
+# the verdict, and act on it.
+#
+# The verdict is the only thing that decides the CRM write, and only one of the
+# two verdicts writes at all. `done` moves the property on, once. `needs_human`
+# writes NOTHING — there is no option on the property for it, so the book stays
+# at "Ready for Proofing", which is what tells a person to pick it up, and the
+# reason rides the needs-a-person email.
+
+def run_proof(token: str, home: Path, ws: WatchSettings,
+              listing: list[DriveFile], state: WatchState, runner: JobRunner,
+              store: JobStore, *, mock: bool, opener, hs_token: str | None,
+              routes: dict[str, str] | None = None,
+              report: TickReport) -> None:
+    """Proofread every book HubSpot flagged for it, and apply any verdict that
+    has since landed.
+
+    In subfolder mode `listing` is proofing's own discovery — the folders of the
+    authors flagged "Ready for Proofing" — already gated, so the gate is not run
+    again over it. In flat mode it is the shared folder listing and the gate
+    runs here, the way promo's and the plan's do."""
+    if not ws.proofing_enabled:
+        return
+    routes = routes or {}
+
+    todo = [f for f in listing if is_proof_candidate(f)]
+
+    # The house convention as a hard rule, the flat path's copy of what
+    # `_discover_ready` already applied in subfolder mode: with the label
+    # required, only "<surname> - Book Original" is the book to read.
+    if ws.require_source_label and not ws.subfolders_enabled:
+        todo = [f for f in todo if naming.has_source_label(f.name)]
+
+    todo.sort(key=lambda f: (f.modified_time, f.name))
+
+    if not ws.subfolders_enabled:
+        todo = _gate_hubspot(hs_token, ws, todo, state,
+                             ready_value=ws.hubspot_proof_ready_value,
+                             id_get=lambda r: r.proof_hubspot_id,
+                             id_set=lambda r, v: setattr(r, "proof_hubspot_id",
+                                                         v),
+                             opener=opener, report=report)
+
+    if len(todo) > ws.max_files_per_tick:
+        report.deferred += len(todo) - ws.max_files_per_tick
+        log.info("%d books are waiting to be proofread; doing %d this run and "
+                 "leaving the rest.", len(todo), ws.max_files_per_tick)
+        todo = todo[:ws.max_files_per_tick]
+
+    for file in todo:
+        try:
+            _one_proof(token, home, ws, file, listing, state, runner, store,
+                       mock=mock, opener=opener, hs_token=hs_token,
+                       dest_folder_id=routes.get(file.id, ws.folder_id),
+                       report=report)
+        except Exception as e:            # noqa: BLE001 - one book, not the run
+            log.exception("Could not proofread %s", file.name)
+            report.failed.append((file.name, str(e)))
+            rec = state.get(file.id)
+            rec.name = file.name
+            rec.proof_attempts += 1
+            state.record(rec)
+
+
+def _one_proof(token: str, home: Path, ws: WatchSettings, file: DriveFile,
+               listing: list[DriveFile], state: WatchState, runner: JobRunner,
+               store: JobStore, *, mock: bool, opener, hs_token: str | None,
+               dest_folder_id: str, report: TickReport) -> None:
+    rec = state.get(file.id)
+    rec.name = file.name
+    rec.modified_time = file.modified_time
+
+    # A verdict already in the folder wins, whoever put it there. That is how
+    # `external` mode finishes, and it is also the repair for an `app` run that
+    # uploaded its outcome and then died before the CRM write: the file is the
+    # durable record, so the next tick reads it rather than re-reading the book.
+    #
+    # Looked for in the book's OWN folder, not in the pass's whole listing. In
+    # subfolder mode that listing is every ready author's folder at once, and
+    # two authors sharing a surname — "John Smith" and "Jane Smith", each with a
+    # "Smith - Book Original" — would produce two files of the same name. One
+    # scoped listing costs one request and cannot pick the wrong book's verdict.
+    folder_files = (listing if not ws.subfolders_enabled
+                    else drive.list_folder(token, dest_folder_id, opener=opener))
+    landed = proof.outcome_in_folder(folder_files, file.name)
+    if landed is not None and rec.proof_marked not in PROOF_TERMINAL:
+        verdict = proof.read_outcome(token, landed, opener=opener)
+        if verdict is not None:
+            report.proofed.append(file.name)
+            _apply_proof_outcome(hs_token, token, ws, file, rec, state, verdict,
+                                 opener=opener, report=report)
+            return
+
+    if ws.proof_runner == "external":
+        _await_external_proof(token, ws, file, rec, state,
+                              dest_folder_id=dest_folder_id, opener=opener,
+                              report=report)
+        return
+
+    if mock:
+        # A rehearsal costs nothing by definition, and there is no version of a
+        # galley wave loop that both exercises the round trip and is free.
+        log.info("Mock pass: leaving the proofread of %s for a real run.",
+                 file.name)
+        return
+
+    job = store.get(rec.proof_job_id) if rec.proof_job_id else None
+    paid_for = (job is not None and job.state == "done" and job.results_dir
+                and Path(job.results_dir).is_dir())
+
+    if rec.proof_attempts >= ws.max_attempts and not paid_for:
+        # The three-strikes rule every stage keeps. A finished job is exempt —
+        # the read is paid for, only delivery failed, which is free to retry.
+        reason = f"Gave up after {rec.proof_attempts} attempts."
+        log.error("%s: %s", file.name, reason)
+        proof.mark_source(token, file, rec, state, status=PROOF_FAILED,
+                          reason=reason, opener=opener)
+        report.failed.append((file.name, reason))
+        return
+
+    job = _prepare_proof(token, home, ws, file, rec, state, runner, store,
+                         opener=opener)
+    if job.state != "done":
+        # Something transient — a model that would not answer, a disk that
+        # filled. Raised so the caller counts an attempt against it.
+        raise PrepFailed(job.error or "The proofread did not finish.")
+
+    report.proofed.append(file.name)
+    # The verdict is assessed BEFORE the upload, so outcome.json is written into
+    # the results folder and then goes to Drive with everything else — one file,
+    # one set of numbers, whichever side reads it.
+    verdict = proof.assess(job, done_value=ws.hubspot_proof_done_value)
+    uploaded = proof.upload_outputs(token, file, job, ws, rec, state,
+                                    folder_files,
+                                    dest_folder_id=dest_folder_id,
+                                    opener=opener)
+    report.uploaded.extend(uploaded)
+    _apply_proof_outcome(hs_token, token, ws, file, rec, state, verdict,
+                         opener=opener, report=report)
+
+
+def _prepare_proof(token: str, home: Path, ws: WatchSettings, file: DriveFile,
+                   rec, state: WatchState, runner: JobRunner, store: JobStore,
+                   *, opener) -> Job:
+    """The manuscript's galley job, run or resumed.
+
+    The shortcut is the point of the state file, and it matters more here than
+    anywhere else in the watcher: a galley run is a wave loop over a whole
+    novel, and running one twice is the most expensive mistake this program can
+    make."""
+    existing = store.get(rec.proof_job_id) if rec.proof_job_id else None
+    if existing is not None:
+        finished = (existing.state == "done" and existing.results_dir
+                    and Path(existing.results_dir).is_dir())
+        if finished:
+            log.info("%s has already been proofread; picking up from there.",
+                     file.name)
+            return existing
+        existing.state = "queued"
+        existing.error = None
+        return proof.run_job(runner, store, existing)
+
+    local = proof.fetch(token, file, home / DOWNLOADS / file.id, opener=opener)
+    job = proof.make_job(local, ws)
+    rec.proof_job_id = job.id
+    state.record(rec)              # before the model is called, never after
+    return proof.run_job(runner, store, job)
+
+
+def _await_external_proof(token: str, ws: WatchSettings, file: DriveFile, rec,
+                          state: WatchState, *, dest_folder_id: str, opener,
+                          report: TickReport) -> None:
+    """Record a book as out with an external practitioner, and say so once.
+
+    No work is started and nothing is spent: the Mac-side loop runs on a Claude
+    Max subscription that cannot run on Fly, so all DocWatch does here is notice
+    the book, mark the manuscript `awaiting` so the folder shows it, and tell
+    the owner where to find it. The marker is deliberately not terminal — the
+    next tick still looks, and picks the verdict up the moment it lands."""
+    folder_link = (f"https://drive.google.com/drive/folders/{dest_folder_id}"
+                   if dest_folder_id else "the watched folder")
+    reason = (f"is flagged '{ws.hubspot_proof_ready_value}' and is waiting for "
+              f"the proofreading practitioner. The book is in {folder_link}; "
+              f"the run delivers '{proof.hand_off_names(file.name)['outcome']}' "
+              f"beside it, and the next pass picks it up.")
+    if rec.proof_marked != PROOF_AWAITING:
+        proof.mark_source(token, file, rec, state, status=PROOF_AWAITING,
+                          opener=opener)
+        log.info("Waiting on a practitioner for %s.", file.name)
+    if not rec.proof_awaiting_emailed:
+        # Once per book, not once per tick: the alert email is for things a
+        # person has not seen yet, and a book that waits a week is not news
+        # every morning.
+        report.awaiting_proof.append((file.name, reason))
+        rec.proof_awaiting_emailed = True
+        state.record(rec)
+
+
+def _apply_proof_outcome(hs_token: str | None, token: str, ws: WatchSettings,
+                         file: DriveFile, rec, state: WatchState,
+                         verdict: "proof.Verdict", *, opener,
+                         report: TickReport) -> None:
+    """Act on a verdict: move the record on, or leave it for a person.
+
+    `done` writes the proofing done value once and marks the manuscript. That
+    order is prep's, for prep's reason: the local record is written before the
+    Drive marker, so a file that reads `done` in Drive was done in HubSpot
+    first, and the two can never disagree in the direction that strands a book.
+
+    `needs_human` writes nothing to HubSpot at all — the record keeps "Ready for
+    Proofing", and the reason goes to `needs_human` so it reaches the owner by
+    email. The manuscript is still marked, because the read has been paid for
+    and repeating it would only buy the same answer again."""
+    rec.proof_outcome = verdict.outcome
+    rec.proof_outcome_reason = verdict.reason
+    state.record(rec)
+
+    if verdict.done:
+        _finish_hubspot_proof(hs_token, ws, file, rec, state, opener=opener)
+        proof.mark_source(token, file, rec, state, status=PROOF_DONE,
+                          opener=opener)
+        return
+
+    reason = (verdict.reason
+              or "the proofread finished but the book needs a human "
+                 "proofreader.")
+    log.warning("Needs a person: %s (%s)", file.name, reason)
+    report.needs_human.append(
+        (file.name, f"was proofread and needs a human proofreader: {reason} "
+                    f"HubSpot was left at "
+                    f"'{ws.hubspot_proof_ready_value}' on purpose."))
+    proof.mark_source(token, file, rec, state, status=PROOF_HUMAN,
+                      reason=reason, opener=opener)
+
+
+def _finish_hubspot_proof(hs_token: str | None, ws: WatchSettings,
+                          file: DriveFile, rec, state: WatchState, *,
+                          opener) -> None:
+    """Move the status property to its proofing done value on the book just
+    proofread.
+
+    The promo/plan twin, with the same guards: read-only mode leaves the CRM
+    untouched, and a blank done value is refused rather than blanking the
+    property. `proof_hubspot_done` makes it exactly one write per book — writing
+    a value already set is harmless, which is what makes the whole step safe to
+    repeat after an interrupted tick.
+
+    The property and the value come from the watcher's settings, never from the
+    outcome.json that was read. That file carries a `hubspot` block, and in
+    `external` mode it was placed in Drive by something outside DocProof: a file
+    in a folder does not get to name the CRM field DocProof writes."""
+    if not (ws.hubspot_enabled and rec.proof_hubspot_id
+            and not rec.proof_hubspot_done):
+        return
+    if not ws.hubspot_write_back:
+        log.info("HubSpot is read-only: leaving %s at its current status.",
+                 file.name)
+        return
+    if not ws.hubspot_proof_done_value:
+        log.warning("HubSpot proofing done-value is empty: leaving %s at its "
+                    "current status rather than blanking it.", file.name)
+        return
+    props = {ws.hubspot_status_property: ws.hubspot_proof_done_value}
+    hubspot.set_properties(hs_token, ws.hubspot_object, rec.proof_hubspot_id,
+                           props, allow={ws.hubspot_status_property},
+                           opener=opener)
+    rec.proof_hubspot_done = True
+    state.record(rec)                     # recorded before the Drive marker
+
+
+@dataclass(frozen=True)
+class DiscoveryStage:
+    """One HubSpot-gated pass over a book, as subfolder discovery sees it.
+
+    Formatting and proofing are two passes over the same manuscript, in the same
+    author folder, gated on two values of the same dropdown. Everything that
+    differs between them lives here — which value means "ready", which record id
+    and marker the pass owns, what counts as a book to work on and what counts
+    as one already finished — so `_discover` stays one function rather than two
+    that drift apart the first time either is fixed.
+    """
+
+    name: str                                    # for the log
+    done_word: str                               # "formatted" | "proofread"
+    ready_value: str
+    id_get: Callable[[Any], str]
+    id_set: Callable[[Any, str], None]
+    candidate: Callable[[DriveFile], bool]
+    already_done: Callable[[DriveFile], bool]
+    # Whether this record is still this stage's to finish — the test that
+    # re-lists an in-flight book's folder after its status has moved off ready.
+    in_flight: Callable[[Any], bool]
+
+
+def format_stage(ws: WatchSettings) -> DiscoveryStage:
+    """Formatting: prepare the new manuscript, mark it `formatted`."""
+    return DiscoveryStage(
+        name="formatting", done_word="formatted",
+        ready_value=ws.hubspot_format_ready_value,
+        id_get=lambda r: r.hubspot_id,
+        id_set=lambda r, v: setattr(r, "hubspot_id", v),
+        candidate=lambda f: classify(f) is Stage.NEW_MANUSCRIPT,
+        already_done=lambda f: classify(f) is Stage.DONE,
+        in_flight=lambda r: r.marked != FORMATTED,
+    )
+
+
+def proof_stage(ws: WatchSettings) -> DiscoveryStage:
+    """Proofing: read the same manuscript again, on proofing's own marker.
+
+    The candidate test is `is_proof_candidate`, which is blind to the formatting
+    marker — a book marked `formatted` is exactly the book to proofread — and
+    treats only proofing's *terminal* marker values as finished, so a book out
+    with an external practitioner stays visible until its verdict lands."""
+    return DiscoveryStage(
+        name="proofing", done_word="proofread",
+        ready_value=ws.hubspot_proof_ready_value,
+        id_get=lambda r: r.proof_hubspot_id,
+        id_set=lambda r, v: setattr(r, "proof_hubspot_id", v),
+        candidate=is_proof_candidate,
+        already_done=lambda f: (f.app_properties.get(PROOF_PROP)
+                                in PROOF_TERMINAL),
+        in_flight=lambda r: r.proof_marked not in PROOF_TERMINAL,
+    )
+
+
 def _discover(token: str, hs_token: str | None, ws: WatchSettings,
-              state: WatchState, *, opener, report: TickReport,
+              state: WatchState, *, stage: DiscoveryStage, opener,
+              report: TickReport,
               dry_run: bool) -> tuple[list[DriveFile], dict[str, str]]:
     """Subfolder mode's answer to "what is there": ask HubSpot who is ready,
     then look only in those authors' folders.
@@ -749,19 +1105,24 @@ def _discover(token: str, hs_token: str | None, ws: WatchSettings,
     logic still works — and a routing map from a manuscript's id to the
     subfolder its outputs belong in. A book a previous tick already started is
     re-listed from the subfolder it recorded, so `_drain` and resume still find
-    it after its status has moved off "ready"."""
+    it after its status has moved off "ready".
+
+    `stage` says which pass this is. Formatting and proofing each call this
+    with their own value and their own record id, and each gets back its own
+    listing — never one shared one — because a book flagged "Ready for Proofing"
+    must not fall into the formatting pass's ungated `run_prep`."""
     want = [p for p in (ws.hubspot_status_property, ws.hubspot_key_property,
                         ws.hubspot_first_property, ws.hubspot_last_property)
             if p]
     try:
         ready = hubspot.find_by_value(
             hs_token, ws.hubspot_object, ws.hubspot_status_property,
-            ws.hubspot_format_ready_value, want_properties=want, opener=opener)
+            stage.ready_value, want_properties=want, opener=opener)
     except HubSpotAuthError:
         raise                             # the token is bad — stop the pass
     except HubSpotError as e:             # transient — the pass's books wait
-        log.info("Waiting: could not fetch the ready Projects from HubSpot "
-                 "(%s); the next run will try again.", e)
+        log.info("Waiting: could not fetch the %s Projects from HubSpot "
+                 "(%s); the next run will try again.", stage.name, e)
         ready = []
 
     listing: list[DriveFile] = []
@@ -771,16 +1132,18 @@ def _discover(token: str, hs_token: str | None, ws: WatchSettings,
     for record in ready:
         seen_records.add(record.id)
         _discover_ready(token, ws, record, state, listing, routes, cache,
-                        opener=opener, report=report, dry_run=dry_run)
+                        stage=stage, opener=opener, report=report,
+                        dry_run=dry_run)
 
     # A book already in flight — its record id is on the state file and it is
     # not yet delivered — is re-listed from the folder it recorded, whether or
     # not it is still flagged ready. Without this a job spanning ticks would
     # have its manuscript read as "gone from the folder" and be parked.
     for rec in list(state.files.values()):
-        if (rec.hubspot_id and rec.hubspot_id not in seen_records
-                and rec.subfolder_id and rec.marked != "formatted"):
-            _adopt(token, rec.subfolder_id, listing, routes, opener=opener)
+        if (stage.id_get(rec) and stage.id_get(rec) not in seen_records
+                and rec.subfolder_id and stage.in_flight(rec)):
+            _adopt(token, rec.subfolder_id, listing, routes, stage=stage,
+                   opener=opener)
 
     uniq = {f.id: f for f in listing}     # a subfolder seen twice, deduped
     return list(uniq.values()), routes
@@ -788,7 +1151,8 @@ def _discover(token: str, hs_token: str | None, ws: WatchSettings,
 
 def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
                     listing: list[DriveFile], routes: dict[str, str],
-                    cache: dict[tuple[str, str], str | None], *, opener,
+                    cache: dict[tuple[str, str], str | None], *,
+                    stage: DiscoveryStage, opener,
                     report: TickReport, dry_run: bool) -> None:
     """One ready record: resolve its author's folder, find the one manuscript in
     it, and route that manuscript's outputs back into the same folder.
@@ -822,7 +1186,7 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
         return
 
     contents = drive.list_folder(token, subfolder_id, opener=opener)
-    manuscripts = [f for f in contents if classify(f) is Stage.NEW_MANUSCRIPT]
+    manuscripts = [f for f in contents if stage.candidate(f)]
 
     # A multi-book author keeps each book in its own folder one level down —
     # author folder -> book folder -> book original — so an author's several
@@ -834,7 +1198,7 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
         book_folders = [f for f in contents if f.is_folder]
         if book_folders:
             _discover_nested(token, ws, record, first, last, author,
-                             book_folders, state, listing, routes,
+                             book_folders, state, listing, routes, stage=stage,
                              opener=opener, report=report, dry_run=dry_run)
             return
 
@@ -852,7 +1216,7 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
     # in matters: a "<surname> - Book Original" marked done is a finished book
     # whose HubSpot status simply never moved, not a missing one.
     intake_files = [f for f in contents if naming.is_source_name(f.name, last)]
-    intake_done = any(classify(f) is Stage.DONE for f in intake_files)
+    intake_done = any(stage.already_done(f) for f in intake_files)
 
     def _unprepared(missing_detail: str) -> None:
         """Account for a ready author with no book to prepare — none dropped
@@ -860,14 +1224,16 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
         person can move HubSpot on); a genuine absence is a missing Book
         Original; an intake present but unfinished was already reported when the
         run failed, so it is not raised again."""
-        ready = ws.hubspot_format_ready_value
+        ready = stage.ready_value
         if intake_done:
             log.info("Waiting: %s is flagged ready but its book is already "
-                     "formatted; the status did not move off ready.", author)
+                     "%s; the status did not move off ready.", author,
+                     stage.done_word)
             report.stuck_ready.append(
                 (author, f"flagged '{ready}' but its "
-                         f"'{last} - {naming.SOURCE_STAGE}' is already formatted "
-                         f"— the status never moved on, so check the write-back."))
+                         f"'{last} - {naming.SOURCE_STAGE}' is already "
+                         f"{stage.done_word} — the status never moved on, so "
+                         f"check the write-back."))
         elif intake_files:
             log.info("Waiting: %s is flagged ready; its intake file is present "
                      "but not yet prepared (a prior run may have failed).",
@@ -910,28 +1276,28 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
     if not dry_run:
         rec = state.get(book.id)
         rec.name = book.name
-        rec.hubspot_id = record.id        # written before prep, never after
+        stage.id_set(rec, record.id)      # written before the work, never after
         rec.author_first = first
         rec.author_last = last
         rec.subfolder_id = subfolder_id
         rec.subfolder_name = author
         state.record(rec)
-    # run_prep preps every new manuscript in the listing without gating again in
-    # subfolder mode, so only the chosen book may ride along — a rival manuscript
-    # the label filter set aside must not. Everything that is not a new
-    # manuscript (the book's outputs) stays, so orphan and OUTPUT logic still
+    # The stage's own runner works every candidate in the listing without gating
+    # again in subfolder mode, so only the chosen book may ride along — a rival
+    # manuscript the label filter set aside must not. Everything that is not a
+    # candidate (the book's outputs) stays, so orphan and OUTPUT logic still
     # works. With the filter off a single manuscript reached here anyway, so this
     # keeps the same contents it always did.
     listing.extend(f for f in contents if f.id == book.id
-                   or classify(f) is not Stage.NEW_MANUSCRIPT)
+                   or not stage.candidate(f))
     routes[book.id] = subfolder_id
 
 
 def _discover_nested(token: str, ws: WatchSettings, record, first: str,
                      last: str, author: str, book_folders: list[DriveFile],
                      state: WatchState, listing: list[DriveFile],
-                     routes: dict[str, str], *, opener, report: TickReport,
-                     dry_run: bool) -> None:
+                     routes: dict[str, str], *, stage: DiscoveryStage, opener,
+                     report: TickReport, dry_run: bool) -> None:
     """A multi-book author, whose books sit one level down: author folder ->
     book folder -> book original. Prepare the one book in each book folder and
     route its outputs back into that same folder, so an author with several
@@ -947,7 +1313,7 @@ def _discover_nested(token: str, ws: WatchSettings, record, first: str,
     flagged = 0
     for folder in book_folders:
         contents = drive.list_folder(token, folder.id, opener=opener)
-        manuscripts = [f for f in contents if classify(f) is Stage.NEW_MANUSCRIPT]
+        manuscripts = [f for f in contents if stage.candidate(f)]
         if ws.require_source_label:
             manuscripts = [f for f in manuscripts
                            if naming.is_source_name(f.name, last)]
@@ -966,23 +1332,23 @@ def _discover_nested(token: str, ws: WatchSettings, record, first: str,
         if not dry_run:
             rec = state.get(book.id)
             rec.name = book.name
-            rec.hubspot_id = record.id        # written before prep, never after
+            stage.id_set(rec, record.id)  # written before the work, never after
             rec.author_first = first
             rec.author_last = last
             rec.subfolder_id = folder.id      # its outputs, and its resume, here
             rec.subfolder_name = author
             state.record(rec)
         # As in the flat path: only the chosen book rides along, and everything
-        # that is not a new manuscript (its outputs) stays so orphan and OUTPUT
+        # that is not a candidate (its outputs) stays so orphan and OUTPUT
         # logic still works.
         listing.extend(f for f in contents if f.id == book.id
-                       or classify(f) is not Stage.NEW_MANUSCRIPT)
+                       or not stage.candidate(f))
         routes[book.id] = folder.id
         queued += 1
 
     if queued or flagged:
         return
-    ready = ws.hubspot_format_ready_value
+    ready = stage.ready_value
     detail = (f"none of its {len(book_folders)} book folder(s) holds a "
               f"'{last} - {naming.SOURCE_STAGE}'")
     log.info("Waiting: %s is flagged ready but %s.", author, detail)
@@ -991,12 +1357,12 @@ def _discover_nested(token: str, ws: WatchSettings, record, first: str,
 
 
 def _adopt(token: str, subfolder_id: str, listing: list[DriveFile],
-           routes: dict[str, str], *, opener) -> None:
+           routes: dict[str, str], *, stage: DiscoveryStage, opener) -> None:
     """Re-list an in-flight book's recorded subfolder so the pass still sees it.
-    Route every new manuscript it holds back into it, the same as discovery."""
+    Route every candidate it holds back into it, the same as discovery."""
     contents = drive.list_folder(token, subfolder_id, opener=opener)
     for f in contents:
-        if classify(f) is Stage.NEW_MANUSCRIPT:
+        if stage.candidate(f):
             routes[f.id] = subfolder_id
     listing.extend(contents)
 
@@ -1265,6 +1631,30 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
                 "Promo is switched on but " + ", ".join(blanks)
                 + " is not set. Run `docproof-watch init` to fill it in.")
 
+    if ws.proofing_enabled:
+        # Proofing is driven by a value of the same HubSpot dropdown formatting
+        # uses, so HubSpot must be on and its own value pair set —
+        # half-configured would either proofread everything or never move a
+        # book on.
+        if not ws.hubspot_enabled:
+            raise NotConfigured(
+                "Proofing is switched on but HubSpot is not. Proofing is "
+                "triggered by a HubSpot status value, so HubSpot has to be on. "
+                "Run `docproof-watch init`, or turn proofing off.")
+        blanks = [name for name, value in (
+            ("hubspot_proof_ready_value", ws.hubspot_proof_ready_value),
+            ("hubspot_proof_done_value", ws.hubspot_proof_done_value),
+        ) if not value]
+        if blanks:
+            raise NotConfigured(
+                "Proofing is switched on but " + ", ".join(blanks)
+                + " is not set. Run `docproof-watch init` to fill it in.")
+        if ws.proof_runner not in ("app", "external"):
+            raise NotConfigured(
+                f"proof_runner is {ws.proof_runner!r}; it has to be 'app' "
+                f"(DocWatch reads the book itself) or 'external' (a "
+                f"practitioner does, and DocWatch waits for the hand-off).")
+
     if ws.plan_enabled:
         # The marketing plan is driven by its own HubSpot property, so HubSpot
         # must be on and the plan's property and its value pair set —
@@ -1328,13 +1718,32 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
         # asks who is ready and looks only in those authors' folders, handing
         # back the same shape of listing the flat path builds plus a map of
         # where each book's outputs belong.
-        listing, routes = _discover(token, hs_token, ws, state, opener=opener,
+        listing, routes = _discover(token, hs_token, ws, state,
+                                    stage=format_stage(ws), opener=opener,
                                     report=report, dry_run=dry_run)
     else:
         listing = drive.list_folder(token, ws.folder_id, opener=opener)
         routes = {}
-    report.listed = len(listing)
-    report.plan = [(f.name, classify(f).value) for f in listing]
+
+    # Proofing gets its OWN listing in subfolder mode, discovered at its own
+    # ready value. It must not share formatting's: `run_prep` prepares every
+    # candidate in that listing without gating again, so a book flagged "Ready
+    # for Proofing" landing in it would be formatted a second time. In flat mode
+    # there is one folder and one listing, and `run_proof` gates it itself.
+    proof_listing: list[DriveFile] = []
+    proof_routes: dict[str, str] = {}
+    if ws.proofing_enabled and ws.subfolders_enabled:
+        proof_listing, proof_routes = _discover(
+            token, hs_token, ws, state, stage=proof_stage(ws), opener=opener,
+            report=report, dry_run=dry_run)
+    elif ws.proofing_enabled:
+        proof_listing = listing
+
+    seen = {f.id for f in listing}
+    extra = [f for f in proof_listing if f.id not in seen]
+    every = listing + extra
+    report.listed = len(every)
+    report.plan = [(f.name, classify(f).value) for f in every]
     report.skipped = sum(1 for _, stage in report.plan
                          if stage == Stage.SKIP.value)
 
@@ -1356,14 +1765,24 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     if not mock:
         # A rehearsal leaves real leftovers alone: _drain finishes whatever a
         # dead pass left mid-flight through the real provider, and
-        # `--mock-tags` is documented as costing nothing.
-        _drain(runner, state, listing)
+        # `--mock-tags` is documented as costing nothing. It is handed every
+        # file this pass can see, proofing's folders included, so a galley job
+        # spanning ticks is not parked as "the manuscript left the folder".
+        _drain(runner, state, every)
 
     collect_finished(token, ws, listing, state, store, opener=opener,
                      report=report)
     submit_ready(token, ws, listing, state, store, opener=opener, report=report)
     run_prep(token, root, ws, listing, state, runner, store, mock=mock,
              opener=opener, hs_token=hs_token, routes=routes, report=report)
+    # Proofing runs after formatting, on its own value of the same dropdown and
+    # its own marker, over its own listing — so a book is never in both stages
+    # at once (one dropdown, one value at a time) and neither touches the
+    # other's markers. Unlike promo and the plan it works in subfolder mode,
+    # which is the mode production runs in.
+    run_proof(token, root, ws, proof_listing, state, runner, store, mock=mock,
+              opener=opener, hs_token=hs_token, routes=proof_routes,
+              report=report)
     # Promo runs after formatting and only in flat mode. It gates on its own
     # HubSpot value, so a book is never in both stages at once — one dropdown,
     # one value at a time — and it never touches the format stage's markers.
@@ -1404,6 +1823,10 @@ def _drain(runner: JobRunner, state: WatchState,
     # Plan jobs the same, on their own field.
     owner.update({rec.plan_job_id: fid for fid, rec in state.files.items()
                   if rec.plan_job_id})
+    # And proofing's galley jobs, which matter most: a wave loop over a whole
+    # novel is the most expensive thing here to finish for nothing.
+    owner.update({rec.proof_job_id: fid for fid, rec in state.files.items()
+                  if rec.proof_job_id})
     runner.resume_interrupted()
     while True:
         try:

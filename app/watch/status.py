@@ -76,6 +76,11 @@ def status(home: str | Path, *, get_key=None,
         # mode is on to decide whether to show it.
         "subfolders_enabled": ws.subfolders_enabled,
         "require_source_label": ws.require_source_label,
+        # The proofing stage, for the panel's switch. The HubSpot values behind
+        # it are CLI-only (as the formatting pair is), so only the two knobs a
+        # person changes book to book are surfaced.
+        "proofing_enabled": ws.proofing_enabled,
+        "proof_runner": ws.proof_runner,
         "max_files_per_tick": ws.max_files_per_tick,
         "auto_ticks": ws.auto_ticks,
         "tick_every_minutes": ws.tick_every_minutes,
@@ -146,6 +151,12 @@ def _files(root: Path) -> list[dict]:
             "total": job.total if job else 0,
             "error": job.error if job else None,
             "uploaded": list(rec.uploaded),
+            # Proofing's own lifecycle, beside formatting's rather than mixed
+            # into it: a book can be formatted and still out with a
+            # proofreader, and "" here simply means proofing never touched it.
+            "proof_marked": rec.proof_marked,
+            "proof_outcome": rec.proof_outcome,
+            "proof_reason": rec.proof_outcome_reason,
             "attempts": rec.attempts,
             "updated_at": rec.updated_at,
         })

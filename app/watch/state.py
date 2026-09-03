@@ -89,6 +89,29 @@ class FileRecord:
     plan_marked: str = ""              # "" | "pending" | "delivered" | "failed"
     plan_attempts: int = 0
     plan_uploaded: dict[str, str] = field(default_factory=dict)
+    # Proofing, on its own lifecycle again — the same manuscript, a second pass
+    # over it, its own HubSpot value and its own Drive marker. All empty on a
+    # record written before the proofing stage existed, which is how those stay
+    # formatting-only. The Drive `docproof.proof` marker is the durable record;
+    # these are the local shortcut that stops a crash mid-flight from re-paying
+    # for the read.
+    proof_job_id: str = ""
+    proof_hubspot_id: str = ""          # the record flagged ready it matched
+    # Whether "Proofing Complete" has been written. The guard that makes the
+    # flip happen exactly once, recorded before the Drive marker so a book that
+    # reads `done` in Drive was done in HubSpot first. Stays False forever on a
+    # needs_human verdict, which writes nothing.
+    proof_hubspot_done: bool = False
+    proof_marked: str = ""             # "" | "awaiting" | "done" | "human" | "failed"
+    proof_attempts: int = 0
+    proof_uploaded: dict[str, str] = field(default_factory=dict)
+    # The verdict and the sentence behind it, kept so `status` and a later tick
+    # can say why a book was left for a person without re-reading Drive.
+    proof_outcome: str = ""            # "" | "done" | "needs_human"
+    proof_outcome_reason: str = ""
+    # Whether the owner has been told this book is waiting on an external
+    # practitioner. One email per book, not one per tick.
+    proof_awaiting_emailed: bool = False
     modified_time: str = ""
     updated_at: str = ""
 

@@ -19,8 +19,10 @@ over, or a draft beside it prepared by mistake. What it does *not* forgive is a
 wrong surname or a missing token: a "Developmental Editorial Review" is not the
 book, however it is spaced.
 
-Proofing will add "book 1" and so on; the seam is `OUTPUT_STAGE` and the small
-`format_base` transform, not a rule spread across the watcher.
+Proofing is the second stage in that series: it hands back "<surname> - book 1"
+with its letter, style sheet and outcome beside it under the same base. The
+seam is `OUTPUT_STAGES` and the small `stage_base` transform, not a rule spread
+across the watcher — a third stage is one more constant.
 """
 from __future__ import annotations
 
@@ -28,10 +30,15 @@ import re
 import unicodedata
 from pathlib import Path
 
-# The stage token an author's manuscript arrives carrying, and the one the
-# formatting stage stamps on what it hands back. Compared case-insensitively.
+# The stage token an author's manuscript arrives carrying, and the ones each
+# DocProof stage stamps on what it hands back. Compared case-insensitively.
 SOURCE_STAGE = "Book Original"
-OUTPUT_STAGE = "book 0"
+OUTPUT_STAGE = "book 0"                  # formatting
+PROOF_STAGE = "book 1"                   # proofing (Galley)
+# Every stage token DocProof writes. `is_output_name` is the one reader: a stem
+# carrying any of these is something DocProof produced, never a manuscript to
+# work on again.
+OUTPUT_STAGES = (OUTPUT_STAGE, PROOF_STAGE)
 
 # The companions to the primary deliverable, under the same base.
 TRACKED_SUFFIX = " - tracked changes"
@@ -39,6 +46,12 @@ NOTES_SUFFIX = " - notes"
 # When the book-styled reading copy is the deliverable, the InDesign-ready
 # file (if also asked for) sits beside it under this suffix.
 INDESIGN_SUFFIX = " - indesign"
+# Proofing's companions, under the "<surname> - book 1" base: the editorial
+# letter, the style sheet, and the machine-readable verdict the watcher reads
+# to decide whether to move HubSpot on. See `galley/outcome.py`.
+LETTER_SUFFIX = " - letter"
+STYLE_SHEET_SUFFIX = " - style-sheet"
+OUTCOME_SUFFIX = " - outcome"
 
 # The dashes a " - " separator turns up as in the wild: a plain hyphen-minus,
 # the hyphen and non-breaking hyphen, the figure/en/em dashes, the horizontal
@@ -100,17 +113,48 @@ def _source_surname(name: str) -> str | None:
     return match.group("surname").strip() if match else None
 
 
-def format_base(stem: str) -> str:
-    """The formatting deliverable's base name for a manuscript.
+def stage_base(stem: str, stage: str) -> str:
+    """One stage's deliverable base name for a manuscript.
 
-    "Smith - Book Original" -> "Smith - book 0". A name that does not carry the
-    source stage token keeps its whole stem and has the output stage appended,
-    so every file still lands under one predictable base. The last token wins
-    (so a surname that echoes it is kept whole), and the dash may be any of the
-    variants an autocorrect leaves behind."""
+    "Smith - Book Original" -> "Smith - book 0" (formatting) or "Smith - book 1"
+    (proofing). A name that does not carry the source stage token keeps its
+    whole stem and has the stage appended, so every file still lands under one
+    predictable base. The last token wins (so a surname that echoes it is kept
+    whole), and the dash may be any of the variants an autocorrect leaves
+    behind."""
     matches = list(_SOURCE_TOKEN_RE.finditer(stem))
     author = stem[:matches[-1].start()].rstrip() if matches else stem
-    return f"{author} - {OUTPUT_STAGE}"
+    return f"{author} - {stage}"
+
+
+def format_base(stem: str) -> str:
+    """The formatting deliverable's base name — "Smith - book 0"."""
+    return stage_base(stem, OUTPUT_STAGE)
+
+
+def proof_base(stem: str) -> str:
+    """The proofing deliverable's base name — "Smith - book 1".
+
+    The one place the proofread hand-off names are built from, so the four
+    files DocWatch expects (`<base>.docx`, `<base> - letter.md`,
+    `<base> - style-sheet.md`, `<base> - outcome.json`) cannot drift from what
+    it looks for."""
+    return stage_base(stem, PROOF_STAGE)
+
+
+def proof_outcome_name(stem: str) -> str:
+    """What the proofread outcome file is called for a manuscript —
+    "Smith - Book Original.docx" -> "Smith - book 1 - outcome.json"."""
+    return f"{proof_base(stem)}{OUTCOME_SUFFIX}.json"
+
+
+def is_proof_outcome_name(name: str, source_stem: str) -> bool:
+    """Whether a filename is the proofread outcome for a given manuscript.
+
+    Folded the same way every other comparison here is — dash variants, case
+    and doubled spaces forgiven — because this name may be typed (or dropped by
+    an external practitioner's tooling) rather than written by DocProof."""
+    return _fold(name) == _fold(proof_outcome_name(source_stem))
 
 
 def has_source_label(name: str) -> bool:
@@ -145,19 +189,23 @@ def is_source_name(name: str, last: str) -> bool:
 
 
 def is_output_name(name: str) -> bool:
-    """Whether a filename is one the formatting stage wrote.
+    """Whether a filename is one a DocProof stage wrote.
 
-    The stage token — " - book 0" — is the tell: an author manuscript is
-    "...- Book Original", never "...- book 0", so a file whose stem carries the
-    output token is DocProof's own, marker or no marker. It catches the
-    deliverable and its "- tracked changes" and "- notes" companions alike,
-    because all three share the base. Left an exact-token check on purpose:
-    DocProof writes these names itself, always with a plain hyphen, so loosening
-    it would only risk misreading a real manuscript as an output and skipping
-    it."""
-    return f" - {OUTPUT_STAGE}".lower() in Path(name).stem.lower()
+    The stage token — " - book 0" for formatting, " - book 1" for proofing — is
+    the tell: an author manuscript is "...- Book Original", never "...- book 0",
+    so a file whose stem carries either token is DocProof's own, marker or no
+    marker. It catches each deliverable and its companions alike ("- tracked
+    changes", "- notes", "- letter", "- style-sheet", "- outcome"), because they
+    all share the base. Left an exact-token check on purpose: DocProof writes
+    these names itself, always with a plain hyphen, so loosening it would only
+    risk misreading a real manuscript as an output and skipping it."""
+    stem = Path(name).stem.lower()
+    return any(f" - {stage}".lower() in stem for stage in OUTPUT_STAGES)
 
 
-__all__ = ["SOURCE_STAGE", "OUTPUT_STAGE", "TRACKED_SUFFIX", "NOTES_SUFFIX",
-           "INDESIGN_SUFFIX", "format_base", "has_source_label",
-           "is_output_name", "is_source_name"]
+__all__ = ["SOURCE_STAGE", "OUTPUT_STAGE", "OUTPUT_STAGES", "PROOF_STAGE",
+           "TRACKED_SUFFIX", "NOTES_SUFFIX", "INDESIGN_SUFFIX",
+           "LETTER_SUFFIX", "STYLE_SHEET_SUFFIX", "OUTCOME_SUFFIX",
+           "format_base", "has_source_label", "is_output_name",
+           "is_proof_outcome_name", "is_source_name", "proof_base",
+           "proof_outcome_name", "stage_base"]
