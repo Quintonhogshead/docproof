@@ -139,6 +139,27 @@ def main(argv=None) -> int:
     ini.add_argument("--hubspot-output-property",
                      help="optional: a property to write the output filename "
                           "into")
+    ini.add_argument("--enable-proofing", action="store_true",
+                     help="also proofread books flagged 'Ready for Proofing' "
+                          "on the same status property (needs HubSpot on)")
+    ini.add_argument("--disable-proofing", action="store_true",
+                     help="stop proofreading (the default)")
+    ini.add_argument("--proof-runner", choices=["app", "external"],
+                     help="who reads the book: 'app' (DocWatch runs the galley "
+                          "job itself) or 'external' (a practitioner does, and "
+                          "DocWatch waits for '<surname> - book 1 - "
+                          "outcome.json' to appear beside the book)")
+    ini.add_argument("--hubspot-proof-ready-value",
+                     help="the status value meaning 'proofread this now' "
+                          "(default 'Ready for Proofing')")
+    ini.add_argument("--hubspot-proof-done-value",
+                     help="the status value DocProof sets once the proofread "
+                          "is back and clean (default 'Proofing Complete')")
+    ini.add_argument("--proof-tier", choices=["T0", "T1", "T2", "T3", "T4"],
+                     help="how hard the app runner reads (default T2)")
+    ini.add_argument("--proof-budget", type=float,
+                     help="dollars one book's proofread may cost; 0 uses the "
+                          "tier's own default")
     ini.add_argument("--hubspot-read-only", dest="hubspot_write_back",
                      action="store_false", default=None,
                      help="gate on HubSpot but never write back to it (a book "
@@ -314,6 +335,7 @@ def cmd_init(args, home: Path) -> int:
     if args.notify_on_complete is not None:
         ws.notify_on_complete = args.notify_on_complete
     _apply_hubspot(args, ws)
+    _apply_proofing(args, ws)
     _apply_subfolders(args, ws)
     ws.save(home)
 
@@ -343,6 +365,16 @@ def cmd_init(args, home: Path) -> int:
               f"'{ws.hubspot_format_done_value or '— not set'}'"
               + ("  (READ-ONLY: no write-back)"
                  if not ws.hubspot_write_back else ""))
+    if ws.proofing_enabled:
+        who = ("DocWatch reads the book" if ws.proof_runner == "app"
+               else "a practitioner reads the book; DocWatch waits for the "
+                    "hand-off")
+        print(f"Proofing on: "
+              f"'{ws.hubspot_proof_ready_value or '— not set'}' → "
+              f"'{ws.hubspot_proof_done_value or '— not set'}' ({who})")
+        if ws.proof_runner == "app":
+            budget = ws.proof_budget_usd or "the tier default"
+            print(f"  reading at {ws.proof_tier}, up to {budget} per book")
     print(f"Keeping its things in {home}")
     missing = _missing(ws)
     if missing:
@@ -393,6 +425,49 @@ def _apply_hubspot(args, ws: WatchSettings) -> None:
     if not ws.hubspot_enabled:
         return
     for attr, prompt in _HUBSPOT_REQUIRED.items():
+        if not getattr(ws, attr):
+            setattr(ws, attr, _ask(prompt))
+
+
+_PROOF_FLAGS = (
+    ("proof_runner", "proof_runner"),
+    ("hubspot_proof_ready_value", "hubspot_proof_ready_value"),
+    ("hubspot_proof_done_value", "hubspot_proof_done_value"),
+    ("proof_tier", "proof_tier"),
+)
+
+# The fields proofing cannot run without. Both ship with real defaults, so this
+# only ever fires for somebody who deliberately blanked one.
+_PROOF_REQUIRED = {
+    "hubspot_proof_ready_value": "Which value means 'ready to proofread'",
+    "hubspot_proof_done_value": "Which value means 'proofing complete'",
+}
+
+
+def _apply_proofing(args, ws: WatchSettings) -> None:
+    """Fold the `--*-proofing` / `--proof-*` flags in, and fill any required
+    field left blank once the stage is switched on — the posture the HubSpot
+    gate takes, for the same reason: a stage that cannot ask, or cannot answer,
+    is worse than one that is off."""
+    if getattr(args, "disable_proofing", False):
+        ws.proofing_enabled = False
+    for attr, flag in _PROOF_FLAGS:
+        value = getattr(args, flag, None)
+        if value is not None:
+            setattr(ws, attr, value)
+    if getattr(args, "proof_budget", None) is not None:
+        if args.proof_budget < 0:
+            print("note: --proof-budget cannot be negative; leaving it alone.")
+        else:
+            ws.proof_budget_usd = float(args.proof_budget)
+    if getattr(args, "enable_proofing", False):
+        ws.proofing_enabled = True
+    if not ws.proofing_enabled:
+        return
+    if not ws.hubspot_enabled:
+        print("Note: proofing needs the HubSpot gate on — the book is flagged "
+              "for it on a CRM property. Enable it with --enable-hubspot.")
+    for attr, prompt in _PROOF_REQUIRED.items():
         if not getattr(ws, attr):
             setattr(ws, attr, _ask(prompt))
 

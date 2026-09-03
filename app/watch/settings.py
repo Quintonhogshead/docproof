@@ -195,11 +195,18 @@ class WatchSettings:
     # HubSpot may spell differently from the label shown in the CRM.
     hubspot_status_property: str = ""
     # The status value that means "format this book now". An editor sets it;
-    # DocProof gates on it. Proofing will add its own ready value here later.
+    # DocProof gates on it. Proofing's own pair is below, on the same property.
     hubspot_format_ready_value: str = ""
     # The status value DocProof writes back once the formatted file is in the
     # folder.
     hubspot_format_done_value: str = ""
+    # The proofing pair, on the same dropdown: "Ready for Proofing" ->
+    # "Proofing Complete". Spelled out rather than left blank because these are
+    # the press's actual option values (the internal value equals the label
+    # verbatim on the Projects object), and a stage that is off does not read
+    # them at all — `proofing_enabled` is the switch, not a blank value.
+    hubspot_proof_ready_value: str = "Ready for Proofing"
+    hubspot_proof_done_value: str = "Proofing Complete"
     # Optional: a property to write the output filename into, so the CRM record
     # links to what was produced. Empty means do not write it.
     hubspot_output_property: str = ""
@@ -210,6 +217,34 @@ class WatchSettings:
     # can be watched end to end without changing a record. A book still marks
     # itself done in Drive, so it is not prepared twice.
     hubspot_write_back: bool = True
+
+    # -- Proofing (Galley) -----------------------------------------------------
+    # The mechanical proofread: the docproof review ladder, its sweeps, verify
+    # and settle, delivered as a tracked-changes manuscript with an editorial
+    # letter and a style sheet. Off by default and gated on the same status
+    # dropdown formatting uses, moved to its own value pair — so an unchanged
+    # prod config behaves exactly as it did before this existed, and turning it
+    # on is one switch. Requires `hubspot_enabled`, like promo and the plan.
+    # See docs/watch.md and `tick.run_proof`.
+    proofing_enabled: bool = False
+    # Who actually reads the book:
+    #
+    #   "app"       DocWatch runs it itself, through the app's galley job — the
+    #               same path the panel's Galley job takes. Needs the vendor
+    #               keys the rest of the app needs, and spends real money.
+    #   "external"  DocWatch only *discovers* the book and waits: it records the
+    #               book as awaiting an external practitioner run, emails the
+    #               owner the book and its folder, and applies the verdict when
+    #               the hand-off files appear in that folder. This is how the
+    #               Mac-side practitioner loop delivers — it runs on a Claude
+    #               Max subscription, which cannot run on Fly.
+    proof_runner: str = "app"
+    # What the app runner asks the governor for, when it is the runner. The
+    # budget is what one book may cost across all its waves; 0 means "the
+    # tier's own default" (see app/routes/jobs.py GALLEY_DEFAULT_BUDGET), which
+    # is the same thing the panel does when a request leaves it blank.
+    proof_tier: str = "T2"
+    proof_budget_usd: float = 0.0
 
     # -- Promo -----------------------------------------------------------------
     # The third pipeline: a teaser and social posts from a finished manuscript.

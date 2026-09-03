@@ -175,9 +175,10 @@ Second, DocProof reads *and writes* the same property, so the private-app token
 needs **write** on that object and the done value must be a real option on the
 property — HubSpot rejects a value that is not in the list.
 
-The ready/done values are named `format_*` because proofing is coming: a later
-release adds `Ready for Proofing` → `Proofing Complete` on the same property.
-Today only the formatting pair does work.
+The ready/done values are named `format_*` because there is a second pair on the
+same property: `Ready for Proofing` → `Proofing Complete`, which drives the
+proofing stage below. One dropdown, one value at a time, so a book is never in
+two stages at once.
 
 **One shared folder, a key in the filename.** There are no per-book folders.
 A manuscript says which book it is through its name: a value — an author surname,
@@ -225,6 +226,94 @@ Two optional fields refine it:
 
 Turn it back off with `docproof-watch init --disable-hubspot`. The token stays
 in the Keychain for next time.
+
+## Proofing (optional)
+
+Formatting is the first pass over a book. **Proofing** is the second: the
+mechanical proofread — DocProof's review ladder, its sweeps and its verify
+gates — delivered as a tracked-changes manuscript with an editorial letter and a
+style sheet beside it. It gates on the *same* status property, moved to its own
+value pair:
+
+| stage | an editor sets | DocProof writes |
+|---|---|---|
+| formatting | `Ready for Formatting` | `Formatting Complete` |
+| proofing | `Ready for Proofing` | `Proofing Complete` |
+
+It is **off by default**, and nothing reads the proofing values until it is on,
+so an existing install is unchanged until somebody switches it on. It needs the
+HubSpot gate on, for the same reason promo and the marketing plan do: the flag
+is what says which book to read. It works in both flat and per-author-subfolder
+mode — unlike promo, which stands aside in subfolder mode.
+
+```bash
+# The values below are the defaults, so in the ordinary case this is enough:
+docproof-watch init --enable-proofing
+```
+
+**What comes back.** Four files, in the folder the book was found in (the
+author's own subfolder, in subfolder mode), under the `book 1` stage name:
+
+```
+Johnson - book 1.docx                 the tracked-changes proofread
+Johnson - book 1 - letter.md          the editorial letter
+Johnson - book 1 - style-sheet.md     the style sheet
+Johnson - book 1 - outcome.json       the verdict, and the numbers behind it
+```
+
+The stage series is `Book Original` (what the author sends) → `book 0`
+(formatting) → `book 1` (proofing). A file carrying any of those stage tokens is
+recognised as something DocProof wrote and is never picked up as a manuscript to
+work on again — by name, not only by marker, which matters because in external
+mode DocProof did not upload them.
+
+**The verdict decides the CRM write, and only one verdict writes.**
+`outcome.json` says either `done` or `needs_human`:
+
+- `done` — nothing left the loop can find or decide. DocProof moves the record
+  to `Proofing Complete`, once.
+- `needs_human` — the book has major grammatical problems and most of its
+  sentences must be rewritten, which is not a job a mechanical proofread should
+  pretend to have finished. **DocProof writes nothing to HubSpot.** The record
+  stays at `Ready for Proofing` — which is exactly what tells a human
+  proofreader to pick the book up — and the reason reaches you in the
+  needs-a-person email (below). There is no "needs a human" option on the
+  property and DocProof will not invent one.
+
+`outcome.json` also carries a `hubspot` block naming the property and value. It
+is there for a person reading the file; DocProof does not obey it. The property
+and the value it writes always come from this watcher's own settings, because in
+external mode that file was placed in Drive by something outside DocProof, and a
+file in a folder does not get to name a CRM field.
+
+### Who reads the book: `--proof-runner`
+
+```bash
+docproof-watch init --enable-proofing --proof-runner app        # the default
+docproof-watch init --enable-proofing --proof-runner external
+```
+
+**`app`** — DocWatch reads the book itself, through the same galley job the
+panel runs, and spends real money doing it. `--proof-tier` (T0–T4, default T2)
+says how hard it reads, and `--proof-budget` caps what one book may cost across
+all its waves; leave the budget at 0 to use the tier's own default. A `--mock-tags`
+rehearsal stands this aside: there is no free version of a wave loop over a novel.
+
+**`external`** — DocWatch reads nothing. It notices the book, marks it
+`awaiting` in the folder, emails you where to find it, and waits. The reading is
+done by the Mac-side proofreading practitioner, which runs on a Claude Max
+subscription and so cannot run on the server. When that run drops the four files
+above into the author's folder, the next pass reads `outcome.json` and acts on
+it. An outcome file that is half-written, or says something DocProof does not
+recognise, is treated as "not there yet" — the book waits and the next pass
+looks again.
+
+Either way the book is read **once**: the marker on the manuscript and the
+watcher's own state file both record it, and the CRM is written exactly once
+however many passes run.
+
+Turn it back off with `docproof-watch init --disable-proofing`; the values stay
+for next time.
 
 ## Per-author subfolders (optional)
 
@@ -297,10 +386,11 @@ Turn it back off with `docproof-watch init --no-require-source-label`.
 Most of what a pass decides is "wait" — nobody need do anything, and the next
 tick reconsiders. A few outcomes are different: a surname that matches two
 Projects both flagged ready (DocProof will not guess which book it is), a
-manuscript that failed prep, or an author flagged **Ready for Formatting whose
+manuscript that failed prep, an author flagged **Ready for Formatting whose
 folder holds no `<surname> - Book Original`** — the folder is empty, or the files
-in it are drafts and reviews. Those go in the pass report and DocProof can email
-you when they happen:
+in it are drafts and reviews — a book whose proofread came back `needs_human`,
+and (in external proofing mode) a book waiting on the practitioner. Those go in
+the pass report and DocProof can email you when they happen:
 
 ```bash
 docproof-watch init --notify-email you@example.com
@@ -638,15 +728,16 @@ None of that needs doing by hand. Run it again, or wait for the schedule.
   `<name> - book 0.docx`. Drive allows it; people find it confusing.
 - **Subfolders are not looked in.** One folder, on purpose — see below.
 - **It cannot tell you what changed inside a manuscript.** That is review, and
-  review is not wired up yet.
+  it arrives as the [proofing stage](#proofing-optional) rather than as part of
+  formatting — off by default, and gated on its own HubSpot value.
 
 ## What comes next
 
 Three things are deliberately left as seams rather than guessed at:
 
-**Copy editing.** [`tick.py`](../app/watch/tick.py) runs three slots in order
-— `collect_finished`, `submit_ready`, `run_prep` — and only the third does
-anything today. A copy-edit pass is a [review](app.md) submitted to a vendor's
+**Copy editing.** [`tick.py`](../app/watch/tick.py) runs its slots in order
+— `collect_finished`, `submit_ready`, `run_prep`, `run_proof` — and the first
+two still do nothing. A copy-edit pass is a [review](app.md) submitted to a vendor's
 overnight batch queue at half price by one pass and collected by a later one,
 which is exactly the shape those first two slots have. Prep cannot work that
 way (its windows have to be read in order) which is why there is nothing to

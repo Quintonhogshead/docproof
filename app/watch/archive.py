@@ -35,9 +35,12 @@ from .settings import GOOGLE_KEY, WatchSettings
 
 log = logging.getLogger("docproof.app.watch.archive")
 
-# What a job's kind is filed under. A book that is not one of these (there is no
-# fourth pipeline today) files under "Other" rather than being dropped.
-KIND_FOLDER = {"review": "Reviews", "prep": "Prep", "promo": "Promo"}
+# What a job's kind is filed under. A kind that is not one of these files under
+# "Other" rather than being dropped. "galley" is the proofing stage's job kind
+# (see app/watch/proof.py), filed under its own name so a proofread's case file,
+# letter and verdict are found where a person would look for them.
+KIND_FOLDER = {"review": "Reviews", "prep": "Prep", "promo": "Promo",
+               "galley": "Proofing"}
 
 # The manifest's fixed name, and the marker that this folder/file is the
 # archive's. `docproof.job` is spelled the same as the watcher's JOB_PROP on

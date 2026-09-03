@@ -13,9 +13,11 @@ toggle.
 
 `assess` reads a finished (ideally settled) run and applies fixed thresholds;
 `galley outcome --set` lets a practitioner or a human overrule with a stated
-reason. Either way outcome.json is written beside findings.json with the
-HubSpot property/value the watch can PATCH verbatim (app/watch/tick.py owns
-the write; this module never calls HubSpot).
+reason. Either way outcome.json is written beside findings.json, carrying the
+HubSpot property/value for `done` and NOTHING for `needs_human` — there is no
+"needs a human" option on the property, so that verdict leaves the book at
+"Ready for Proofing" for a person to pick up. `app/watch/proof.py` reads this
+file and `app/watch/tick.py` owns the write; this module never calls HubSpot.
 """
 from __future__ import annotations
 
@@ -30,12 +32,21 @@ OUTCOME_NAME = "outcome.json"
 OUTCOMES = ("done", "needs_human")
 
 # HubSpot: the DocProof gate targets the Projects object (0-970), property
-# `docproof`; option values equal their labels verbatim. The two values below
-# are the defaults for the proofing stage — configurable per call.
+# `docproof`; option values equal their labels verbatim. `done` moves the book
+# on; `needs_human` writes NOTHING.
+#
+# There is no "Needs Human Proofreader" option on the property and the press has
+# said there will not be one, so a needs_human verdict has no value to PATCH:
+# the book stays at "Ready for Proofing" — which is exactly what a person needs
+# to see — and reaches its owner through the watcher's needs-a-person email
+# instead. Hence the empty default: `hubspot_fields("needs_human")` hands back
+# no property and no value at all, so nothing downstream can accidentally blank
+# the status by writing "" into it. A caller that really does have an option to
+# write can still pass `needs_human_value` explicitly.
 HUBSPOT_OBJECT = "0-970"
 HUBSPOT_PROPERTY = "docproof"
 DEFAULT_DONE_VALUE = "Proofing Complete"
-DEFAULT_NEEDS_HUMAN_VALUE = "Needs Human Proofreader"
+DEFAULT_NEEDS_HUMAN_VALUE = ""
 
 
 @dataclass
@@ -116,8 +127,16 @@ def hubspot_fields(outcome: str, *, done_value: str = DEFAULT_DONE_VALUE,
                    needs_human_value: str = DEFAULT_NEEDS_HUMAN_VALUE,
                    prop: str = HUBSPOT_PROPERTY, obj: str = HUBSPOT_OBJECT
                    ) -> dict[str, str]:
-    return {"object": obj, "property": prop,
-            "value": done_value if outcome == "done" else needs_human_value}
+    """The property and value a watch should PATCH for this verdict — or an
+    empty dict when there is nothing to write.
+
+    `needs_human` yields `{}` by default (see the constants above): no option
+    exists for it, and a blank value would blank the status property rather
+    than move it, so the answer is "write nothing" rather than "write ''"."""
+    value = done_value if outcome == "done" else needs_human_value
+    if not value:
+        return {}
+    return {"object": obj, "property": prop, "value": value}
 
 
 def evidence_of(run_dir: str | Path, source_paras: Mapping[str, str] | None

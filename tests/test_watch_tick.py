@@ -1437,7 +1437,9 @@ def test_an_in_flight_book_is_readopted_even_when_not_ready(tmp_path, provider):
     rec.hubspot_id, rec.subfolder_id, rec.marked = "hs-Johnson", SUB, ""
     state.record(rec)
 
-    listing, routes = ticklib._discover("tok", "hs", ws, state, opener=opener,
+    listing, routes = ticklib._discover("tok", "hs", ws, state,
+                                        stage=ticklib.format_stage(ws),
+                                        opener=opener,
                                         report=ticklib.TickReport(),
                                         dry_run=False)
 
