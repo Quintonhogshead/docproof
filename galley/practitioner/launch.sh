@@ -22,7 +22,7 @@ WS="$WORKROOT/$SLUG"
 # The `docproof` wrapper that re-injects the API keys for the sifter processes
 # only (see galley-bin/docproof): the brain never sees them.
 WRAPBIN="${WRAPBIN:-$HOME/galley-bin}"
-MODEL="${MODEL:-claude-fable-5}"
+MODEL="${MODEL:-claude-fable-5-1}"
 PERM="${PERM:-acceptEdits}"
 
 # Release candidate-screening Apply for THIS deployment only. The subsystem's

@@ -76,8 +76,12 @@ REQUIRED_STATE: dict[str, str] = {
     "deliver": "delivered",
 }
 
-DEFAULT_BUDGET_USD = 20.0            # CLAUDE.md's default, "$20 per book"
-DEFAULT_MODEL = "claude-fable-5"
+#: The API ceiling for one book (Quinton, 2026-09-03). It is not advice: the
+#: driver passes it to `galley approve`, so `approval.json` carries it as
+#: `max_spend_usd` and every paid verb REFUSES (exit 5) past it — which stops
+#: the driver as needs_human rather than overspending quietly.
+DEFAULT_BUDGET_USD = 10.0
+DEFAULT_MODEL = "claude-fable-5-1"
 DEFAULT_PERMISSION_MODE = "acceptEdits"
 DEFAULT_WORKSPACE_ROOT = "~/galley-workspaces"
 DEFAULT_WRAPBIN = "~/galley-bin"
@@ -86,6 +90,54 @@ DEFAULT_WRAPBIN = "~/galley-bin"
 HANDOFF_STAGE = "book 1"
 #: Where the driver leaves its own log and ledger inside the workspace.
 DRIVER_DIR = "driver"
+#: The decision log Galley ships beside the manuscript (galley/journal.py).
+DECISION_LOG_NAME = "DECISION_LOG.md"
+
+#: Runaway protection on the subscription side. A headless session that loops
+#: spends no API dollars but burns the Max subscription and the wall clock all
+#: the same, so every phase carries BOTH a turn cap (`claude --max-turns`) and
+#: a wall-clock timeout on the subprocess. Hitting either ends the run as
+#: needs_human naming the phase and the cap — never silently.
+DEFAULT_MAX_TURNS = 100
+PHASE_MAX_TURNS: dict[str, int] = {
+    "profile": 80,      # scans + PLAN.md, no spend
+    "approve": 60,      # genre-pack, routes, approve — three commands
+    "sweeps": 120,      # a dry-run and an apply per bespoke sweep
+    "ladder": 100,      # one long review command, plus log reads
+    "flights": 150,
+    "audit": 100,
+    "reread": 150,
+    "verify": 250,      # re-reads every applied edit; may re-run per paragraph
+    "settle": 400,      # the until-clean sweep, round after round
+    "certify": 60,
+    "deliver": 80,
+}
+#: Wall-clock seconds per phase. Two hours is the floor for a whole-book
+#: command; the ladder runs a full review, and verify/settle re-read the book.
+DEFAULT_PHASE_TIMEOUT_S = 2 * 3600.0
+PHASE_TIMEOUT_S: dict[str, float] = {
+    "ladder": 3 * 3600.0,
+    "verify": 4 * 3600.0,
+    "settle": 4 * 3600.0,
+}
+#: What a session says when it stopped because the turn cap was reached. Read
+#: off the phase log, because an exit code alone does not distinguish "hit the
+#: cap" from "the command failed".
+_TURN_CAP_RE = re.compile(r"max(?:imum)?[ _-]?turns?\b|turn limit",
+                          re.IGNORECASE)
+#: The conventional exit code for "killed by a timeout".
+TIMEOUT_RC = 124
+
+#: The settle policy (Quinton, 2026-09-03). The until-clean sweep runs at most
+#: SETTLE_ROUNDS rounds; a round raising SETTLE_QUIET_FLOOR new items or FEWER
+#: is quiet and the book is done. `--quiet-floor` is inclusive in
+#: galley/settle.py (`new_items <= quiet_floor`), so "fewer than five" is a
+#: floor of 4. The percentage rule is switched off (`--quiet-share 0` makes
+#: `new_items <= 0` the only share that counts) so the absolute number decides
+#: alone. If the last permitted round is still noisy, the book needs a human.
+SETTLE_ROUNDS = 3
+SETTLE_QUIET_FLOOR = 4
+SETTLE_QUIET_SHARE = 0.0
 #: How many trailing log lines a failure reason carries.
 TAIL_LINES = 20
 
@@ -127,10 +179,13 @@ _PROMPTS: dict[str, str] = {
         "report (`docproof galley routes source/{book} --config runs/mech.yaml "
         "> runs/routes.txt`; read it back), then write the immutable manifest: "
         "`docproof galley approve source/{book} --config runs/mech.yaml "
-        "--budget <PLAN.md total> --out approval.json`. Advance the state "
-        "machine (--source and --config). Every later paid command runs with "
-        "--approval approval.json. Report the allowed models/providers and the "
-        "cap; do NOT spend."),
+        "--budget {budget} --out approval.json`. The cap is ${budget} of API "
+        "spend for the whole book — that exact figure, not the plan's total: "
+        "it is the ceiling every paid verb refuses past, and PLAN.md's total "
+        "must already fit under it. Advance the state machine (--source and "
+        "--config). Every later paid command runs with --approval "
+        "approval.json. Report the allowed models/providers and the cap; do "
+        "NOT spend."),
     "sweeps": (
         "Phase: bespoke sweeps. Read PLAN.md for the approved sweep list and "
         "KNOBS.md for the sweep contract. Author all sweep files in one batch, "
@@ -187,9 +242,14 @@ _PROMPTS: dict[str, str] = {
     "settle": (
         "Phase: residual settlement — zero open candidates. Follow /settle. "
         "Run `docproof galley settle runs/<final> --source source/{book} "
-        "--config <run config> --engine subagent > runs/settle.log 2>&1` (the "
-        "config is the $0 replay config the final build used; run from the "
-        "workspace root so a relative intent_zones_file resolves). Read the "
+        "--config <run config> --engine subagent {settle_flags} > "
+        "runs/settle.log 2>&1` (the config is the $0 replay config the final "
+        "build used; run from the workspace root so a relative "
+        "intent_zones_file resolves). Those flags are REQUIRED and exact: "
+        "sweep until a round comes back quiet, at most {settle_rounds} "
+        "round(s); a round raising fewer than {settle_noisy} new item(s) is "
+        "quiet and the book is done. If the last round is still noisy the book "
+        "needs a human proofreader — report that, do not sweep again. Read the "
         "summary lines and settlement.json's counts; open must be []. Then "
         "`docproof galley state . --advance settled --results runs/<final> "
         "--source source/{book} --config <run config>` (it refuses, exit 7, "
@@ -248,12 +308,25 @@ _MECHANICAL_NOTE: dict[str, str] = {
 }
 
 
-def phase_prompt(phase: str, book: str, *, mechanical_only: bool = True) -> str:
+def settle_flags(rounds: int = SETTLE_ROUNDS,
+                 quiet_floor: int = SETTLE_QUIET_FLOOR,
+                 quiet_share: float = SETTLE_QUIET_SHARE) -> str:
+    """The exact `galley settle` flags the settle phase must use."""
+    return (f"--until-clean --rounds {int(rounds)} "
+            f"--quiet-floor {int(quiet_floor)} --quiet-share {quiet_share:g}")
+
+
+def phase_prompt(phase: str, book: str, *, mechanical_only: bool = True,
+                 budget_usd: float = DEFAULT_BUDGET_USD,
+                 settle_rounds: int = SETTLE_ROUNDS,
+                 settle_quiet_floor: int = SETTLE_QUIET_FLOOR,
+                 settle_quiet_share: float = SETTLE_QUIET_SHARE) -> str:
     """The prompt for one phase's headless session.
 
-    ``book`` is the manuscript's basename inside ``source/``. In mechanical
-    mode a phase the scope forbids has no prompt at all — asking for one is a
-    programming error, not a runtime choice."""
+    ``book`` is the manuscript's basename inside ``source/``; ``budget_usd`` is
+    the API ceiling the `approve` phase freezes into ``approval.json``. In
+    mechanical mode a phase the scope forbids has no prompt at all — asking for
+    one is a programming error, not a runtime choice."""
     if phase not in _PROMPTS:
         raise DriverError(
             f"unknown phase {phase!r} — expected one of {', '.join(ALL_PHASES)}")
@@ -261,7 +334,11 @@ def phase_prompt(phase: str, book: str, *, mechanical_only: bool = True) -> str:
         raise DriverError(
             f"phase {phase!r} is copy-edit scope; this run is mechanical "
             f"proofreading only (drop --mechanical-only to run it)")
-    prompt = _PROMPTS[phase].format(book=book)
+    prompt = _PROMPTS[phase].format(
+        book=book, budget=f"{budget_usd:.2f}",
+        settle_flags=settle_flags(settle_rounds, settle_quiet_floor,
+                                  settle_quiet_share),
+        settle_rounds=settle_rounds, settle_noisy=settle_quiet_floor + 1)
     if mechanical_only:
         prompt += _MECHANICAL_NOTE.get(phase, "")
     return prompt
@@ -398,6 +475,8 @@ class PhaseSpec:
     log_path: Path
     argv: list[str]
     env: dict[str, str]
+    max_turns: int = DEFAULT_MAX_TURNS
+    timeout_s: float = DEFAULT_PHASE_TIMEOUT_S
 
 
 @dataclass
@@ -406,24 +485,49 @@ class PhaseResult:
     returncode: int
     log_path: Path | None = None
     tail: str = ""
+    #: Which runaway cap ended this session, if either: "timeout" | "max_turns".
+    limit: str | None = None
 
     @property
     def ok(self) -> bool:
-        return self.returncode == 0
+        return self.returncode == 0 and not self.limit
+
+
+def detect_turn_cap(text: str) -> bool:
+    """Whether a phase log says the session stopped at its turn cap."""
+    return bool(_TURN_CAP_RE.search(text or ""))
 
 
 def spawn_claude(spec: PhaseSpec) -> PhaseResult:
     """Run one phase as its own headless `claude -p` session, teeing its output
-    to the phase log. The default spawner; injected over in tests."""
+    to the phase log, under the phase's turn and wall-clock caps. The default
+    spawner; injected over in tests."""
     spec.log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(spec.log_path, "w", encoding="utf-8") as fh:
-        fh.write(f"# galley driver: phase {spec.phase} at {_now()}\n")
+        fh.write(f"# galley driver: phase {spec.phase} at {_now()} "
+                 f"(max-turns {spec.max_turns}, timeout "
+                 f"{spec.timeout_s / 3600:.1f}h)\n")
         fh.flush()
-        proc = subprocess.run(spec.argv, cwd=str(spec.workspace),
-                              env=spec.env, stdout=fh,
-                              stderr=subprocess.STDOUT, text=True)
-    return PhaseResult(spec.phase, proc.returncode, spec.log_path,
-                       tail_of(spec.log_path))
+        try:
+            proc = subprocess.run(spec.argv, cwd=str(spec.workspace),
+                                  env=spec.env, stdout=fh,
+                                  stderr=subprocess.STDOUT, text=True,
+                                  timeout=spec.timeout_s)
+        except subprocess.TimeoutExpired:
+            fh.write(f"\n# TIMEOUT: killed after {spec.timeout_s / 3600:.1f}h\n")
+            return PhaseResult(spec.phase, TIMEOUT_RC, spec.log_path,
+                               tail_of(spec.log_path), limit="timeout")
+    tail = tail_of(spec.log_path)
+    limit = "max_turns" if detect_turn_cap(tail) else None
+    return PhaseResult(spec.phase, proc.returncode, spec.log_path, tail,
+                       limit=limit)
+
+
+def _read_json(path: Path) -> Any | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
 
 
 def tail_of(path: str | Path, lines: int = TAIL_LINES) -> str:
@@ -599,6 +703,7 @@ class DriveResult:
             "stopped_at": self.stopped_at,
             "gate": dict(self.gate),
             "phases": [{"phase": p.phase, "returncode": p.returncode,
+                        "limit": p.limit or "",
                         "log": str(p.log_path) if p.log_path else ""}
                        for p in self.phases],
             "handoff": [str(p) for p in self.handoff],
@@ -631,6 +736,17 @@ class Driver:
     poll_interval_s: float = 30.0
     state_gate: bool = True
     question_gate: bool = True
+    #: Runaway caps. `max_turns`/`timeout_s` override every phase; the two
+    #: `*_by_phase` maps override one, and win over the flat override.
+    max_turns: int | None = None
+    max_turns_by_phase: dict[str, int] = field(default_factory=dict)
+    timeout_s: float | None = None
+    timeout_by_phase: dict[str, float] = field(default_factory=dict)
+    #: The settle policy: at most `settle_rounds` until-clean rounds, a round
+    #: raising `settle_quiet_floor` new items or fewer is quiet.
+    settle_rounds: int = SETTLE_ROUNDS
+    settle_quiet_floor: int = SETTLE_QUIET_FLOOR
+    settle_quiet_share: float = SETTLE_QUIET_SHARE
     env: dict[str, str] | None = None
     # Resolved at call time (see `_spawner`), never bound as a dataclass
     # default: a default captured here would survive a monkeypatch of
@@ -656,14 +772,35 @@ class Driver:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def turns_for(self, phase: str) -> int:
+        if phase in self.max_turns_by_phase:
+            return int(self.max_turns_by_phase[phase])
+        if self.max_turns is not None:
+            return int(self.max_turns)
+        return PHASE_MAX_TURNS.get(phase, DEFAULT_MAX_TURNS)
+
+    def timeout_for(self, phase: str) -> float:
+        if phase in self.timeout_by_phase:
+            return float(self.timeout_by_phase[phase])
+        if self.timeout_s is not None:
+            return float(self.timeout_s)
+        return PHASE_TIMEOUT_S.get(phase, DEFAULT_PHASE_TIMEOUT_S)
+
     def _spec(self, phase: str, env: dict[str, str]) -> PhaseSpec:
         prompt = phase_prompt(phase, self.book.name,
-                              mechanical_only=self.mechanical_only)
+                              mechanical_only=self.mechanical_only,
+                              budget_usd=self.budget_usd,
+                              settle_rounds=self.settle_rounds,
+                              settle_quiet_floor=self.settle_quiet_floor,
+                              settle_quiet_share=self.settle_quiet_share)
+        turns = self.turns_for(phase)
         argv = ["claude", "-p", prompt, "--model", self.model,
-                "--permission-mode", self.permission_mode]
+                "--permission-mode", self.permission_mode,
+                "--max-turns", str(turns)]
         return PhaseSpec(phase=phase, prompt=prompt, workspace=self.workspace,
                          log_path=self._driver_dir() / f"{phase}.log",
-                         argv=argv, env=env)
+                         argv=argv, env=env, max_turns=turns,
+                         timeout_s=self.timeout_for(phase))
 
     def _questions_text(self) -> str:
         try:
@@ -678,6 +815,42 @@ class Driver:
             return ""
         return after[len(before):].strip() if after.startswith(before) \
             else after.strip()
+
+    def settle_verdict(self) -> str:
+        """Why this book still needs a human after the settle sweep, or "".
+
+        The policy is the sweep's own arithmetic, read back off
+        ``settlement.json``: the loop is allowed `settle_rounds` rounds, and a
+        round raising more than `settle_quiet_floor` new items is noisy. A
+        sweep that ran out of rounds while still noisy has not converged on
+        clean, and no amount of further mechanical work will fix that — it is
+        a human proofreader's book."""
+        run = self._final_run()
+        if run is None:
+            return ""
+        payload = _read_json(run / "settlement.json")
+        if not isinstance(payload, dict):
+            return ""
+        conv = payload.get("convergence") or {}
+        if not conv or conv.get("stopped") in ("clean", "quiet"):
+            return ""
+        if conv.get("quiet") is True:
+            return ""
+        rounds = int(conv.get("rounds", 0) or 0)
+        new_items = conv.get("last_new_items", "?")
+        return (f"still finding errors after {rounds} round(s): {new_items} in "
+                f"the last round (the sweep stopped on "
+                f"{conv.get('stopped', 'the round cap')}, and a round is quiet "
+                f"only under {self.settle_quiet_floor + 1} new items) — the "
+                f"book is not converging on clean and needs a human "
+                f"proofreader")
+
+    def _final_run(self) -> Path | None:
+        """The run directory the build ended in: the newest `runs/*` holding a
+        findings envelope."""
+        runs = sorted((self.workspace / "runs").glob("*/findings.json"),
+                      key=lambda p: p.stat().st_mtime, reverse=True)
+        return runs[0].parent if runs else None
 
     def _current_state(self) -> str:
         from galley.state_machine import RunStateMachine
@@ -706,8 +879,29 @@ class Driver:
         result.stopped_at = phase
         self._write_outcome(reason)
         self._write_ledger(result)
+        # A stopped run still gets its decision log: what a person picking the
+        # workspace up needs most is the record of what was decided before it
+        # stopped, and why it stopped.
+        self.write_decision_log()
         self.log(f"STOPPED at {phase or 'the plan gate'}: {reason}")
         return result
+
+    def write_decision_log(self) -> Path | None:
+        """Render `deliverable/DECISION_LOG.md` from whatever artifacts exist.
+
+        Best-effort by design: a decision log that cannot render must never be
+        the thing that sinks a finished run, so a failure is logged and the
+        run carries on (the hand-off, which requires the file, will say so)."""
+        run = self._final_run()
+        out = self.workspace / "deliverable" / DECISION_LOG_NAME
+        try:
+            from galley.journal import write_journal
+            return write_journal(run or self.workspace / "runs", out,
+                                 workspace=self.workspace,
+                                 book=self.book.name, generated_at=_now())
+        except Exception as e:                              # noqa: BLE001
+            self.log(f"could not render the decision log ({e})")
+            return None
 
     def _write_outcome(self, reason: str) -> Path:
         """The driver's own verdict, in the place DocWatch reads: `runs/`.
@@ -832,6 +1026,19 @@ class Driver:
             asked_before = self._questions_text()
             outcome = self._spawner()(spec)
             result.phases.append(outcome)
+            if outcome.limit == "timeout":
+                return self._stop(
+                    result, phase,
+                    f"phase {phase} hit its wall-clock cap of "
+                    f"{spec.timeout_s / 3600:.1f}h and was killed — a session "
+                    f"that long is looping, not working; last lines of "
+                    f"{outcome.log_path}:\n{outcome.tail}")
+            if outcome.limit == "max_turns":
+                return self._stop(
+                    result, phase,
+                    f"phase {phase} hit its turn cap of {spec.max_turns} "
+                    f"(claude --max-turns) — last lines of "
+                    f"{outcome.log_path}:\n{outcome.tail}")
             if not outcome.ok:
                 return self._stop(
                     result, phase,
@@ -848,6 +1055,10 @@ class Driver:
                     result, phase,
                     f"phase {phase} escalated a question and there is nobody "
                     f"to answer it:\n{asked[:1200]}")
+            if phase == "settle":
+                unconverged = self.settle_verdict()
+                if unconverged:
+                    return self._stop(result, phase, unconverged)
             need = REQUIRED_STATE.get(phase) if self.state_gate else None
             if need and not self._state_reached(need):
                 return self._stop(
@@ -907,6 +1118,9 @@ class Driver:
     def run_handoff(self) -> list[Path]:
         out = Path(self.handoff_dir) if self.handoff_dir \
             else self.workspace / "handoff"
+        # The decision log is rendered from the run's artifacts at hand-off
+        # time, so it always describes the build that actually ships.
+        self.write_decision_log()
         return build_handoff(self.workspace, self.book.name, out,
                              outcome_sources=self._outcome_sources())
 
@@ -936,6 +1150,7 @@ def handoff_base(source_name: str, stage: str = HANDOFF_STAGE) -> str:
 #: the deliverable's file within the workspace, and the suffix it lands under.
 _LETTER_NAMES = ("letter.md", "EDITORS_LETTER.md")
 _STYLE_NAMES = ("style-sheet.md", "STYLE_SHEET.md")
+_JOURNAL_NAMES = (DECISION_LOG_NAME, "decision-log.md")
 
 
 def build_handoff(workspace: str | Path, source_name: str,
@@ -944,9 +1159,10 @@ def build_handoff(workspace: str | Path, source_name: str,
     """Copy the four hand-off files into ``handoff_dir`` under house names.
 
     ``<surname> - book 1.docx`` (the tracked-changes proofread manuscript),
-    ``… - letter.md``, ``… - style-sheet.md``, ``… - outcome.json``. Every one
-    is required: a hand-off missing a piece is not a hand-off, so a missing
-    file raises rather than shipping a partial folder."""
+    ``… - letter.md``, ``… - style-sheet.md``, ``… - decision-log.md``,
+    ``… - outcome.json``. Every one is required: a hand-off missing a piece is
+    not a hand-off, so a missing file raises rather than shipping a partial
+    folder."""
     ws = Path(workspace)
     out = Path(handoff_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -972,6 +1188,12 @@ def build_handoff(workspace: str | Path, source_name: str,
             f"no style sheet in {deliverable} (looked for "
             f"{', '.join(_STYLE_NAMES)}) — render it with `docproof galley "
             f"letter`")
+    journal = _first_existing(deliverable, _JOURNAL_NAMES)
+    if journal is None:
+        raise DriverError(
+            f"no decision log in {deliverable} (looked for "
+            f"{', '.join(_JOURNAL_NAMES)}) — render it with `docproof galley "
+            f"journal RUN --workspace {ws}`")
     outcome = next((p for p in outcome_sources if Path(p).is_file()), None)
     if outcome is None:
         raise DriverError(
@@ -981,6 +1203,7 @@ def build_handoff(workspace: str | Path, source_name: str,
     pairs = ((docx, f"{base}.docx"),
              (letter, f"{base} - letter.md"),
              (style, f"{base} - style-sheet.md"),
+             (journal, f"{base} - decision-log.md"),
              (Path(outcome), f"{base} - outcome.json"))
     written: list[Path] = []
     for src, name in pairs:
@@ -1033,12 +1256,15 @@ def _default_upload(files: list[Path], folder_id: str) -> list[str]:
 
 
 __all__ = [
-    "ALL_PHASES", "COPYEDIT_PHASES", "DEFAULT_BUDGET_USD", "DEFAULT_MODEL",
-    "DEFAULT_PERMISSION_MODE", "DEFAULT_WORKSPACE_ROOT", "DEFAULT_WRAPBIN",
-    "HANDOFF_STAGE", "MECHANICAL_PHASES", "REQUIRED_STATE", "DriveResult",
-    "Driver", "DriverError", "PhaseResult", "PhaseSpec", "PlanSummary",
-    "build_env", "build_handoff", "gate_decision", "gate_question",
-    "handoff_base", "phase_prompt", "phases_for", "read_plan",
-    "record_approval", "reply_after", "seed_workspace", "select_phases",
+    "ALL_PHASES", "COPYEDIT_PHASES", "DECISION_LOG_NAME", "DEFAULT_BUDGET_USD",
+    "DEFAULT_MAX_TURNS", "DEFAULT_MODEL", "DEFAULT_PERMISSION_MODE",
+    "DEFAULT_PHASE_TIMEOUT_S", "DEFAULT_WORKSPACE_ROOT", "DEFAULT_WRAPBIN",
+    "HANDOFF_STAGE", "MECHANICAL_PHASES", "PHASE_MAX_TURNS", "PHASE_TIMEOUT_S",
+    "REQUIRED_STATE", "SETTLE_QUIET_FLOOR", "SETTLE_QUIET_SHARE",
+    "SETTLE_ROUNDS", "TIMEOUT_RC", "DriveResult", "Driver", "DriverError",
+    "PhaseResult", "PhaseSpec", "PlanSummary", "build_env", "build_handoff",
+    "detect_turn_cap", "gate_decision", "gate_question", "handoff_base",
+    "phase_prompt", "phases_for", "read_plan", "record_approval",
+    "reply_after", "seed_workspace", "select_phases", "settle_flags",
     "spawn_claude", "tail_of",
 ]

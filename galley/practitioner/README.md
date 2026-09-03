@@ -81,7 +81,7 @@ and `reread` are not run; `--copyedit` re-opens them for an experiment.
 
 | Flag | What it does |
 |---|---|
-| `--approve auto` | approve the plan when its `TOTAL` is inside `--budget` (default $20) and no line puts a copy-edit lane in scope; otherwise stop |
+| `--approve auto` | approve the plan when its `TOTAL` is inside `--budget` (default **$10**, the API ceiling) and no line puts a copy-edit lane in scope; otherwise stop |
 | `--approve email` | send the plan through `galley ask` and poll `QUESTIONS.md` for `APPROVED`/`DECLINED` below the marker, until `--reply-timeout` (6h) |
 | `--approve manual` | today's behaviour: stop at the gate for a person |
 | `--from PHASE` / `--phases …` | restart from, or run only, these phases (`state.json` is the ledger) |
@@ -89,13 +89,17 @@ and `reread` are not run; `--copyedit` re-opens them for an experiment.
 | `--drive-folder-id ID` | also upload the hand-off there, using the watcher's own Google sign-in (`docproof-watch auth`) |
 | `--no-state-gate` | don't require each phase to have advanced `state.json` |
 | `--no-question-gate` | don't stop when a phase appends an escalation to `QUESTIONS.md` |
+| `--max-turns N` / `--phase-max-turns PHASE=N` | turn cap per session (default: settle 400, verify 250, ladder 100, 60-150 elsewhere) |
+| `--timeout HOURS` / `--phase-timeout PHASE=HOURS` | wall-clock cap per session (default 2h; ladder 3h, verify/settle 4h) |
+| `--settle-rounds N` / `--settle-quiet-floor N` / `--settle-quiet-share S` | the settle policy (default 3 / 4 / 0) |
 
 **Stopping.** A phase that exits nonzero stops the driver, writes
 `runs/outcome.json` as `needs_human` naming the phase and its last log lines,
 and leaves the workspace alone — nothing is retried or worked around. The same
 happens when the gate refuses, when an emailed gate gets no reply, when a
-phase exits 0 without advancing the state machine, and when a phase appends an
-escalation to `QUESTIONS.md` (`galley ask` exits 0, so the file is what says a
+phase hits its turn cap or wall-clock timeout, when the settle sweep is still
+noisy at its round ceiling, when a phase exits 0 without advancing the state
+machine, and when a phase appends an escalation to `QUESTIONS.md` (`galley ask` exits 0, so the file is what says a
 session asked something nobody is there to answer). Exit codes: **0** finished,
 **7** stopped needing a human (read `runs/outcome.json`), **2** a setup error.
 Per-phase logs and the driver's own ledger are in `runs/driver/`.
@@ -105,11 +109,24 @@ directory under the house series (surname read by `app/watch/naming.py` from
 `<surname> - Book Original.docx`):
 
 ```
-<surname> - book 1.docx              the tracked-changes proofread manuscript
-<surname> - book 1 - letter.md       the editor's letter
-<surname> - book 1 - style-sheet.md  the style sheet
-<surname> - book 1 - outcome.json    done | needs_human, with the reason
+<surname> - book 1.docx                the tracked-changes proofread manuscript
+<surname> - book 1 - letter.md         the editor's letter
+<surname> - book 1 - style-sheet.md    the style sheet
+<surname> - book 1 - decision-log.md   every action taken, and why
+<surname> - book 1 - outcome.json      done | needs_human, with the reason
 ```
+
+**The decision log** (`galley/journal.py`) is rendered from the run's own
+artifacts: driver events and the gate decision, the plan's G-items and how they
+were resolved, each sweep and its count, every applied edit with the
+explanation its detector recorded, every withheld row with its status, every
+author query, the verify verdicts, the settle records round by round, the
+certify checks, and the outcome with its evidence. Grouped by phase, then by
+paragraph; a phase that never ran is a one-line "not run" section. It is
+deterministic and reads no clock, so `docproof galley journal RUN --workspace
+WS --out FILE` regenerates it byte for byte at any time. The driver writes it
+to `deliverable/DECISION_LOG.md` at hand-off — and also when a run STOPS, so a
+workspace someone picks up always says what was decided and why it stopped.
 
 With `--drive-folder-id` they are also uploaded with the watcher's own Drive
 credentials. If sign-in is missing the driver stops and says so; the files are

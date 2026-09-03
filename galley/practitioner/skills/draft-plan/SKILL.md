@@ -56,7 +56,9 @@ the skeleton's shape.
    default.yaml — an omitted `sweeps:` kills all sweeps). Per-category
    `passes`/`token_budget` knobs are per-run only.
 3. **Price each line** = words/1000 × calibrated rate. Sum, add 15% headroom,
-   compare to budget tier. Mark which lines are $0.
+   compare to the API ceiling — **$10 per book** unless the gate says another
+   figure. That ceiling is what `approval.json` freezes and what every paid
+   verb refuses past, so a plan that does not fit under it is not a plan. Mark which lines are $0.
 4. **Expected yield** per line from calibration/recall history (seeded-recall
    numbers, prior books). Be honest about what a lane can't reach.
 5. **Stop rules.** Marginal-cost ceiling per wave (default: stop when a wave

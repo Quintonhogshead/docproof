@@ -25,7 +25,7 @@ BOOK="${BOOK:?set BOOK=/path/to/manuscript.docx}"
 SLUG="${SLUG:?set SLUG=book-slug}"
 WORKROOT="${WORKROOT:-$HOME/galley-workspaces}"
 WRAPBIN="${WRAPBIN:-$HOME/galley-bin}"
-MODEL="${MODEL:-claude-fable-5}"
+MODEL="${MODEL:-claude-fable-5-1}"
 PERM="${PERM:-acceptEdits}"
 PHASE="${PHASE:-profile}"
 # Go-live scope: mechanical proofreading only. COPYEDIT=1 re-opens the

@@ -429,6 +429,7 @@ def _deliverable(ws: Path) -> None:
         b"not the manuscript")
     (d / "letter.md").write_text("# Letter\n", encoding="utf-8")
     (d / "style-sheet.md").write_text("# Style sheet\n", encoding="utf-8")
+    (d / gd.DECISION_LOG_NAME).write_text("# Decision log\n", encoding="utf-8")
     (d / "outcome.json").write_text(json.dumps({
         "outcome": "done", "reason": "no open items", "evidence": {},
         "hubspot": {"value": "Proofing Complete"}, "set_by": "assess"}),
@@ -446,7 +447,7 @@ def test_handoff_base_follows_the_house_series(source_name, expected):
     assert gd.handoff_base(source_name) == expected
 
 
-def test_handoff_writes_the_four_contract_files(book, tmp_path):
+def test_handoff_writes_the_contract_files(book, tmp_path):
     ws = gd.seed_workspace(book, "ford-book-1", workspace_root=tmp_path / "ws")
     _deliverable(ws)
     out = tmp_path / "handoff"
@@ -454,6 +455,7 @@ def test_handoff_writes_the_four_contract_files(book, tmp_path):
         ws, book.name, out,
         outcome_sources=[ws / "deliverable" / "outcome.json"])
     assert sorted(p.name for p in written) == [
+        "Ford - book 1 - decision-log.md",
         "Ford - book 1 - letter.md",
         "Ford - book 1 - outcome.json",
         "Ford - book 1 - style-sheet.md",
@@ -488,8 +490,8 @@ def test_a_full_run_hands_off_and_uploads(book, tmp_path):
                      drive_folder_id="folder-9", upload=upload,
                      handoff_dir=tmp_path / "handoff").run()
     assert result.outcome == "done"
-    assert len(result.handoff) == 4
-    assert len(result.uploaded) == 4
+    assert len(result.handoff) == 5
+    assert len(result.uploaded) == 5
     assert {f for _n, f in uploaded} == {"folder-9"}
     assert ("Ford - book 1.docx", "folder-9") in uploaded
 

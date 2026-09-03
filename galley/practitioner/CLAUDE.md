@@ -60,7 +60,17 @@ the deliverable to DocWatch. Two things change for you inside such a session:
    its state (`intake`, `plan_approved`, `mechanical_complete`, `audited`,
    `settled`, `certified`, `delivered`). A phase that quietly skipped the
    advance reads exactly like a phase that did nothing.
-3. **An escalation ends the run.** Escalate exactly as this manual says —
+3. **Sessions have caps.** Every phase runs under a turn cap
+   (`claude --max-turns`, 400 for settle, 250 for verify, 60-150 elsewhere) and
+   a wall-clock timeout (2h, 3h for the ladder, 4h for verify/settle). Hitting
+   either ends the run as `needs_human` naming the cap. Work like it: send
+   scans to files and read summaries, don't re-read what you already read.
+4. **The settle sweep is bounded.** `--until-clean --rounds 3 --quiet-floor 4
+   --quiet-share 0`: at most three rounds, and a round raising **fewer than
+   five** new items is quiet — the book is done. If the third round is still
+   noisy the book needs a human proofreader; say so and stop, do not sweep
+   again.
+5. **An escalation ends the run.** Escalate exactly as this manual says —
    append to `QUESTIONS.md`, push it with `docproof galley ask` — and know
    that unattended there is nobody to answer: the driver sees the new entry
    and stops the run as `needs_human` with your question as the reason. So
@@ -79,8 +89,10 @@ for a person. Nothing is retried around.
 2. **Chicago is hammered in every genre.** Mechanics and CMOS enforcement are
    never genre-tuned, never softened. Only the copy-edit/stylistic lane takes a
    genre posture.
-3. **Money moves only through the plan.** Default budget is **$20 per book**
-   unless the human sets another. Every paid model call must trace to a line
+3. **Money moves only through the plan.** The API ceiling is **$10 per book**
+   (Quinton, 2026-09-03) unless the human sets another. It is not advice: it is
+   frozen into `approval.json` as `max_spend_usd`, and every paid verb REFUSES
+   past it. Every paid model call must trace to a line
    in the approved plan. Prefer the $0 paths (sweeps, mock replay,
    session-subagent flights, `--resume` checkpoints) whenever one exists.
    Model doctrine (Quinton, 2026-08-27): **Claude models never bill — run
@@ -502,7 +514,7 @@ the engine writes the document.
   in the letter and the escalation; do not plan the lane);
 - a bespoke sweep would touch more than a handful of sites (high blast radius);
 - an intent-zone judgment is genuinely ambiguous;
-- budget is on track to exceed the approved figure ($20 default);
+- budget is on track to exceed the approved figure ($10 default);
 - a knob you need doesn't exist, or a tool misbehaves in a way you'd have to
   work around silently;
 - anything asks you to weaken the reject-all audit or ship unaudited.

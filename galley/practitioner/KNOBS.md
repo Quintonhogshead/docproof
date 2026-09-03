@@ -15,7 +15,9 @@ ESCALATION (the knob may not exist), not a reason to go read the source.
   headless session with the phase prompts that now live in `galley/driver.py`
   (`~/galley-bin/galley-run.sh` is a thin wrapper over this verb;
   `--print-prompt PHASE` prints one). `--approve auto|email|manual` decides the
-  plan gate; `--budget USD` (default $20) is the ceiling it decides against;
+  plan gate; `--budget USD` (default **$10**, the API ceiling for a book) is
+  the figure it decides against AND the figure the `approve` phase freezes into
+  `approval.json`;
   `--from PHASE` / `--phases …` restart or narrow; `--handoff DIR` and
   `--drive-folder-id` put the four hand-off files (`<surname> - book 1.docx`,
   `… - letter.md`, `… - style-sheet.md`, `… - outcome.json`) where DocWatch
@@ -28,6 +30,25 @@ ESCALATION (the knob may not exist), not a reason to go read the source.
   then adds a **mechanical only** check that FAILS on a copy-edit lane in the
   config or approval, a shipped copy-edit finding, or a `flights_findings.json`
   in the run dir.
+- **Session caps.** Each phase runs `claude --max-turns N` under a wall-clock
+  timeout: 400 turns / 4h for settle, 250 / 4h for verify, 100 / 3h for the
+  ladder, 60-150 / 2h elsewhere. `--max-turns N` / `--timeout HOURS` override
+  every phase, `--phase-max-turns PHASE=N` / `--phase-timeout PHASE=HOURS` one.
+  Hitting either ends the run as needs_human naming the phase and the cap.
+- **The settle policy.** The driver's settle phase runs `--until-clean --rounds
+  3 --quiet-floor 4 --quiet-share 0`: at most 3 rounds, a round raising FEWER
+  THAN 5 new items is quiet (the floor is inclusive: `new_items <= floor`), and
+  the percentage rule is off so the absolute count decides alone. A sweep still
+  noisy at the ceiling ends the run as needs_human ("still finding errors after
+  3 rounds: N in the last round"). `--settle-rounds` / `--settle-quiet-floor` /
+  `--settle-quiet-share` change the three numbers. NOTE: `--until-clean` now
+  treats an EXPLICIT `--rounds N` as its ceiling (it used to ignore it and
+  sweep to 12); leave `--rounds` off to keep the old reach.
+- **The decision log.** `docproof galley journal RUN --workspace WS --out FILE`
+  renders `DECISION_LOG.md` — every action and the reason recorded for it, from
+  the run's own artifacts. $0, no model, no clock. The driver writes it into
+  `deliverable/` and the hand-off; regenerate it whenever someone asks how a
+  decision was made.
 - **An escalation stops an unattended run.** Anything a phase appends to
   `QUESTIONS.md` stops the driver as `needs_human` with your question as the
   reason (`--no-question-gate` disables it) — `galley ask` exits 0, so the file

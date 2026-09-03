@@ -1473,7 +1473,15 @@ class Settler:
                      "fresh sweep of the whole book")
             items = self.fresh_sweep()
             self.last_reread = (len(items) or 1) * 50   # a whole-book read
-        limit = HARD_MAX_ROUNDS if self.opt.until_clean else self.opt.rounds
+        # `--until-clean` sweeps until a round comes back quiet, but an
+        # EXPLICIT `--rounds N` is still a ceiling on it: a caller who names a
+        # round budget means it, and the old behaviour (silently sweeping to
+        # HARD_MAX_ROUNDS whatever `--rounds` said) is a trap for anyone
+        # running the loop unattended. `rounds=0`/unset keeps the old reach.
+        limit = self.opt.rounds
+        if self.opt.until_clean:
+            limit = min(self.opt.rounds, HARD_MAX_ROUNDS) if self.opt.rounds \
+                else HARD_MAX_ROUNDS
         stopped = "clean"
         while items and round_no < limit:
             round_no += 1
