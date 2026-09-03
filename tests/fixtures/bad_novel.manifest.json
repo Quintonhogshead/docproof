@@ -1,0 +1,72 @@
+[
+  {
+    "id": "D1-subject-verb",
+    "damage_type": "subject_verb_disagreement",
+    "paragraph": 2,
+    "quote": "The orchard beyond the yard were a smudge of dark branches, patient and unmoving in the wet morning air.",
+    "correction": "The orchard beyond the yard was a smudge of dark branches, patient and unmoving in the wet morning air."
+  },
+  {
+    "id": "D2-dropped-word",
+    "damage_type": "dropped_word",
+    "paragraph": 3,
+    "quote": "Her father had built house with his own hands, board by board, in the years before she was born.",
+    "correction": "Her father had built the house with his own hands, board by board, in the years before she was born."
+  },
+  {
+    "id": "D3-garbled-order",
+    "damage_type": "garbled_word_order",
+    "paragraph": 4,
+    "quote": "She had set the pages on the kitchen table three days ago and not had found the nerve to open them since, as though the ink itself might rise up and accuse her of some small dishonesty.",
+    "correction": "She had set the pages on the kitchen table three days ago and had not found the nerve to open them since, as though the ink itself might rise up and accuse her of some small dishonesty."
+  },
+  {
+    "id": "D4-dropped-word",
+    "damage_type": "dropped_word",
+    "paragraph": 5,
+    "quote": "Kathryn pulled on her coat, laced her boots, and stepped out into a world washed clean, determined walk until her thoughts settled into something she could use.",
+    "correction": "Kathryn pulled on her coat, laced her boots, and stepped out into a world washed clean, determined to walk until her thoughts settled into something she could use."
+  },
+  {
+    "id": "D5-run-on",
+    "damage_type": "run_on",
+    "paragraph": 6,
+    "quote": "The lane was soft underfoot and quiet, and she met no one on the long walk to the crossroads, a single crow watched her from the top of a fence post, unbothered, turning its head as she passed as if it had been expecting her all along.",
+    "correction": "The lane was soft underfoot and quiet, and she met no one on the long walk to the crossroads. A single crow watched her from the top of a fence post, unbothered, turning its head as she passed as if it had been expecting her all along."
+  },
+  {
+    "id": "D6-subject-verb",
+    "damage_type": "subject_verb_disagreement",
+    "paragraph": 8,
+    "quote": "He notice everything and said almost none of it aloud.",
+    "correction": "He noticed everything and said almost none of it aloud."
+  },
+  {
+    "id": "D7-garbled-order",
+    "damage_type": "garbled_word_order",
+    "paragraph": 9,
+    "quote": "The crossroads not had changed in her lifetime, four rough lanes meeting at a leaning signpost whose paint had long since weathered away.",
+    "correction": "The crossroads had not changed in her lifetime, four rough lanes meeting at a leaning signpost whose paint had long since weathered away."
+  },
+  {
+    "id": "D8-dropped-word",
+    "damage_type": "dropped_word",
+    "paragraph": 10,
+    "quote": "In the end decision made itself, the way such decisions usually did, and she found her feet already carrying her up the rising road before she had quite chosen to go.",
+    "correction": "In the end the decision made itself, the way such decisions usually did, and she found her feet already carrying her up the rising road before she had quite chosen to go."
+  },
+  {
+    "id": "D9-run-on",
+    "damage_type": "run_on",
+    "paragraph": 11,
+    "quote": "The years had taught her to distrust grand plans and to trust small motions instead, and so she did not try to picture the whole of the day ahead, she would walk to the town, and see what the town had to show her, and let the next thing follow from the last, and somewhere in all that ordinary forward motion the answer she needed might quietly present itself.",
+    "correction": "The years had taught her to distrust grand plans and to trust small motions instead, and so she did not try to picture the whole of the day ahead. She would walk to the town, and see what the town had to show her, and let the next thing follow from the last, and somewhere in all that ordinary forward motion the answer she needed might quietly present itself."
+  },
+  {
+    "id": "D10-subject-verb",
+    "damage_type": "subject_verb_disagreement",
+    "paragraph": 12,
+    "quote": "But she do not turn.",
+    "correction": "But she did not turn."
+  }
+]
