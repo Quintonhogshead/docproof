@@ -232,6 +232,93 @@ def test_certify_text_hygiene_passes_clean_text_and_dividers(tmp_path):
     assert check.status == "pass"
 
 
+# --- pre-existing vs. introduced hygiene faults (HARNESS_NOTES item 10) -----
+#
+# certify's canonical text strips paragraph-trailing whitespace, so a fault
+# already in the SOURCE manuscript can never be expressed as a finding row —
+# no lane could ever have fixed it. Without --source that is unprovable and
+# every hit still fails (today's behaviour); with a matching --source, a
+# hit that is byte-for-byte the same in the source's same paragraph passes
+# instead, while a hit the run actually introduced still fails.
+
+def _docx_with_internal_break(path, before, trailing_ws, after):
+    """A single paragraph whose text has a mid-paragraph line break (w:br) —
+    the Redding body-0734 shape: 'gone. \\n\\n', a pre-existing space before a
+    paragraph-INTERNAL break, not the paragraph's own trailing whitespace."""
+    import docx as _docx
+    from docx.enum.text import WD_BREAK
+    d = _docx.Document()
+    p = d.add_paragraph()
+    p.add_run(before + trailing_ws)
+    p.add_run().add_break(WD_BREAK.LINE)
+    if after:
+        p.add_run(after)
+    d.save(path)
+
+
+def test_certify_text_hygiene_pre_existing_double_space_is_not_a_fail(tmp_path):
+    run = _run_dir(tmp_path, {"findings": [], "cost": {"total_usd": 0.0}})
+    _docx_in(run, "book.docx", "A clean paragraph.",
+             "Two  spaces survived here.")
+    _docx_in(tmp_path, "source.docx", "A clean paragraph.",
+             "Two  spaces survived here.")
+    cert = certify_run(run, source=tmp_path / "source.docx")
+    check = next(c for c in cert.checks if c.name == "delivered text hygiene")
+    assert check.status == "pass"
+    assert "pre-existing" in check.detail
+
+
+def test_certify_text_hygiene_introduced_double_space_still_fails(tmp_path):
+    run = _run_dir(tmp_path, {"findings": [], "cost": {"total_usd": 0.0}})
+    _docx_in(run, "book.docx", "A clean paragraph.",
+             "Two  spaces survived here.")
+    _docx_in(tmp_path, "source.docx", "A clean paragraph.",
+             "Two spaces survived here.")     # clean in the source
+    cert = certify_run(run, source=tmp_path / "source.docx")
+    check = next(c for c in cert.checks if c.name == "delivered text hygiene")
+    assert check.status == "fail"
+    assert "double space" in check.detail
+
+
+def test_certify_text_hygiene_pre_existing_internal_break_space_passes(tmp_path):
+    """The exact Redding body-0734 shape: a pre-existing space before a
+    paragraph-internal line break, byte-identical in the source."""
+    run = _run_dir(tmp_path, {"findings": [], "cost": {"total_usd": 0.0}})
+    _docx_with_internal_break(run / "book.docx", "It was gone.", " ",
+                              "Next line.")
+    _docx_with_internal_break(tmp_path / "source.docx", "It was gone.", " ",
+                              "Next line.")
+    cert = certify_run(run, source=tmp_path / "source.docx")
+    check = next(c for c in cert.checks if c.name == "delivered text hygiene")
+    assert check.status == "pass"
+    assert "pre-existing" in check.detail
+
+
+def test_certify_text_hygiene_introduced_internal_break_space_fails(tmp_path):
+    """The same shape, but the source paragraph is clean — this run
+    introduced the trailing space, so it still fails."""
+    run = _run_dir(tmp_path, {"findings": [], "cost": {"total_usd": 0.0}})
+    _docx_with_internal_break(run / "book.docx", "It was gone.", " ",
+                              "Next line.")
+    _docx_with_internal_break(tmp_path / "source.docx", "It was gone.", "",
+                              "Next line.")
+    cert = certify_run(run, source=tmp_path / "source.docx")
+    check = next(c for c in cert.checks if c.name == "delivered text hygiene")
+    assert check.status == "fail"
+
+
+def test_certify_text_hygiene_without_source_still_fails_a_preexisting_fault(
+        tmp_path):
+    """No --source given means pre-existing can't be proven — every hit still
+    fails, exactly like before this fix."""
+    run = _run_dir(tmp_path, {"findings": [], "cost": {"total_usd": 0.0}})
+    _docx_with_internal_break(run / "book.docx", "It was gone.", " ",
+                              "Next line.")
+    cert = certify_run(run)
+    check = next(c for c in cert.checks if c.name == "delivered text hygiene")
+    assert check.status == "fail"
+
+
 # --- the `ran` flag from `galley verify` -------------------------------------
 
 def test_certify_change_verify_honors_ran_false(tmp_path):
@@ -452,10 +539,39 @@ def _scan(tmp_path, rows):
     return next(c for c in certify_run(run).checks if c.name == "artifact scan")
 
 
-def test_artifact_scan_catches_an_ellipsis_followed_by_a_period(tmp_path):
-    """The old entry was the literal string '…\\.', which no text contains."""
+def test_artifact_scan_allows_a_sentence_final_ellipsis_period(tmp_path):
+    """An ellipsis directly followed by ONE period is not an artifact — it is
+    exactly what `sweep_ellipsis` leaves behind at a genuine sentence end
+    (house style: NBSP + … + period), per HARNESS_NOTES item 9. Flagging it
+    made a correctly swept book fail its own certificate."""
     check = _scan(tmp_path, [{"para_id": "b1", "corrected_text": "He waited…."}])
+    assert check.status == "pass"
+
+
+def test_artifact_scan_catches_a_doubled_period_after_an_ellipsis(tmp_path):
+    """A composed edit appending its own period onto text that already ended
+    in an ellipsis+period is a genuine merge artifact."""
+    check = _scan(tmp_path, [{"para_id": "b1", "corrected_text": "He waited….."}])
     assert check.status == "fail" and "…" in check.detail
+
+
+def test_sweep_ellipsis_output_is_clean_under_the_artifact_scan(tmp_path):
+    """Run the shipped sweep over sample sentences and confirm the certify
+    artifact scan is clean on its output — the sweep and the certificate must
+    agree. Mirrors the Redding body-0734-style case: a manuscript sentence
+    already ends on the ellipsis GLYPH plus a literal period (a common
+    pre-existing style), and the sweep only normalizes the glyph's leading
+    space, leaving the sentence-final period exactly where it was."""
+    from docproof.sweeps import _sweep_ellipsis, apply_hits
+    samples = [
+        "She wondered whether it even mattered….",
+        "He waited….",
+        "“I don't know…” she said.",
+    ]
+    swept = [apply_hits(t, _sweep_ellipsis(t, None, "nbsp")) for t in samples]
+    check = _scan(tmp_path, [{"para_id": f"b{i}", "corrected_text": t}
+                             for i, t in enumerate(swept)])
+    assert check.status == "pass"
 
 
 def test_artifact_scan_period_patterns_are_literal_not_any_char(tmp_path):

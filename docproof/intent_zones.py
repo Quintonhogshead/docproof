@@ -184,6 +184,24 @@ def _resolve_one(zone: IntentZone, paragraphs: list[ParagraphRef],
     return spans
 
 
+def _is_whole_span_zone(zone: IntentZone) -> bool:
+    """Whether `zone`'s selector produces a whole-line/title span (`para_ids`
+    or `para_range`) rather than a TERM/regex/quotes match — a single word or
+    short phrase within a paragraph, not the paragraph itself. This is the
+    field the zero-width boundary rule needs and the model did not have: no
+    new IntentZone attribute, just which selector the zone was defined with
+    (a zone mixes selectors rarely enough that a zone-level read is enough —
+    see IntentZone's docstring: "exactly one selector field should be set")."""
+    return bool(zone.para_ids or zone.para_range)
+
+
+def _is_punct_or_space(text: str) -> bool:
+    """Whether `text` holds no letters or digits — punctuation and/or
+    whitespace only. Empty text is not "punctuation-only" (there is nothing
+    there to be punctuation)."""
+    return bool(text) and not any(c.isalnum() for c in text)
+
+
 class ResolvedZones:
     """Intent zones resolved to concrete spans, with the fast lookup the
     enforcement filter needs: given (para_id, start, end), which zone (if any)
@@ -196,20 +214,40 @@ class ResolvedZones:
     def any(self) -> bool:
         return any(self._by_para.values())
 
-    def zone_at(self, para_id: str, start: int, end: int) -> IntentZone | None:
+    def zone_at(self, para_id: str, start: int, end: int, *,
+               insert_text: str | None = None) -> IntentZone | None:
         """The most restrictive zone whose span intersects [start, end) in this
         paragraph, or None. `locked` beats `punctuation` beats `open` on a tie,
-        so the strictest protection wins when zones overlap."""
+        so the strictest protection wins when zones overlap.
+
+        A zero-width span (start == end) is a pure INSERTION point. Touching
+        either boundary of a whole-line/title-span zone (`para_ids` /
+        `para_range` — see `_is_whole_span_zone`) still counts as inside:
+        appending a period at the end of a locked title touches [37,37)
+        against a zone of [0,37) and slips a strict half-open test — the
+        Purpura beta's title-period bug. A TERM/regex zone is narrower: it
+        protects one word or short phrase, and Redding showed the same
+        boundary-inclusive rule downgrading every punctuation-only fix that
+        merely abuts the term (a comma after "Mom", a period after
+        "RESPOND") — the term itself was never touched. So for a term-shaped
+        zone, a zero-width insertion AT the boundary that is punctuation/
+        whitespace only (`insert_text` given and holds no letters or digits)
+        is NOT inside; an insertion that overlaps the term's interior, or
+        that adds a letter/digit at its edge (changes the term), still is.
+        Callers that omit `insert_text` get the old boundary-inclusive read
+        for every zone — the safe default."""
         rank = {"locked": 0, "punctuation": 1, "open": 2}
         best: IntentZone | None = None
         for lo, hi, zone in self._by_para.get(para_id, ()):  # half-open
-            # A zero-width span is a pure INSERTION point: appending a period
-            # at the end of a locked title touches [37,37) against a zone of
-            # [0,37) and slips a strict half-open test — the Purpura beta's
-            # title-period bug. An insertion touching either boundary edits
-            # the protected text and counts as inside.
-            hit = (lo <= start <= hi) if start == end \
-                else (start < hi and lo < end)
+            if start == end:
+                hit = lo <= start <= hi
+                if (hit and (start == lo or start == hi)
+                        and insert_text is not None
+                        and _is_punct_or_space(insert_text)
+                        and not _is_whole_span_zone(zone)):
+                    hit = False
+            else:
+                hit = start < hi and lo < end
             if hit:
                 if best is None or rank[zone.permission] < rank[best.permission]:
                     best = zone
@@ -237,12 +275,15 @@ def resolve(zones: IntentZones, paragraphs: list[ParagraphRef], *,
     return ResolvedZones(by_para)
 
 
-def _edit_span(finding, para_text: str) -> tuple[int, int] | None:
+def _edit_span(finding, para_text: str) -> tuple[int, int, str] | None:
     """The absolute [start, end) char range a finding actually changes in its
-    paragraph, or None if its quoted window cannot be located. Locates the
-    ``occurrence``-th occurrence of the finding's ``original_text`` window, then
-    trims the common prefix/suffix between it and ``corrected_text`` down to the
-    minimal differing region — the same shape the validator anchors."""
+    paragraph, plus the literal text it inserts there, or None if its quoted
+    window cannot be located. Locates the ``occurrence``-th occurrence of the
+    finding's ``original_text`` window, then trims the common prefix/suffix
+    between it and ``corrected_text`` down to the minimal differing region —
+    the same shape the validator anchors. The trimmed-out middle of
+    ``corrected_text`` is what a zero-width (pure-insertion) edit actually
+    inserts — `zone_at`'s punctuation-boundary carve-out reads it."""
     window = getattr(finding, "original_text", "") or ""
     corrected = getattr(finding, "corrected_text", "") or ""
     if not window:
@@ -263,7 +304,8 @@ def _edit_span(finding, para_text: str) -> tuple[int, int] | None:
         s += 1
     lo = idx + p
     hi = idx + len(window) - s
-    return (lo, max(lo, hi))
+    insert_text = corrected[p:len(corrected) - s]
+    return (lo, max(lo, hi), insert_text)
 
 
 def enforce(findings: list, resolved: ResolvedZones,
@@ -297,7 +339,8 @@ def enforce(findings: list, resolved: ResolvedZones,
         if span is None:
             out.append(f)
             continue
-        zone = resolved.zone_at(f.para_id, span[0], span[1])
+        lo, hi, insert_text = span
+        zone = resolved.zone_at(f.para_id, lo, hi, insert_text=insert_text)
         if zone is None:
             out.append(f)
             continue
