@@ -816,7 +816,9 @@ def _galley_parser(sub) -> None:
                                         "(optional; hash/route/budget checks "
                                         "are skipped without it)")
     gct.add_argument("--source", help="the manuscript, to check the source "
-                                      "hash against the approval")
+                                      "hash against the approval and to tell "
+                                      "a pre-existing text-hygiene fault from "
+                                      "one this run introduced")
     gct.add_argument("--config", help="the effective config, to check the "
                                       "config hash and routes")
     _stage_arg(gct)

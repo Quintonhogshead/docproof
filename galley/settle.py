@@ -481,8 +481,8 @@ def artifact_in(text: str) -> str | None:
     """The first house-style artifact a settlement's text would ship — the
     same patterns certify's artifact scan fails a build on (`”.` and `”,`
     are British/logical punctuation, which the walker's suggestions used 16
-    times on the Redding trial; `,,`, `…\.`, a doubled space are composition
-    damage). None when clean."""
+    times on the Redding trial; `,,`, a doubled period after an ellipsis, a
+    doubled space are composition damage). None when clean."""
     from galley.manifest import _ARTIFACTS
     for pat in _ARTIFACTS:
         if pat.search(text):

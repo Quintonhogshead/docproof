@@ -41,10 +41,22 @@ _MODEL_FIELD = re.compile(r"(^|_)(model)$")
 
 # The deterministic artifact patterns a clean deliverable must not contain —
 # the merge desk's own scan list (doubled comma/space, orphaned punctuation).
-# Compiled regexes, so the two that end in a period mean a LITERAL period
-# (an ellipsis or a closing quote followed by one) rather than any character;
-# the pattern text is what a failing check names.
-_ARTIFACTS = tuple(re.compile(p) for p in (",,", '" "', r"…\.", r"”\.", "”,"))
+# Compiled regexes, so the ones that end in a period mean a LITERAL period
+# (a closing quote followed by one) rather than any character; the pattern
+# text is what a failing check names.
+#
+# An ellipsis directly followed by exactly ONE period is NOT itself an
+# artifact: it is precisely the shape the shipped `sweep_ellipsis`
+# (docproof/sweeps.py) leaves behind when a sentence ends on an ellipsis —
+# house style is a non-breaking space before the glyph and a period straight
+# after it at a genuine sentence end, and the sweep only ever normalizes the
+# glyph and its leading space, never the sentence-final period that follows
+# it (that period was never part of the ellipsis match). Flagging that shape
+# made a correctly swept book fail its own certificate. A DOUBLED period —
+# what a composed edit can produce by appending its own period onto text
+# that already ended in one — is still a real artifact.
+_ARTIFACTS = tuple(re.compile(p) for p in
+                   (",,", '" "', r"…\.{2,}", r"”\.", "”,"))
 # The zero-cost markers: an envelope whose findings legitimately cost $0 to
 # produce because the paid work is recorded elsewhere — an import of external
 # judgments, or a Galley rebuild of a case file's adjudicated findings (see
@@ -471,8 +483,11 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
     # 8. Text hygiene over the delivered .docx itself: no double spaces, no
     # paragraph-trailing whitespace. The Johnson run shipped 84 double spaces
     # the head proofreader's own check caught — whatever path produced the
-    # deliverable, this fails loud instead.
-    cert.checks.append(_certify_text_hygiene(run))
+    # deliverable, this fails loud instead. A hit that was already there in
+    # the SOURCE manuscript's same paragraph is not this run's fault (see
+    # _certify_text_hygiene) — --source is what lets the check tell the two
+    # apart.
+    cert.checks.append(_certify_text_hygiene(run, source))
 
     # 9. Finished-text SENSE gates. certify itself reads no text for meaning;
     # `galley verify` does and records its verdict here. An item without a
@@ -645,11 +660,62 @@ def _certify_finished_walk(run: Path) -> Check:
                  "accepted text read, no residual errors")
 
 
-def _certify_text_hygiene(run: Path) -> Check:
+# How much of a hygiene hit's surrounding text must match the source
+# paragraph, byte for byte, to call it pre-existing rather than introduced.
+# Wide enough to be specific about which double-space/trailing-space run it
+# is (not just that the paragraph has one somewhere), narrow enough that an
+# edit elsewhere in a long paragraph does not spuriously mask a genuinely new
+# hit right next to it.
+_HYGIENE_CTX = 15
+
+
+def _hygiene_pre_existing(text: str, m: re.Match, src_text: str | None) -> bool:
+    """Whether the hygiene hit `m` (a double-space or trailing-space match in
+    the delivered paragraph `text`) is byte-for-byte present in the SOURCE
+    manuscript's same paragraph — a fault the run did not introduce and
+    cannot even express as a finding (canonical text strips paragraph-
+    trailing whitespace, so no finding row can target it; Redding body-0734:
+    a pre-existing space before a paragraph-internal line break, "gone.
+    \n\n"). No source paragraph to compare against (no --source, an
+    unreadable source, or a paragraph the source doesn't have) means this
+    cannot be proven, so it counts as introduced — the conservative default."""
+    if src_text is None:
+        return False
+    window = text[max(0, m.start() - _HYGIENE_CTX):
+                  min(len(text), m.end() + _HYGIENE_CTX)]
+    return window in src_text
+
+
+def _source_paragraph_texts(source: str | Path, walk_package, DocxPackage,
+                            paragraph_view_text) -> dict[str, str] | None:
+    """{para_id: text} for every paragraph in the source manuscript (the same
+    accept-view read the delivered .docx gets), or None if the source can't be
+    read — a missing/corrupt --source is a reason to skip the pre-existing
+    comparison, not to crash certify."""
+    try:
+        pkg = DocxPackage(str(source))
+    except Exception:
+        return None
+    try:
+        return {wp.para_id: paragraph_view_text(wp.element, "accept")
+                for wp in walk_package(pkg)}
+    except Exception:
+        return None
+
+
+def _certify_text_hygiene(run: Path, source: str | Path | None = None) -> Check:
     """Scan every delivered .docx in the run directory (accept-all view) for
     double spaces and paragraph-trailing whitespace — the two things
     normalization promises are gone. Skips honestly when there is no .docx or
-    the OOXML tooling is unavailable."""
+    the OOXML tooling is unavailable.
+
+    A hit that is byte-for-byte pre-existing in the SOURCE manuscript's same
+    paragraph (see `_hygiene_pre_existing`) does not fail the check — it is
+    named in a passing note instead, since the run did not introduce it and
+    has no finding row that could have fixed it. A hit absent from the source
+    paragraph — introduced by this run — still fails. Without --source (or
+    with an unreadable one), every hit fails: today's behaviour, since
+    pre-existing cannot be proven."""
     # The change-log docx quotes ORIGINAL, pre-fix text (its trailing spaces
     # are what the run fixed), so hygiene applies only to the manuscript
     # deliverable — and to its ACCEPT view, the text the author ends up with.
@@ -666,8 +732,14 @@ def _certify_text_hygiene(run: Path) -> Check:
     except Exception as e:                        # lxml missing, etc.
         return Check("delivered text hygiene", "skip",
                      f"OOXML tooling unavailable: {e}")
+
+    src_paragraphs = (_source_paragraph_texts(source, walk_package, DocxPackage,
+                                              paragraph_view_text)
+                      if source is not None else None)
+
     trailing = re.compile(r"[  ]+(?=\n|$)")
     problems: list[str] = []
+    pre_existing: list[str] = []
     for path in docs:
         try:
             pkg = DocxPackage(str(path))
@@ -679,13 +751,36 @@ def _certify_text_hygiene(run: Path) -> Check:
             text = paragraph_view_text(wp.element, "accept")
             if not any(c.isalnum() for c in text):
                 continue                          # scene dividers space freely
-            doubles += len(_POST_TEXT_DOUBLE.findall(text))
-            trails += sum(1 for _ in trailing.finditer(text))
+            src_text = (src_paragraphs.get(wp.para_id)
+                       if src_paragraphs is not None else None)
+            for m in _POST_TEXT_DOUBLE.finditer(text):
+                if _hygiene_pre_existing(text, m, src_text):
+                    pre_existing.append(f"{wp.para_id}: double space "
+                                        f"pre-existing in the source")
+                else:
+                    doubles += 1
+            for m in trailing.finditer(text):
+                if _hygiene_pre_existing(text, m, src_text):
+                    pre_existing.append(f"{wp.para_id}: trailing space "
+                                        f"pre-existing in the source")
+                else:
+                    trails += 1
         if doubles or trails:
             problems.append(f"{path.name}: {doubles} double space(s), "
                             f"{trails} trailing-space run(s)")
     if problems:
-        return Check("delivered text hygiene", "fail", "; ".join(problems))
+        detail = "; ".join(problems)
+        if pre_existing:
+            detail += (f" (also {len(pre_existing)} pre-existing hit(s) not "
+                       f"counted against this run)")
+        return Check("delivered text hygiene", "fail", detail)
+    if pre_existing:
+        return Check("delivered text hygiene", "pass",
+                     f"{len(docs)} document(s): no introduced double spaces "
+                     f"or trailing whitespace; {len(pre_existing)} hit(s) "
+                     f"pre-existing in the source and not this run's fault: "
+                     + "; ".join(pre_existing[:6])
+                     + ("…" if len(pre_existing) > 6 else ""))
     return Check("delivered text hygiene", "pass",
                  f"{len(docs)} document(s): no double spaces, no trailing "
                  f"whitespace")
