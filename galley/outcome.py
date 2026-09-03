@@ -13,11 +13,12 @@ toggle.
 
 `assess` reads a finished (ideally settled) run and applies fixed thresholds;
 `galley outcome --set` lets a practitioner or a human overrule with a stated
-reason. Either way outcome.json is written beside findings.json, carrying the
-HubSpot property/value for `done` and NOTHING for `needs_human` — there is no
-"needs a human" option on the property, so that verdict leaves the book at
-"Ready for Proofing" for a person to pick up. `app/watch/proof.py` reads this
-file and `app/watch/tick.py` owns the write; this module never calls HubSpot.
+reason. Either way outcome.json is written beside findings.json carrying the
+HubSpot property and value for the verdict — both verdicts have one, and both
+move the book off "Ready for Proofing": `done` to "Proofing Complete", and
+`needs_human` to "Needs Human PR", the option that puts the book in front of a
+human proofreader. `app/watch/proof.py` reads this file and `app/watch/tick.py`
+owns the write; this module never calls HubSpot.
 """
 from __future__ import annotations
 
@@ -32,21 +33,19 @@ OUTCOME_NAME = "outcome.json"
 OUTCOMES = ("done", "needs_human")
 
 # HubSpot: the DocProof gate targets the Projects object (0-970), property
-# `docproof`; option values equal their labels verbatim. `done` moves the book
-# on; `needs_human` writes NOTHING.
+# `docproof`; option values equal their labels verbatim. Both verdicts move the
+# book on — "Proofing Complete" when the loop finished it, "Needs Human PR" when
+# it did not and a human proofreader has to take over. The second is a real
+# option on the property, so the book leaves "Ready for Proofing" either way and
+# nothing sits in a queue nobody is reading.
 #
-# There is no "Needs Human Proofreader" option on the property and the press has
-# said there will not be one, so a needs_human verdict has no value to PATCH:
-# the book stays at "Ready for Proofing" — which is exactly what a person needs
-# to see — and reaches its owner through the watcher's needs-a-person email
-# instead. Hence the empty default: `hubspot_fields("needs_human")` hands back
-# no property and no value at all, so nothing downstream can accidentally blank
-# the status by writing "" into it. A caller that really does have an option to
-# write can still pass `needs_human_value` explicitly.
+# A blank value is still refused rather than written: PATCHing "" would blank
+# the status property instead of moving it, so `hubspot_fields` hands back an
+# empty dict in that case and the caller writes nothing at all.
 HUBSPOT_OBJECT = "0-970"
 HUBSPOT_PROPERTY = "docproof"
 DEFAULT_DONE_VALUE = "Proofing Complete"
-DEFAULT_NEEDS_HUMAN_VALUE = ""
+DEFAULT_NEEDS_HUMAN_VALUE = "Needs Human PR"
 
 
 @dataclass
@@ -127,12 +126,12 @@ def hubspot_fields(outcome: str, *, done_value: str = DEFAULT_DONE_VALUE,
                    needs_human_value: str = DEFAULT_NEEDS_HUMAN_VALUE,
                    prop: str = HUBSPOT_PROPERTY, obj: str = HUBSPOT_OBJECT
                    ) -> dict[str, str]:
-    """The property and value a watch should PATCH for this verdict — or an
-    empty dict when there is nothing to write.
+    """The property and value a watch should PATCH for this verdict.
 
-    `needs_human` yields `{}` by default (see the constants above): no option
-    exists for it, and a blank value would blank the status property rather
-    than move it, so the answer is "write nothing" rather than "write ''"."""
+    Both verdicts have one: `done` -> "Proofing Complete", `needs_human` ->
+    "Needs Human PR". A caller that blanks either value gets an empty dict back
+    rather than a blank value to write — PATCHing "" would blank the status
+    property instead of moving it on."""
     value = done_value if outcome == "done" else needs_human_value
     if not value:
         return {}

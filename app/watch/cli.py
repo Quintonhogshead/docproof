@@ -147,7 +147,7 @@ def main(argv=None) -> int:
     ini.add_argument("--proof-runner", choices=["app", "external"],
                      help="who reads the book: 'app' (DocWatch runs the galley "
                           "job itself) or 'external' (a practitioner does, and "
-                          "DocWatch waits for '<surname> - book 1 - "
+                          "DocWatch waits for '<surname> - Book 2 - "
                           "outcome.json' to appear beside the book)")
     ini.add_argument("--hubspot-proof-ready-value",
                      help="the status value meaning 'proofread this now' "
@@ -155,6 +155,10 @@ def main(argv=None) -> int:
     ini.add_argument("--hubspot-proof-done-value",
                      help="the status value DocProof sets once the proofread "
                           "is back and clean (default 'Proofing Complete')")
+    ini.add_argument("--hubspot-proof-needs-human-value",
+                     help="the status value DocProof sets when the proofread "
+                          "says the book needs a human proofreader (default "
+                          "'Needs Human PR')")
     ini.add_argument("--proof-tier", choices=["T0", "T1", "T2", "T3", "T4"],
                      help="how hard the app runner reads (default T2)")
     ini.add_argument("--proof-budget", type=float,
@@ -371,7 +375,11 @@ def cmd_init(args, home: Path) -> int:
                     "hand-off")
         print(f"Proofing on: "
               f"'{ws.hubspot_proof_ready_value or '— not set'}' → "
-              f"'{ws.hubspot_proof_done_value or '— not set'}' ({who})")
+              f"'{ws.hubspot_proof_done_value or '— not set'}' (or "
+              f"'{ws.hubspot_proof_needs_human_value or '— not set'}') "
+              f"({who})")
+        print("  reading '<surname> - Book 1', handing back "
+              "'<surname> - Book 2'")
         if ws.proof_runner == "app":
             budget = ws.proof_budget_usd or "the tier default"
             print(f"  reading at {ws.proof_tier}, up to {budget} per book")
@@ -433,14 +441,19 @@ _PROOF_FLAGS = (
     ("proof_runner", "proof_runner"),
     ("hubspot_proof_ready_value", "hubspot_proof_ready_value"),
     ("hubspot_proof_done_value", "hubspot_proof_done_value"),
+    ("hubspot_proof_needs_human_value", "hubspot_proof_needs_human_value"),
     ("proof_tier", "proof_tier"),
 )
 
-# The fields proofing cannot run without. Both ship with real defaults, so this
-# only ever fires for somebody who deliberately blanked one.
+# The fields proofing cannot run without: the value in, and the two values out —
+# a proofread ends at one of two verdicts and both move the book on. All three
+# ship with real defaults, so this only ever fires for somebody who deliberately
+# blanked one.
 _PROOF_REQUIRED = {
     "hubspot_proof_ready_value": "Which value means 'ready to proofread'",
     "hubspot_proof_done_value": "Which value means 'proofing complete'",
+    "hubspot_proof_needs_human_value":
+        "Which value means 'needs a human proofreader'",
 }
 
 

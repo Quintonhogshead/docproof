@@ -175,10 +175,10 @@ Second, DocProof reads *and writes* the same property, so the private-app token
 needs **write** on that object and the done value must be a real option on the
 property — HubSpot rejects a value that is not in the list.
 
-The ready/done values are named `format_*` because there is a second pair on the
-same property: `Ready for Proofing` → `Proofing Complete`, which drives the
-proofing stage below. One dropdown, one value at a time, so a book is never in
-two stages at once.
+The ready/done values are named `format_*` because there is a second set on the
+same property: `Ready for Proofing` → `Proofing Complete` or `Needs Human PR`,
+which drives the proofing stage below. One dropdown, one value at a time, so a
+book is never in two stages at once.
 
 **One shared folder, a key in the filename.** There are no per-book folders.
 A manuscript says which book it is through its name: a value — an author surname,
@@ -235,10 +235,10 @@ gates — delivered as a tracked-changes manuscript with an editorial letter and
 style sheet beside it. It gates on the *same* status property, moved to its own
 value pair:
 
-| stage | an editor sets | DocProof writes |
-|---|---|---|
-| formatting | `Ready for Formatting` | `Formatting Complete` |
-| proofing | `Ready for Proofing` | `Proofing Complete` |
+| stage | reads | an editor sets | DocProof writes | and hands back |
+|---|---|---|---|---|
+| formatting | `<surname> - Book Original` | `Ready for Formatting` | `Formatting Complete` | `<surname> - book 0` |
+| proofing | `<surname> - Book 1` | `Ready for Proofing` | `Proofing Complete` **or** `Needs Human PR` | `<surname> - Book 2` |
 
 It is **off by default**, and nothing reads the proofing values until it is on,
 so an existing install is unchanged until somebody switches it on. It needs the
@@ -251,34 +251,60 @@ mode — unlike promo, which stands aside in subfolder mode.
 docproof-watch init --enable-proofing
 ```
 
-**What comes back.** Four files, in the folder the book was found in (the
-author's own subfolder, in subfolder mode), under the `book 1` stage name:
+**The book it reads.** The house stage series has four names, and each stage
+reads the file the one before it left:
 
 ```
-Johnson - book 1.docx                 the tracked-changes proofread
-Johnson - book 1 - letter.md          the editorial letter
-Johnson - book 1 - style-sheet.md     the style sheet
-Johnson - book 1 - outcome.json       the verdict, and the numbers behind it
+Johnson - Book Original.docx     what the author sends
+Johnson - book 0.docx            formatting hands back
+Johnson - Book 1.docx            the developmental edit, done by people
+Johnson - Book 2.docx            proofing hands back
 ```
 
-The stage series is `Book Original` (what the author sends) → `book 0`
-(formatting) → `book 1` (proofing). A file carrying any of those stage tokens is
-recognised as something DocProof wrote and is never picked up as a manuscript to
-work on again — by name, not only by marker, which matters because in external
-mode DocProof did not upload them.
+So proofing's input is `<surname> - Book 1` and its output is
+`<surname> - Book 2`, exactly the way formatting takes a `Book Original` and
+puts a `book 0` back in the same folder. Nothing else in the folder is read: a
+draft, the author's original, a questionnaire, `book 0` — a proofread costs a
+novel's worth of model time, so which file it reads is a name, never a guess. If
+the `Book 1` is not there yet, the author is reported as missing it and you are
+emailed, so the file gets uploaded or renamed rather than waiting unseen.
 
-**The verdict decides the CRM write, and only one verdict writes.**
-`outcome.json` says either `done` or `needs_human`:
+`Book 1` is an **input**, and DocProof is careful about that in both directions:
+the formatting stage will never prepare one, and it is never treated as an
+output to skip — which would hide proofing's own source from it.
 
-- `done` — nothing left the loop can find or decide. DocProof moves the record
-  to `Proofing Complete`, once.
+**What comes back.** Five files, in the folder the book was found in (the
+author's own subfolder, in subfolder mode), under the `Book 2` base:
+
+```
+Johnson - Book 2.docx                  the tracked-changes proofread
+Johnson - Book 2 - letter.md           the editorial letter
+Johnson - Book 2 - style-sheet.md      the style sheet
+Johnson - Book 2 - decision-log.md     every action taken, and why
+Johnson - Book 2 - outcome.json        the verdict, and the numbers behind it
+```
+
+A file carrying a `book 0` or `Book 2` token is recognised as something DocProof
+wrote and is never picked up to work on again — by name, not only by marker,
+which matters because in external mode DocProof did not upload them. Case, an
+em- or en-dashed separator and doubled spaces are all forgiven, for the same
+reason: those names may be written on somebody's Mac.
+
+**The verdict decides the CRM write, and both verdicts write.** `outcome.json`
+says either `done` or `needs_human`:
+
+- `done` — nothing left the loop can find or decide. The record moves to
+  `Proofing Complete`.
 - `needs_human` — the book has major grammatical problems and most of its
   sentences must be rewritten, which is not a job a mechanical proofread should
-  pretend to have finished. **DocProof writes nothing to HubSpot.** The record
-  stays at `Ready for Proofing` — which is exactly what tells a human
-  proofreader to pick the book up — and the reason reaches you in the
-  needs-a-person email (below). There is no "needs a human" option on the
-  property and DocProof will not invent one.
+  pretend to have finished. The record moves to `Needs Human PR` — the option
+  that puts the book in front of a human proofreader — **and** the reason
+  reaches you in the needs-a-person email (below). The CRM value says what; only
+  the email says why.
+
+Either way the book leaves `Ready for Proofing`, because a book left sitting at
+ready is one nobody would notice. Exactly one PATCH per book, whichever verdict
+it was.
 
 `outcome.json` also carries a `hubspot` block naming the property and value. It
 is there for a person reading the file; DocProof does not obey it. The property
@@ -302,7 +328,7 @@ rehearsal stands this aside: there is no free version of a wave loop over a nove
 **`external`** — DocWatch reads nothing. It notices the book, marks it
 `awaiting` in the folder, emails you where to find it, and waits. The reading is
 done by the Mac-side proofreading practitioner, which runs on a Claude Max
-subscription and so cannot run on the server. When that run drops the four files
+subscription and so cannot run on the server. When that run drops the files
 above into the author's folder, the next pass reads `outcome.json` and acts on
 it. An outcome file that is half-written, or says something DocProof does not
 recognise, is treated as "not there yet" — the book waits and the next pass

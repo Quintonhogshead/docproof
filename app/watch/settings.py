@@ -200,13 +200,20 @@ class WatchSettings:
     # The status value DocProof writes back once the formatted file is in the
     # folder.
     hubspot_format_done_value: str = ""
-    # The proofing pair, on the same dropdown: "Ready for Proofing" ->
-    # "Proofing Complete". Spelled out rather than left blank because these are
-    # the press's actual option values (the internal value equals the label
-    # verbatim on the Projects object), and a stage that is off does not read
-    # them at all — `proofing_enabled` is the switch, not a blank value.
+    # The proofing values, on the same dropdown. One value in — "Ready for
+    # Proofing" — and two ways out, because a proofread ends at one of two
+    # verdicts and both of them move the book on: "Proofing Complete" when the
+    # loop finished it, "Needs Human PR" when the book needs a human
+    # proofreader. Neither leaves it sitting at ready, so nothing waits in a
+    # queue nobody is reading.
+    #
+    # Spelled out rather than left blank because these are the press's actual
+    # option values (on the Projects object the internal value equals the label
+    # verbatim), and a stage that is off does not read them at all —
+    # `proofing_enabled` is the switch, not a blank value.
     hubspot_proof_ready_value: str = "Ready for Proofing"
     hubspot_proof_done_value: str = "Proofing Complete"
+    hubspot_proof_needs_human_value: str = "Needs Human PR"
     # Optional: a property to write the output filename into, so the CRM record
     # links to what was produced. Empty means do not write it.
     hubspot_output_property: str = ""

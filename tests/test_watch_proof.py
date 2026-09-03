@@ -2,10 +2,11 @@
 model at all.
 
 The properties worth holding this to are the ones that cost money or mislead a
-person: a book is read once and only once; the CRM moves on exactly once, and
-only for a verdict of `done`; a `needs_human` verdict writes NOTHING and reaches
-a person instead; and what proofing writes into the folder is never mistaken for
-a manuscript to work on again.
+person: a book is read once and only once; the CRM moves on exactly once,
+whichever verdict it was, and never sits at "Ready for Proofing" afterwards; the
+file proofing reads is the dev-edited `Book 1` and nothing else in the folder;
+and what proofing writes (`Book 2`) is never mistaken for a manuscript to work
+on again.
 
 Nothing here touches a network, a model, or a clock.
 """
@@ -36,19 +37,25 @@ FOLDER = "1AbCdEfGhIjKlMnOp"
 SUB = "sf-johnson"
 MANUSCRIPT = (FIXTURES / "googledoc.docx").read_bytes()
 
-BOOK = "Johnson - Book Original.docx"
-DELIVERABLE = "Johnson - book 1.docx"
-LETTER = "Johnson - book 1 - letter.md"
-STYLE_SHEET = "Johnson - book 1 - style-sheet.md"
-OUTCOME = "Johnson - book 1 - outcome.json"
+# The house series: the author sends a Book Original, formatting hands back a
+# book 0, people do the developmental edit and leave a Book 1 — and Book 1 is
+# what proofing reads, handing back a Book 2 in the same folder.
+ORIGINAL = "Johnson - Book Original.docx"
+BOOK = "Johnson - Book 1.docx"
+DELIVERABLE = "Johnson - Book 2.docx"
+LETTER = "Johnson - Book 2 - letter.md"
+STYLE_SHEET = "Johnson - Book 2 - style-sheet.md"
+DECISION_LOG = "Johnson - Book 2 - decision-log.md"
+OUTCOME = "Johnson - Book 2 - outcome.json"
+HAND_OFF = {DELIVERABLE, LETTER, STYLE_SHEET, OUTCOME}
 
 
 # --- the watcher --------------------------------------------------------------
 
 def proof_ws(**over) -> WatchSettings:
     """A watcher with the HubSpot gate on and proofing switched on, flat-folder.
-    The filename stem is the author key, so "Johnson - Book Original.docx" has
-    to be matched by a pattern that pulls the surname out of it."""
+    The filename stem is the author key, so "Johnson - Book 1.docx" has to be
+    matched by a pattern that pulls the surname out of it."""
     fields = dict(folder_id=FOLDER, model="claude-haiku-4-5",
                   client_id="client-1", client_secret="secret-1",
                   hubspot_enabled=True, hubspot_object="0-970",
@@ -64,7 +71,7 @@ def proof_ws(**over) -> WatchSettings:
 
 def sub_proof_ws(**over) -> WatchSettings:
     """The same, in the mode production runs in: per-author subfolders, and only
-    the "<surname> - Book Original" is ever the book."""
+    the "<surname> - Book 1" is ever the book."""
     fields = dict(subfolders_enabled=True, require_source_label=True,
                   hubspot_first_property="firstname",
                   hubspot_last_property="lastname")
@@ -112,6 +119,21 @@ def hs_props(opener, key="Johnson") -> dict:
     return opener.hubspot[f"hs-{key}"]["properties"]
 
 
+def _mail(opener, index: int = 0) -> str:
+    """The alert email as a person reads it. The body is quoted-printable, and
+    its soft line breaks fall wherever the reason happens to be long — so it is
+    decoded here rather than asserted on raw, which made a passing test depend
+    on the length of a sentence."""
+    import quopri
+
+    raw = base64.urlsafe_b64decode(opener.emails[index]["raw"])
+    head, _, body = raw.partition(b"\r\n\r\n")
+    if not body:
+        head, _, body = raw.partition(b"\n\n")
+    return (head.decode() + "\n\n"
+            + quopri.decodestring(body).decode("utf-8", "replace"))
+
+
 # --- a galley run that costs nothing ------------------------------------------
 
 @pytest.fixture
@@ -151,32 +173,53 @@ def needs_human(monkeypatch):
     """The other verdict, from the assessor rather than from the folder: the
     thresholds themselves are `galley.outcome`'s to test, so here the sentence
     is stubbed and what is under test is what the watcher does with it."""
-    from galley.outcome import Outcome
+    from galley.outcome import Outcome, hubspot_fields
 
     def fake_assess(run_dir, **kw):
+        # The verdict is stubbed; the HubSpot block is built the way the real
+        # assessor builds it, from the values the watcher passed down, so the
+        # outcome.json that ships is shaped like a real one.
         return Outcome(outcome="needs_human",
                        reason="most sentences must be rewritten",
-                       evidence={"rewrite_share": 0.9})
+                       evidence={"rewrite_share": 0.9},
+                       hubspot=hubspot_fields("needs_human", **kw))
 
     monkeypatch.setattr("galley.outcome.assess", fake_assess)
 
 
 # --- what proofing writes is never a manuscript -------------------------------
 
-def test_the_book_1_files_are_recognised_as_output():
-    """The name belt: every file the proofread hands back carries the "- book 1"
-    stage token, so a folder full of them is never read as four new manuscripts
+def test_the_book_2_files_are_recognised_as_output():
+    """The name belt: every file the proofread hands back carries the "- Book 2"
+    stage token, so a folder full of them is never read as five new manuscripts
     — marker or no marker, which is the case that matters for the external
-    runner, whose files DocProof did not upload."""
-    for name in (DELIVERABLE, LETTER, STYLE_SHEET, OUTCOME):
+    runner, whose files DocProof did not upload. Dash and case drift is forgiven
+    for the same reason: those names may be written on somebody's Mac."""
+    for name in (DELIVERABLE, LETTER, STYLE_SHEET, DECISION_LOG, OUTCOME,
+                 "Johnson — Book 2.docx", "Johnson - book 2 - letter.md"):
         bare = drive_entry(name)
-        assert classify(_file(bare, "x")) is Stage.OUTPUT
-        assert not is_proof_candidate(_file(bare, "x"))
+        assert classify(_file(bare, "x")) is Stage.OUTPUT, name
+        assert not is_proof_candidate(_file(bare, "x")), name
 
 
-def test_the_book_original_is_still_a_proof_candidate_once_formatted():
-    """Proofing is the second pass over the same book, so the formatting marker
-    must not hide it — but proofing's own terminal marker must."""
+def test_the_book_1_is_proofings_input_and_nobody_elses():
+    """The correction that matters most: `Book 1` is an INPUT, not an output.
+    Calling it an output would hide proofing's own source from it; calling it a
+    new manuscript would let the formatting stage prepare it a second time."""
+    book = _file(drive_entry(BOOK), "m-1")
+    assert classify(book) is Stage.PROOF_MANUSCRIPT
+    assert classify(book) is not Stage.NEW_MANUSCRIPT   # never formatting's
+    assert classify(book) is not Stage.OUTPUT           # never skipped
+    assert is_proof_candidate(book)
+
+    # …and the other files in the series are not proofing's.
+    for name in (ORIGINAL, "Johnson - book 0.docx", "Johnson - Draft Two.docx"):
+        assert not is_proof_candidate(_file(drive_entry(name), "x")), name
+
+
+def test_a_book_1_is_still_proofings_once_formatting_has_marked_it():
+    """The formatting marker must not hide it — but proofing's own terminal
+    marker must."""
     formatted = _file(drive_entry(BOOK, props={STATE_PROP: "formatted"}), "m-1")
     assert is_proof_candidate(formatted)
     assert classify(formatted) is Stage.DONE      # formatting is done with it
@@ -188,6 +231,20 @@ def test_the_book_original_is_still_a_proof_candidate_once_formatted():
     # has to stay visible or its verdict would never be picked up.
     waiting = _file(drive_entry(BOOK, props={PROOF_PROP: PROOF_AWAITING}), "m-1")
     assert is_proof_candidate(waiting)
+
+
+@pytest.mark.parametrize("name", [
+    "Johnson - Book 1.docx", "Johnson — Book 1.docx", "johnson - book 1.docx",
+    "Johnson  -  Book  1.docx", "Johnson - Book-1.docx",
+    "Lichtenstein (and Dolores DelBello) - Book 1.docx",
+])
+def test_the_book_1_recognizer_forgives_the_drift_a_filename_picks_up(name):
+    """The same folded recognizer the intake names use: a " - " autocorrected
+    into an em dash, a doubled space, a stray case. What it must not forgive is
+    a different number."""
+    assert is_proof_candidate(_file(drive_entry(name), "x")), name
+    assert not is_proof_candidate(_file(drive_entry("Johnson - Book 12.docx"),
+                                        "x"))
 
 
 def _file(entry: dict, file_id: str):
@@ -208,7 +265,7 @@ def test_a_book_ready_for_proofing_is_read_and_flipped(tmp_path, galley):
 
     assert report.ok and report.proofed == [BOOK]
     assert report.prepped == []                    # formatting did not run
-    assert set(uploads_in(opener)) == {DELIVERABLE, LETTER, STYLE_SHEET, OUTCOME}
+    assert set(uploads_in(opener)) == HAND_OFF
     assert hs_props(opener)["docproof"] == "Proofing Complete"
     assert len(patches(opener)) == 1               # exactly one write
     assert opener.files["f-1"]["appProperties"][PROOF_PROP] == PROOF_DONE
@@ -285,7 +342,7 @@ def test_a_shared_surname_flagged_twice_needs_a_person(tmp_path, galley):
     guess which book the file is. Nothing is read, nothing is written, and a
     person is told."""
     ws = proof_ws()
-    opener = fake_drive(folder(f_1=drive_entry("Smith - Book Original.docx")),
+    opener = fake_drive(folder(f_1=drive_entry("Smith - Book 1.docx")),
                         docx=MANUSCRIPT,
                         hubspot={"a": ready_to_proof(last="Smith"),
                                  "b": ready_to_proof(last="Smith")})
@@ -293,7 +350,7 @@ def test_a_shared_surname_flagged_twice_needs_a_person(tmp_path, galley):
     report = run(tmp_path, ws, opener)
 
     assert report.proofed == [] and galley == []
-    assert [n for n, _ in report.needs_human] == ["Smith - Book Original.docx"]
+    assert [n for n, _ in report.needs_human] == ["Smith - Book 1.docx"]
     assert "cannot tell which book" in report.needs_human[0][1]
     assert patches(opener) == []
     assert PROOF_PROP not in opener.files["f-1"].get("appProperties", {})
@@ -309,7 +366,7 @@ def test_a_ready_book_in_its_authors_subfolder_is_found_and_delivered_there(
                          "m-1": in_sub(BOOK),
                          # a decoy author nobody flagged
                          "sf-2": author_folder("Jane Smith"),
-                         "d-1": in_sub("Smith - Book Original.docx", sub="sf-2")},
+                         "d-1": in_sub("Smith - Book 1.docx", sub="sf-2")},
                         docx=MANUSCRIPT,
                         hubspot={"Johnson": ready_to_proof()})
 
@@ -317,7 +374,7 @@ def test_a_ready_book_in_its_authors_subfolder_is_found_and_delivered_there(
 
     assert report.ok and report.proofed == [BOOK]
     placed = uploads_in(opener)
-    assert set(placed) == {DELIVERABLE, LETTER, STYLE_SHEET, OUTCOME}
+    assert set(placed) == HAND_OFF
     for entry in placed.values():
         assert entry["parents"] == [SUB]           # never the parent, never sf-2
     assert hs_props(opener)["docproof"] == "Proofing Complete"
@@ -329,6 +386,117 @@ def test_a_ready_book_in_its_authors_subfolder_is_found_and_delivered_there(
         urllib.parse.urlparse(c.full_url).query).get("q", [""])[0]
         for c in opener.calls]
     assert f"'{FOLDER}' in parents and trashed = false" not in queries
+
+
+def test_discovery_reaches_every_author_folder_and_only_the_ready_one_is_read(
+        tmp_path, galley):
+    """Five authors under the watched parent, each with a `Book 1` waiting;
+    exactly one Project is at "Ready for Proofing". Proofing has to reach the
+    right one wherever it sits — the same HubSpot-first walk formatting does,
+    which asks the CRM who is ready and then asks Drive for *those* authors'
+    folders by name — and it has to leave the other four completely alone: not
+    read, not marked, not written to.
+
+    That "by name" is the point, and it is what keeps the pass cheap: the parent
+    Author Folder is never listed, so the work scales with how many books are
+    flagged, not with how many authors the press has."""
+    ws = sub_proof_ws()
+    authors = [("Quinton", "Johnson"), ("Jane", "Smith"), ("Ada", "Okafor"),
+               ("Bo", "Lindqvist"), ("Ines", "Варга")]
+    files: dict = {}
+    for i, (first, last) in enumerate(authors):
+        sub = f"sf-{i}"
+        files[sub] = author_folder(f"{first} {last}")
+        files[f"m-{i}"] = in_sub(f"{last} - Book 1.docx", sub=sub)
+    opener = fake_drive(files, docx=MANUSCRIPT,
+                        # Only Okafor is flagged. The other four sit at values
+                        # that mean somebody else's turn — or nobody's.
+                        hubspot={"Okafor": ready_to_proof("Okafor", "Ada"),
+                                 "Johnson": {"docproof": "Formatting Complete",
+                                             "author_last_name": "Johnson",
+                                             "firstname": "Quinton",
+                                             "lastname": "Johnson"},
+                                 "Smith": {"docproof": "Proofing Complete",
+                                           "author_last_name": "Smith",
+                                           "firstname": "Jane",
+                                           "lastname": "Smith"},
+                                 "Lindqvist": {"docproof": "",
+                                               "author_last_name": "Lindqvist",
+                                               "firstname": "Bo",
+                                               "lastname": "Lindqvist"}})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.ok and report.proofed == ["Okafor - Book 1.docx"]
+    assert len(galley) == 1                        # one book read, not five
+    placed = uploads_in(opener)
+    assert set(placed) == {"Okafor - Book 2.docx", "Okafor - Book 2 - letter.md",
+                           "Okafor - Book 2 - style-sheet.md",
+                           "Okafor - Book 2 - outcome.json"}
+    for entry in placed.values():
+        assert entry["parents"] == ["sf-2"]        # Ada Okafor's own folder
+    assert hs_props(opener, "Okafor")["docproof"] == "Proofing Complete"
+    assert len(patches(opener)) == 1
+
+    # The four that were not flagged were not touched, in the folder or the CRM.
+    for i, (_first, last) in enumerate(authors):
+        if last == "Okafor":
+            continue
+        assert PROOF_PROP not in opener.files[f"m-{i}"].get("appProperties", {})
+    assert hs_props(opener, "Johnson")["docproof"] == "Formatting Complete"
+    assert hs_props(opener, "Smith")["docproof"] == "Proofing Complete"
+    assert hs_props(opener, "Lindqvist")["docproof"] == ""
+
+    # Drive was asked for one author's folder by name; the parent was never
+    # listed, and nor was anybody else's folder.
+    queries = [urllib.parse.parse_qs(
+        urllib.parse.urlparse(c.full_url).query).get("q", [""])[0]
+        for c in opener.calls]
+    assert any("name = 'Ada Okafor'" in q for q in queries)
+    assert f"'{FOLDER}' in parents and trashed = false" not in queries
+    for other in ("Quinton Johnson", "Jane Smith", "Bo Lindqvist"):
+        assert not any(f"name = '{other}'" in q for q in queries), other
+
+
+def test_a_book_1_for_the_wrong_surname_is_never_read(tmp_path, galley):
+    """`require_source_label` is off here — and it changes nothing for proofing.
+    A `Book 1` in Johnson's folder that belongs to somebody else is not
+    Johnson's book, and a proofread costs a novel's worth of model time, so it
+    is left for a person rather than guessed at."""
+    ws = sub_proof_ws(require_source_label=False)
+    opener = fake_drive({SUB: author_folder("Quinton Johnson"),
+                         "m-1": in_sub("Okafor - Book 1.docx")},
+                        docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_to_proof()})
+
+    report = run(tmp_path, ws, opener)
+
+    assert galley == [] and report.proofed == []
+    assert uploads_in(opener) == {} and patches(opener) == []
+    assert [a for a, _ in report.missing_source] == ["Quinton Johnson"]
+    assert "Johnson - Book 1" in report.missing_source[0][1]
+
+
+def test_a_flat_folder_reads_only_the_ready_authors_book(tmp_path, galley):
+    """The same guarantee with subfolders off: three `Book 1`s loose in the one
+    watched folder, one Project flagged, and the gate matches the filename key
+    to it. The other two wait, untouched."""
+    ws = proof_ws()
+    opener = fake_drive(folder(f_1=drive_entry("Johnson - Book 1.docx"),
+                               f_2=drive_entry("Smith - Book 1.docx"),
+                               f_3=drive_entry("Okafor - Book 1.docx")),
+                        docx=MANUSCRIPT,
+                        hubspot={"Smith": ready_to_proof(last="Smith")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.proofed == ["Smith - Book 1.docx"] and len(galley) == 1
+    assert set(uploads_in(opener)) == {
+        "Smith - Book 2.docx", "Smith - Book 2 - letter.md",
+        "Smith - Book 2 - style-sheet.md", "Smith - Book 2 - outcome.json"}
+    assert hs_props(opener, "Smith")["docproof"] == "Proofing Complete"
+    for other in ("f-1", "f-3"):
+        assert PROOF_PROP not in opener.files[other].get("appProperties", {})
 
 
 def test_a_book_ready_for_proofing_is_never_formatted_as_well(tmp_path, galley,
@@ -355,11 +523,12 @@ def test_a_book_ready_for_proofing_is_never_formatted_as_well(tmp_path, galley,
 
 # --- needs_human --------------------------------------------------------------
 
-def test_needs_human_writes_nothing_to_hubspot_and_tells_a_person(
+def test_needs_human_moves_the_record_to_needs_human_pr_and_tells_a_person(
         tmp_path, galley, needs_human):
-    """The verdict that must never move a record. The toggle stays at "Ready
-    for Proofing" — which is what tells a human proofreader to pick the book up
-    — and the reason reaches the owner by email."""
+    """The other verdict, and it moves the record too — to "Needs Human PR",
+    the option that puts the book in front of a human proofreader. Exactly one
+    PATCH, and the reason still reaches the owner by email, because the CRM
+    value says what and only the email says why."""
     ws = proof_ws(notify_email="quinton@atmospherepress.com")
     opener = fake_drive(folder(f_1=drive_entry(BOOK)), docx=MANUSCRIPT,
                         hubspot={"Johnson": ready_to_proof()})
@@ -367,19 +536,37 @@ def test_needs_human_writes_nothing_to_hubspot_and_tells_a_person(
     report = run(tmp_path, ws, opener)
 
     assert report.proofed == [BOOK]                # it was read
-    assert patches(opener) == []                   # and nothing was written
-    assert hs_props(opener)["docproof"] == "Ready for Proofing"
+    assert len(patches(opener)) == 1               # written exactly once
+    assert hs_props(opener)["docproof"] == "Needs Human PR"
+    assert json.loads(patches(opener)[0].data)["properties"] == {
+        "docproof": "Needs Human PR"}
 
     assert [n for n, _ in report.needs_human] == [BOOK]
     assert "most sentences must be rewritten" in report.needs_human[0][1]
     assert len(opener.emails) == 1
-    raw = base64.urlsafe_b64decode(opener.emails[0]["raw"]).decode()
+    raw = _mail(opener)
     assert "most sentences must be rewritten" in raw
     assert "To: quinton@atmospherepress.com" in raw
 
     rec = WatchState.load(tmp_path / "state.json").get("f-1")
-    assert rec.proof_outcome == "needs_human" and rec.proof_hubspot_done is False
+    assert rec.proof_outcome == "needs_human" and rec.proof_hubspot_done is True
     assert opener.files["f-1"]["appProperties"][PROOF_PROP] == PROOF_HUMAN
+
+
+def test_the_outcome_that_ships_carries_the_needs_human_value(tmp_path, galley,
+                                                              needs_human):
+    """The verdict the folder shows and the value the CRM got are the same
+    decision, so outcome.json names it too."""
+    ws = proof_ws()
+    opener = fake_drive(folder(f_1=drive_entry(BOOK)), docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_to_proof()})
+
+    run(tmp_path, ws, opener)
+
+    uploaded = [fid for fid, e in opener.files.items() if e["name"] == OUTCOME][0]
+    payload = json.loads(opener.content[uploaded].decode())
+    assert payload["outcome"] == "needs_human"
+    assert payload["hubspot"]["value"] == "Needs Human PR"
 
 
 def test_a_book_left_for_a_human_is_not_read_again(tmp_path, galley,
@@ -415,7 +602,7 @@ def test_external_mode_waits_and_says_so(tmp_path, galley):
     assert OUTCOME in report.awaiting_proof[0][1]
     assert opener.files["f-1"]["appProperties"][PROOF_PROP] == PROOF_AWAITING
 
-    raw = base64.urlsafe_b64decode(opener.emails[0]["raw"]).decode()
+    raw = _mail(opener)
     assert BOOK in raw and FOLDER in raw
 
     # A second pass says nothing new: the book is still waiting, and a book that
@@ -446,7 +633,10 @@ def test_external_mode_picks_the_verdict_up_when_it_lands(tmp_path, galley):
     assert opener.files["f-1"]["appProperties"][PROOF_PROP] == PROOF_DONE
 
 
-def test_an_external_needs_human_verdict_writes_nothing(tmp_path, galley):
+def test_an_external_needs_human_verdict_moves_the_record_too(tmp_path, galley):
+    """A practitioner's `needs_human` is acted on exactly as the app runner's
+    is: one PATCH to "Needs Human PR", from the watcher's settings — note the
+    hand-off file here names no value at all."""
     ws = proof_ws(proof_runner="external")
     opener = fake_drive(folder(f_1=drive_entry(BOOK)), docx=MANUSCRIPT,
                         hubspot={"Johnson": ready_to_proof()})
@@ -456,8 +646,8 @@ def test_an_external_needs_human_verdict_writes_nothing(tmp_path, galley):
                        "reason": "the book needs a human", "hubspot": {}})
     report = run(tmp_path, ws, opener)
 
-    assert patches(opener) == []
-    assert hs_props(opener)["docproof"] == "Ready for Proofing"
+    assert len(patches(opener)) == 1
+    assert hs_props(opener)["docproof"] == "Needs Human PR"
     assert [n for n, _ in report.needs_human] == [BOOK]
     assert "the book needs a human" in report.needs_human[0][1]
 
@@ -502,16 +692,16 @@ def test_an_unreadable_outcome_waits_rather_than_guessing(tmp_path, galley):
 
 def test_a_verdict_is_read_from_the_books_own_folder(tmp_path, galley):
     """Two authors share a surname, each in their own folder, each with a
-    "Smith - Book Original" — so each hand-off is called "Smith - book 1 -
+    "Smith - Book 1" — so each hand-off is called "Smith - Book 2 -
     outcome.json". Scanning the pass's whole listing by name would let one
     author's verdict move the other author's record on. The lookup is scoped to
     the folder the book was found in, so only the one that really landed counts."""
     ws = sub_proof_ws(proof_runner="external")
     opener = fake_drive({
         "sf-a": author_folder("John Smith"),
-        "m-a": in_sub("Smith - Book Original.docx", sub="sf-a"),
+        "m-a": in_sub("Smith - Book 1.docx", sub="sf-a"),
         "sf-b": author_folder("Jane Smith"),
-        "m-b": in_sub("Smith - Book Original.docx", sub="sf-b"),
+        "m-b": in_sub("Smith - Book 1.docx", sub="sf-b"),
     }, docx=MANUSCRIPT,
         hubspot={"john": ready_to_proof(last="Smith", first="John"),
                  "jane": ready_to_proof(last="Smith", first="Jane")})
@@ -519,7 +709,7 @@ def test_a_verdict_is_read_from_the_books_own_folder(tmp_path, galley):
     run(tmp_path, ws, opener)
     # Only John's practitioner has answered.
     _hand_off(opener, {"outcome": "done", "reason": "clean"},
-              name="Smith - book 1 - outcome.json", parent="sf-a")
+              name="Smith - Book 2 - outcome.json", parent="sf-a")
 
     report = run(tmp_path, ws, opener)
 
@@ -555,6 +745,7 @@ def test_the_defaults_are_no_new_behaviour():
     assert ws.proof_runner == "app"
     assert ws.hubspot_proof_ready_value == "Ready for Proofing"
     assert ws.hubspot_proof_done_value == "Proofing Complete"
+    assert ws.hubspot_proof_needs_human_value == "Needs Human PR"
     assert ws.proof_tier == "T2" and ws.proof_budget_usd == 0.0
 
 
@@ -563,7 +754,8 @@ def test_the_settings_survive_a_save_and_load(tmp_path):
                        proof_runner="external", proof_tier="T3",
                        proof_budget_usd=42.5,
                        hubspot_proof_ready_value="Ready for Proofing",
-                       hubspot_proof_done_value="Proofing Complete")
+                       hubspot_proof_done_value="Proofing Complete",
+                       hubspot_proof_needs_human_value="Needs Human PR")
     ws.save(tmp_path)
 
     back = WatchSettings.load(tmp_path)
@@ -571,6 +763,7 @@ def test_the_settings_survive_a_save_and_load(tmp_path):
     assert back.proofing_enabled is True and back.proof_runner == "external"
     assert back.proof_tier == "T3" and back.proof_budget_usd == 42.5
     assert back.hubspot_proof_done_value == "Proofing Complete"
+    assert back.hubspot_proof_needs_human_value == "Needs Human PR"
 
 
 def test_proofing_without_hubspot_is_refused(tmp_path, galley):
@@ -588,6 +781,17 @@ def test_a_blank_proof_done_value_is_refused_before_the_pass(tmp_path, galley):
     opener = fake_drive(folder(f_1=drive_entry(BOOK)), docx=MANUSCRIPT)
 
     with pytest.raises(ticklib.NotConfigured, match="proof_done_value"):
+        run(tmp_path, ws, opener)
+
+
+def test_a_blank_needs_human_value_is_refused_before_the_pass(tmp_path, galley):
+    """The needs-a-human value is as load-bearing as the done one — a verdict
+    with nowhere to write it would leave the book at ready, which is the state
+    nobody notices — so it is refused up front the same way."""
+    ws = proof_ws(hubspot_proof_needs_human_value="")
+    opener = fake_drive(folder(f_1=drive_entry(BOOK)), docx=MANUSCRIPT)
+
+    with pytest.raises(ticklib.NotConfigured, match="needs_human_value"):
         run(tmp_path, ws, opener)
 
 
@@ -618,14 +822,21 @@ def test_the_budget_falls_back_to_the_tier(tmp_path):
         WatchSettings(proof_tier="T1", proof_budget_usd=7.5)) == 7.5
 
 
-def test_the_hand_off_names_are_the_agreed_four():
+def test_the_hand_off_names_are_the_agreed_set():
+    """The contract both sides build from — `galley/driver.py` writes these on
+    the practitioner's Mac and DocWatch looks for them here, so the two must
+    come out of the same transform."""
+    from galley.driver import handoff_base
+
     assert prooflib.hand_off_names(BOOK) == {
         "manuscript": DELIVERABLE, "letter": LETTER,
-        "style_sheet": STYLE_SHEET, "outcome": OUTCOME}
+        "style_sheet": STYLE_SHEET, "decision_log": DECISION_LOG,
+        "outcome": OUTCOME}
+    assert handoff_base(BOOK) == "Johnson - Book 2"
 
 
 def test_the_job_it_makes_is_a_galley_job(tmp_path):
-    job = prooflib.make_job(tmp_path / "Johnson - Book Original.docx",
+    job = prooflib.make_job(tmp_path / "Johnson - Book 1.docx",
                             proof_ws(proof_tier="T3"))
     assert job.kind == "galley" and job.tier == "T3"
     assert job.budget_usd == 150.0 and job.source == "watch"
@@ -652,8 +863,11 @@ def test_the_cli_turns_proofing_on_and_off(tmp_path, capsys):
     assert ws.proofing_enabled is True and ws.proof_runner == "external"
     assert ws.proof_tier == "T3" and ws.proof_budget_usd == 12.5
     assert ws.hubspot_proof_ready_value == "Ready for Proofing"
+    assert ws.hubspot_proof_needs_human_value == "Needs Human PR"
     printed = capsys.readouterr().out
     assert "Proofing on" in printed and "Ready for Proofing" in printed
+    assert "Needs Human PR" in printed
+    assert "Book 1" in printed and "Book 2" in printed
 
     cli.main(["--home", str(tmp_path), "init", "--disable-proofing"])
     assert WatchSettings.load(tmp_path).proofing_enabled is False

@@ -75,8 +75,9 @@ class FakeSpawner:
 
 @pytest.fixture()
 def book(tmp_path) -> Path:
-    """The fixture manuscript under the house intake name."""
-    dest = tmp_path / "Ford - Book Original.docx"
+    """The fixture manuscript under the house name proofing reads: the
+    developmental edit, "<surname> - Book 1"."""
+    dest = tmp_path / "Ford - Book 1.docx"
     dest.write_bytes(FIXTURE.read_bytes())
     return dest
 
@@ -151,7 +152,7 @@ def test_build_env_refuses_without_the_subscription_token():
 def test_seed_workspace_builds_what_launch_sh_builds(book, tmp_path):
     ws = gd.seed_workspace(book, "ford-book-1",
                            workspace_root=tmp_path / "ws")
-    for rel in ("CLAUDE.md", "KNOBS.md", "source/Ford - Book Original.docx",
+    for rel in ("CLAUDE.md", "KNOBS.md", "source/Ford - Book 1.docx",
                 ".claude/settings.local.json",
                 ".claude/skills/draft-plan/SKILL.md", "runs", "deliverable"):
         assert (ws / rel).exists(), rel
@@ -219,7 +220,7 @@ def test_auto_gate_refuses_a_copyedit_plan_and_stops_before_spending(
     assert spawn.phases == ["profile"]
     outcome = json.loads((ws / "runs" / "outcome.json").read_text("utf-8"))
     assert outcome["outcome"] == "needs_human"
-    assert outcome["hubspot"]["value"] == "Needs Human Proofreader"
+    assert outcome["hubspot"]["value"] == "Needs Human PR"
 
 
 def test_auto_gate_refuses_a_plan_over_budget(book, tmp_path):
@@ -415,7 +416,7 @@ def test_a_needs_human_run_outcome_is_not_papered_over(book, tmp_path):
     assert result.reason == "most sentences must be rewritten"
     assert result.exit_code == 7
     # …and the hand-off still happened: DocWatch needs the files either way.
-    assert [p.name for p in result.handoff][0] == "Ford - book 1.docx"
+    assert [p.name for p in result.handoff][0] == "Ford - Book 2.docx"
 
 
 # --- the hand-off ------------------------------------------------------------
@@ -437,11 +438,16 @@ def _deliverable(ws: Path) -> None:
 
 
 @pytest.mark.parametrize("source_name,expected", [
-    ("Ford - Book Original.docx", "Ford - book 1"),
-    ("Lichtenstein (and Dolores DelBello) - Book Original.docx",
-     "Lichtenstein (and Dolores DelBello) - book 1"),
-    ("Johnson — Book Original.docx", "Johnson - book 1"),
-    ("Something Else.docx", "Something Else - book 1"),
+    ("Ford - Book 1.docx", "Ford - Book 2"),
+    ("Lichtenstein (and Dolores DelBello) - Book 1.docx",
+     "Lichtenstein (and Dolores DelBello) - Book 2"),
+    ("Johnson — Book 1.docx", "Johnson - Book 2"),
+    ("Johnson - book-1.docx", "Johnson - Book 2"),
+    # A source still at an earlier stage in the series resolves too, so a run
+    # driven at an odd file never produces "Ford - Book Original - Book 2".
+    ("Ford - Book Original.docx", "Ford - Book 2"),
+    ("Ford - book 0.docx", "Ford - Book 2"),
+    ("Something Else.docx", "Something Else - Book 2"),
 ])
 def test_handoff_base_follows_the_house_series(source_name, expected):
     assert gd.handoff_base(source_name) == expected
@@ -455,15 +461,15 @@ def test_handoff_writes_the_contract_files(book, tmp_path):
         ws, book.name, out,
         outcome_sources=[ws / "deliverable" / "outcome.json"])
     assert sorted(p.name for p in written) == [
-        "Ford - book 1 - decision-log.md",
-        "Ford - book 1 - letter.md",
-        "Ford - book 1 - outcome.json",
-        "Ford - book 1 - style-sheet.md",
-        "Ford - book 1.docx",
+        "Ford - Book 2 - decision-log.md",
+        "Ford - Book 2 - letter.md",
+        "Ford - Book 2 - outcome.json",
+        "Ford - Book 2 - style-sheet.md",
+        "Ford - Book 2.docx",
     ]
     # The change log is NOT the manuscript.
-    assert (out / "Ford - book 1.docx").read_bytes() == FIXTURE.read_bytes()
-    assert json.loads((out / "Ford - book 1 - outcome.json").read_text(
+    assert (out / "Ford - Book 2.docx").read_bytes() == FIXTURE.read_bytes()
+    assert json.loads((out / "Ford - Book 2 - outcome.json").read_text(
         "utf-8"))["outcome"] == "done"
 
 
@@ -493,7 +499,7 @@ def test_a_full_run_hands_off_and_uploads(book, tmp_path):
     assert len(result.handoff) == 5
     assert len(result.uploaded) == 5
     assert {f for _n, f in uploaded} == {"folder-9"}
-    assert ("Ford - book 1.docx", "folder-9") in uploaded
+    assert ("Ford - Book 2.docx", "folder-9") in uploaded
 
 
 def test_a_failed_upload_leaves_the_files_and_names_the_fix(book, tmp_path):
@@ -509,7 +515,7 @@ def test_a_failed_upload_leaves_the_files_and_names_the_fix(book, tmp_path):
                      handoff_dir=tmp_path / "handoff").run()
     assert result.outcome == "needs_human"
     assert "docproof-watch auth" in result.reason
-    assert (tmp_path / "handoff" / "Ford - book 1.docx").is_file()
+    assert (tmp_path / "handoff" / "Ford - Book 2.docx").is_file()
 
 
 def test_a_missing_deliverable_is_a_handoff_failure(book, tmp_path):

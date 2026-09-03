@@ -442,10 +442,11 @@ def test_outcome_needs_human_when_most_paragraphs_need_rewrite(tmp_path, capsys)
     oc = json.loads([l for l in out.splitlines() if l.startswith("{")][-1])
     assert oc["outcome"] == "needs_human"
     assert "rewrite-class" in oc["reason"]
-    # needs_human names NO HubSpot write: there is no option for it on the
-    # property, so the book stays at "Ready for Proofing" for a person to pick
-    # up rather than being moved anywhere (or, worse, blanked).
-    assert oc["hubspot"] == {}
+    # needs_human names its own HubSpot value — the option that puts the book
+    # in front of a human proofreader. Both verdicts move the book off "Ready
+    # for Proofing"; a book left sitting at ready is one nobody would notice.
+    assert oc["hubspot"] == {"object": "0-970", "property": "docproof",
+                             "value": "Needs Human PR"}
     # a human overrule is recorded as such
     assert main(["galley", "outcome", str(run), "--set", "done",
                  "--reason", "reviewed by hand"]) == 0
@@ -453,24 +454,27 @@ def test_outcome_needs_human_when_most_paragraphs_need_rewrite(tmp_path, capsys)
         == "human"
 
 
-def test_hubspot_fields_writes_for_done_and_nothing_for_needs_human():
-    """The whole HubSpot contract, in one place. `done` names the property and
-    the value a watch may PATCH; `needs_human` names nothing at all, because
-    there is no option for it — writing "" would blank the status rather than
-    move it, and leaving the book at "Ready for Proofing" is what tells a human
-    proofreader to pick it up.
+def test_hubspot_fields_names_a_value_for_both_verdicts():
+    """The whole HubSpot contract, in one place. Both verdicts name a real
+    option on the `docproof` property — "Proofing Complete" when the loop
+    finished the book, "Needs Human PR" when a human proofreader has to take it
+    on — so a book leaves "Ready for Proofing" either way and nothing sits in a
+    queue nobody is reading.
 
-    A caller that really does have an option to write can still say so, which
-    is what keeps `--needs-human-value` meaningful."""
-    from galley.outcome import DEFAULT_NEEDS_HUMAN_VALUE, hubspot_fields
+    A blanked value is the one case that yields nothing: PATCHing "" would blank
+    the status property rather than move it, so the answer is "write nothing"
+    instead."""
+    from galley.outcome import (DEFAULT_DONE_VALUE, DEFAULT_NEEDS_HUMAN_VALUE,
+                                hubspot_fields)
 
-    assert DEFAULT_NEEDS_HUMAN_VALUE == ""
+    assert DEFAULT_DONE_VALUE == "Proofing Complete"
+    assert DEFAULT_NEEDS_HUMAN_VALUE == "Needs Human PR"
     assert hubspot_fields("done") == {"object": "0-970", "property": "docproof",
                                       "value": "Proofing Complete"}
-    assert hubspot_fields("needs_human") == {}
+    assert hubspot_fields("needs_human") == {
+        "object": "0-970", "property": "docproof", "value": "Needs Human PR"}
     assert hubspot_fields("done", done_value="") == {}
-    assert hubspot_fields("needs_human", needs_human_value="Send To Human") == {
-        "object": "0-970", "property": "docproof", "value": "Send To Human"}
+    assert hubspot_fields("needs_human", needs_human_value="") == {}
 
 
 # --- import-findings --anchor accepted -----------------------------------------
