@@ -27,20 +27,38 @@ this table before pricing a plan.
 | Repair channel | ≈ $0.36/book | triggered by ≥3 flags/sentence |
 | Deterministic sweeps, mock replay, merge | $0 | always in the plan |
 
+## Scope first — is this a mechanical run?
+
+Go-live Galley is **MECHANICAL PROOFREADING ONLY** (Quinton, 2026-09-03), and
+the driver runs every book that way unless told otherwise. When the run is
+mechanical-only — the phase prompt says so, or the run is under `--stage
+mechanical-wave` — the plan carries **no copy-edit flights, no merge desk, and
+no wave-2 re-read line at all**. Not "recommend NO"; simply absent. The
+approval is written `docproof galley approve … --stage mechanical-wave
+--mechanical-only`, which refuses over a config with smoothing or rewrite on,
+and `certify` fails the delivery if a copy-edit finding or a
+`flights_findings.json` turns up. `docproof galley drive --approve auto` reads
+this plan without a model: it approves only a plan with a parseable `TOTAL`
+line, inside the budget, and with no copy-edit line — so keep the TOTAL line in
+the skeleton's shape.
+
 ## Procedure
 
 1. **Lanes.** Wave 1 mechanical: ensemble ladder (Luna+Haiku union, Luna
    verifier) + LT (picky per posture) + full sweep list + repair + low-conf
-   confirm + both gates. Copy-edit lane: flight deck on the PROOFREAD text,
-   judge posture from the profile's genre. Genre pack scans as configured.
-   Bespoke sweeps from the profile, each listed individually.
+   confirm + both gates. Genre pack scans as configured. Bespoke sweeps from
+   the profile, each listed individually. The copy-edit lane (flight deck on
+   the PROOFREAD text, judge posture from the profile's genre) is a
+   COPY-EDIT-SCOPE line — include it only when the run is not mechanical-only.
 2. **Config discipline.** Get knob names, defaults, and mechanics from
    `KNOBS.md` — never `cat` `config.py`/`default.yaml`/`sweeps.py` into context.
    Write the full run config; restate every section you touch (a config REPLACES
    default.yaml — an omitted `sweeps:` kills all sweeps). Per-category
    `passes`/`token_budget` knobs are per-run only.
 3. **Price each line** = words/1000 × calibrated rate. Sum, add 15% headroom,
-   compare to budget tier. Mark which lines are $0.
+   compare to the API ceiling — **$10 per book** unless the gate says another
+   figure. That ceiling is what `approval.json` freezes and what every paid
+   verb refuses past, so a plan that does not fit under it is not a plan. Mark which lines are $0.
 4. **Expected yield** per line from calibration/recall history (seeded-recall
    numbers, prior books). Be honest about what a lane can't reach.
 5. **Stop rules.** Marginal-cost ceiling per wave (default: stop when a wave
@@ -57,9 +75,11 @@ BOOK · genre · NN,NNN words · tier TN · budget $NN
 2. mechanical ladder (ensemble)  $X.XX     est. NNN findings
 3. LT (picky=<posture>)          $0.XX
 4. repair + low-conf confirm     $0.XX
-5. flights (6 lenses × <models>) $X.XX     judge=<posture>  [or $0 subagent mode]
-6. merge + artifact scan         $0
-7. audit + wave-2 reserve        $X.XX
-8. adjudicate + rebuild + letter $0
+5. audit (hypotheses, no re-read) $X.XX
+6. verify + settle + certify     $0
+7. adjudicate + rebuild + letter $0
 TOTAL $XX.XX  ·  stop: $2/finding marginal, N waves max
 ```
+
+Copy-edit scope only (omit entirely on a mechanical run): flights (6 lenses ×
+models, judge posture), merge + artifact scan, the wave-2 re-read reserve.

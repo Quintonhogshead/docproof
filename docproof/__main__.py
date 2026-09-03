@@ -803,6 +803,12 @@ def _galley_parser(sub) -> None:
                      help="where to write the manifest (default: approval.json)")
     gap.add_argument("--note", default="", help="a free-text note recorded in "
                                                 "the manifest")
+    gap.add_argument("--mechanical-only", action="store_true",
+                     help="record the go-live scope on the manifest: "
+                          "mechanical proofreading only. Refuses to write an "
+                          "approval over a config that enables a copy-edit "
+                          "lane (smoothing/rewrite), and makes `galley "
+                          "certify` FAIL a run that grew one")
     gap.add_argument("--json", action="store_true")
 
     gct = gsub.add_parser(
@@ -905,11 +911,13 @@ def _galley_parser(sub) -> None:
                      help="the $0 replay config the rebuilds run under")
     _stage_arg(gse)
     _genre_arg(gse)
-    gse.add_argument("--rounds", type=int, default=3,
+    gse.add_argument("--rounds", type=int, default=None,
                      help="settle rounds before leftovers become queries "
-                          "(default 3; ignored by --until-clean, which runs "
-                          "to a quiet round or the turn budget, never past "
-                          "12)")
+                          "(default 3). With --until-clean it is the CEILING "
+                          "on the sweep — `--until-clean --rounds 3` stops "
+                          "after three rounds even if the third is still "
+                          "noisy; left unset, --until-clean sweeps to a quiet "
+                          "round, the turn budget, or 12 rounds")
     gse.add_argument("--until-clean", action="store_true",
                      help="keep sweeping while rounds keep finding real work: "
                           "stop after a QUIET round (new items at or below "
@@ -986,6 +994,127 @@ def _galley_parser(sub) -> None:
     goc.add_argument("--done-value", default=None)
     goc.add_argument("--needs-human-value", default=None)
     goc.add_argument("--json", action="store_true")
+
+    gjn = gsub.add_parser(
+        "journal",
+        help="the decision log: every action taken on the book and why, "
+             "rendered from the run's own artifacts (driver events, plan gate, "
+             "sweeps, every edit with its recorded reason, verify, settle, "
+             "certify, outcome). Deterministic, $0, regenerable any time.")
+    gjn.add_argument("run", help="the run directory (the one holding "
+                                 "findings.json)")
+    gjn.add_argument("--workspace", help="the book's workspace, for PLAN.md, "
+                                         "approval.json, profile.json, the "
+                                         "driver ledger and certify.txt")
+    gjn.add_argument("--book", default="", help="the book's name for the "
+                                                "heading (default: read from "
+                                                "the approval or the run)")
+    gjn.add_argument("--out", help="write here (default: stdout). The driver "
+                                   "writes deliverable/DECISION_LOG.md")
+    gjn.add_argument("--at", default="", help="timestamp to stamp on it (you "
+                                              "supply it; never read from a "
+                                              "clock, so the render is "
+                                              "reproducible)")
+
+    gdr = gsub.add_parser(
+        "drive",
+        help="the UNATTENDED driver: seed the per-book workspace and run the "
+             "practitioner phases in order, each as its own headless session, "
+             "decide the plan gate under --approve, stop on the first failure "
+             "with runs/outcome.json = needs_human, and hand the deliverable "
+             "off to DocWatch. Mechanical proofreading only by default.")
+    gdr.add_argument("--book", required=True,
+                     help="the manuscript to proofread (.docx)")
+    gdr.add_argument("--slug", required=True,
+                     help="the workspace name for this book (one per book)")
+    gdr.add_argument("--workspace-root", default=None,
+                     help="where per-book workspaces live "
+                          "(default: ~/galley-workspaces)")
+    gdr.add_argument("--budget", type=float, default=None, metavar="USD",
+                     help="the plan-gate ceiling in USD (default: $20, the "
+                          "manual's per-book default)")
+    gdr.add_argument("--approve", choices=["auto", "email", "manual"],
+                     default="auto",
+                     help="the plan gate: `auto` approves a priced, "
+                          "mechanical-only plan inside --budget; `email` sends "
+                          "it through `galley ask` and polls QUESTIONS.md for "
+                          "a reply; `manual` stops at the gate as today")
+    gdr.add_argument("--from", dest="from_phase", metavar="PHASE",
+                     help="restart the sequence at this phase (the workspace's "
+                          "state.json is the ledger)")
+    gdr.add_argument("--phases", nargs="+", metavar="PHASE",
+                     help="run only these phases, in order")
+    gdr.add_argument("--handoff", metavar="DIR",
+                     help="where the DocWatch hand-off files are written "
+                          "(default: <workspace>/handoff/)")
+    gdr.add_argument("--drive-folder-id", default="",
+                     help="also upload the hand-off to this Google Drive "
+                          "folder, with the watcher's own sign-in "
+                          "(`docproof-watch auth`)")
+    gdr.add_argument("--copyedit", action="store_true",
+                     help="allow the copy-edit phases (flights, reread). OFF "
+                          "by default: go-live Galley is mechanical "
+                          "proofreading only (owner, 2026-09-03)")
+    gdr.add_argument("--model", default=None,
+                     help="the brain model for every phase session "
+                          "(default: claude-fable-5)")
+    gdr.add_argument("--permission-mode", default=None,
+                     help="the headless session's permission mode "
+                          "(default: acceptEdits)")
+    gdr.add_argument("--wrapbin", default=None,
+                     help="the directory holding the `docproof` wrapper that "
+                          "re-injects API keys for the sifters "
+                          "(default: ~/galley-bin)")
+    gdr.add_argument("--reply-timeout", type=float, default=None,
+                     metavar="HOURS",
+                     help="--approve email: how long to wait for a reply "
+                          "before stopping as needs_human (default: 6)")
+    gdr.add_argument("--poll-interval", type=float, default=None,
+                     metavar="SECONDS",
+                     help="--approve email: how often to re-read QUESTIONS.md "
+                          "(default: 30)")
+    gdr.add_argument("--no-state-gate", action="store_true",
+                     help="do not require each phase to have advanced "
+                          "state.json before the next one runs")
+    gdr.add_argument("--max-turns", type=int, default=None, metavar="N",
+                     help="turn cap for every phase session "
+                          "(default: per-phase, verify 250 / settle 400)")
+    gdr.add_argument("--phase-max-turns", action="append", default=[],
+                     metavar="PHASE=N",
+                     help="turn cap for ONE phase (repeatable); wins over "
+                          "--max-turns")
+    gdr.add_argument("--timeout", type=float, default=None, metavar="HOURS",
+                     help="wall-clock cap for every phase session "
+                          "(default: 2h, ladder 3h, verify/settle 4h)")
+    gdr.add_argument("--phase-timeout", action="append", default=[],
+                     metavar="PHASE=HOURS",
+                     help="wall-clock cap for ONE phase (repeatable); wins "
+                          "over --timeout")
+    gdr.add_argument("--settle-rounds", type=int, default=None, metavar="N",
+                     help="the until-clean sweep's ceiling (default 3): a "
+                          "sweep still noisy after N rounds ends the run as "
+                          "needs_human")
+    gdr.add_argument("--settle-quiet-floor", type=int, default=None,
+                     metavar="N",
+                     help="a settle round raising N new items or fewer is "
+                          "quiet and the book is done (default 4, i.e. fewer "
+                          "than five)")
+    gdr.add_argument("--settle-quiet-share", type=float, default=None,
+                     metavar="SHARE",
+                     help="settle's percentage quiet rule (default 0 — off, "
+                          "so the absolute count decides alone)")
+    gdr.add_argument("--no-question-gate", action="store_true",
+                     help="do not stop when a phase appends an escalation to "
+                          "QUESTIONS.md (by default an unanswerable question "
+                          "stops the run as needs_human)")
+    gdr.add_argument("--print-prompt", metavar="PHASE",
+                     help="print that phase's prompt and exit — what the thin "
+                          "shell wrapper uses; nothing is spawned")
+    gdr.add_argument("--dry-run", action="store_true",
+                     help="seed the workspace and print the phase sequence; "
+                          "spawn no session")
+    gdr.add_argument("--json", action="store_true",
+                     help="print the driver's result envelope to stdout")
 
 
 def _galley_spend_args(p: argparse.ArgumentParser) -> None:
@@ -2454,7 +2583,143 @@ def cmd_galley(args) -> int:
             "state": _galley_state,
             "settle": _galley_settle,
             "residuals": _galley_residuals,
+            "drive": _galley_drive,
+            "journal": _galley_journal,
             "outcome": _galley_outcome}[args.galley_cmd](args)
+
+
+def _galley_journal(args) -> int:
+    """`docproof galley journal`: render the decision log (galley/journal.py).
+
+    $0, no model, no clock: the same artifacts always render the same
+    document, so a log can be regenerated whenever someone asks how a decision
+    was made."""
+    from galley.journal import render_journal
+
+    run = Path(args.run)
+    if not run.is_dir():
+        print(f"error: no run directory at {run}", file=sys.stderr)
+        return 2
+    try:
+        text = render_journal(run, workspace=args.workspace, book=args.book,
+                              generated_at=args.at)
+    except (OSError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+        print(f"wrote {out} — {len(text.splitlines())} line(s)")
+    else:
+        print(text)
+    return 0
+
+
+def _galley_drive(args) -> int:
+    """`docproof galley drive`: the unattended driver (galley/driver.py).
+
+    Sequences the practitioner phases, each as its own headless session, under
+    a stated plan-gate policy; stops on the first failure with runs/outcome.json
+    = needs_human; hands the certified deliverable to DocWatch. Exit 0 when the
+    run finished `done`, 7 when it stopped needing a human, 2 on a setup error
+    the message names."""
+    from galley import driver as gd
+
+    mechanical_only = not getattr(args, "copyedit", False)
+    if getattr(args, "print_prompt", None):
+        try:
+            print(gd.phase_prompt(args.print_prompt, Path(args.book).name,
+                                  mechanical_only=mechanical_only))
+        except gd.DriverError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        return 0
+
+    kwargs: dict = {}
+    if args.workspace_root:
+        kwargs["workspace_root"] = Path(args.workspace_root)
+    if args.budget is not None:
+        kwargs["budget_usd"] = args.budget
+    if args.model:
+        kwargs["model"] = args.model
+    if args.permission_mode:
+        kwargs["permission_mode"] = args.permission_mode
+    if args.wrapbin:
+        kwargs["wrapbin"] = Path(args.wrapbin)
+    if args.reply_timeout is not None:
+        kwargs["reply_timeout_s"] = args.reply_timeout * 3600.0
+    if args.poll_interval is not None:
+        kwargs["poll_interval_s"] = args.poll_interval
+    if args.handoff:
+        kwargs["handoff_dir"] = Path(args.handoff)
+    if args.max_turns is not None:
+        kwargs["max_turns"] = args.max_turns
+    if args.timeout is not None:
+        kwargs["timeout_s"] = args.timeout * 3600.0
+    for name, flag, cast, scale in (
+            ("max_turns_by_phase", "phase_max_turns", int, 1.0),
+            ("timeout_by_phase", "phase_timeout", float, 3600.0)):
+        pairs: dict = {}
+        for spec in getattr(args, flag) or []:
+            phase, _, value = str(spec).partition("=")
+            if not value:
+                print(f"error: --{flag.replace('_', '-')} wants PHASE=VALUE, "
+                      f"got {spec!r}", file=sys.stderr)
+                return 2
+            try:
+                pairs[phase.strip()] = cast(value) * scale
+            except ValueError:
+                print(f"error: --{flag.replace('_', '-')} {spec!r}: "
+                      f"{value!r} is not a number", file=sys.stderr)
+                return 2
+        if pairs:
+            kwargs[name] = ({k: int(v) for k, v in pairs.items()}
+                            if cast is int else pairs)
+    for opt, key in (("settle_rounds", "settle_rounds"),
+                     ("settle_quiet_floor", "settle_quiet_floor"),
+                     ("settle_quiet_share", "settle_quiet_share")):
+        value = getattr(args, opt)
+        if value is not None:
+            kwargs[key] = value
+
+    drv = gd.Driver(
+        book=Path(args.book).expanduser(), slug=args.slug,
+        approve=args.approve, mechanical_only=mechanical_only,
+        start_phase=args.from_phase, only_phases=args.phases,
+        drive_folder_id=args.drive_folder_id,
+        state_gate=not args.no_state_gate,
+        question_gate=not args.no_question_gate, **kwargs)
+
+    if args.dry_run:
+        try:
+            ws = gd.seed_workspace(drv.book, drv.slug,
+                                   workspace_root=drv.workspace_root)
+            phases = gd.select_phases(mechanical_only=mechanical_only,
+                                      start=args.from_phase, only=args.phases)
+        except gd.DriverError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        print(f"workspace {ws}")
+        print(f"phases: {' -> '.join(phases)}")
+        print(f"gate: --approve {args.approve} at ${drv.budget_usd:.2f}"
+              f"{' (mechanical only)' if mechanical_only else ''}")
+        if args.json:
+            print(json.dumps({"workspace": str(ws), "phases": phases,
+                              "approve": args.approve,
+                              "budget_usd": drv.budget_usd,
+                              "mechanical_only": mechanical_only},
+                             ensure_ascii=False))
+        return 0
+
+    try:
+        result = drv.run()
+    except gd.DriverError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(result.to_json(), ensure_ascii=False))
+    return result.exit_code
 
 
 def _paragraph_ids(spec: str | None) -> list[str] | None:
@@ -2476,8 +2741,9 @@ def _galley_settle(args) -> int:
     engine error."""
     from galley.outcome import (DEFAULT_DONE_VALUE, DEFAULT_NEEDS_HUMAN_VALUE,
                                 assess)
-    from galley.settle import (SettleOptions, Settler, kept_rows, open_items,
-                               resolve)
+    from galley.settle import (DEFAULT_ROUNDS as DEFAULT_SETTLE_ROUNDS,
+                               HARD_MAX_ROUNDS, SettleOptions, Settler,
+                               kept_rows, open_items, resolve)
     from .providers import cost_of_usage
 
     run = Path(args.run)
@@ -2504,6 +2770,12 @@ def _galley_settle(args) -> int:
             print(f"error: --context {args.context}: {e}", file=sys.stderr)
             return 2
 
+    # `--rounds` unset means "the verb's own default" (3) — except under
+    # --until-clean, where unset means "no ceiling of your own" (0), so the
+    # sweep keeps its historical reach to a quiet round or 12.
+    _rounds = args.rounds if args.rounds is not None \
+        else (0 if args.until_clean else DEFAULT_SETTLE_ROUNDS)
+
     items = open_items(run)
     if args.dry_run:
         print(f"dry run — {len(items)} open item(s) in {run}")
@@ -2524,7 +2796,8 @@ def _galley_settle(args) -> int:
         except Exception as e:                              # noqa: BLE001
             print(f"  (owner resolution unavailable: {e})")
         print(f"\nupper bound: {len(items)} judge call(s) + a delta verify per "
-              f"round × {args.rounds} round(s); nothing written.")
+              f"round × {_rounds or HARD_MAX_ROUNDS} round(s); nothing "
+              f"written.")
         return 0
 
     default_model = cfg.continuity.model or cfg.api.model
@@ -2542,7 +2815,7 @@ def _galley_settle(args) -> int:
         if guard is not None:
             return guard
 
-    opts = SettleOptions(rounds=max(0, int(args.rounds)), engine=engine,
+    opts = SettleOptions(rounds=max(0, int(_rounds)), engine=engine,
                          model=model, context=context,
                          verify_delta=not args.no_verify,
                          until_clean=bool(args.until_clean),
@@ -2578,7 +2851,7 @@ def _galley_settle(args) -> int:
           f"({', '.join(f'{k}={v}' for k, v in sorted(counts.items())) or 'none'}), "
           f"{len(st.open)} open; engine={engine} "
           f"({result.usage.api_calls} model call(s), ${cost:.4f}).")
-    for note in st.notes[-args.rounds - 1:]:
+    for note in st.notes[-(st.rounds + 1):]:
         print(f"  {note}")
     print(f"  outcome: {outcome.outcome} — {outcome.reason[:200]}")
     print(f"\n  {run / 'settlement.json'}\n  {run / 'outcome.json'}")
@@ -4287,6 +4560,7 @@ def _galley_approve(args) -> int:
             max_spend_usd=args.budget,
             stage=getattr(args, "stage", None) or prov.get("stage"),
             genre=getattr(args, "genre", None) or prov.get("genre"),
+            mechanical_only=bool(getattr(args, "mechanical_only", False)),
             note=args.note)
     except (FileNotFoundError, ValueError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
@@ -4299,7 +4573,8 @@ def _galley_approve(args) -> int:
     print(f"  source {manifest['source_sha256'][:12]}…  config "
           f"{manifest['config_sha256'][:12]}…")
     print(f"  budget ${manifest['max_spend_usd']:.2f}  stage "
-          f"{manifest['stage']}  lanes {manifest['enabled_lanes']}")
+          f"{manifest['stage']}  lanes {manifest['enabled_lanes']}"
+          + ("  MECHANICAL ONLY" if manifest.get("mechanical_only") else ""))
     print(f"  allowed providers: {', '.join(manifest['allowed_providers'])}")
     print(f"  allowed models: {', '.join(manifest['allowed_models'])}")
     if args.json:

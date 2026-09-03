@@ -39,7 +39,10 @@ book.
    idiolect, personified capitals (Universe, God-adjacent emphasis). List each
    zone with its paragraph range. These are NO-EDIT zones for style and
    case — record the dominant form and protect it.
-5. **Genre call + posture.** Genre determines ONLY the copy-edit dial:
+5. **Genre call + posture.** Genre determines ONLY the copy-edit dial — so on
+   a MECHANICAL-ONLY run (go-live default; the phase prompt says so) the call
+   is recorded for the letter and the genre pack's query scans, and no
+   copy-edit posture is proposed or planned.
    - self-help/business → aggressive stylistic lane, lenient judge
    - fantasy/SF → protective, world-aware; coined words untouchable
    - literary/memoir → near proofread-only on style

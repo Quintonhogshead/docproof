@@ -17,9 +17,69 @@ names, the genres, the stages) as JSON. Read THAT to find a verb — never `cat`
 `--help` or the source (see Context discipline). If a verb you need is not in
 `capabilities`, that's an escalation, not a reason to go reading code.
 
-Your job on any manuscript: **profile → priced plan → human plan gate →
+Your job on any manuscript: **profile → priced plan → plan gate →
 execute waves → audit → adjust → adjudicate → deliver.** Every stage has a
 skill; follow the skill, record what you learned.
+
+## Scope: go-live is MECHANICAL PROOFREADING ONLY
+
+Quinton, 2026-09-03. The book Galley ships is a Chicago **proofread**. The
+copy-edit flight deck, the merge desk, and the gated wave-2 re-read are
+**tabled** — not deprecated, but out of scope for a run unless a human says
+otherwise on that run. In practice:
+
+- the phase prompt tells you when a run is mechanical-only, and the driver
+  (`docproof galley drive`) never launches the `flights` or `reread` phases;
+- `/draft-plan` writes a plan with **no** flights, merge-desk or wave-2 line —
+  absent, not "recommend NO", because the unattended gate reads those lines and
+  refuses the plan;
+- the approval is written with `--stage mechanical-wave --mechanical-only`, so
+  `approval.json` records the copy-edit lanes as shut and `docproof galley
+  certify` FAILS the delivery if a copy-edit finding, a copy-edit lane, or a
+  `flights_findings.json` appears;
+- one tracked-change author ships (the proofreader), so the two-author check
+  stays a skip.
+
+Everything else in this manual — the ladder, the $0 subagent lanes, verify,
+settle, certify — is unchanged.
+
+## Unattended runs (`docproof galley drive`)
+
+A whole book can run with nobody watching: the driver seeds the workspace,
+runs `profile → approve → sweeps → ladder → audit → verify → settle → certify
+→ deliver`, each as its own lean session with these same prompts, and hands
+the deliverable to DocWatch. Two things change for you inside such a session:
+
+1. **There is no chat to answer into.** The plan gate is decided by policy
+   (`--approve auto` approves a priced, mechanical-only plan inside the
+   budget; `--approve email` sends it out and waits for a reply in
+   `QUESTIONS.md`; `--approve manual` stops). Write the plan so a machine can
+   read it: one `TOTAL … $N` line, no copy-edit lines.
+2. **Advance the state machine, every time.** The driver checks `state.json`
+   after each phase and STOPS the run if the phase it just ran did not reach
+   its state (`intake`, `plan_approved`, `mechanical_complete`, `audited`,
+   `settled`, `certified`, `delivered`). A phase that quietly skipped the
+   advance reads exactly like a phase that did nothing.
+3. **Sessions have caps.** Every phase runs under a turn cap
+   (`claude --max-turns`, 400 for settle, 250 for verify, 60-150 elsewhere) and
+   a wall-clock timeout (2h, 3h for the ladder, 4h for verify/settle). Hitting
+   either ends the run as `needs_human` naming the cap. Work like it: send
+   scans to files and read summaries, don't re-read what you already read.
+4. **The settle sweep is bounded.** `--until-clean --rounds 3 --quiet-floor 4
+   --quiet-share 0`: at most three rounds, and a round raising **fewer than
+   five** new items is quiet — the book is done. If the third round is still
+   noisy the book needs a human proofreader; say so and stop, do not sweep
+   again.
+5. **An escalation ends the run.** Escalate exactly as this manual says —
+   append to `QUESTIONS.md`, push it with `docproof galley ask` — and know
+   that unattended there is nobody to answer: the driver sees the new entry
+   and stops the run as `needs_human` with your question as the reason. So
+   escalate only what genuinely blocks the book, and decide everything you are
+   entitled to decide.
+
+A nonzero exit from any phase stops the driver, writes `runs/outcome.json` as
+`needs_human` with the phase and your last log lines, and leaves the workspace
+for a person. Nothing is retried around.
 
 ## The prime directives
 
@@ -29,8 +89,10 @@ skill; follow the skill, record what you learned.
 2. **Chicago is hammered in every genre.** Mechanics and CMOS enforcement are
    never genre-tuned, never softened. Only the copy-edit/stylistic lane takes a
    genre posture.
-3. **Money moves only through the plan.** Default budget is **$20 per book**
-   unless the human sets another. Every paid model call must trace to a line
+3. **Money moves only through the plan.** The API ceiling is **$10 per book**
+   (Quinton, 2026-09-03) unless the human sets another. It is not advice: it is
+   frozen into `approval.json` as `max_spend_usd`, and every paid verb REFUSES
+   past it. Every paid model call must trace to a line
    in the approved plan. Prefer the $0 paths (sweeps, mock replay,
    session-subagent flights, `--resume` checkpoints) whenever one exists.
    Model doctrine (Quinton, 2026-08-27): **Claude models never bill — run
@@ -448,9 +510,11 @@ the engine writes the document.
 ## Escalate to the human when
 
 - the plan gate hasn't approved the spend you're about to make;
+- the run is mechanical-only and the book seems to need copy-editing (say so,
+  in the letter and the escalation; do not plan the lane);
 - a bespoke sweep would touch more than a handful of sites (high blast radius);
 - an intent-zone judgment is genuinely ambiguous;
-- budget is on track to exceed the approved figure ($20 default);
+- budget is on track to exceed the approved figure ($10 default);
 - a knob you need doesn't exist, or a tool misbehaves in a way you'd have to
   work around silently;
 - anything asks you to weaken the reject-all audit or ship unaudited.

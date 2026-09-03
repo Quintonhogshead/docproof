@@ -738,6 +738,76 @@ def test_a_sweep_that_will_not_converge_flags_needs_human(tmp_path, monkeypatch)
     assert st.convergence["stopped"] == "turn_budget"
 
 
+def test_until_clean_takes_an_explicit_rounds_as_its_ceiling(tmp_path,
+                                                             monkeypatch):
+    """`--until-clean --rounds 2` sweeps AT MOST two rounds. The sweep used to
+    ignore --rounds entirely and run to the hard cap of 12, which is a trap for
+    an unattended driver that names a round budget and means it."""
+    src = _manuscript(tmp_path)
+    ids, _doc = _para_ids(src)
+    run = _build(tmp_path, src, [
+        {"para_id": ids[0], "original_text": "teh", "corrected_text": "the",
+         "confidence": "high"}])
+    _walk(run, [{"para_id": ids[1], "quote": "recieve", "problem": "sp",
+                 "suggestion": "receive", "severity": "high"}])
+
+    def noisy(pairs):
+        return {"findings": [{"para_id": ids[1], "quote": q, "problem": "x",
+                              "suggestion": r, "severity": "low"}
+                             for q, r in pairs]}
+    prov = _Provider(
+        {"problems": []},
+        noisy((("Its light", "Its glow"), ("was thin", "was faint"),
+               ("was enough", "was sufficient"), ("by tonight", "by nightfall"))),
+        {"problems": []},
+        noisy((("Its glow", "Its shine"), ("was faint", "was dim"),
+               ("was sufficient", "was ample"), ("by nightfall", "by dusk"))),
+        {"problems": []}, noisy((("Its shine", "Its blaze"),)))
+    _fake_engine(monkeypatch, prov)
+    assert main(["galley", "settle", str(run), "--source", str(src),
+                 "--config", _replay_config(tmp_path), "--engine", "provider",
+                 "--until-clean", "--rounds", "2", "--quiet-floor", "0",
+                 "--quiet-share", "0"]) == 0
+    _recs, st = _records(run)
+    # Two settling rounds, then the leftovers shipped as questions — never a
+    # third read, though the provider had one more noisy answer scripted.
+    assert st.convergence["rounds"] == 2
+    assert st.convergence["stopped"] == "round_cap"
+    assert st.convergence["quiet"] is False
+    assert prov.calls and len(prov.calls) == 4
+
+
+def test_until_clean_without_rounds_keeps_its_old_reach(tmp_path, monkeypatch):
+    """…and an unset --rounds still means "sweep to a quiet round", not the
+    verb's default of 3: the ceiling only exists when a caller names one."""
+    from galley.settle import HARD_MAX_ROUNDS, SettleOptions
+    src = _manuscript(tmp_path)
+    ids, _doc = _para_ids(src)
+    run = _build(tmp_path, src, [
+        {"para_id": ids[0], "original_text": "teh", "corrected_text": "the",
+         "confidence": "high"}])
+    _walk(run, [{"para_id": ids[1], "quote": "recieve", "problem": "sp",
+                 "suggestion": "receive", "severity": "high"}])
+    prov = _Provider({"problems": []}, {"findings": []})
+    _fake_engine(monkeypatch, prov)
+    seen = {}
+    from galley import settle as settle_mod
+    real = settle_mod.Settler.__init__
+
+    def spy(self, *a, **kw):
+        real(self, *a, **kw)
+        seen["rounds"] = self.opt.rounds
+        seen["until_clean"] = self.opt.until_clean
+    monkeypatch.setattr(settle_mod.Settler, "__init__", spy)
+    assert main(["galley", "settle", str(run), "--source", str(src),
+                 "--config", _replay_config(tmp_path), "--engine", "provider",
+                 "--until-clean"]) == 0
+    # rounds 0 = "no ceiling of your own"; the loop falls back to the hard cap.
+    assert seen == {"rounds": 0, "until_clean": True}
+    assert HARD_MAX_ROUNDS == 12
+    assert SettleOptions().rounds == 3          # the non-until-clean default
+
+
 def test_until_clean_with_nothing_open_starts_with_a_fresh_sweep(tmp_path,
                                                                   monkeypatch):
     src = _manuscript(tmp_path)
