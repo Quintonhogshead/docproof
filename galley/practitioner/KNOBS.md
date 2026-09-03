@@ -7,6 +7,37 @@ cache-read cost we've measured. Everything you need to write a run config is
 here. If a knob you need genuinely isn't documented here, that is an
 ESCALATION (the knob may not exist), not a reason to go read the source.
 
+## What changed (the unattended driver + mechanical-only scope)
+
+- **`docproof galley drive --book B --slug S`** — runs the whole loop with
+  nobody watching: seeds the workspace, then `profile → approve → sweeps →
+  ladder → audit → verify → settle → certify → deliver`, each as its own lean
+  headless session with the phase prompts that now live in `galley/driver.py`
+  (`~/galley-bin/galley-run.sh` is a thin wrapper over this verb;
+  `--print-prompt PHASE` prints one). `--approve auto|email|manual` decides the
+  plan gate; `--budget USD` (default $20) is the ceiling it decides against;
+  `--from PHASE` / `--phases …` restart or narrow; `--handoff DIR` and
+  `--drive-folder-id` put the four hand-off files (`<surname> - book 1.docx`,
+  `… - letter.md`, `… - style-sheet.md`, `… - outcome.json`) where DocWatch
+  reads them. Exit 0 = the run finished; 7 = it stopped and
+  `runs/outcome.json` says `needs_human` and why; 2 = a setup error.
+- **Mechanical-only scope (go-live).** `flights` and `reread` are not run.
+  `docproof galley approve … --stage mechanical-wave --mechanical-only`
+  stamps `mechanical_only: true` on `approval.json` and REFUSES over a config
+  with `smoothing`/`smoothing.edits`/`rewrite` on; `docproof galley certify`
+  then adds a **mechanical only** check that FAILS on a copy-edit lane in the
+  config or approval, a shipped copy-edit finding, or a `flights_findings.json`
+  in the run dir.
+- **An escalation stops an unattended run.** Anything a phase appends to
+  `QUESTIONS.md` stops the driver as `needs_human` with your question as the
+  reason (`--no-question-gate` disables it) — `galley ask` exits 0, so the file
+  is the only honest signal that a session asked something.
+- **The state machine is the driver's gate too.** After each phase the driver
+  requires `state.json` to have reached that phase's state (`intake`,
+  `plan_approved`, `mechanical_complete`, `audited`, `settled`, `certified`,
+  `delivered`) and stops the run if it has not. Advance it with BOTH `--source`
+  and `--config`, every time.
+
 ## What changed in v0.183.0 (residual settlement)
 
 - **`docproof galley settle RUN --source BOOK --config C`** — the settlement
@@ -197,7 +228,8 @@ Three separate axes compose onto a base config. Precedence, strict-to-loose:
   `error_types: [spelling]` + the spell scan and locks every other lane, sweep,
   and gate off — feather-soft, spelling only.
 - **`docproof galley approve`** freezes the composed config into `approval.json`
-  (source + config hashes, allowed models/providers, stage, lanes, budget).
+  (source + config hashes, allowed models/providers, stage, lanes, budget, and
+  `mechanical_only` when `--mechanical-only` is given).
   `docproof review --approval …` refuses to run on any deviation; `docproof
   galley certify` is the delivery gate. `docproof galley routes` prints the
   effective model→provider egress map — the one place routing is legible.

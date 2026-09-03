@@ -587,3 +587,67 @@ def test_two_author_skips_without_a_deliverable_and_for_one_lane(tmp_path):
     ta2 = next(c for c in certify_run(run2).checks
                if c.name == "two-author attribution")
     assert ta2.status == "skip" and "single lane" in ta2.detail
+
+
+# --- mechanical-only scope (go-live, 2026-09-03) -----------------------------
+
+def test_mechanical_only_manifest_records_the_scope(tmp_path):
+    m = build_manifest(source=_source(tmp_path), config_path=str(CONFIG),
+                       cfg=_mech_cfg(), max_spend_usd=20.0,
+                       stage="mechanical-wave", mechanical_only=True)
+    assert m["mechanical_only"] is True
+    # The mechanical-wave stage locks the copy-edit lanes shut, so none is
+    # frozen into the approval.
+    assert not [lane for lane in m["enabled_lanes"]
+                if lane in ("smoothing", "smoothing_edits", "rewrite")]
+
+
+def test_mechanical_only_refuses_a_config_with_a_copyedit_lane(tmp_path):
+    cfg, _ = materialize_genre_pack(CONFIG, "general_fiction",
+                                    stage="copyedit-wave")
+    with pytest.raises(ValueError, match="mechanical-only approval"):
+        build_manifest(source=_source(tmp_path), config_path=str(CONFIG),
+                       cfg=cfg, max_spend_usd=20.0, mechanical_only=True)
+
+
+def test_certify_has_no_scope_check_without_the_claim(tmp_path):
+    m = build_manifest(source=_source(tmp_path), config_path=str(CONFIG),
+                       cfg=_mech_cfg(), max_spend_usd=20.0)
+    run = _run_dir(tmp_path, {"findings": _TWO_LANES,
+                              "cost": {"total_usd": 1.0}})
+    assert not [c for c in certify_run(run, manifest=m).checks
+                if c.name == "mechanical only"]
+
+
+def test_certify_fails_a_mechanical_only_run_that_shipped_a_copyedit(tmp_path):
+    m = build_manifest(source=_source(tmp_path), config_path=str(CONFIG),
+                       cfg=_mech_cfg(), max_spend_usd=20.0,
+                       mechanical_only=True)
+    run = _run_dir(tmp_path, {"findings": _TWO_LANES,
+                              "cost": {"total_usd": 1.0}})
+    check = next(c for c in certify_run(run, manifest=m).checks
+                 if c.name == "mechanical only")
+    assert check.status == "fail" and "copy-edit finding" in check.detail
+
+
+def test_certify_fails_a_mechanical_only_run_with_a_flight_artifact(tmp_path):
+    m = build_manifest(source=_source(tmp_path), config_path=str(CONFIG),
+                       cfg=_mech_cfg(), max_spend_usd=20.0,
+                       mechanical_only=True)
+    run = _run_dir(tmp_path, {"findings": [{"a": 1}],
+                              "cost": {"total_usd": 1.0}})
+    (run / "flights_findings.json").write_text("{}")
+    check = next(c for c in certify_run(run, manifest=m).checks
+                 if c.name == "mechanical only")
+    assert check.status == "fail" and "flights_findings.json" in check.detail
+
+
+def test_certify_passes_a_clean_mechanical_only_run(tmp_path):
+    cfg = _mech_cfg()
+    m = build_manifest(source=_source(tmp_path), config_path=str(CONFIG),
+                       cfg=cfg, max_spend_usd=20.0, mechanical_only=True)
+    run = _run_dir(tmp_path, {"findings": [dict(_TWO_LANES[0])],
+                              "cost": {"total_usd": 1.0}})
+    check = next(c for c in certify_run(run, manifest=m, cfg=cfg).checks
+                 if c.name == "mechanical only")
+    assert check.status == "pass"

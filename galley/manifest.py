@@ -36,6 +36,12 @@ from typing import Any
 
 MANIFEST_SCHEMA_VERSION = 1
 
+# The lanes that make a run a COPY-EDIT run rather than a proofread. Go-live
+# Galley (owner, 2026-09-03) does mechanical proofreading only, so an approval
+# may declare `mechanical_only` and certify fails the delivery if one of these
+# turns up — in the config, in the findings, or as a flight-deck artifact.
+COPYEDIT_LANES = ("smoothing", "smoothing_edits", "rewrite")
+
 # A config field whose NAME ends in one of these carries a model id we route on.
 _MODEL_FIELD = re.compile(r"(^|_)(model)$")
 
@@ -177,10 +183,25 @@ def build_manifest(*, source: str | Path, config_path: str | Path, cfg: Any,
                    max_spend_usd: float, stage: str | None = None,
                    genre: str | None = None,
                    allowed_providers: list[str] | None = None,
+                   mechanical_only: bool = False,
                    note: str = "") -> dict[str, Any]:
     """Assemble the immutable approval manifest. ``allowed_providers`` defaults
     to exactly the providers the approved config actively uses — an approval is
-    a promise that the run reaches no OTHER vendor."""
+    a promise that the run reaches no OTHER vendor.
+
+    ``mechanical_only`` records the go-live scope decision (2026-09-03:
+    mechanical proofreading only) on the manifest itself, so ``certify`` can
+    fail a run that grew a copy-edit lane. It REFUSES to write an approval that
+    contradicts its own config: a mechanical-only approval over a config with
+    smoothing or rewrite on would be a promise the run cannot keep."""
+    if mechanical_only:
+        live = [lane for lane in _enabled_lanes(cfg) if lane in COPYEDIT_LANES]
+        if live:
+            raise ValueError(
+                f"a mechanical-only approval cannot be written over a config "
+                f"that enables the copy-edit lane(s) {', '.join(live)} — "
+                f"compose the config with `--stage mechanical-wave`, which "
+                f"locks them shut")
     routes = model_routes(cfg)
     active_models = sorted({r.model for r in routes if r.active})
     providers = (sorted(set(allowed_providers)) if allowed_providers is not None
@@ -198,6 +219,7 @@ def build_manifest(*, source: str | Path, config_path: str | Path, cfg: Any,
         "allowed_models": active_models,
         "allowed_providers": providers,
         "enabled_lanes": lanes,
+        "mechanical_only": bool(mechanical_only),
         "routes": [r.to_json() for r in routes],
         "note": note,
     }
@@ -489,7 +511,49 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
         cert.checks.append(_certify_terminal_states(envelope))
     cert.checks.append(_certify_settlement(run))
     cert.checks.append(_certify_outcome(run))
+
+    # 11. Scope. An approval that declares mechanical-only is a promise about
+    # WHAT was done, not only what it cost; certify is where that promise is
+    # kept. Only added when the approval makes the claim — a copy-edit run
+    # certifies exactly as it did before.
+    if manifest is not None and manifest.get("mechanical_only"):
+        cert.checks.append(_certify_mechanical_only(manifest, cfg, envelope,
+                                                    run))
     return cert
+
+
+def _certify_mechanical_only(manifest: dict[str, Any], cfg: Any | None,
+                             envelope: dict[str, Any] | None, run: Path
+                             ) -> Check:
+    """The go-live scope gate: no copy-edit lane in the config, no copy-edit
+    finding in the deliverable, no flight-deck artifact in the run."""
+    problems: list[str] = []
+    approved = [lane for lane in (manifest.get("enabled_lanes") or [])
+                if lane in COPYEDIT_LANES]
+    if approved:
+        problems.append(f"the approval itself lists {', '.join(approved)}")
+    if cfg is not None:
+        live = [lane for lane in _enabled_lanes(cfg) if lane in COPYEDIT_LANES]
+        if live:
+            problems.append(f"the config enables {', '.join(live)}")
+    rows = [r for r in ((envelope or {}).get("findings") or [])
+            if isinstance(r, dict)]
+    shipped = [r for r in rows
+               if (r.get("lane") == "copyedit"
+                   or r.get("error_type") == "copyedit")
+               and (_row_applied(r) or r.get("queried") is True)]
+    if shipped:
+        problems.append(f"{len(shipped)} copy-edit finding(s) shipped "
+                        f"(e.g. {shipped[0].get('finding_id', '?')})")
+    if (run / "flights_findings.json").is_file():
+        problems.append("a flight-deck run (flights_findings.json) is in the "
+                        "run directory")
+    if problems:
+        return Check("mechanical only", "fail",
+                     "; ".join(problems) + " — this run was approved as "
+                     "mechanical proofreading only")
+    return Check("mechanical only", "pass",
+                 "no copy-edit lane in the config, findings, or artifacts")
 
 
 def _certify_terminal_states(envelope: dict[str, Any]) -> Check:
@@ -1094,7 +1158,7 @@ def _artifact_scan(run: Path) -> Check:
 
 
 __all__ = [
-    "MANIFEST_SCHEMA_VERSION", "ModelRoute", "Deviation", "Check",
-    "Certificate", "sha256_file", "config_hash", "model_routes",
+    "MANIFEST_SCHEMA_VERSION", "COPYEDIT_LANES", "ModelRoute", "Deviation",
+    "Check", "Certificate", "sha256_file", "config_hash", "model_routes",
     "providers_in_use", "build_manifest", "verify_plan", "certify_run",
 ]
