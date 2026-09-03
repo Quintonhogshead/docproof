@@ -161,6 +161,28 @@ def paragraph_views(run_dir: str | Path) -> tuple[dict[str, str], dict[str, str]
     return original, accepted
 
 
+def paragraph_styles(run_dir: str | Path) -> dict[str, str]:
+    """Every paragraph of the deliverable's Word style id, keyed by para_id
+    (``"Normal"`` when the paragraph names none) — the same ids
+    :func:`paragraph_views` keys by. What a reviewability test needs and the
+    views do not carry. Empty when there is no deliverable or the OOXML
+    tooling is unavailable."""
+    path = deliverable_docx(run_dir)
+    if path is None:
+        return {}
+    try:
+        from docproof.utils.xml_helpers import DocxPackage, qn, walk_package
+    except Exception as e:                          # pragma: no cover - lxml etc.
+        log.warning("verify: OOXML tooling unavailable (%s); no styles", e)
+        return {}
+    style_path = f"{qn('w:pPr')}/{qn('w:pStyle')}"
+    out: dict[str, str] = {}
+    for wp in walk_package(DocxPackage(str(path))):
+        el = wp.element.find(style_path)
+        out[wp.para_id] = el.get(qn("w:val")) if el is not None else "Normal"
+    return out
+
+
 def accepted_text(run_dir: str | Path) -> dict[str, str]:
     """The ACCEPT-all view alone — see :func:`paragraph_views`."""
     return paragraph_views(run_dir)[1]
