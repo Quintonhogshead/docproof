@@ -622,3 +622,174 @@ def test_a_dashboard_with_no_watcher_at_all_is_still_zeros(client):
 
     assert usage["totals"]["jobs"] == 0
     assert usage["by_source"] == []
+
+
+# --- the proofing panel -------------------------------------------------------
+#
+# The Automations screen's Proofread workflow. What it needs from the API is a
+# way to turn the stage on, choose who reads the book, and correct the three
+# HubSpot values without a terminal on the Fly volume — plus enough of the
+# status payload to show which books are out with a practitioner and how the
+# last few proofreads ended.
+
+def test_the_panel_can_turn_proofing_on_and_choose_the_runner(client):
+    configured(client)
+
+    body = client.put("/api/watch", json={"proofing_enabled": True,
+                                          "proof_runner": "external"}).json()
+
+    assert body["watch"]["proofing_enabled"] is True
+    assert body["watch"]["proof_runner"] == "external"
+    ws = WatchSettings.load(client.home)
+    assert ws.proofing_enabled is True and ws.proof_runner == "external"
+
+
+def test_a_runner_nobody_has_heard_of_is_refused(client):
+    answer = client.put("/api/watch", json={"proof_runner": "magic"})
+
+    assert answer.status_code == 400
+    assert "practitioner" in answer.json()["detail"]
+    assert WatchSettings.load(client.home).proof_runner == "external"
+
+
+def test_the_panel_can_correct_the_three_hubspot_values(client):
+    """The vocabulary is newer than the panel, so an admin has to be able to fix
+    a value they typed into HubSpot without ssh-ing onto the volume."""
+    configured(client)
+
+    body = client.put("/api/watch", json={
+        "hubspot_proof_ready_value": "Ready for Proofing ",
+        "hubspot_proof_done_value": " Formatting/Proofing Complete",
+        "hubspot_proof_needs_human_value": "Needs Human PR",
+    }).json()
+
+    ws = WatchSettings.load(client.home)
+    assert ws.hubspot_proof_ready_value == "Ready for Proofing"   # trimmed
+    assert ws.hubspot_proof_done_value == "Formatting/Proofing Complete"
+    assert ws.hubspot_proof_needs_human_value == "Needs Human PR"
+    assert body["watch"]["hubspot_proof_done_value"] == \
+        "Formatting/Proofing Complete"
+
+
+def test_a_blank_needs_human_value_is_a_real_choice(client):
+    """Blank means "write nothing for that verdict" — `_finish_hubspot_proof`
+    refuses an empty value rather than blanking the status property — so an
+    admin clearing the box has to be able to mean it, unlike the folder box
+    where blank means "unchanged"."""
+    configured(client, hubspot_proof_needs_human_value="Needs Human PR")
+
+    client.put("/api/watch", json={"hubspot_proof_needs_human_value": ""})
+
+    assert WatchSettings.load(client.home).hubspot_proof_needs_human_value == ""
+
+
+def test_saving_the_proofing_values_keeps_the_formatting_ones(client):
+    """The panel may set the proofing vocabulary; it must not be a way to reach
+    the formatting pair, or the status property itself."""
+    configured(client, hubspot_status_property="docproof",
+               hubspot_format_ready_value="Ready for Formatting",
+               hubspot_format_done_value="Formatting Complete")
+
+    client.put("/api/watch", json={
+        "hubspot_proof_ready_value": "Ready for Proofing",
+        "hubspot_status_property": "hs_pipeline_stage",     # not on the model
+        "hubspot_format_done_value": "Closed Won",          # not on the model
+    })
+
+    ws = WatchSettings.load(client.home)
+    assert ws.hubspot_proof_ready_value == "Ready for Proofing"
+    assert ws.hubspot_status_property == "docproof"
+    assert ws.hubspot_format_done_value == "Formatting Complete"
+
+
+def test_the_status_says_enough_to_draw_the_proofing_workflow(client):
+    configured(client, hubspot_enabled=True, proofing_enabled=True,
+               proof_runner="external")
+
+    w = watch_of(client)["watch"]
+
+    assert w["hubspot_enabled"] is True and w["hubspot_write_back"] is True
+    assert w["proofing_enabled"] is True and w["proof_runner"] == "external"
+    assert w["hubspot_proof_ready_value"] == "Ready for Proofing"
+    assert w["hubspot_proof_done_value"] == "Proofing Complete"
+    assert w["hubspot_proof_needs_human_value"] == "Needs Human PR"
+
+
+def test_the_status_lists_what_is_out_with_a_practitioner_and_what_came_back(
+        client):
+    """The two read-only lists in the drawer, both read off state.json: a book
+    marked `awaiting` with the folder it is in and when it went out, and the
+    verdicts that have landed with the reason behind each."""
+    state = WatchState(client.home / "state.json")
+    state.record(FileRecord(file_id="f-1", name="Johnson - Book 1.docx",
+                            subfolder_name="Quinton Johnson",
+                            proof_marked="awaiting"))
+    state.record(FileRecord(file_id="f-2", name="Okafor - Book 1.docx",
+                            subfolder_name="Ada Okafor",
+                            proof_marked="human", proof_outcome="needs_human",
+                            proof_outcome_reason="most sentences must be "
+                                                 "rewritten"))
+    state.record(FileRecord(file_id="f-3", name="Smith - Book 1.docx",
+                            proof_marked="done", proof_outcome="done",
+                            proof_outcome_reason="no open items",
+                            proof_uploaded={"Smith - Book 2.docx": "up-1"}))
+
+    rows = {r["name"]: r for r in watch_of(client)["watch"]["files"]}
+
+    waiting = rows["Johnson - Book 1.docx"]
+    assert waiting["proof_marked"] == "awaiting"
+    assert waiting["folder"] == "Quinton Johnson"
+    assert waiting["updated_at"]                  # "waiting since"
+    assert not waiting["proof_outcome"]           # no verdict yet
+
+    assert rows["Okafor - Book 1.docx"]["proof_outcome"] == "needs_human"
+    assert "rewritten" in rows["Okafor - Book 1.docx"]["proof_reason"]
+    assert rows["Smith - Book 1.docx"]["proof_outcome"] == "done"
+    assert rows["Smith - Book 1.docx"]["proof_uploaded"] == \
+        ["Smith - Book 2.docx"]
+    # A flat-folder book has no author folder; the panel falls back to naming
+    # the watched folder rather than showing an empty cell.
+    assert rows["Smith - Book 1.docx"]["folder"] == ""
+
+
+def test_a_config_written_before_proofing_existed_still_answers(client):
+    """The panel has to draw against the prod config as it stands on the Fly
+    volume today, which carries none of these keys. `WatchSettings.load` drops
+    what it does not know and fills the rest from the defaults, so the payload
+    is complete and the stage is off."""
+    client.home.mkdir(parents=True, exist_ok=True)
+    (client.home / "watch.json").write_text(
+        '{"folder_id": "%s", "model": "claude-haiku-4-5", '
+        '"hubspot_enabled": true, "unknown_old_key": 1}' % FOLDER,
+        encoding="utf-8")
+
+    w = watch_of(client)["watch"]
+
+    assert w["proofing_enabled"] is False         # nothing new happens
+    assert w["proof_runner"] == "external"
+    assert w["hubspot_proof_ready_value"] == "Ready for Proofing"
+    assert w["hubspot_proof_needs_human_value"] == "Needs Human PR"
+
+
+def test_the_proofing_drawer_and_its_script_name_the_same_elements():
+    """The panel is markup in one file and behaviour in another, so a rename on
+    either side is a control that silently stops working. This is the seam held
+    to: every id the proofing code reaches for exists in the page, and the
+    drawer the registry opens is one the page actually has."""
+    from app.settings import resource_root
+
+    static = resource_root() / "app" / "static"
+    page = (static / "index.html").read_text(encoding="utf-8")
+    script = (static / "app.js").read_text(encoding="utf-8")
+
+    for element in ("wf-config-proof", "wf-proof-setup", "wf-proof-save",
+                    "wf-proof-note", "proof-enabled", "proof-runner",
+                    "proof-runner-hint", "proof-ready", "proof-done",
+                    "proof-needs-human", "proof-awaiting-block",
+                    "proof-awaiting", "proof-awaiting-empty",
+                    "proof-verdicts", "proof-verdicts-empty"):
+        assert f'id="{element}"' in page, element
+        assert f"'{element}'" in script, element
+    # The runner's two values are the ones the API accepts, spelled in the page
+    # rather than only in prose.
+    assert 'value="external"' in page and 'value="app"' in page

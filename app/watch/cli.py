@@ -145,10 +145,11 @@ def main(argv=None) -> int:
     ini.add_argument("--disable-proofing", action="store_true",
                      help="stop proofreading (the default)")
     ini.add_argument("--proof-runner", choices=["app", "external"],
-                     help="who reads the book: 'app' (DocWatch runs the galley "
-                          "job itself) or 'external' (a practitioner does, and "
-                          "DocWatch waits for '<surname> - Book 2 - "
-                          "outcome.json' to appear beside the book)")
+                     help="who reads the book: 'external' (the default — a "
+                          "practitioner does, and DocWatch waits for "
+                          "'<surname> - Book 2 - outcome.json' to appear beside "
+                          "the book) or 'app' (DocWatch runs the galley job "
+                          "itself, unsettled and with no decision log)")
     ini.add_argument("--hubspot-proof-ready-value",
                      help="the status value meaning 'proofread this now' "
                           "(default 'Ready for Proofing')")
@@ -445,15 +446,18 @@ _PROOF_FLAGS = (
     ("proof_tier", "proof_tier"),
 )
 
-# The fields proofing cannot run without: the value in, and the two values out —
-# a proofread ends at one of two verdicts and both move the book on. All three
-# ship with real defaults, so this only ever fires for somebody who deliberately
-# blanked one.
+# The fields proofing cannot run without: the value that says which books to
+# read, and the value a clean one moves to. Both ship with real defaults, so
+# this only ever fires for somebody who deliberately blanked one.
+#
+# The needs-a-human value is deliberately absent. Blank is a real choice on it —
+# that verdict then writes nothing and the book waits at the ready value for a
+# person — so asking for it interactively would turn a legitimate setting into a
+# prompt nobody can skip. See `tick`'s preflight, which does not require it
+# either, and the panel, which says so in as many words.
 _PROOF_REQUIRED = {
     "hubspot_proof_ready_value": "Which value means 'ready to proofread'",
     "hubspot_proof_done_value": "Which value means 'proofing complete'",
-    "hubspot_proof_needs_human_value":
-        "Which value means 'needs a human proofreader'",
 }
 
 

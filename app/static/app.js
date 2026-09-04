@@ -68,6 +68,11 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 // Which kind of document the user said they were starting
                 // with: a format suffix, or "all" for both.
                 formatChoice: 'all', formats: [], extraSuffixes: [],
+                // The last watch-status fields the Automations registry was
+                // drawn from. The status is polled every five seconds and the
+                // registry is a table somebody may be tabbing through, so it is
+                // rebuilt only when one of those fields actually moved.
+                wfWatchSignature: null,
                 // A corrections job's proof — the marked-up PDF or redlined Word
                 // file dropped alongside the InDesign book. Held here (not staged
                 // as a job file: the manuscript preflight rejects it) until the
@@ -7478,6 +7483,23 @@ function renderWatch(body, quiet) {
   renderWatchRun(body);
   renderWatchBanner(body);
   renderWatchFiles(w.files);
+  // What proofing has been doing — safe to redraw on the five-second poll,
+  // because nothing in it is a field anybody types into.
+  renderProofReadout(w);
+  // The workflow registry reads the watch status too (the Format and Proofread
+  // rows), so it has to follow a change here. Only when something it shows
+  // actually moved, though: rebuilding the table every five seconds would take
+  // focus off a row somebody is tabbing through.
+  if ($('wf-rows')) {
+    const signature = JSON.stringify([w.folder_id, w.signed_in, w.hubspot_enabled,
+                                      w.proofing_enabled, w.proof_runner,
+                                      w.hubspot_proof_ready_value,
+                                      w.hubspot_proof_done_value]);
+    if (signature !== state.wfWatchSignature) {
+      state.wfWatchSignature = signature;
+      renderRegistry();
+    }
+  }
   applyWatchSchedule(body.can_schedule);
   // Cheap and keystroke-safe, so they run on the five-second poll too: showing
   // the editor follows the checkbox, and "next look" is a clock that should
@@ -7495,6 +7517,17 @@ function renderWatch(body, quiet) {
   // the flat folder is the bug this closes.
   $('watch-require-label-field').hidden = false;
   $('watch-require-label').checked = w.require_source_label;
+  // Proofing. Every one of these has a fallback, because the config on the Fly
+  // volume predates the stage and carries none of these keys — the panel still
+  // has to draw. The text boxes fall back to "" so the box shows its
+  // placeholder rather than the word "undefined"; the runner falls back to the
+  // recommended value rather than to whatever the select's first option is.
+  $('proof-enabled').checked = !!w.proofing_enabled;
+  $('proof-runner').value = w.proof_runner || 'external';
+  $('proof-ready').value = w.hubspot_proof_ready_value ?? '';
+  $('proof-done').value = w.hubspot_proof_done_value ?? '';
+  $('proof-needs-human').value = w.hubspot_proof_needs_human_value ?? '';
+  applyProofRunnerHint();
   $('watch-archive-enabled').checked = w.archive_enabled;
   $('watch-archive-folder').value = w.archive_folder_id || '';
   $('watch-archive-source').checked = w.archive_include_source;
@@ -7739,6 +7772,95 @@ function renderWatchFiles(files) {
                           f.uploaded.join(', ') || '—', money(f.cost)]));
   });
   applyWatchFilesFilter();
+}
+
+// ── proofing (Galley) ───────────────────────────────────────────────────────
+//
+// Two read-only lists under the proofing settings, both read straight off the
+// watch status: which books an external practitioner is holding, and how the
+// last few proofreads ended. They answer the two questions the settings above
+// cannot — "is anything stuck?" and "what did it decide?" — and they are the
+// only place a `needs_human` reason is visible outside the alert email.
+
+const PROOF_VERDICT_ROWS = 6;
+const PROOF_VERDICT_LABEL = { done: 'Clean', needs_human: 'Needs a human' };
+
+function applyProofRunnerHint() {
+  const hint = $('proof-runner-hint');
+  if (!hint) return;
+  hint.textContent = $('proof-runner').value === 'app'
+    ? 'DocWatch reads the book itself and pays for it. It does not settle or '
+      + 'certify the build, and writes no decision log.'
+    : 'DocWatch only finds the book and waits. The practitioner loop on the Mac '
+      + 'reads it on a Claude Max subscription, and DocWatch picks the verdict '
+      + 'up on the next pass.';
+}
+
+function proofWhen(iso) {
+  if (!iso) return '—';
+  const t = new Date(iso);
+  if (isNaN(t)) return '—';
+  const days = Math.floor((Date.now() - t.getTime()) / 86400000);
+  const stamp = t.toLocaleString([], { month: 'short', day: 'numeric',
+                                       hour: '2-digit', minute: '2-digit' });
+  // "since when" reads better as an elapsed count once a book has been out
+  // more than a day — that is the number somebody is judging.
+  if (days >= 1) return `${stamp} · ${days} day${days === 1 ? '' : 's'} ago`;
+  return stamp;
+}
+
+function renderProofReadout(w) {
+  const files = w.files || [];
+  const awaiting = files.filter((f) => f.proof_marked === 'awaiting');
+  const verdicts = files.filter((f) => f.proof_outcome)
+    .slice(0, PROOF_VERDICT_ROWS);
+
+  // The awaiting list is only meaningful when somebody else is doing the
+  // reading — but a book left over from before a runner switch still shows,
+  // rather than vanishing with the setting that created it.
+  const block = $('proof-awaiting-block');
+  if (block) {
+    block.hidden = !(awaiting.length || w.proof_runner === 'external');
+  }
+  const table = $('proof-awaiting');
+  const empty = $('proof-awaiting-empty');
+  if (table && empty) {
+    table.innerHTML = '';
+    empty.hidden = awaiting.length > 0;
+    if (awaiting.length) {
+      table.append(headRow(['Book', 'Folder', 'Waiting since']));
+      awaiting.forEach((f) => table.append(bodyRow([
+        f.name || '—', f.folder || 'the watched folder',
+        proofWhen(f.updated_at),
+      ])));
+    }
+  }
+
+  const vt = $('proof-verdicts');
+  const ve = $('proof-verdicts-empty');
+  if (!vt || !ve) return;
+  vt.innerHTML = '';
+  ve.hidden = verdicts.length > 0;
+  if (!verdicts.length) return;
+  vt.append(headRow(['Book', 'Verdict', 'Why', 'When']));
+  verdicts.forEach((f) => {
+    const tr = document.createElement('tr');
+    const book = document.createElement('td');
+    book.textContent = f.name || '—';
+    const verdict = document.createElement('td');
+    const word = document.createElement('span');
+    word.className = 'wf-verdict ' + f.proof_outcome;
+    word.textContent = PROOF_VERDICT_LABEL[f.proof_outcome] || f.proof_outcome;
+    verdict.append(word);
+    const why = document.createElement('td');
+    why.className = 'wf-reason';
+    why.textContent = f.proof_reason || '—';
+    const when = document.createElement('td');
+    when.className = 'wf-when';
+    when.textContent = proofWhen(f.updated_at);
+    tr.append(book, verdict, why, when);
+    vt.append(tr);
+  });
 }
 
 function renderWatchPlan(rows) {
@@ -9205,6 +9327,8 @@ function automationWorkflows() {
   const planReady = !!(pl.hubspot_enabled && pl.hubspot_plan_property
                        && pl.hubspot_plan_needed_value
                        && pl.hubspot_plan_done_value);
+  const proofReady = !!(w.hubspot_enabled && w.hubspot_proof_ready_value
+                        && w.hubspot_proof_done_value);
   // When a workflow reads "Needs setup", `setup` names what's missing and where
   // to fix it: a `target` tab jumps straight there, `self` opens the drawer
   // whose own fields are the fix, and a null target means the blocker is a
@@ -9219,6 +9343,26 @@ function automationWorkflows() {
       status: folderReady ? 'on' : 'setup',
       setup: folderReady ? null : { hint: 'Connect a Google Drive folder to '
         + 'switch this on.', target: 'connection' },
+    },
+    {
+      id: 'proof', name: 'Proofread', sub: 'Book 1 → Book 2, tracked changes',
+      trigger: {
+        text: w.hubspot_proof_ready_value
+          ? 'HubSpot: ' + w.hubspot_proof_ready_value : 'HubSpot status',
+        hs: true,
+      },
+      effect: 'Book 2 + letter', config: 'wf-config-proof',
+      enabled: !!w.proofing_enabled, toggleable: true,
+      status: !w.proofing_enabled ? 'off' : (proofReady ? 'on' : 'setup'),
+      // The ready and done values are what the stage cannot run without: one
+      // says which books to read, the other says where to move them. The
+      // needs-a-human value may legitimately be blank — that verdict then
+      // writes nothing — so it is not part of "ready".
+      setup: (!w.proofing_enabled || proofReady) ? null
+        : (w.hubspot_enabled
+            ? { hint: 'Fill in the HubSpot trigger and done values.',
+                target: 'self' }
+            : hubspotMissing),
     },
     {
       id: 'promo', name: 'Promo copy', sub: 'Teaser + 12 social posts',
@@ -9455,7 +9599,8 @@ function applyDrawer() {
   const layout = $('wf-layout');
   if (!drawer || !layout) return;
   const x = automationWorkflows().find((w) => w.id === wfUI.selected);
-  ['wf-config-prep', 'wf-config-promo', 'wf-config-plan'].forEach((cid) => {
+  ['wf-config-prep', 'wf-config-proof', 'wf-config-promo',
+   'wf-config-plan'].forEach((cid) => {
     const el = $(cid); if (el) el.hidden = !(x && cid === x.config);
   });
   drawer.hidden = !x;
@@ -9467,17 +9612,22 @@ function applyDrawer() {
   const wfActive = ($('auto-panel-workflows') || {}).classList
     && $('auto-panel-workflows').classList.contains('is-active');
   if (screen) screen.classList.toggle('wf-wide', !!x && wfActive);
-  // The prep drawer's setup banner: what's missing, and a jump to fix it.
-  const banner = $('wf-prep-setup');
-  if (banner) {
-    const s = x && x.id === 'prep' ? x.setup : null;
+  // A drawer's setup banner: what's still missing, and a jump to fix it. Only
+  // the drawers that have one are listed; a `self` target has no jump, because
+  // the fields under the banner are the fix.
+  [['prep', 'wf-prep-setup'], ['proof', 'wf-proof-setup']].forEach(([id, el]) => {
+    const banner = $(el);
+    if (!banner) return;
+    const s = x && x.id === id ? x.setup : null;
     banner.hidden = !s;
     banner.innerHTML = '';
     if (s) {
       banner.append(document.createTextNode(s.hint + ' '));
-      if (s.target) banner.append(wfJump('Go to Connection →', s.target));
+      if (s.target && s.target !== 'self') {
+        banner.append(wfJump('Go to Connection →', s.target));
+      }
     }
-  }
+  });
   if (x) {
     $('wf-drawer-title').textContent = x.name;
     $('wf-drawer-sub').textContent = x.trigger.text + ' → ' + x.effect;
@@ -9486,7 +9636,12 @@ function applyDrawer() {
 
 async function toggleWorkflow(x) {
   try {
-    if (x.id === 'promo') {
+    if (x.id === 'proof') {
+      renderWatch(await api('/api/watch', {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ proofing_enabled: !x.enabled }),
+      }));
+    } else if (x.id === 'promo') {
       await api('/api/promo/settings', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ promo_enabled: !x.enabled }),
@@ -9500,8 +9655,10 @@ async function toggleWorkflow(x) {
       await loadPlanSettings();
     }
   } catch (e) {
-    const note = $(x.id === 'promo' ? 'promo-settings-status'
-                                    : 'plan-settings-status');
+    // A toggle that would not save says so where the workflow's own settings
+    // are, not in a corner of the table — that is where somebody looks next.
+    const note = $({ proof: 'wf-proof-note', promo: 'promo-settings-status' }[x.id]
+                   || 'plan-settings-status');
     if (note) { note.hidden = false; note.textContent = e.message; }
   }
 }
@@ -9591,6 +9748,33 @@ $('wf-prep-save').addEventListener('click', async () => {
         prep_output: $('watch-output').value,
         upload_failure_note: $('watch-failure-note').checked,
         require_source_label: $('watch-require-label').checked,
+      }),
+    });
+    renderWatch(body);
+    watchNote(note, 'Saved.', 'ok');
+  } catch (err) {
+    watchNote(note, err.message, 'error');
+  } finally { button.disabled = false; }
+});
+
+// The Proofread drawer: the switch, who reads the book, and the three HubSpot
+// values it gates and writes on. Saved together, like the prep drawer's.
+$('proof-runner').addEventListener('change', applyProofRunnerHint);
+$('wf-proof-save').addEventListener('click', async () => {
+  const button = $('wf-proof-save');
+  const note = $('wf-proof-note');
+  note.hidden = true; button.disabled = true;
+  try {
+    const body = await api('/api/watch', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        proofing_enabled: $('proof-enabled').checked,
+        proof_runner: $('proof-runner').value,
+        hubspot_proof_ready_value: $('proof-ready').value,
+        hubspot_proof_done_value: $('proof-done').value,
+        // Sent even when blank: an empty box is a real choice here — that
+        // verdict then writes nothing and the book waits for a person.
+        hubspot_proof_needs_human_value: $('proof-needs-human').value,
       }),
     });
     renderWatch(body);

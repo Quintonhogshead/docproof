@@ -1504,6 +1504,34 @@ button.pill.setup.actionable:focus-visible { outline: 2px solid var(--warn); out
   background: color-mix(in srgb, var(--warn) 12%, transparent);
   border-left: 3px solid var(--warn);
 }
+/* A read-only block inside a drawer — what the workflow has actually been
+   doing, under the settings that decide what it will do next. Separated by a
+   rule rather than a card, so it reads as the same panel continuing rather than
+   as another thing to fill in. */
+.wf-readout { border-top: 1px solid var(--line); padding-top: 0.7rem; }
+.wf-readout h4 {
+  margin: 0 0 0.4rem; font-size: 0.78rem; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--muted); font-weight: 600;
+}
+/* The shared `.table` scrolls sideways rather than wrapping, which is right for
+   the wide tables on their own screens and wrong here: the drawer is a fixed
+   384px column, and a verdict's reason is a sentence. Fixed layout with wrapping
+   cells keeps the whole thing inside the drawer instead of stretching the
+   Automations screen into a horizontal scroll. */
+.wf-readout .table {
+  display: table; table-layout: fixed; font-size: 0.85rem;
+}
+.wf-readout .table td, .wf-readout .table th {
+  vertical-align: top; white-space: normal; overflow-wrap: anywhere;
+}
+/* The verdict word itself, coloured the way the status pills are: a clean book
+   reads as done, a book needing a person reads as something to act on. */
+.wf-verdict { font-weight: 600; white-space: nowrap; }
+.wf-verdict.done { color: var(--ok); }
+.wf-verdict.needs_human { color: var(--warn); }
+/* The reason behind a verdict: long, and the least important thing in the row,
+   so it wraps and stays quiet instead of stretching the drawer. */
+.wf-reason { color: var(--muted); }
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;

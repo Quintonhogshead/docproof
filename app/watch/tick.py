@@ -1000,10 +1000,13 @@ def _apply_proof_outcome(hs_token: str | None, token: str, ws: WatchSettings,
     _finish_hubspot_proof(hs_token, ws, file, rec, state,
                           value=ws.hubspot_proof_needs_human_value,
                           opener=opener)
+    moved = (f"HubSpot was moved to '{ws.hubspot_proof_needs_human_value}'."
+             if ws.hubspot_proof_needs_human_value
+             else f"No value is configured for that verdict, so HubSpot was "
+                  f"left at '{ws.hubspot_proof_ready_value}' for a person.")
     report.needs_human.append(
-        (file.name, f"was proofread and needs a human proofreader: {reason} "
-                    f"HubSpot was moved to "
-                    f"'{ws.hubspot_proof_needs_human_value}'."))
+        (file.name,
+         f"was proofread and needs a human proofreader: {reason} {moved}"))
     proof.mark_source(token, file, rec, state, status=PROOF_HUMAN,
                       reason=reason, opener=opener)
 
@@ -1673,11 +1676,19 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
                 "Proofing is switched on but HubSpot is not. Proofing is "
                 "triggered by a HubSpot status value, so HubSpot has to be on. "
                 "Run `docproof-watch init`, or turn proofing off.")
+        # The ready and done values are what the stage cannot run without: one
+        # says which books to read, the other says where to move a clean one.
+        #
+        # The needs-a-human value is deliberately NOT here. Blank is a real
+        # choice on it — `_finish_hubspot_proof` refuses an empty value rather
+        # than blanking the status property, so the book stays at the ready
+        # value for a person and the reason still reaches the owner by email.
+        # A press with no such option on its dropdown clears the box and gets
+        # exactly that; refusing the whole pass over it would make the panel's
+        # own helper text a lie.
         blanks = [name for name, value in (
             ("hubspot_proof_ready_value", ws.hubspot_proof_ready_value),
             ("hubspot_proof_done_value", ws.hubspot_proof_done_value),
-            ("hubspot_proof_needs_human_value",
-             ws.hubspot_proof_needs_human_value),
         ) if not value]
         if blanks:
             raise NotConfigured(

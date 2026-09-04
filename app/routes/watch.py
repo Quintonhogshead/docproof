@@ -46,14 +46,25 @@ class WatchUpdate(BaseModel):
     # Subfolder mode's one book-to-book knob (the mode itself is CLI-set):
     # prepare only "<surname> - Book Original" in each author's folder.
     require_source_label: bool | None = None
-    # The proofing stage's two switches: whether it runs at all, and who reads
-    # the book — DocWatch itself ("app") or the Mac-side practitioner loop
-    # ("external"), which DocWatch only waits on. Its HubSpot values stay
-    # CLI-only, exactly like the formatting pair they sit beside: the CRM
-    # vocabulary is set up once, and the panel is where a person changes their
-    # mind about a run.
+    # The proofing stage: whether it runs at all, who reads the book — DocWatch
+    # itself ("app") or the Mac-side practitioner loop ("external"), which
+    # DocWatch only waits on — and the three values of the HubSpot dropdown it
+    # gates and writes on.
+    #
+    # Those three are editable here, unlike the formatting pair, because the
+    # proofing vocabulary is newer than the panel and an admin should not need a
+    # terminal on the Fly volume to correct a value they typed into HubSpot. The
+    # write allowlist is untouched by that: `hubspot.set_properties` still only
+    # ever accepts `hubspot_status_property`, so what a person can change here is
+    # which *value* DocProof writes, never which property it writes to.
     proofing_enabled: bool | None = None
     proof_runner: str | None = None
+    hubspot_proof_ready_value: str | None = None
+    hubspot_proof_done_value: str | None = None
+    # Blank means "write nothing" for that verdict — `_finish_hubspot_proof`
+    # refuses an empty value rather than blanking the status property — so the
+    # book stays at the ready value for a person. The panel says so.
+    hubspot_proof_needs_human_value: str | None = None
     # Bounds so a slip in the UI cannot spend a morning's worth of manuscripts
     # in one pass, or set a clock that never stops going off.
     max_files_per_tick: int | None = Field(default=None, ge=1, le=50)
@@ -196,6 +207,16 @@ def register(app: FastAPI) -> None:
                                          "reads the book) or 'external' (a "
                                          "practitioner does).")
             ws.proof_runner = update.proof_runner
+        # The proofing values are trimmed, and a blank one is a real value: it
+        # means "write nothing for that verdict", which `_finish_hubspot_proof`
+        # already honours by refusing to PATCH rather than blanking the status.
+        # So they are set with `is not None`, not with a truth test — an admin
+        # clearing the needs-a-human box has to be able to mean it.
+        for name in ("hubspot_proof_ready_value", "hubspot_proof_done_value",
+                     "hubspot_proof_needs_human_value"):
+            value = getattr(update, name)
+            if value is not None:
+                setattr(ws, name, value.strip())
         for name in ("upload_failure_note",
                      "require_source_label", "proofing_enabled",
                      "max_files_per_tick", "auto_ticks", "tick_every_minutes",
