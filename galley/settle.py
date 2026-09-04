@@ -1064,7 +1064,22 @@ def judge(res: Residual, em: emap.EditMap, source: Mapping[str, str],
     """One model call for one residual the deterministic pass could not
     settle. The reply is re-run through `decide` with the judge's replacement
     so every guard (note, fact, growth, intent zone) still applies to what the
-    model proposed."""
+    model proposed. `judge_packet` + `judge_decision` are the two halves, so
+    a round can fan the calls out and fold the answers in order."""
+    system, user = judge_packet(res, em, source, working, context=context)
+    schema, name = _judge_schema()
+    result = provider.complete_structured(model=model, system=system, user=user,
+                                          schema=schema, schema_name=name,
+                                          max_tokens=max_tokens)
+    if result.usage is not None:
+        usage.add(result.usage, model=model)
+    return judge_decision(res, result)
+
+
+def judge_packet(res: Residual, em: emap.EditMap, source: Mapping[str, str],
+                 working: Mapping[str, Mapping[str, Any]], *,
+                 context: str = "") -> tuple[str, str]:
+    """(system, user) for one judge call — everything but the call itself."""
     segs = em.paragraphs.get(res.para_id) or []
     acc = emap.accepted_of(segs)
     src = source.get(res.para_id, "")
@@ -1089,13 +1104,12 @@ def judge(res: Residual, em: emap.EditMap, source: Mapping[str, str],
     user = (f"SOURCE: {source_sentence}\nCURRENT: {current_sentence}\n"
             f"{owner_line}FLAGGED SPAN: {flagged!r}\n"
             f"PROBLEM: {res.problem}\nSUGGESTION: {res.suggestion!r}")
-    schema, name = _judge_schema()
-    system = _judge_system(context)
-    result = provider.complete_structured(model=model, system=system, user=user,
-                                          schema=schema, schema_name=name,
-                                          max_tokens=max_tokens)
-    if result.usage is not None:
-        usage.add(result.usage, model=model)
+    return _judge_system(context), user
+
+
+def judge_decision(res: Residual, result: Any) -> Decision:
+    """The judge's reply as a Decision (`judge_replacement` carries the text
+    for a second pass through `decide`; anything unusable is a query)."""
     if result.stop_reason != "ok" or not isinstance(result.parsed, dict):
         return Decision("query", "no_suggestion", question=_question(res))
     action = str(result.parsed.get("action", "")).strip().lower()
@@ -1430,6 +1444,11 @@ class SettleOptions:
     # The approval's scope (approval.json `mechanical_only`): a suggestion
     # beyond a proofread's reach ships as a query, never an edit.
     mechanical_only: bool = False
+    # Model calls in flight at once — the judge calls of a round and the
+    # delta re-verify's batches/reads — from the config's own limiter
+    # (`Config.concurrency_for`). 1 is the sequential loop this used to be:
+    # 100+ settle calls in 10+ minutes on Georgis (2026-09-04).
+    concurrency: int = 1
 
 
 @dataclass
@@ -1540,6 +1559,8 @@ class Settler:
         judged = 0
         guards = {"mechanical_only": self.opt.mechanical_only,
                   "sweeps": self._sweeps}
+        prefetched = self._prefetch_judgments(items, em, accepted, source,
+                                              working, guards)
         for res in items:
             dec = decide(res, em, accepted, source, working, self._zones,
                          **guards)
@@ -1549,9 +1570,9 @@ class Settler:
                                    question=_question(res))
                 else:
                     judged += 1
-                    jd = judge(res, em, source, working, self.provider,
-                               self.opt.model, self.usage,
-                               context=self.opt.context)
+                    jd = prefetched.get(res.id) or judge(
+                        res, em, source, working, self.provider,
+                        self.opt.model, self.usage, context=self.opt.context)
                     if jd.action == "judge_replacement":
                         dec = decide(res, em, accepted, source, working,
                                      self._zones, replacement=jd.replacement,
@@ -1661,7 +1682,8 @@ class Settler:
             + len(touched))
         vr = verify_delta(self.run_dir, touched, self.provider, self.opt.model,
                           self.usage, context=self.opt.context,
-                          max_tokens=self.opt.max_tokens)
+                          max_tokens=self.opt.max_tokens,
+                          concurrency=self.opt.concurrency)
         have = self.settlement.record_ids()
         fresh: list[Residual] = []
         # A verifier flag on a composite this round: a second look by the
@@ -1720,6 +1742,49 @@ class Settler:
                 snapshot=f"round{round_no}-verifier-revert"))
         self.touched = set()
         return fresh
+
+    def _prefetch_judgments(self, items, em, accepted, source, working,
+                            guards) -> dict[str, Decision]:
+        """The round's judge calls, fanned out ahead of the sequential
+        decide/apply loop when the options allow more than one in flight.
+
+        The loop below must stay sequential — each apply mutates `working`,
+        and the next decide reads it — so the model calls are the part that
+        parallelizes: every item the PRE-ROUND state sends to the judge gets
+        its packet built now, the calls fan out (`docproof.fanout.fan_out`),
+        and the answers are folded in item order and handed to the loop by
+        residual id. An item whose in-loop decision no longer needs the judge
+        simply leaves its answer unused. At concurrency 1 nothing is
+        prefetched and the loop calls the judge itself, exactly as before."""
+        if self.provider is None or self.opt.concurrency <= 1:
+            return {}
+        need = [res for res in items
+                if decide(res, em, accepted, source, working, self._zones,
+                          **guards).action == "judge"]
+        if not need:
+            return {}
+        from docproof.fanout import fan_out
+        packets = {res.id: judge_packet(res, em, source, working,
+                                        context=self.opt.context)
+                   for res in need}
+        schema, name = _judge_schema()
+        model = self.opt.model
+
+        def fetch(res: Residual):
+            system, user = packets[res.id]
+            return self.provider.complete_structured(
+                model=model, system=system, user=user, schema=schema,
+                schema_name=name, max_tokens=2000)
+
+        out: dict[str, Decision] = {}
+        for n, (res, result) in enumerate(
+                fan_out(need, fetch, concurrency=self.opt.concurrency), 1):
+            if result.usage is not None:
+                self.usage.add(result.usage, model=model)
+            out[res.id] = judge_decision(res, result)
+            log.info("settle: judge %d/%d done (%s) — %s", n, len(need),
+                     res.para_id, out[res.id].action)
+        return out
 
     # -- the composite self-check and the shared revert ------------------------
 
@@ -1967,10 +2032,12 @@ class Settler:
         uc, uw = Usage(), Usage()
         changes = verify_run(self.run_dir, self.provider, self.opt.model, uc,
                              context=self.opt.context, run_changes=True,
-                             run_walk=False, max_tokens=self.opt.max_tokens)
+                             run_walk=False, max_tokens=self.opt.max_tokens,
+                             concurrency=self.opt.concurrency)
         walk = verify_run(self.run_dir, self.provider, self.opt.model, uw,
                           context=self.opt.context, run_changes=False,
-                          run_walk=True, max_tokens=self.opt.max_tokens)
+                          run_walk=True, max_tokens=self.opt.max_tokens,
+                          concurrency=self.opt.concurrency)
         for u in (uc, uw):
             for f in ("input_tokens", "output_tokens",
                       "cache_creation_input_tokens", "cache_read_input_tokens",
@@ -2207,7 +2274,8 @@ __all__ = [
     "TERMINAL_STATES", "apply_decision", "decide", "fold_accepted_rows",
     "artifact_in", "deletes_an_aside", "judge", "kept_rows",
     "looks_like_instruction", "rewrite_class", "duplicated_fragments",
-    "introduced_fragments", "second_look", "SweepGuard",
+    "introduced_fragments", "second_look", "SweepGuard", "judge_packet",
+    "judge_decision",
     "DUPLICATE_FRAGMENT_WORDS",
     "align_to_sentence",
     "open_items", "resolve", "restore_rows", "rewrite_verify_artifacts",

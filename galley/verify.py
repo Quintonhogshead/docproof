@@ -436,32 +436,50 @@ def verify_changes(edits: Sequence[dict[str, Any]], accepted: dict[str, str],
                    provider, model: str, usage: Usage, *,
                    context: str = "", batch_size: int = DEFAULT_CHANGE_BATCH,
                    max_tokens: int = DEFAULT_MAX_TOKENS,
-                   original: dict[str, str] | None = None) -> list[ChangeProblem]:
+                   original: dict[str, str] | None = None,
+                   concurrency: int = 1) -> list[ChangeProblem]:
     """Re-read every applied edit in its finished context and return the ones
     that are a real problem. One `complete_structured` call per `batch_size`
     edits; a reply that did not come back clean is a loss (no problems), never a
     parse of a half-answer. `original` is the reject-all view (see
     :func:`paragraph_views`); with it, each paragraph's BEFORE view is the
-    text as ingested rather than one recomposed from the accepted view."""
+    text as ingested rather than one recomposed from the accepted view.
+
+    `concurrency` batches are in flight at once (`docproof.fanout.fan_out`);
+    replies are folded in BATCH ORDER on this thread, so the problems list,
+    the usage ledger, and the loss record read exactly as the sequential
+    loop's did. On Georgis (2026-09-04) ~95 verify calls took ~5 minutes one
+    at a time under an `api.concurrency` of 8."""
+    from docproof.fanout import fan_out, fold_usage
     schema, schema_name = _change_schema()
     system = _CHANGE_SYSTEM + _context_block(context, "verifier")
     problems: list[ChangeProblem] = []
     edits = list(edits)
     batches = _chunks(list(range(len(edits))), batch_size)
-    for n, batch_idx in enumerate(batches, 1):
+
+    def fetch(numbered):
+        n, batch_idx = numbered
         batch = [edits[i] for i in batch_idx]
         user = _change_user(batch, accepted, original)
         # Progress for a headless run: each call is a model turn (a whole
         # subprocess on the subagent lane), and a 2,000-edit book is ~80 of
         # them in silence otherwise.
-        log.info("change verifier: batch %d/%d (%d edit(s)) on %s — %d "
-                 "problem(s) so far", n, len(batches), len(batch), model,
-                 len(problems))
+        log.info("change verifier: batch %d/%d (%d edit(s)) on %s", n,
+                 len(batches), len(batch), model)
+        local = Usage()                 # folded on the calling thread
         result = _ask_with_retry(provider, model=model, system=system,
                                  user=user, schema=schema,
                                  schema_name=schema_name, max_tokens=max_tokens,
-                                 usage=usage,
+                                 usage=local,
                                  what=f"change batch {n}/{len(batches)}")
+        return result, local
+
+    for (n, batch_idx), (result, local) in fan_out(
+            list(enumerate(batches, 1)), fetch, concurrency=concurrency):
+        batch = [edits[i] for i in batch_idx]
+        fold_usage(usage, local)
+        log.info("change verifier: batch %d/%d done — %d problem(s) so far",
+                 n, len(batches), len(problems))
         if result.stop_reason != "ok":
             log.warning("verify_changes: reply not ok (stop_reason=%s%s) — %d "
                         "edit(s) unread this batch", result.stop_reason,
@@ -490,10 +508,14 @@ def verify_changes(edits: Sequence[dict[str, Any]], accepted: dict[str, str],
 def walk_finished_text(accepted: dict[str, str], provider, model: str,
                        usage: Usage, *, context: str = "",
                        char_budget: int = DEFAULT_WALK_CHARS,
-                       max_tokens: int = DEFAULT_MAX_TOKENS) -> list[ResidualFinding]:
+                       max_tokens: int = DEFAULT_MAX_TOKENS,
+                       concurrency: int = 1) -> list[ResidualFinding]:
     """Proofread the accepted text for residual errors and return them. One
     `complete_structured` call per read (a `char_budget` slice of paragraphs);
-    a non-clean reply is a loss for that read, not a parse of a truncation."""
+    a non-clean reply is a loss for that read, not a parse of a truncation.
+    `concurrency` reads are in flight at once, folded in READ ORDER (see
+    :func:`verify_changes`)."""
+    from docproof.fanout import fan_out, fold_usage
     schema, schema_name = _walk_schema()
     system = _WALK_SYSTEM + _context_block(context, "proofreader")
     valid_ids = set(accepted)
@@ -501,14 +523,24 @@ def walk_finished_text(accepted: dict[str, str], provider, model: str,
     reads = _walk_reads(accepted, char_budget)
     unread_paragraphs: list[str] = []
     UNREAD.clear()
-    for n, read in enumerate(reads, 1):
+
+    def fetch(numbered):
+        n, read = numbered
         log.info("finished-text walk: read %d/%d (%d paragraph(s), %s..%s) "
-                 "on %s — %d residual(s) so far", n, len(reads), len(read),
-                 read[0][0], read[-1][0], model, len(found))
+                 "on %s", n, len(reads), len(read), read[0][0], read[-1][0],
+                 model)
+        local = Usage()                 # folded on the calling thread
         result = _ask_with_retry(provider, model=model, system=system,
                                  user=_walk_user(read), schema=schema,
                                  schema_name=schema_name, max_tokens=max_tokens,
-                                 usage=usage, what=f"walk read {n}/{len(reads)}")
+                                 usage=local, what=f"walk read {n}/{len(reads)}")
+        return result, local
+
+    for (n, read), (result, local) in fan_out(
+            list(enumerate(reads, 1)), fetch, concurrency=concurrency):
+        fold_usage(usage, local)
+        log.info("finished-text walk: read %d/%d done — %d residual(s) so far",
+                 n, len(reads), len(found))
         if result.stop_reason != "ok":
             log.warning("walk_finished_text: reply not ok (stop_reason=%s%s) — a "
                         "read of %d paragraph(s) went unread", result.stop_reason,
@@ -574,7 +606,7 @@ class VerifyRunResult:
 def verify_run(run_dir: str | Path, provider, model: str, usage: Usage, *,
                context: str = "", run_changes: bool = True,
                run_walk: bool = True, max_tokens: int = DEFAULT_MAX_TOKENS,
-               ) -> VerifyRunResult:
+               concurrency: int = 1) -> VerifyRunResult:
     """Both gates over a finished run dir. Reads the deliverable's two views and
     findings.json deterministically, then spends one model call per batch/read.
     With NO accepted text — no deliverable, or the OOXML tooling is missing —
@@ -596,7 +628,7 @@ def verify_run(run_dir: str | Path, provider, model: str, usage: Usage, *,
         _take_losses("changes")
         problems = verify_changes(edits, accepted, provider, model, usage,
                                   context=context, max_tokens=max_tokens,
-                                  original=original)
+                                  original=original, concurrency=concurrency)
         lost = _take_losses("changes")
         n_calls = -(-len(edits) // DEFAULT_CHANGE_BATCH) if edits else 0
         if n_calls and len(lost) >= n_calls:
@@ -607,7 +639,8 @@ def verify_run(run_dir: str | Path, provider, model: str, usage: Usage, *,
     if run_walk:
         _take_losses("walk")
         residuals = walk_finished_text(accepted, provider, model, usage,
-                                       context=context, max_tokens=max_tokens)
+                                       context=context, max_tokens=max_tokens,
+                                       concurrency=concurrency)
         lost = _take_losses("walk")
         n_calls = len(_walk_reads(accepted, DEFAULT_WALK_CHARS))
         if n_calls and len(lost) >= n_calls:
@@ -624,7 +657,8 @@ def verify_delta(run_dir: str | Path, para_ids: Sequence[str], provider,
                  model: str, usage: Usage, *, context: str = "",
                  run_changes: bool = True, run_walk: bool = True,
                  max_tokens: int = DEFAULT_MAX_TOKENS,
-                 char_budget: int = DEFAULT_WALK_CHARS) -> VerifyRunResult:
+                 char_budget: int = DEFAULT_WALK_CHARS,
+                 concurrency: int = 1) -> VerifyRunResult:
     """Both gates over ONLY the named paragraphs of a run — what the settle
     loop re-reads after a round touched them. Same packets and prompts as the
     full run (an applied edit in its finished context; the accepted text of
@@ -647,11 +681,12 @@ def verify_delta(run_dir: str | Path, para_ids: Sequence[str], provider,
         if edits:
             problems = verify_changes(edits, acc, provider, model, usage,
                                       context=context, max_tokens=max_tokens,
-                                      original=orig)
+                                      original=orig, concurrency=concurrency)
     if run_walk and acc:
         residuals = walk_finished_text(acc, provider, model, usage,
                                        context=context, max_tokens=max_tokens,
-                                       char_budget=char_budget)
+                                       char_budget=char_budget,
+                                       concurrency=concurrency)
     return VerifyRunResult(problems, residuals, ran_changes=run_changes,
                            ran_walk=run_walk)
 

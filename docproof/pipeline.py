@@ -1394,6 +1394,7 @@ def chapter_sweep_findings(cfg: Config, prepared: Prepared, ids, usage: Usage,
             model=cfg.chapter_sweep.model,
             max_output_tokens=cfg.chapter_sweep.max_output_tokens,
             usage=usage, window_chars=cfg.chapter_sweep.window_chars,
+            concurrency=cfg.concurrency_for(cfg.chapter_sweep.model),
             # The same whole-book sections the typed detectors read: the
             # vocabulary (coinages are not typos), the variant conventions,
             # and the story sheet (tense/POV/pronouns) when that pass is on.

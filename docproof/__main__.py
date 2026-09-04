@@ -1195,6 +1195,24 @@ def _engine_arg(p: argparse.ArgumentParser) -> None:
              "= subagent if available, else provider, else none")
 
 
+# The subagent lane's ceiling on calls in flight, whatever api.concurrency
+# says: each turn is a whole Claude Code CLI process, not a socket.
+SUBAGENT_MAX_INFLIGHT = 4
+
+
+def _lane_concurrency(cfg, engine: str, model: str) -> int:
+    """How many verify/settle calls a galley verb keeps in flight: the
+    config's own limiter for the API lane (`Config.concurrency_for`, the one
+    the ladder runs under), a small fixed ceiling for the subagent lane, and
+    1 for the deterministic lane. `api.concurrency: 1` still means serial
+    everywhere."""
+    if engine == "provider":
+        return cfg.concurrency_for(model)
+    if engine == "subagent":
+        return max(1, min(cfg.api.concurrency, SUBAGENT_MAX_INFLIGHT))
+    return 1
+
+
 def _resolve_engine(args, cfg, *, default_model: str | None = None
                     ) -> tuple[str, Any, str]:
     """(engine, provider, model) for --engine. `provider` is None for the
@@ -2999,7 +3017,8 @@ def _galley_settle(args) -> int:
                          quiet_share=float(args.quiet_share),
                          max_turns=int(args.max_turns),
                          propagate=not args.no_propagate,
-                         mechanical_only=mechanical_only)
+                         mechanical_only=mechanical_only,
+                         concurrency=_lane_concurrency(cfg, engine, model))
     settler = Settler(run, cfg=cfg, manuscript=args.source,
                       error_dir=error_dir, provider=provider, options=opts)
     from .agent_lane import AgentLaneUnavailable
@@ -3436,6 +3455,7 @@ def _galley_verify(args) -> int:
 
     para_ids = _paragraph_ids(getattr(args, "paragraphs", None))
 
+    concurrency = _lane_concurrency(cfg, engine, model)
     # One verify_run per gate with its own Usage, so each artifact carries
     # ITS OWN bill and `ran`/`reason` verdict, and certify can sum the run's
     # cost-bearing artifacts without double-counting. The deterministic
@@ -3446,16 +3466,20 @@ def _galley_verify(args) -> int:
         if para_ids is not None:
             from galley.verify import verify_delta
             changes = verify_delta(results, para_ids, provider, model,
-                                   usage_changes, context=context,
+                                   usage_changes, concurrency=concurrency,
+                                   context=context,
                                    run_changes=run_changes, run_walk=False)
             walk = verify_delta(results, para_ids, provider, model, usage_walk,
+                                concurrency=concurrency,
                                 context=context, run_changes=False,
                                 run_walk=run_walk)
         else:
             changes = verify_run(results, provider, model, usage_changes,
+                                 concurrency=concurrency,
                                  context=context, run_changes=run_changes,
                                  run_walk=False)
             walk = verify_run(results, provider, model, usage_walk,
+                              concurrency=concurrency,
                               context=context, run_changes=False,
                               run_walk=run_walk)
     except AgentLaneUnavailable as e:
