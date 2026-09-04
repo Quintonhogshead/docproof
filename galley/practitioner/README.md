@@ -63,9 +63,125 @@ without one (it fails loudly instead). `DOCPROOF_CANDIDATE_APPLY=1` is
 exported for this deployment only (candidate screening may apply; production
 keeps the shadow floor).
 
+## Nobody at the keyboard: `docproof galley agent`
+
+`galley drive` runs one book. The **agent** is the long-running process that
+decides which book, and when — so the whole proofing loop runs with nobody
+watching.
+
+DocWatch (on Fly, `proof_runner = external`) finds `<surname> - Book 1.docx` at
+"Ready for Proofing", marks the manuscript `awaiting` and emails. It cannot run
+Galley itself: the brain is a Claude Max subscription, which lives on one
+machine of ours. The agent is what closes that gap.
+
+```
+every --poll-interval (default 5 min):
+    GET <app>/api/watch/awaiting          (bearer token, read-only)
+    for the first book this machine has not already claimed:
+        download the Book 1 with the watcher's own Google sign-in
+        run galley.driver over it — --approve auto, $10, mechanical only
+        the driver's hand-off uploads the Book 2 set to the author's folder
+DocWatch's next tick reads the outcome.json and moves HubSpot on.
+```
+
+**One book at a time, once each, always with an answer.** A local ledger
+(`~/galley-workspaces/.agent-state.json`) records every Drive file id claimed,
+finished or failed, and the claim is written *before* the work — so a crash
+resumes the same workspace from the phase its `state.json` reached rather than
+paying for a whole novel twice, and a book that failed is never retried. A
+download that fails, a driver that crashes and a run that stops all write a
+`needs_human` outcome.json naming what went wrong and upload it (with the
+decision log) to the author's folder, so a book is never left silent at "Ready
+for Proofing".
+
+### One-time setup
+
+1. **Give the brain a subscription token** — the agent never spends API dollars
+   on the practitioner's own thinking.
+
+   ```bash
+   claude setup-token          # prints a token; copy it
+   ```
+
+2. **Set the server's half of the shared secret.** On Fly:
+
+   ```bash
+   python -c "import secrets; print(secrets.token_urlsafe(32))"   # keep this
+   fly secrets set DOCPROOF_AGENT_TOKEN=<that value> -a atmosphere-docproof
+   ```
+
+   Without it the server answers *nobody* on `/api/watch/awaiting`; a value
+   shorter than 24 characters is refused as not a secret.
+
+3. **Write the machine's credentials file** — never the shell, because a
+   service manager passes almost no environment and a token in a shell profile
+   is a token in every process.
+
+   ```bash
+   mkdir -p ~/.galley && touch ~/.galley/agent.env && chmod 600 ~/.galley/agent.env
+   ```
+
+   ```ini
+   CLAUDE_CODE_OAUTH_TOKEN=<from step 1>
+   GALLEY_APP_URL=https://atmosphere-docproof.fly.dev
+   GALLEY_AGENT_TOKEN=<the same value as step 2>
+   ```
+
+   The agent refuses to start if that file is readable by any other account.
+   Anything else you put in it rides through to the driver's environment.
+
+4. **Sign in to Google**, so the agent can download the Book 1 and upload the
+   Book 2 set:
+
+   ```bash
+   docproof-watch auth
+   ```
+
+   On macOS that stores the refresh token in the Keychain and nothing more is
+   needed. **On Linux there is usually no keyring backend**, so `get_api_key`
+   falls back to the environment: add the refresh token to the same
+   credentials file instead —
+
+   ```ini
+   GOOGLE_REFRESH_TOKEN=<the refresh token>
+   ```
+
+   — and the agent puts it into its own environment at startup, which is where
+   `app/watch/drive.py` looks first on every platform.
+
+5. **Install the service.**
+
+   ```bash
+   docproof galley agent --install
+   ```
+
+   A launchd LaunchAgent (`~/Library/LaunchAgents/com.atmosphere.galley-agent.plist`)
+   on macOS; a systemd user unit (`~/.config/systemd/user/galley-agent.service`,
+   enabled with lingering so it survives logout) on Linux. Same command line,
+   same credentials file, same log: `~/galley-workspaces/agent.log`. It also
+   refreshes `~/galley-bin/galley-run.sh` from this repo's copy, keeping the old
+   one beside it as `.bak`.
+
+   If `loginctl enable-linger` is refused on Linux (it needs root), the unit
+   still runs for the session — finish it with
+   `sudo loginctl enable-linger $USER`.
+
+### Day to day
+
+| Command | What it does |
+|---|---|
+| `docproof galley agent --once` | one poll, then exit — the way to test the setup |
+| `docproof galley agent --status` | what this machine has claimed, finished and failed |
+| `docproof galley agent --uninstall` | stop and remove the service |
+| `docproof galley agent --drive-folder-id ID` | deliver every hand-off to one folder instead of the author's — a rehearsal |
+
+`--budget` overrides the $10 per-book API ceiling; `--poll-interval` the five
+minutes. The log and the ledger both live under `--workspace-root` (default
+`~/galley-workspaces`), beside the per-book workspaces themselves.
+
 ## Unattended: `docproof galley drive`
 
-The whole loop with nobody watching — the go-live path.
+The whole loop with nobody watching, one book at a time — what the agent calls.
 
 ```bash
 docproof galley drive --book "/path/Book.docx" --slug book-slug \
