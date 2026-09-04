@@ -403,6 +403,12 @@ never the whole book in one context. One Opus subagent per window is the
 default; use Fable when a thread genuinely spans the book. Require each
 subagent to WRITE its rows to a file (subagents that answer inline lose work).
 
+**The strict screen (before any fleet row is imported).** Read the WHOLE
+sentence with the change applied before deciding; reject if the applied
+sentence is ungrammatical. A row that reads fine in isolation can break its
+sentence: Georgis (2026-09-04), "standing silent" → "stood silent" produced
+"was stood silent". The screen has the full sentence — use it.
+
 **Output contract.** Verbatim quote→correction rows, `import-findings`
 schema, on the **EDIT-channel `galley_read` type** (declared in
 `error_types`, listed first) when the fix is decidable — a wrong-direction

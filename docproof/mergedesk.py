@@ -593,7 +593,8 @@ def iterate_until_clean(merge: MergeResult, doc: DocumentModel, *,
                         format_types: dict[str, str] | None = None,
                         edit_guard=None,
                         max_iterations: int = 25,
-                        later_loses: bool = False
+                        later_loses: bool = False,
+                        sweep_guard=None
                         ) -> tuple[MergeResult, list[ArtifactHit]]:
     """Re-run `merge`'s ordered findings through `validate_findings`, scan the
     result for artifacts, and — bounded — drop the losing FINDING and recheck
@@ -646,7 +647,7 @@ def iterate_until_clean(merge: MergeResult, doc: DocumentModel, *,
         validated = validate_findings(
             findings, doc, min_confidence, query_types=query_types,
             format_types=format_types or {}, edit_guard=edit_guard,
-            guard_exempt=frozenset({"repair"}))
+            guard_exempt=frozenset({"repair"}), sweep_guard=sweep_guard)
         hits = scan_artifacts(validated, doc)
         if not hits:
             return MergeResult(findings, validated + merge.rejected,

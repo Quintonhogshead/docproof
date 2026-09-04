@@ -179,48 +179,37 @@ def _sweep_ellipsis(text: str, variant=None, style: str = "nbsp") -> list[Hit]:
 _DASHES = re.compile(r"(?P<pre>[ \t\u00a0]*)(?P<run>-{2,}|–|—|-)(?P<post>[ \t\u00a0]*)")
 
 
-# Word prefixes that hyphenate in compounds — true prefixes plus the common
-# compound-modifier leads ("well-known", "much-loved"). A hyphen after one of
-# these with a space on only ONE side ("co- worker", "well- known") is a
-# broken compound, not a sentence-break dash, and none of this sweep's
-# business.
-_HYPHEN_PREFIXES = frozenset("""
-co pre re non anti semi ex mid self all half quasi multi inter intra over
-under sub super counter cross extra post pro vice de un dis mis out up
-well much far long high low full best worst top
-""".split())
-
-# Spelled numbers on either side of a one-sided hyphen ("twenty- five") are a
-# broken compound number, which sweep_compound_number owns.
-_NUMBER_WORDS = frozenset(
-    ("twenty thirty forty fifty sixty seventy eighty ninety "
-     "one two three four five six seven eight nine").split())
+# Closed-class words: a one-sided hyphen beside one of these ("us- well",
+# "the explosions- none") is a typed sentence break, a broken compound, or a
+# stray — a sweep cannot tell which, and a sweep that fires wrongly is the
+# more expensive mistake. Left alone for a reader.
+from .adjudicate import FUNCTION_WORDS as _FUNCTION_WORDS  # noqa: E402
 
 _WORD_BEFORE = re.compile(r"[A-Za-z][A-Za-z'’]*$")
 _WORD_AFTER = re.compile(r"[\"“‘']?([A-Za-z][A-Za-z'’]*)")
 
 
-def _one_sided_dash(text: str, m: re.Match) -> bool:
-    """Whether a single hyphen with a space on only one side reads as a
-    sentence-break dash: "Garbage- I mean, Garage", "it was late -too late".
-    The alternative reading is a compound broken around its hyphen
-    ("co- worker", "twenty- five", "5- and 10-mile"), so whole words must
-    flank it and the compound patterns are excluded by name."""
-    wb = _WORD_BEFORE.search(text[:m.start("run")].rstrip(_SP))
-    wa = _WORD_AFTER.match(text[m.end("run"):].lstrip(_SP))
-    if wb is None or wa is None:
+def _broken_compound(text: str, m: re.Match) -> bool:
+    """Whether "word- word" — a single hyphen attached to the word before it
+    with a space after — is a compound broken around its hyphen ("fast-
+    flowing", "co- worker", "well- known", "T- shirt", "twenty- five") that
+    this sweep may close up. Georgis (2026-09-04): "fast- flowing" was read
+    as a sentence dash and set as "fast—flowing". A hyphen with a space on
+    only ONE side is never a dash; it is a typo inside a compound, and only
+    when both neighbours are plain words that are not function words (and
+    the right-hand one is not the "and"/"or" of a suspended pair, "5- and
+    10-mile") is the sweep sure enough to close it."""
+    if not (m.group("post") and not m.group("pre")):
+        return False
+    wb = _WORD_BEFORE.search(text[:m.start("run")])
+    wa = _WORD_AFTER.match(text[m.end("post"):])
+    if wb is None or wa is None or wa.group(0)[0] in "\"“‘'":
         return False
     prev_word = wb.group(0).lower().strip("'’")
     next_word = wa.group(1).lower().strip("'’")
-    if m.group("post") and not m.group("pre"):
-        # "word- word": a broken compound keeps its prefix attached — a known
-        # hyphenating prefix, or a single letter ("T- shirt", "X- ray").
-        if prev_word in _HYPHEN_PREFIXES or len(prev_word) == 1:
-            return False
-        # "5- and 10-mile", "twenty- and thirty-somethings": suspended pairs.
-        if next_word in ("and", "or"):
-            return False
-    if prev_word in _NUMBER_WORDS and next_word in _NUMBER_WORDS:
+    if next_word in ("and", "or"):
+        return False
+    if prev_word in _FUNCTION_WORDS or next_word in _FUNCTION_WORDS:
         return False
     return True
 
@@ -249,18 +238,24 @@ def _sweep_dash(text: str, variant=None) -> list[Hit]:
             replacement, why = "—", ("House style sets a sentence-break dash "
                                      "as an unspaced em dash.")
         elif run == "-":
-            # A single hyphen reads as a dash standing alone between words
-            # ("it was late - too late") — or attached to one word with a
-            # space on the other side ("Garbage- I mean, Garage"), the typed
-            # form the Purpura human pass fixed throughout. Unspaced on both
-            # sides it is a compound (well-known) and none of this sweep's
-            # business; between digits it is arithmetic or a loose range,
-            # both judgment calls; at a line edge it is a bullet or a
-            # dangling mark.
+            # A single hyphen reads as a dash only standing alone between
+            # words, spaced on BOTH sides ("it was late - too late"). With a
+            # space on one side only it is a compound broken around its
+            # hyphen ("fast- flowing"), which is closed up here when the
+            # sweep can be sure, and otherwise left for a reader — never a
+            # dash (Georgis, 2026-09-04: "fast- flowing" became
+            # "fast—flowing"). Unspaced on both sides it is a compound
+            # (well-known) and none of this sweep's business; between digits
+            # it is arithmetic or a loose range, both judgment calls; at a
+            # line edge it is a bullet or a dangling mark.
             if not (m.group("pre") or m.group("post")):
                 continue
-            if not (m.group("pre") and m.group("post")) \
-                    and not _one_sided_dash(text, m):
+            if not (m.group("pre") and m.group("post")):
+                if _broken_compound(text, m):
+                    hits.append(Hit(m.start(), m.end(), "-",
+                                    "A hyphen with a space on one side is a "
+                                    "compound broken around its hyphen; "
+                                    "closed up."))
                 continue
             if not before or not after:
                 continue
@@ -968,8 +963,13 @@ def unclosed_quote_findings(paragraphs: Sequence[ParagraphRef],
 # trailing dot is captured separately: on a dotted form ("3 p.m.") that dot may
 # be the abbreviation's own or the sentence's period, and the two need
 # different replacements.
+# Every typed form of a clock time with a meridiem — "2:30 am", "11PM",
+# "7AM", "9:00am", "8:00pm", "3 p.m." — with or without a space, minutes, or
+# periods, in either case. The trailing lookahead keeps "3 amid" and "at 7
+# ambulances" from reading as times (they did: "3:00 AMid").
 _TIME_MERIDIEM = re.compile(
-    r"(?<![.\d])(\d{1,2})(:\d{2})?[  ]*([AaPp])[  ]*\.?[  ]*([Mm])(\.?)")
+    r"(?<![.\d])(\d{1,2})(:\d{2})?[  ]*([AaPp])[  ]*\.?[  ]*([Mm])(\.?)"
+    r"(?![A-Za-z])")
 
 
 def _sweep_time_of_day(text: str, variant=None) -> list[Hit]:

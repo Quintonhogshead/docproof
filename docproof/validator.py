@@ -250,6 +250,40 @@ def anchors_midword(para_text: str, s: int, original: str,
     return False
 
 
+_NEIGHBOUR_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:['’][A-Za-z]+)?")
+
+
+def duplicates_neighbour(para_text: str, start: int, end: int,
+                         inserted: str) -> str | None:
+    """The word the inserted/replacement text repeats from IMMEDIATELY before
+    or after its span in the paragraph, or None. A `missing_word` row inserted
+    "Kalamata." before a sentence beginning "Kalamata, the capital…" (source
+    "arrived in. Kalamata,", Georgis 2026-09-04) — read inside the edit it
+    looked fine; read in the paragraph it doubled the name. Case-insensitive,
+    punctuation ignored; a word the deleted span itself carried is not a
+    repeat (re-typing "Kalamata" as "Kalamata." is not a doubling)."""
+    words = [w.lower() for w in _NEIGHBOUR_WORD_RE.findall(inserted)]
+    if not words:
+        return None
+    deleted = {w.lower() for w in _NEIGHBOUR_WORD_RE.findall(para_text[start:end])}
+    before = _NEIGHBOUR_WORD_RE.findall(para_text[max(0, start - 60):start])
+    after = _NEIGHBOUR_WORD_RE.findall(para_text[end:end + 60])
+    if before and words[0] == before[-1].lower() and words[0] not in deleted:
+        return before[-1]
+    if after and words[-1] == after[0].lower() and words[-1] not in deleted:
+        return after[0]
+    return None
+
+
+# A currency_style / number_style "correction" that produces a sub-dollar
+# amount in numerals: "a dime" -> "$0.10", "5 cents" -> "$0.05", "90 cents"
+# -> "$0.90" all shipped from the Georgis ladder. Chicago 9.20 keeps amounts
+# under a dollar in words; the prompt now says so, and this is the
+# deterministic backstop for a model that ignores it.
+_SUB_DOLLAR_RE = re.compile(r"\$0\.\d{2}\b")
+_MONEY_STYLE_TYPES = ("currency_style", "number_style")
+
+
 def _is_imported(f: Finding) -> bool:
     return (f.finding_id.split("-", 1)[0] in _IMPORT_ID_PREFIXES
             or f.error_type in ("imported_edit", "galley_settle"))
@@ -260,8 +294,16 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
                       query_types: frozenset[str] = frozenset(),
                       format_types: dict[str, str] | None = None,
                       edit_guard=None,
-                      guard_exempt: frozenset[str] = frozenset()) -> list[Finding]:
+                      guard_exempt: frozenset[str] = frozenset(),
+                      sweep_guard=None) -> list[Finding]:
     """Anchor every finding, and decide which channel it goes down.
+
+    `sweep_guard` (a docproof.sweepguard.SweepGuard built from the run's
+    configured sweeps) refuses any edit the house sweeps would re-fire on
+    inside its changed span — the typed `capitalization` pass lowercasing
+    "2:30 AM" to "2:30 am" (Georgis, 2026-09-04) — with status
+    `rejected_undoes_house_style:<sweep key>`. None (the default) skips the
+    check, so a bare call behaves as before.
 
     `query_types` are error types that ask rather than correct. They skip the
     edit machinery entirely: there is no minimal diff to compute, no confidence
@@ -426,6 +468,29 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
                      f.finding_id, f.error_type, dup, inserted[:60])
             continue
 
+        # 2.43 — a fix whose words repeat the word immediately before or after
+        # its span ("Kalamata." inserted before "Kalamata, the capital").
+        nb = duplicates_neighbour(para.text, start, end, inserted)
+        if nb is not None:
+            out.append(_status(f, "rejected_duplicates_neighbour", anchor))
+            log.info("%s (%s): refused — the correction repeats its neighbour "
+                     "%r: %r", f.finding_id, f.error_type, nb, inserted[:60])
+            continue
+
+        # 2.44 — house style is not a lane's to undo. The configured sweeps
+        # are run over the paragraph AS IT WOULD READ; a sweep that fires
+        # inside the changed span and did not fire there before is the row
+        # writing a form the house removes ("2:30 AM" -> "2:30 am").
+        if sweep_guard is not None and getattr(sweep_guard, "sweeps", None):
+            key = sweep_guard.refires(para.text, (start, end), composed,
+                                      (start, start + len(inserted)))
+            if key:
+                out.append(_status(f, f"rejected_undoes_house_style:{key}",
+                                   anchor))
+                log.info("%s (%s): refused — %s would re-fire on %r",
+                         f.finding_id, f.error_type, key, inserted[:60])
+                continue
+
         # 2.45 — number labels. A number_style edit that lands on a LABEL — a
         # "Mindset Number 23", a "1)" list marker, a heading — is refused
         # outright: the numeral is part of a name, not a count in a sentence,
@@ -436,6 +501,14 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
             log.info("%s (number_style): refused — %r is a label, not a "
                      "number in a sentence", f.finding_id,
                      para.text[max(0, start - 20):end + 10])
+            continue
+        # 2.46 — sub-dollar amounts stay in words (Chicago 9.20): "a dime",
+        # "5 cents", "90 cents" are never restyled to "$0.NN".
+        if f.error_type in _MONEY_STYLE_TYPES and _SUB_DOLLAR_RE.search(inserted) \
+                and not _SUB_DOLLAR_RE.search(deleted):
+            out.append(_status(f, "rejected_policy", anchor))
+            log.info("%s (%s): refused — a sub-dollar amount stays in words, "
+                     "not %r", f.finding_id, f.error_type, inserted[:40])
             continue
 
         # 2.5 — overreach guard. A proofreading fix is minimal; an edit that

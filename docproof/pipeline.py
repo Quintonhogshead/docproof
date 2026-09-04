@@ -2477,11 +2477,15 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                          "inside protected spans at finish()",
                          len(_zone_hits))
 
+    from .sweepguard import SweepGuard
+    sweep_guard = SweepGuard.from_config(cfg, prepared.variant)
+
     def _validate(findings):
         return validate_findings(findings, prepared.doc, cfg.min_confidence,
                                  query_types=prepared.query_types,
                                  format_types=prepared.format_types,
                                  edit_guard=cfg.edit_guard,
+                                 sweep_guard=sweep_guard,
                                  # A sentence repair legitimately inserts a
                                  # dropped word or clause the 16-char growth cap
                                  # would refuse; its fabrication defence is the

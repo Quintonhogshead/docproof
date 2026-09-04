@@ -504,9 +504,12 @@ def rebuild_from_rows(cfg: Config, *, manuscript: str | Path, rows: list[dict],
         remap_unchanneled=remap_unchanneled, id_prefix=id_prefix,
         format_round_trip=True,
         paragraphs={p.para_id: p.text for p in prepared.doc.paragraphs})
+    from .sweepguard import SweepGuard
+    sweep_guard = SweepGuard.from_config(cfg, prepared.variant)
     checked = validate_findings(findings, prepared.doc, cfg.min_confidence,
                                 query_types=prepared.query_types,
-                                format_types=prepared.format_types)
+                                format_types=prepared.format_types,
+                                sweep_guard=sweep_guard)
     # The merged-result artifact scan the merge desk runs for two lanes, run
     # here for rows composed from any number of lanes: two rows that each
     # pass the validator's overlap check can still splice into ",," or a
@@ -519,7 +522,8 @@ def rebuild_from_rows(cfg: Config, *, manuscript: str | Path, rows: list[dict],
             MergeResult(findings=list(findings)), prepared.doc,
             min_confidence=cfg.min_confidence,
             query_types=prepared.query_types,
-            format_types=prepared.format_types, later_loses=True)
+            format_types=prepared.format_types, later_loses=True,
+            sweep_guard=sweep_guard)
         if hits:
             keep = {f.finding_id for f in merged.findings}
             dropped_rows = [f for f in findings if f.finding_id not in keep]

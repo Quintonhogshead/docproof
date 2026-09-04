@@ -537,6 +537,12 @@ def _galley_parser(sub) -> None:
                     help="the manuscript, for per-chapter finding counts in the "
                          "letter (optional; .docx or .idml)")
     gl.add_argument("--config", default="config/default.yaml")
+    gl.add_argument("--workspace", metavar="WS",
+                    help="a Galley workspace: the letter's spend and waves "
+                         "are read from EVERY run under WS/runs/ (findings."
+                         "json cost plus settlement/verify artifacts), not "
+                         "only the run the casefile came from — a $0 replay "
+                         "build otherwise reports \"$0.00 spent, 1 wave\"")
     gl.add_argument("--out", help="directory for letter.md and style-sheet.md "
                                   "(default: beside the case file)")
     gl.add_argument("--json", action="store_true",
@@ -1499,7 +1505,14 @@ def cmd_inventory(args) -> int:
     cfg, error_dir = _configure(args)
     setup_logging(cfg.output_dir)
     try:
-        prepared = prepare(cfg, args.input, error_dir)
+        # A costed preview, like `review --dry-run`: the free analyses (the
+        # sweeps, the dictionary scan) still run so the inventory can say
+        # what a run fixes for free, but the two stages prepare() can SPEND
+        # on — the story sheet and the candidate-screening judge — never
+        # build a provider. Inventory printed a Story sheet line and made
+        # one Luna call with keys present (Georgis, 2026-09-04), against
+        # its own "no API" promise.
+        prepared = prepare(cfg, args.input, error_dir, dry_run=True)
     except (IngestError, FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -3628,6 +3641,21 @@ def _galley_letter(args) -> int:
             print(f"error: {e}", file=sys.stderr)
             return 2
 
+    if getattr(args, "workspace", None):
+        from galley.casefile_synth import workspace_waves
+        waves = workspace_waves(args.workspace)
+        if waves:
+            # The workspace ledger replaces the single synthesized wave: every
+            # run's spend, in order, so the letter states what was really
+            # spent and which lanes ran.
+            cf.waves = list(waves)
+            cf.budget.charges = []
+            for w in waves:
+                cf.budget.charge(f"run {w.index}", w.spend_usd, wave=w.index)
+        else:
+            print(f"note: --workspace {args.workspace}: no runs/*/findings."
+                  f"json found; the letter keeps the run's own spend",
+                  file=sys.stderr)
     letter_path, style_path = render_all(cf, out, ms=ms)
     open_queries = sum(1 for v in cf.verdicts if v.ruling == "query")
     print(f"\nEditorial letter for {cf.book or '(untitled)'}: "
@@ -4380,6 +4408,12 @@ def cmd_galley_profile(args) -> int:
     if profile.bespoke_sweep_candidates:
         print(f"{len(profile.bespoke_sweep_candidates)} bespoke-sweep "
              f"candidate(s) — see --json for patterns")
+    if profile.field_errors:
+        print(f"WARNING: {len(profile.field_errors)} unresolved field "
+              f"result(s) (\"Error! Bookmark not defined.\" etc.) — the "
+              f"designer regenerates the TOC; no lane edits them:")
+        for line in profile.field_errors[:6]:
+            print(f"  {line}")
     rl = profile.reading_level
     if rl.ari is not None:
         print(f"reading level: ARI {rl.ari:.1f}"
@@ -4813,7 +4847,8 @@ def _galley_certify(args) -> int:
 
     print(f"Certificate for {args.run}:")
     for c in cert.checks:
-        glyph = {"pass": "PASS", "fail": "FAIL", "skip": "skip"}[c.status]
+        glyph = {"pass": "PASS", "fail": "FAIL", "skip": "skip",
+                 "warn": "WARN"}.get(c.status, c.status)
         print(f"  [{glyph}] {c.name}{f' — {c.detail}' if c.detail else ''}")
     print(f"\n  {'PASSED' if cert.passed else 'FAILED'} "
           f"({len(cert.failed)} failing check(s))")

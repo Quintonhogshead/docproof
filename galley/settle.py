@@ -62,6 +62,7 @@ from typing import Any, Mapping, Sequence
 
 from docproof import editmap as emap
 from docproof.models import Usage
+from docproof.sweepguard import SweepGuard
 
 log = logging.getLogger("galley.settle")
 
@@ -82,6 +83,7 @@ NON_TERMINAL = ("pending", "held", "residual", "flagged", "proposed",
 REASON_PREFIXES = (
     "duplicate", "overlap_loser", "voice", "intent_zone", "style_only", "fact",
     "unanchorable", "walker_wrong", "unresolved_after_", "ambiguous_anchor",
+    "toc_unreachable",
     "editorial_note", "verifier_reverted", "verifier_confirmed",
     "verifier_overruled", "oversize", "unplaced",
     "space_deletion", "rejected_", "no_suggestion", "unmapped", "edit_damage",
@@ -680,71 +682,6 @@ def introduced_fragments(source: str, accepted: str,
     return out
 
 
-# ---- the sweep guard (Georgis, 2026-09-04) ------------------------------------
-
-class SweepGuard:
-    """Refuses a settlement the deterministic sweeps would immediately undo.
-
-    The sweeps (docproof/sweeps.py) are the house rules as code, and the
-    rebuild runs them first with first claim on every span: a composite that
-    writes "4:00 a.m." over the house "4:00 AM" is either re-fired on at the
-    next build or rejected as an overlap — a round of churn either way, and
-    on the Georgis run sixty-seven of them. So before a settlement is
-    applied, the paragraph AS IT WOULD READ is scanned with the run's own
-    sweep set; a hit inside the changed span that was not already there
-    before the change means the settlement undoes house style, and the item
-    is dropped with the sweep's key as the reason."""
-
-    def __init__(self, sweeps: Sequence[Any], variant: Any = None, *,
-                 ellipsis_style: str = "nbsp"):
-        self.sweeps = list(sweeps)
-        self.variant = variant
-        self.ellipsis_style = ellipsis_style
-
-    @classmethod
-    def from_config(cls, cfg: Any, variant: Any = None) -> "SweepGuard":
-        from docproof.sweeps import resolve as _resolve_sweeps
-        keys = list(getattr(cfg, "sweeps", None) or [])
-        style = getattr(getattr(cfg, "style", None), "ellipsis", "nbsp")
-        try:
-            sweeps = _resolve_sweeps(keys)
-        except ValueError:
-            sweeps = []
-        return cls(sweeps, variant, ellipsis_style=style or "nbsp")
-
-    def _hits_in(self, text: str, lo: int, hi: int) -> list[tuple[str, int, int]]:
-        from functools import partial
-        out: list[tuple[str, int, int]] = []
-        for sweep in self.sweeps:
-            scan = (partial(sweep.scan, style=self.ellipsis_style)
-                    if sweep.key == "sweep_ellipsis" else sweep.scan)
-            try:
-                hits = scan(text, self.variant)
-            except Exception:                                # noqa: BLE001
-                continue
-            for h in hits:
-                # overlap, with a zero-width insertion counting as inside
-                if h.start < hi and h.end > lo or (lo == hi and h.start <= lo <= h.end):
-                    out.append((sweep.key, h.start, h.end))
-        return out
-
-    def refires(self, before: str, before_span: tuple[int, int],
-                after: str, after_span: tuple[int, int]) -> str | None:
-        """The key of the first sweep that would fire inside `after_span` of
-        `after` and did not fire inside `before_span` of `before`, else
-        None."""
-        if not self.sweeps:
-            return None
-        after_hits = self._hits_in(after, *after_span)
-        if not after_hits:
-            return None
-        before_keys = {k for k, _s, _e in self._hits_in(before, *before_span)}
-        for key, _s, _e in after_hits:
-            if key not in before_keys:
-                return key
-        return None
-
-
 # Words that betray an editor's aside living inside the manuscript text — a
 # parenthetical a copy-edit lane leaked ("(parallel with X; breaks tense
 # agreement as written)"). Deleting such a parenthetical is a repair, never
@@ -873,7 +810,8 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
            source: Mapping[str, str], working: Mapping[str, Mapping[str, Any]],
            zones: Any = None, *, replacement: str | None = None,
            mechanical_only: bool = False,
-           sweeps: "SweepGuard | None" = None) -> Decision:
+           sweeps: "SweepGuard | None" = None,
+           skipped: Mapping[str, str] | None = None) -> Decision:
     """The deterministic half of A3. Returns a Decision whose action is one of
     absorb/add/drop/query/revise/revert, or `judge` when only a model can
     settle it (no usable suggestion, or the composite grew past the guard).
@@ -882,9 +820,17 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
     the deterministic sweeps would undo is dropped (`undoes_house_style`).
     `mechanical_only` applies the proofread-scope guard: a change beyond one
     function word / spelling fix / punctuation ships as a query
-    (`rewrite_class`) carrying the suggestion."""
+    (`rewrite_class`) carrying the suggestion. `skipped` maps the paragraph
+    ids the build never reviews to the reason ingest gave (`style:TOC1`);
+    a residual in a TOC-styled paragraph can never be settled by the engine
+    (the walk still reads it: nine "Error! Bookmark not defined." entries
+    and a "CLASSESES" on Georgis) and is dropped `toc_unreachable` — certify
+    warns on unresolved fields separately."""
     why = resolve(res, em, accepted, working)
     if why is not None:
+        reason = str((skipped or {}).get(res.para_id, ""))
+        if reason.lower().startswith("style:toc"):
+            return Decision("drop", "toc_unreachable")
         if why in ("ambiguous_anchor", "unmapped"):
             # Real text the engine cannot place by arithmetic: still a
             # residual, so it goes to the author with the suggestion, never
@@ -1365,11 +1311,12 @@ def _residual_from_row(row: Mapping[str, Any]) -> Residual:
 
 
 def _prepare_source(cfg, manuscript: str | Path, error_dir: str | Path
-                    ) -> tuple[dict[str, str], Any, Any]:
+                    ) -> tuple[dict[str, str], Any, Any, dict[str, str]]:
     """The canonical (post-normalization) paragraphs the replay anchors
-    against, the resolved intent zones when the config names a file, and the
+    against, the resolved intent zones when the config names a file, the
     English variant the run proofs against (what the sweep guard scans
-    with)."""
+    with), and the paragraphs ingest SKIPPED (para_id -> reason, e.g.
+    `style:TOC1`) so a residual there can be dropped as unreachable."""
     from docproof.pipeline import prepare
     c = copy.deepcopy(cfg)
     from docproof.replay import zero_paid_passes
@@ -1382,13 +1329,16 @@ def _prepare_source(cfg, manuscript: str | Path, error_dir: str | Path
         from docproof.intent_zones import load_intent_zones, resolve as _res
         zones = _res(load_intent_zones(cfg.intent_zones_file),
                      list(prepared.doc.paragraphs))
-    return paras, zones, getattr(prepared, "variant", None)
+    skipped = {str(pid): str(reason)
+               for pid, reason in (getattr(prepared.doc, "skipped", ()) or ())}
+    return paras, zones, getattr(prepared, "variant", None), skipped
 
 
 def _source_paragraphs(cfg, manuscript: str | Path, error_dir: str | Path
                        ) -> tuple[dict[str, str], Any]:
     """(paragraphs, zones) — see :func:`_prepare_source`."""
-    paras, zones, _variant = _prepare_source(cfg, manuscript, error_dir)
+    paras, zones, _variant, _skipped = _prepare_source(cfg, manuscript,
+                                                       error_dir)
     return paras, zones
 
 
@@ -1400,7 +1350,8 @@ def fold_accepted_rows(run_dir: Path, rows: Sequence[Mapping[str, Any]], *,
     Deterministic only (a row the guards cannot settle becomes a query)."""
     env = load_envelope(run_dir)
     working, _owner_of = kept_rows(env.get("findings") or [])
-    source, zones, variant = _prepare_source(cfg, manuscript, error_dir)
+    source, zones, variant, skipped = _prepare_source(cfg, manuscript,
+                                                      error_dir)
     guard = SweepGuard.from_config(cfg, variant)
     em = emap.load_or_build(run_dir, source, env.get("findings") or [])
     from galley.verify import paragraph_views
@@ -1412,7 +1363,8 @@ def fold_accepted_rows(run_dir: Path, rows: Sequence[Mapping[str, Any]], *,
             continue
         res = _residual_from_row(raw)
         dec = decide(res, em, accepted, source, working, zones,
-                     mechanical_only=mechanical_only, sweeps=guard)
+                     mechanical_only=mechanical_only, sweeps=guard,
+                     skipped=skipped)
         if dec.action == "judge":
             dec = Decision("query", dec.reason, question=_question(res))
         rec, added, _removed = apply_decision(res, dec, working, source, 0,
@@ -1513,6 +1465,7 @@ class Settler:
         self._zones: Any = None
         self._variant: Any = None
         self._sweeps: SweepGuard | None = None
+        self._skipped: dict[str, str] = {}
 
     # -- one round ----------------------------------------------------------
 
@@ -1539,8 +1492,9 @@ class Settler:
         rows = env.get("findings") or []
         working, _ = kept_rows(rows)
         if not self._source:
-            self._source, self._zones, self._variant = _prepare_source(
-                self.cfg, self.manuscript, self.error_dir)
+            (self._source, self._zones, self._variant,
+             self._skipped) = _prepare_source(self.cfg, self.manuscript,
+                                              self.error_dir)
             self._sweeps = SweepGuard.from_config(self.cfg, self._variant)
         em = emap.load_or_build(self.run_dir, self._source, rows)
         from galley.verify import paragraph_views
@@ -1583,7 +1537,7 @@ class Settler:
         unplannable: set[str] = set()
         judged = 0
         guards = {"mechanical_only": self.opt.mechanical_only,
-                  "sweeps": self._sweeps}
+                  "sweeps": self._sweeps, "skipped": self._skipped}
         prefetched = self._prefetch_judgments(items, em, accepted, source,
                                               working, guards)
         for res in items:

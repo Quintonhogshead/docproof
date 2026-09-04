@@ -138,6 +138,11 @@ class Profile(BaseModel):
     # unaffected either way.
     model_confirmed: bool = False
     model_notes: str = ""
+    # Unresolved Word field results anywhere in the file, the skipped TOC
+    # styles included ("body-0012: CLASSESES\tError! Bookmark not defined.").
+    # The designer regenerates the TOC; the plan notes them; no lane edits
+    # them (Georgis, 2026-09-04).
+    field_errors: list[str] = Field(default_factory=list)
 
 
 # --- deterministic extraction -------------------------------------------------
@@ -347,7 +352,17 @@ def build_profile(input_path: str | Path, cfg: Config | None = None) -> Profile:
         reading_level=reading_level,
         genre_guesses=genre_guesses,
         recommended_preset=recommended,
-        bespoke_sweep_candidates=_bespoke_candidates(tics))
+        bespoke_sweep_candidates=_bespoke_candidates(tics),
+        field_errors=_field_errors(path))
+
+
+def _field_errors(path: Path) -> list[str]:
+    """Every paragraph — skipped styles included — carrying an unresolved
+    field result, as "para_id: text". $0; the same scan certify warns on."""
+    if path.suffix.lower() != ".docx":
+        return []
+    from galley.manifest import unresolved_field_results
+    return [f"{pid}: {text}" for pid, text in unresolved_field_results(path)]
 
 
 # --- optional model confirmation ---------------------------------------------

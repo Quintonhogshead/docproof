@@ -329,7 +329,7 @@ def verify_plan(manifest: dict[str, Any], *, source: str | Path, cfg: Any,
 @dataclass
 class Check:
     name: str
-    status: str          # "pass" | "fail" | "skip"
+    status: str          # "pass" | "fail" | "skip" | "warn" (never blocks)
     detail: str = ""
 
     def to_json(self) -> dict[str, str]:
@@ -510,6 +510,10 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
     # _certify_text_hygiene) — --source is what lets the check tell the two
     # apart.
     cert.checks.append(_certify_text_hygiene(run, source))
+    # 8b. Unresolved field results ("Error! Bookmark not defined.") in ANY
+    # paragraph, the skipped TOC styles included — a warning for the
+    # designer, never a failure (see _certify_field_results).
+    cert.checks.append(_certify_field_results(run))
 
     # 9. Finished-text SENSE gates. certify itself reads no text for meaning;
     # `galley verify` does and records its verdict here. An item without a
@@ -1240,6 +1244,58 @@ def _duplicated_fragment_hits(run: Path) -> list[str]:
     return hits
 
 
+# What Word leaves in a field result it could not resolve — a TOC entry whose
+# bookmark was deleted, a cross-reference to a heading that went. Visible to a
+# reader, never to a typed pass (TOC styles are skipped from review), and only
+# the designer regenerating the TOC can fix it.
+_UNRESOLVED_FIELD_RE = re.compile(
+    r"Error! (?:Bookmark not defined|Reference source not found)\.?")
+
+
+def unresolved_field_results(docx_path: str | Path) -> list[tuple[str, str]]:
+    """Every paragraph of the .docx — EVERY paragraph, the skipped styles
+    included — whose accept-view text carries an unresolved field result, as
+    (para_id, text). Georgis (2026-09-04): nine "Error! Bookmark not
+    defined." TOC entries were visible only to the paid finished-text walk,
+    which then raised residuals nothing could settle. Empty when the file
+    cannot be read."""
+    try:
+        from docproof.reassembler import paragraph_view_text
+        from docproof.utils.xml_helpers import DocxPackage, walk_package
+        pkg = DocxPackage(str(docx_path))
+    except Exception:                                    # noqa: BLE001
+        return []
+    out: list[tuple[str, str]] = []
+    for wp in walk_package(pkg):
+        text = paragraph_view_text(wp.element, "accept")
+        if _UNRESOLVED_FIELD_RE.search(text):
+            out.append((wp.para_id, " ".join(text.split())[:120]))
+    return out
+
+
+def _certify_field_results(run: Path) -> Check:
+    """A WARNING, never a failure: an unresolved field is the designer's to
+    fix by regenerating the TOC, and a certificate must not block delivery
+    on text no lane can edit — but it must not stay silent either."""
+    docs = sorted(p for p in run.glob("*.docx")
+                  if not p.name.startswith("~$")
+                  and "change log" not in p.name.lower())
+    if not docs:
+        return Check("unresolved fields", "skip",
+                     "no manuscript .docx in the run directory")
+    hits = unresolved_field_results(docs[0])
+    if hits:
+        sample = "; ".join(f"{pid}: {text[:60]}" for pid, text in hits[:4])
+        return Check("unresolved fields", "warn",
+                     f"{len(hits)} paragraph(s) carry an unresolved field "
+                     f"result (\"Error! Bookmark not defined.\" / \"Reference "
+                     f"source not found.\") — the designer regenerates the "
+                     f"TOC/fields; no lane can edit them: {sample}"
+                     + ("…" if len(hits) > 4 else ""))
+    return Check("unresolved fields", "pass",
+                 "no unresolved field results in the delivered text")
+
+
 def _minus_preexisting(corrected: str, original: str) -> str:
     """`corrected` with every artifact the ORIGINAL span already carried
     blanked out, occurrence for occurrence.
@@ -1308,4 +1364,5 @@ __all__ = [
     "MANIFEST_SCHEMA_VERSION", "COPYEDIT_LANES", "ModelRoute", "Deviation",
     "Check", "Certificate", "sha256_file", "config_hash", "model_routes",
     "providers_in_use", "build_manifest", "verify_plan", "certify_run",
+    "unresolved_field_results",
 ]

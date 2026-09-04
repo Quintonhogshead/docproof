@@ -5,7 +5,10 @@ description: Screen the accumulated findings with the practitioner rulebook, the
 
 # /adjudicate — the screening rulebook
 
-Every finding that reaches the deliverable passes this screen. The output is
+Every finding that reaches the deliverable passes this screen. **Read the
+whole sentence with the change applied before deciding; reject if the applied
+sentence is ungrammatical** (Georgis: "standing silent" → "stood silent" read
+fine alone and produced "was stood silent" in its sentence). The output is
 a curated set replayed through the engine at $0 — you adjudicate findings and
 write rules; the engine writes the document.
 

@@ -34,6 +34,14 @@ STATUSES = (
     # The correction would leave a doubled word the original did not have
     # ("and and,") — the fix itself is the artifact (Georgis, 2026-09-04).
     "rejected_doubled_word_in_fix",
+    # The correction's words repeat the word(s) immediately before or after
+    # its span in the paragraph ("Kalamata." inserted before "Kalamata, the
+    # capital", Georgis 2026-09-04).
+    "rejected_duplicates_neighbour",
+    # The configured house sweeps would re-fire inside the changed span of the
+    # paragraph as it would read — the row undoes house style (a typed pass
+    # lowercasing "2:30 AM"). Carries the sweep key after a colon.
+    "rejected_undoes_house_style",
     "skipped_low_confidence",
 )
 
