@@ -147,6 +147,20 @@ def test_a_space_deletion_merge_is_demoted_to_a_query():
     assert out[0].force_query
 
 
+def test_a_space_deletion_the_dictionary_closes_is_applied():
+    """Georgis head-to-head (2026-09-04): "wash cloth" -> "washcloth" is a
+    spelling correction — the dictionary carries the closed form — so it
+    applies as a tracked edit. Only a join the dictionary does NOT know
+    ("bloodwork", above) stays the author's compound-styling call."""
+    original = "It was me who bathed her with a wash cloth every night."
+    corrected = "It was me who bathed her with a washcloth every night."
+    doc = _doc(original)
+    out = validate_findings([_finding(original, corrected)], doc, "medium",
+                            edit_guard=GUARD)
+    assert out[0].status == "validated"
+    assert not out[0].force_query
+
+
 def test_a_space_deletion_beside_punctuation_is_not_a_merge():
     """Deleting a doubled space, or a space before punctuation, is an ordinary
     typographic fix — only a deletion that JOINS two words is a compound call."""

@@ -31,7 +31,11 @@ Redding).
    - decides deterministically first: duplicate → drop; inside a locked
      intent zone → drop; editorial note → stripped (nothing left → query);
      **a number/name/title/date/quoted line change → query, never an edit**;
-     pure space deletion → query; unanchorable → drop (recorded);
+     a space-only deletion → EDIT when the dictionary knows the closed form
+     (`closed_compound`), else query (`space_deletion`); a deletion of a
+     verbatim repeated run → EDIT (`duplicate_passage`, bypasses the fact
+     and rewrite-class guards); a second question on a span already queried
+     → DROP (`duplicate_query`); unanchorable → drop (recorded);
    - otherwise absorbs (revises the owning edit as ONE composite, absorbing
      every row it touches whole) or adds (a new edit on untouched text);
    - asks the narrow judge only when there is no usable suggestion or the
@@ -52,6 +56,19 @@ Redding).
    be `[]`) and the verdict in `outcome.json`.
 4. **Advance** — `galley state WS --advance settled --results RUN --source
    BOOK --config C` (refuses, exit 7, while anything is open). Then certify.
+
+## The query count is a ceiling, not an outlet
+
+A round that closes most of its items as questions is forwarding, not
+settling (the Fable Georgis run: 108 of 242 residuals became comments and a
+61-comment ceiling became 153). Before certify, read `settlement.json`'s
+`counts.query` against the budget in `approval.json` (`comment_budget`);
+`certify`'s **comment budget** check FAILS the delivered document over it.
+The fix is never to raise the number: collapse same-rule families to one
+comment, and re-decide every question the book itself answers — a verbatim
+repeat, a dictionary compound, a pronoun the sentence disambiguates, a comma
+splice. Every question that survives is one question plus one sentence of
+evidence, never a grammar diagnosis.
 
 ## Engine doctrine
 

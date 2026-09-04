@@ -1192,3 +1192,102 @@ def test_introduced_fragments_counts_a_local_splice_not_a_far_repeat():
     # the window is measured between the two copies' starts
     tight = "one two three four five, one two three four five."
     assert introduced_fragments("", tight) == ["one two three four five"]
+
+
+# --- Georgis head-to-head (2026-09-04): the book itself answers these ---------
+
+def test_closed_compound_known_promotes_a_dictionary_join_only():
+    from galley.settle import closed_compound_known, is_space_deletion
+    assert is_space_deletion("wash cloth", "washcloth")
+    assert closed_compound_known("a wash cloth", "a washcloth")
+    assert closed_compound_known("the coffee house", "the coffeehouse")
+    # a join the dictionary does not carry stays the author's call
+    assert not closed_compound_known("the lamp desk", "the lampdesk")
+    # not a space deletion at all
+    assert not closed_compound_known("wash cloth", "wash-cloth")
+
+
+def test_deletes_a_repeat_names_the_pasted_run():
+    from galley.settle import deletes_a_repeat
+    before = "greet her. The old dog limped out to greet her."
+    after = "greet her."
+    para_after = "The old dog limped out to greet her."
+    assert deletes_a_repeat(before, after, elsewhere=[para_after]) \
+        == "The old dog limped out to greet her"
+    # the same deletion with no copy anywhere is a rewrite, not a repeat
+    assert deletes_a_repeat(before, after, elsewhere=["Nothing here."]) is None
+    # a short run is never a "repeat" (n words)
+    assert deletes_a_repeat("the dog. the dog.", "the dog.",
+                            elsewhere=["the dog."]) is None
+
+
+def test_settle_closes_a_dictionary_compound_as_an_edit(tmp_path):
+    src = _manuscript(tmp_path, PARAGRAPHS + [
+        "It was me who bathed her with a wash cloth every night."])
+    ids, _doc = _para_ids(src)
+    p5 = ids[5]
+    run = _build(tmp_path, src, [
+        {"para_id": ids[0], "original_text": "teh", "corrected_text": "the",
+         "confidence": "high"}])
+    _walk(run, [{"para_id": p5, "quote": "wash cloth", "problem":
+                 "closed compound", "suggestion": "washcloth",
+                 "severity": "low"}])
+    assert _settle(tmp_path, run, src, "--rounds", "1",
+                   "--mechanical-only") == 0
+    recs, st = _records(run)
+    r = recs[residual_id(p5, "wash cloth")]
+    assert r.action == "add" and r.reason == "closed_compound"
+    assert "washcloth" in _accepted(run)[p5]
+    assert st.open == []
+
+
+def test_settle_deletes_a_duplicated_passage_as_an_edit(tmp_path):
+    dup = ("Once again, my heart was pulled out of my chest. "
+           "I could not bear to watch him go. "
+           "Once again, my heart was pulled out of my chest. "
+           "I could not bear to watch him go.")
+    src = _manuscript(tmp_path, PARAGRAPHS + [dup])
+    ids, _doc = _para_ids(src)
+    p5 = ids[5]
+    run = _build(tmp_path, src, [
+        {"para_id": ids[0], "original_text": "teh", "corrected_text": "the",
+         "confidence": "high"}])
+    quote = ("watch him go. Once again, my heart was pulled out of my chest. "
+             "I could not bear to watch him go.")
+    _walk(run, [{"para_id": p5, "quote": quote, "problem":
+                 "two sentences repeated verbatim", "suggestion":
+                 "watch him go.", "severity": "medium"}])
+    assert _settle(tmp_path, run, src, "--rounds", "1",
+                   "--mechanical-only") == 0
+    recs, st = _records(run)
+    r = recs[residual_id(p5, quote)]
+    assert r.action == "add" and r.reason == "duplicate_passage", r
+    acc = _accepted(run)[p5]
+    assert acc.count("Once again, my heart") == 1
+    assert st.open == []
+
+
+def test_a_second_question_on_a_queried_span_is_a_duplicate(tmp_path):
+    src = _manuscript(tmp_path)
+    ids, _doc = _para_ids(src)
+    p2 = ids[2]
+    run = _build(tmp_path, src, [
+        {"para_id": ids[0], "original_text": "teh", "corrected_text": "the",
+         "confidence": "high"}])
+    _walk(run, [
+        {"para_id": p2, "quote": "sure the total", "problem":
+         "garbled — two plausible repairs", "suggestion": "",
+         "severity": "medium"},
+        {"para_id": p2, "quote": "would not change again", "problem":
+         "unclear — which total?", "suggestion": "", "severity": "medium"}])
+    assert _settle(tmp_path, run, src, "--rounds", "1") == 0
+    recs, st = _records(run)
+    first = recs[residual_id(p2, "sure the total")]
+    second = recs[residual_id(p2, "would not change again")]
+    assert first.action == "query"
+    assert second.action == "drop" and second.reason.startswith(
+        "duplicate_query")
+    env = json.loads((run / "findings.json").read_text("utf-8"))
+    assert sum(1 for row in env["findings"]
+               if row.get("queried") and row["para_id"] == p2) == 1
+    assert st.open == []

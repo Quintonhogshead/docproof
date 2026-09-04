@@ -162,10 +162,21 @@ def test_a_partial_handoff_still_needs_a_verdict(book, tmp_path):
         gd.build_handoff(ws, book.name, tmp_path / "out", partial=True)
 
 
-def test_a_finished_handoff_still_demands_all_five(book, tmp_path):
+def test_a_finished_handoff_still_demands_all_six(book, tmp_path):
     ws = gd.seed_workspace(book, "ford-book-1", workspace_root=tmp_path / "ws")
     _deliverable(ws)
     (ws / "deliverable" / "letter.md").unlink()
     with pytest.raises(gd.DriverError, match="no editor's letter"):
+        gd.build_handoff(ws, book.name, tmp_path / "out",
+                         outcome_sources=[ws / "deliverable" / "outcome.json"])
+
+
+def test_a_finished_handoff_demands_the_verification_report(book, tmp_path):
+    """The sixth file (Georgis head-to-head, 2026-09-04): a proof without its
+    verification report is not a hand-off."""
+    ws = gd.seed_workspace(book, "ford-book-1", workspace_root=tmp_path / "ws")
+    _deliverable(ws)
+    (ws / "deliverable" / "verification.md").unlink()
+    with pytest.raises(gd.DriverError, match="no verification report"):
         gd.build_handoff(ws, book.name, tmp_path / "out",
                          outcome_sources=[ws / "deliverable" / "outcome.json"])

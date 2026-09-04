@@ -88,7 +88,8 @@ REASON_PREFIXES = (
     "verifier_overruled", "oversize", "unplaced",
     "space_deletion", "rejected_", "no_suggestion", "unmapped", "edit_damage",
     "rewrite_class", "undoes_house_style", "composite_mismatch",
-    "duplicated_fragment")
+    "duplicated_fragment", "duplicate_query", "closed_compound",
+    "duplicate_passage")
 
 _SPACE_ONLY = re.compile(r"\s+")
 _PUNCT_ONLY = re.compile(r"[^\w\s]")
@@ -507,6 +508,33 @@ def is_space_deletion(before: str, after: str) -> bool:
     return len(after) < len(before)
 
 
+def closed_compound_known(before: str, after: str,
+                          dictionary: str = "en_US") -> bool:
+    """A space deletion whose result the dictionary already knows — "wash
+    cloth" -> "washcloth", "coffee house" -> "coffeehouse" — is a spelling
+    correction, not the author's call (Georgis head-to-head, 2026-09-04: the
+    Fable run queried eighteen of these that the Astra run simply fixed).
+    Anything the dictionary does not carry stays a query. No dictionary on
+    this machine means no promotion — the conservative answer."""
+    # A general space-only deletion (not only the bare two-word quote
+    # is_space_deletion answers for): some whitespace between letters gone,
+    # nothing else changed.
+    if not before or not after or len(after) >= len(before):
+        return False
+    if _SPACE_ONLY.sub("", before) != _SPACE_ONLY.sub("", after):
+        return False
+    from docproof.spellscan import dictionary_knows
+    # Only the joined tokens are judged; punctuation around them rides along.
+    joined = [t for t in _TOKEN_RE.findall(after)
+              if t.lower() not in {w.lower() for w in _TOKEN_RE.findall(before)}]
+    if not joined:
+        return False
+    for word in joined:
+        if not dictionary_knows(word, dictionary):
+            return False
+    return True
+
+
 def edit_kind(before: str, after: str) -> str:
     """"punctuation" when the two differ only in punctuation/whitespace/case,
     else "wording" — what an intent zone's permission is checked against."""
@@ -691,6 +719,49 @@ _ASIDE_WORDS_RE = re.compile(
     r"tense|revision note|query|should be|needs? (?:a|to)|missing|stray|"
     r"consider|reword|rephrase|clarif|ambiguous|antecedent|dangling|"
     r"comma splice|run-on|fragment|subject and verb)\b", re.IGNORECASE)
+
+
+def _para_neighbours(para_id: str, texts: Mapping[str, str]) -> list[str]:
+    """The paragraphs either side of `para_id` in reading order, by id."""
+    ids = sorted(texts)
+    try:
+        i = ids.index(para_id)
+    except ValueError:
+        return []
+    return [texts[x] for x in ids[max(0, i - 1):i] + ids[i + 1:i + 2]]
+
+
+def deletes_a_repeat(before: str, after: str, *, elsewhere: Sequence[str] = (),
+                     n: int = DUPLICATE_FRAGMENT_WORDS) -> str | None:
+    """`after` is `before` with one contiguous run of at least `n` words
+    removed, and that run still reads verbatim somewhere else — in the rest
+    of `before`, or in a neighbouring paragraph (`elsewhere`). Returns the
+    deleted run, or None.
+
+    A sentence pasted twice is the book's own evidence; deleting the second
+    copy is mechanics, not a rewrite (Georgis, 2026-09-04: three duplicated
+    passages the Fable run queried and the Astra run deleted)."""
+    bw = _TOKEN_RE.findall(before)
+    aw = _TOKEN_RE.findall(after)
+    if len(aw) >= len(bw) or not bw:
+        return None
+    import difflib
+    ops = [op for op in difflib.SequenceMatcher(
+        a=[w.lower() for w in bw], b=[w.lower() for w in aw],
+        autojunk=False).get_opcodes() if op[0] != "equal"]
+    if len(ops) != 1 or ops[0][0] != "delete":
+        return None
+    _tag, i1, i2, _j1, _j2 = ops[0]
+    if i2 - i1 < n:
+        return None
+    run = " ".join(w.lower() for w in bw[i1:i2])
+    rest = " ".join(w.lower() for w in bw[:i1] + bw[i2:])
+    if run in rest:
+        return " ".join(bw[i1:i2])
+    for text in elsewhere:
+        if run in " ".join(w.lower() for w in _TOKEN_RE.findall(text)):
+            return " ".join(bw[i1:i2])
+    return None
 
 
 def deletes_an_aside(before: str, after: str) -> bool:
@@ -913,7 +984,10 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
         return Decision("query", "instruction", question=_question(res))
     if suggestion == res.quote:
         return Decision("drop", "walker_wrong")
-    if is_space_deletion(res.quote, suggestion):
+    tag = ""
+    if closed_compound_known(res.quote, suggestion):
+        tag = "closed_compound"
+    elif is_space_deletion(res.quote, suggestion):
         return Decision("query", "space_deletion",
                         question=_question(res, suggestion))
     lo, hi = align_to_sentence(acc, lo, hi, suggestion)
@@ -931,7 +1005,15 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
                 label = getattr(zone, "label", "") or getattr(zone, "category",
                                                               "")
                 return Decision("drop", f"intent_zone:{label}")
-    fact = _fact(comp.before, comp.text, src_text)
+    # The paragraph AS IT WILL READ after the deletion: a run still present
+    # there (or next door) is a repeat; the one being deleted is the copy.
+    after_para = acc[:comp.acc_start] + comp.text + acc[comp.acc_end:]
+    repeat = deletes_a_repeat(comp.before, comp.text,
+                              elsewhere=[after_para]
+                              + _para_neighbours(res.para_id, accepted))
+    if repeat:
+        tag = "duplicate_passage"
+    fact = None if repeat else _fact(comp.before, comp.text, src_text)
     if fact:
         return Decision("query", f"fact:{fact}", question=_question(res,
                                                                     suggestion))
@@ -966,15 +1048,15 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
             return Decision("drop", f"undoes_house_style:{bad}")
     # Proofread scope: the net change on the SOURCE span, not just this
     # settlement's delta, is what the author's tracked change will show.
-    if mechanical_only:
+    if mechanical_only and not repeat:
         why = rewrite_class(src_text[comp.src_start:comp.src_end], comp.text)
         if why:
             return Decision("query", f"rewrite_class:{why}",
                             question=_question(res, suggestion))
     if comp.absorbed:
-        return Decision("absorb", "", replacement=comp.text, composite=comp,
+        return Decision("absorb", tag, replacement=comp.text, composite=comp,
                         owner_key=comp.owners[0])
-    return Decision("add", "", replacement=comp.text, composite=comp)
+    return Decision("add", tag, replacement=comp.text, composite=comp)
 
 
 def _question(res: Residual, suggestion: str = "") -> str:
@@ -1201,6 +1283,31 @@ def _query_row(res: Residual, source: Mapping[str, str], question: str,
     return row
 
 
+def query_already_on(res: Residual, working: Mapping[str, Mapping[str, Any]],
+                     source: Mapping[str, str]) -> str | None:
+    """The key of a kept QUERY row in the same paragraph whose anchored text
+    overlaps the residual's sentence (or its quote), or None. Two questions
+    on one span reach the author as two comments; the second is a duplicate."""
+    src = source.get(res.para_id, "")
+    s0, s1 = res.source_span or (0, 0)
+    lo, hi = emap.sentence_bounds(src, s0, s1) if src else (0, 0)
+    sentence = src[lo:hi].strip() if hi > lo else ""
+    quote = res.quote.strip()
+    for key, row in working.items():
+        if str(row.get("para_id")) != res.para_id:
+            continue
+        if not (row.get("force_query") or row.get("queried")
+                or str(row.get("status")) == "query"):
+            continue
+        anchored = str(row.get("original_text") or "").strip()
+        if not anchored:
+            continue
+        if (sentence and (anchored in sentence or sentence in anchored)) \
+                or (quote and (quote in anchored or anchored in quote)):
+            return str(key)
+    return None
+
+
 def restore_rows(working: dict[str, dict[str, Any]], rid: str,
                  rows: Any) -> int:
     """Put previously removed rows back into the working set under keys that
@@ -1269,6 +1376,15 @@ def apply_decision(res: Residual, dec: Decision,
         return rec, new_rows, removed
 
     if dec.action == "query":
+        twin = query_already_on(res, working, source)
+        if twin:
+            # One question per span (Georgis, 2026-09-04: the Fable run shipped
+            # paired comments — an imported query and a settle query on the
+            # same "over stoked fire"). The author reads one, not two.
+            rec = SettlementRecord(res.id, round_no, "drop", owner_key, before,
+                                   "", f"duplicate_query:{twin}", verified_by,
+                                   para_id=res.para_id, kind=res.kind)
+            return rec, new_rows, removed
         lane = str(working.get(owner_key or "", {}).get("lane") or "")
         qrow = _query_row(res, source, dec.question or _question(res),
                           lane=lane)
@@ -1581,6 +1697,9 @@ class Settler:
             new_rows.extend(added)
             removed_by[res.id] = removed
             added_by[res.id] = added
+            if rec.action == "query":
+                for qrow in added:
+                    working[f"query-{res.id}"] = qrow
             if rec.action in ("absorb", "add", "revise", "drop") \
                     and rec.owner_finding_id or rec.action in ("absorb", "add",
                                                                "revise"):

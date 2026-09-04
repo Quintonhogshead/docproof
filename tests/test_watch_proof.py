@@ -46,6 +46,7 @@ DELIVERABLE = "Johnson - Book 2.docx"
 LETTER = "Johnson - Book 2 - letter.md"
 STYLE_SHEET = "Johnson - Book 2 - style-sheet.md"
 DECISION_LOG = "Johnson - Book 2 - decision-log.md"
+VERIFICATION = "Johnson - Book 2 - verification.md"
 OUTCOME = "Johnson - Book 2 - outcome.json"
 HAND_OFF = {DELIVERABLE, LETTER, STYLE_SHEET, OUTCOME}
 
@@ -850,7 +851,7 @@ def test_the_hand_off_names_are_the_agreed_set():
     assert prooflib.hand_off_names(BOOK) == {
         "manuscript": DELIVERABLE, "letter": LETTER,
         "style_sheet": STYLE_SHEET, "decision_log": DECISION_LOG,
-        "outcome": OUTCOME}
+        "verification": VERIFICATION, "outcome": OUTCOME}
     assert handoff_base(BOOK) == "Johnson - Book 2"
 
 

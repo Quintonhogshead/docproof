@@ -814,6 +814,11 @@ def _galley_parser(sub) -> None:
                      help="where to write the manifest (default: approval.json)")
     gap.add_argument("--note", default="", help="a free-text note recorded in "
                                                 "the manifest")
+    gap.add_argument("--comment-budget", type=int, default=None,
+                     help="the margin-comment ceiling this run promises "
+                          "(about 1 per 1,000 words); certify FAILS a "
+                          "deliverable carrying more. Omitted: certify reads "
+                          "the workspace profile's figure")
     gap.add_argument("--mechanical-only", action="store_true",
                      help="record the go-live scope on the manifest: "
                           "mechanical proofreading only. Refuses to write an "
@@ -3641,12 +3646,23 @@ def _galley_letter(args) -> int:
             print(f"note: --workspace {args.workspace}: no runs/*/findings."
                   f"json found; the letter keeps the run's own spend",
                   file=sys.stderr)
-    letter_path, style_path = render_all(cf, out, ms=ms)
+    # Run evidence (settlement, certificate, profile, the delivered file) is
+    # what turns the letter from a wave ledger into a proofreader's letter —
+    # choices and reasons, decisions still needed, verification and limits —
+    # and what the verification report is rendered from. Absent when the
+    # target is a bare casefile with no run directory beside it.
+    from galley.letter import render_verification_report, run_evidence
+    evidence = run_evidence(synth_dir, getattr(args, "workspace", None)) \
+        if (synth_dir / "findings.json").exists() else None
+    letter_path, style_path = render_all(cf, out, ms=ms, evidence=evidence)
+    report_path = render_verification_report(evidence, out, cf=cf) \
+        if evidence is not None else None
     open_queries = sum(1 for v in cf.verdicts if v.ruling == "query")
     print(f"\nEditorial letter for {cf.book or '(untitled)'}: "
           f"{len(cf.findings)} finding(s), {len(cf.waves)} wave(s), "
           f"{open_queries} open query/-ies, {_money(cf.budget.spent_usd)} spent.")
-    print(f"  {letter_path}\n  {style_path}")
+    print(f"  {letter_path}\n  {style_path}"
+          + (f"\n  {report_path}" if report_path else ""))
     if args.json:
         # No API call here — render_all is a report over decisions the case
         # file already recorded — so cost is zero. `cf.findings` are galley
@@ -3658,6 +3674,8 @@ def _galley_letter(args) -> int:
                                        "book": cf.book,
                                        "letter": str(letter_path),
                                        "style_sheet": str(style_path),
+                                       "verification": str(report_path)
+                                       if report_path else "",
                                        "findings": len(cf.findings),
                                        "waves": len(cf.waves),
                                        "open_queries": open_queries,
@@ -4799,6 +4817,7 @@ def _galley_approve(args) -> int:
             stage=getattr(args, "stage", None) or prov.get("stage"),
             genre=getattr(args, "genre", None) or prov.get("genre"),
             mechanical_only=bool(getattr(args, "mechanical_only", False)),
+            comment_budget=getattr(args, "comment_budget", None),
             note=args.note)
     except (FileNotFoundError, ValueError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
@@ -4812,7 +4831,9 @@ def _galley_approve(args) -> int:
           f"{manifest['config_sha256'][:12]}…")
     print(f"  budget ${manifest['max_spend_usd']:.2f}  stage "
           f"{manifest['stage']}  lanes {manifest['enabled_lanes']}"
-          + ("  MECHANICAL ONLY" if manifest.get("mechanical_only") else ""))
+          + ("  MECHANICAL ONLY" if manifest.get("mechanical_only") else "")
+          + (f"  comments <= {manifest['comment_budget']}"
+             if manifest.get("comment_budget") else ""))
     print(f"  allowed providers: {', '.join(manifest['allowed_providers'])}")
     print(f"  allowed models: {', '.join(manifest['allowed_models'])}")
     if args.json:

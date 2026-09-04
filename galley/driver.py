@@ -189,7 +189,10 @@ _PROMPTS: dict[str, str] = {
         "report (`docproof galley routes source/{book} --config runs/mech.yaml "
         "> runs/routes.txt`; read it back), then write the immutable manifest: "
         "`docproof galley approve source/{book} --config runs/mech.yaml "
-        "--budget {budget} --out approval.json`. The cap is ${budget} of API "
+        "--budget {budget} --comment-budget <profile.json comment_budget> "
+        "--out approval.json`. The comment budget is a CEILING certify "
+        "enforces on the delivered document (about 1 per 1,000 words). The "
+        "cap is ${budget} of API "
         "spend for the whole book — that exact figure, not the plan's total: "
         "it is the ceiling every paid verb refuses past, and PLAN.md's total "
         "must already fit under it. Advance the state machine (--source and "
@@ -247,7 +250,12 @@ _PROMPTS: dict[str, str] = {
         "--engine subagent > runs/verify.log 2>&1` (add --context <notes file> "
         "if the workspace has voice notes; --dry-run first if you want the "
         "read count). It re-reads every applied edit and proofreads the "
-        "accepted text as the author will read it. Read only the summary line "
+        "accepted text as the author will read it. ROTATE the readers: a "
+        "subagent that wrote or imported edits for a window never verifies "
+        "that window (assign windows offset from the ladder/fleet split), and "
+        "each walk window is read TWICE — mechanics first, then a slow "
+        "type-and-compare pass for omissions, duplicated passages, and sense. "
+        "Read only the summary line "
         "and the WARNING/ERROR lines of runs/<final>/run.log; if "
         "finished_walk.json lists unread_paragraphs, re-run with --paragraphs "
         "on them (@FILE) to a side dir and say so. Do NOT hand-fix anything it "
@@ -264,7 +272,14 @@ _PROMPTS: dict[str, str] = {
         "sweep until a round comes back quiet, at most {settle_rounds} "
         "round(s); a round raising fewer than {settle_noisy} new item(s) is "
         "quiet and the book is done. If the last round is still noisy the book "
-        "needs a human proofreader — report that, do not sweep again. Read the "
+        "needs a human proofreader — report that, do not sweep again. A "
+        "residual closes as an EDIT or a DROP whenever the book itself "
+        "answers it (a verbatim repeat, a dictionary compound, a pronoun the "
+        "sentence disambiguates, a comma splice); it closes as a QUERY only "
+        "for author knowledge — a fact, an intent, an identity. The comment "
+        "budget in approval.json is a ceiling certify enforces: read "
+        "settlement.json's query count against it, and collapse same-rule "
+        "families to one comment before certify rather than after. Read the "
         "summary lines and settlement.json's counts; open must be []. Then "
         "`docproof galley state . --advance settled --results runs/<final> "
         "--source source/{book} --config <run config>` (it refuses, exit 7, "
@@ -276,8 +291,10 @@ _PROMPTS: dict[str, str] = {
         "--approval approval.json --source source/{book} --config <run "
         "config>` to runs/certify.txt and read it back. Every check must PASS "
         "(hashes, approved routes, checkpoint, zero-cost anomaly, budget, "
-        "artifact scan, change-verify, finished-walk). A FAIL blocks delivery: "
-        "fix the failing check, never ship around it. Advance the state "
+        "artifact scan, change-verify, finished-walk, comment budget). A FAIL "
+        "blocks delivery: fix the failing check, never ship around it — an "
+        "over-budget comment count means collapsing families and deciding "
+        "what the book answers, not raising the number. Advance the state "
         "machine to certified (--source and --config). Report the "
         "certificate."),
     "deliver": (
@@ -285,13 +302,21 @@ _PROMPTS: dict[str, str] = {
         "shows PASSED and runs/<final>/settlement.json has open: [] — read "
         "both; if either is missing or failing, STOP and say which. Do NOT "
         "rebuild anything after certify: copy the certified tracked-changes "
-        "docx from runs/<final> to deliverable/, render the editor's letter + "
-        "style sheet (`docproof galley letter`) to deliverable/ as letter.md "
-        "and style-sheet.md, and copy outcome.json beside them (its outcome — "
-        "done or needs_human — and reason go in the letter's closing "
-        "paragraph). Advance the state machine to delivered (--source and "
-        "--config). Report final spend, change/comment counts, and the "
-        "outcome."),
+        "docx from runs/<final> to deliverable/, then render the letter, the "
+        "style sheet, and the verification report with `docproof galley "
+        "letter runs/<final> --workspace . --source source/{book} --out "
+        "deliverable/` (letter.md, style-sheet.md, verification.md — "
+        "--workspace is what makes the letter report the REAL spend across "
+        "every run, not the $0 replay build's; the verification report "
+        "carries the delivered file's SHA-256, the certificate table with its "
+        "skipped checks named, the untracked preparation counts, and the "
+        "honest residual statement). Read all three back: a style sheet that "
+        "says no rulings were recorded, or a letter that says $0 when the "
+        "ladder billed, is a defect to fix before hand-off. Copy outcome.json "
+        "beside them (its outcome — done or needs_human — and reason go in "
+        "the letter's closing paragraph). Advance the state machine to "
+        "delivered (--source and --config). Report final spend, "
+        "change/comment counts, and the outcome."),
 }
 
 # Appended to the phases where the scope decision changes what the session may
@@ -1418,19 +1443,20 @@ def handoff_base(source_name: str, stage: str = HANDOFF_STAGE) -> str:
 _LETTER_NAMES = ("letter.md", "EDITORS_LETTER.md")
 _STYLE_NAMES = ("style-sheet.md", "STYLE_SHEET.md")
 _JOURNAL_NAMES = (DECISION_LOG_NAME, "decision-log.md")
+_VERIFICATION_NAMES = ("verification.md", "VERIFICATION.md")
 
 
 def build_handoff(workspace: str | Path, source_name: str,
                   handoff_dir: str | Path, *,
                   outcome_sources: Iterable[Path] = (),
                   partial: bool = False) -> list[Path]:
-    """Copy the five hand-off files into ``handoff_dir`` under house names.
+    """Copy the six hand-off files into ``handoff_dir`` under house names.
 
     ``<surname> - Book 2.docx`` (the tracked-changes proofread manuscript),
     ``… - letter.md``, ``… - style-sheet.md``, ``… - decision-log.md``,
-    ``… - outcome.json``. On a FINISHED run every one is required: a hand-off
-    missing a piece is not a hand-off, so a missing file raises rather than
-    shipping a partial folder.
+    ``… - verification.md``, ``… - outcome.json``. On a FINISHED run every
+    one is required: a hand-off missing a piece is not a hand-off, so a
+    missing file raises rather than shipping a partial folder.
 
     ``partial=True`` is the STOPPED run's hand-off. A run that died at the
     ladder has no deliverable and no letter, but it does have a verdict and a
@@ -1469,6 +1495,12 @@ def build_handoff(workspace: str | Path, source_name: str,
             f"no decision log in {deliverable} (looked for "
             f"{', '.join(_JOURNAL_NAMES)}) — render it with `docproof galley "
             f"journal RUN --workspace {ws}`")
+    verification = _first_existing(deliverable, _VERIFICATION_NAMES)
+    if verification is None and not partial:
+        raise DriverError(
+            f"no verification report in {deliverable} (looked for "
+            f"{', '.join(_VERIFICATION_NAMES)}) — `docproof galley letter "
+            f"RUN --workspace {ws}` renders it beside the letter")
     outcome = next((p for p in outcome_sources if Path(p).is_file()), None)
     if outcome is None:
         raise DriverError(
@@ -1479,6 +1511,7 @@ def build_handoff(workspace: str | Path, source_name: str,
              (letter, f"{base} - letter.md"),
              (style, f"{base} - style-sheet.md"),
              (journal, f"{base} - decision-log.md"),
+             (verification, f"{base} - verification.md"),
              (Path(outcome), f"{base} - outcome.json"))
     written: list[Path] = []
     for src, name in pairs:

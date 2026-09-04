@@ -431,6 +431,7 @@ def _deliverable(ws: Path) -> None:
     (d / "letter.md").write_text("# Letter\n", encoding="utf-8")
     (d / "style-sheet.md").write_text("# Style sheet\n", encoding="utf-8")
     (d / gd.DECISION_LOG_NAME).write_text("# Decision log\n", encoding="utf-8")
+    (d / "verification.md").write_text("# Verification\n", encoding="utf-8")
     (d / "outcome.json").write_text(json.dumps({
         "outcome": "done", "reason": "no open items", "evidence": {},
         "hubspot": {"value": "Proofing Complete"}, "set_by": "assess"}),
@@ -465,6 +466,7 @@ def test_handoff_writes_the_contract_files(book, tmp_path):
         "Ford - Book 2 - letter.md",
         "Ford - Book 2 - outcome.json",
         "Ford - Book 2 - style-sheet.md",
+        "Ford - Book 2 - verification.md",
         "Ford - Book 2.docx",
     ]
     # The change log is NOT the manuscript.
@@ -496,8 +498,8 @@ def test_a_full_run_hands_off_and_uploads(book, tmp_path):
                      drive_folder_id="folder-9", upload=upload,
                      handoff_dir=tmp_path / "handoff").run()
     assert result.outcome == "done"
-    assert len(result.handoff) == 5
-    assert len(result.uploaded) == 5
+    assert len(result.handoff) == 6
+    assert len(result.uploaded) == 6
     assert {f for _n, f in uploaded} == {"folder-9"}
     assert ("Ford - Book 2.docx", "folder-9") in uploaded
 

@@ -75,6 +75,18 @@ the skeleton's shape.
    samples, intent zones you will protect, anything unusual. WAIT for approval.
    Scope changes after approval re-gate.
 
+## Fleet shape and the reread — what to plan, what not to
+
+Every $0 subagent lane is **fixed windows × two passes**: a mechanics pass,
+then a slow type-and-compare pass for omissions, duplicated passages, and
+sense (the Astra Georgis run: 14 windows, 3 readers, two passes each). When
+recall feels thin, plan the second pass, not a fourth fleet. The verify
+walk is planned as a ROTATED reread: windows assigned so no reader checks
+edits it wrote. Plan the comment budget as a number (`profile.json`
+`comment_budget`) and carry it to `approve --comment-budget`; plan ONE
+rebuild after adjudication. A plan whose settle line expects "leftovers
+ship as questions" in volume is planning to blow the ceiling.
+
 ## Plan skeleton
 
 ```
@@ -86,8 +98,9 @@ BOOK · genre · NN,NNN words · tier TN · budget $NN
 3. LT (picky=<posture>)          $0.XX
 4. repair + low-conf confirm     $0.XX
 5. audit (hypotheses, no re-read) $X.XX
-6. verify + settle + certify     $0
-7. adjudicate + rebuild + letter $0
+6. adjudicate (concordance) + ONE rebuild   $0
+7. verify (rotated reread) + settle + certify  $0   comments <= NN (budget)
+8. letter + style sheet + verification report $0
 TOTAL $XX.XX  ·  stop: $2/finding marginal, N waves max
 ```
 

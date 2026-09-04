@@ -91,6 +91,7 @@ INDESIGN_SUFFIX = " - indesign"
 LETTER_SUFFIX = " - letter"
 STYLE_SHEET_SUFFIX = " - style-sheet"
 DECISION_LOG_SUFFIX = " - decision-log"
+VERIFICATION_SUFFIX = " - verification"
 OUTCOME_SUFFIX = " - outcome"
 
 # The dashes a " - " separator turns up as in the wild: a plain hyphen-minus,
@@ -342,6 +343,7 @@ __all__ = ["DECISION_LOG_SUFFIX", "INDESIGN_SUFFIX", "LETTER_SUFFIX",
            "NOTES_SUFFIX", "OUTCOME_SUFFIX", "OUTPUT_STAGE", "OUTPUT_STAGES",
            "PROOF_SOURCE_STAGE", "PROOF_STAGE", "SOURCE_STAGE", "SPELLINGS",
            "STAGE_TOKENS", "STYLE_SHEET_SUFFIX", "TRACKED_SUFFIX",
+           "VERIFICATION_SUFFIX",
            "spellings_of",
            "format_base", "has_proof_source_label", "has_source_label",
            "is_output_name", "is_proof_outcome_name", "is_proof_source_name",
