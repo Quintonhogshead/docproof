@@ -1635,8 +1635,9 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
 
     <div class="card">
       <h3>Your API keys</h3>
-      <p class="muted">DocProof sends your documents to Claude or ChatGPT to be
-        reviewed, and those services bill you directly. Paste a key below to
+      <p class="muted">DocProof sends your documents to Claude, ChatGPT, Gemini,
+        or a hosted open-weight model on DeepInfra to be reviewed, and those
+        services bill you directly. Paste a key below to
         turn one on. Keys are stored in your Mac's Keychain — never in a file
         and never shown again.</p>
 
@@ -1668,6 +1669,17 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
           <button type="button" data-test="gemini">Test</button>
         </span>
         <small class="status" id="status-gemini"></small>
+      </label>
+
+      <label class="field">
+        <span>DeepInfra key <small class="muted">from deepinfra.com — hosted
+          open-weight models (gpt-oss, Qwen, DeepSeek), no watermark</small></span>
+        <span class="row">
+          <input type="password" id="key-deepinfra" placeholder="…"
+                 autocomplete="new-password">
+          <button type="button" data-test="deepinfra">Test</button>
+        </span>
+        <small class="status" id="status-deepinfra"></small>
       </label>
 
       <label class="field">

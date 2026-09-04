@@ -1,6 +1,7 @@
 api:
   model: claude-haiku-4-5
-  provider: anthropic        # only consulted for models not in the catalog
+  provider: anthropic        # anthropic | openai | gemini | deepinfra — only
+                             # consulted for models not in the catalog
   max_retries: 2
   max_output_tokens: 16000
   prompt_caching: true

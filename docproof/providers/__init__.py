@@ -39,6 +39,10 @@ def build_provider(cfg, *, api_key: str | None = None,
     if name == "gemini":
         from .gemini_provider import GeminiProvider
         return GeminiProvider(**kwargs)
+    if name == "deepinfra":
+        from .deepinfra_provider import DeepInfraProvider
+        return DeepInfraProvider(**kwargs)
     raise ProviderError(
         f"Unknown provider {name!r} for model {cfg.api.model!r}. "
-        f"Set api.provider to 'anthropic', 'openai', or 'gemini'.")
+        f"Set api.provider to 'anthropic', 'openai', 'gemini', or "
+        f"'deepinfra'.")

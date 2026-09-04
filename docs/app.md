@@ -72,12 +72,21 @@ jobs and settings somewhere other than `~/Library/Application Support/DocProof`
 (`docproof-app` also takes `--no-browser`).
 
 **First run:** go to Settings and paste an API key. DocProof sends documents to
-Claude, ChatGPT, or Gemini, and those services bill you directly. Keys go into
-the macOS Keychain — never into a file, never returned to the browser, never
-logged. The **Test** button makes one cheap real call so a bad key fails there
-rather than at 11pm. If `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or
-`GEMINI_API_KEY` are already in your environment, they're picked up
-automatically and take precedence.
+Claude, ChatGPT, Gemini, or a hosted open-weight model on DeepInfra, and those
+services bill you directly. Keys go into the macOS Keychain — never into a
+file, never returned to the browser, never logged. The **Test** button makes
+one cheap real call so a bad key fails there rather than at 11pm. If
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `DEEPINFRA_API_KEY`
+are already in your environment, they're picked up automatically and take
+precedence.
+
+**DeepInfra** is the odd one out: it serves open-weight models (gpt-oss, Qwen,
+DeepSeek) per token rather than a vendor's own model. Nothing it returns is
+watermarked, inputs are not retained after the call, and the prices are a
+fraction of the others — but the text does leave your machine for the duration
+of the call, and there is no batch mode, so a DeepInfra model can only run
+"now". The catalog lists only the models DeepInfra serves with a context large
+enough to read a whole novel in one call.
 
 Finished documents land in `~/Documents/DocProof/<document name>/`.
 

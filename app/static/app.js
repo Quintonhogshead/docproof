@@ -2058,6 +2058,11 @@ function syncExaminationJudgment() {
   const rounds = $('rounds');
   if (!batch || !now) return;
   const active = kind() === 'review' && !!(sw && sw.checked);
+  // A vendor with no batch endpoint (DeepInfra) runs now only, whatever the
+  // experiment switch says. Recorded on the radio by syncBatchAvailability so
+  // this function, which owns the control, folds it into one verdict.
+  const noBatch = batch.dataset.noBatch === '1';
+  const locked = active || noBatch;
   if (graph) {
     const graphRow = graph.closest('label');
     if (active) {
@@ -2075,14 +2080,17 @@ function syncExaminationJudgment() {
       if (graphRow) graphRow.title = '';
     }
   }
-  batch.disabled = active;
+  batch.disabled = locked;
   const batchLabel = batch.closest('label');
   if (batchLabel) {
-    batchLabel.classList.toggle('choice-disabled', active);
+    batchLabel.classList.toggle('choice-disabled', locked);
     batchLabel.title = active
-      ? 'The independent examination experiment runs right now only.' : '';
+      ? 'The independent examination experiment runs right now only.'
+      : noBatch
+        ? 'This model’s vendor has no overnight batch mode; it runs now only.'
+        : '';
   }
-  if (active && !now.checked) {
+  if (locked && !now.checked) {
     now.checked = true;
     $('schedule-wrap').hidden = true;
   }
@@ -3006,10 +3014,24 @@ function updateAdvancedSummary() {
   if (adv) adv.addEventListener('change', updateAdvancedSummary);
 })();
 
+// Whether the chosen reviewer's vendor has a batch endpoint at all. Noted on
+// the batch radio and handed to syncExaminationJudgment, which owns the
+// control, so a DeepInfra model greys out "overnight" instead of failing at
+// submit time.
+function syncBatchAvailability(m) {
+  const batch = document.querySelector('input[name="mode"][value="batch"]');
+  if (!batch) return;
+  const flag = m && m.supports_batch === false ? '1' : '';
+  if (batch.dataset.noBatch === flag) return;
+  batch.dataset.noBatch = flag;
+  syncExaminationJudgment();
+}
+
 function renderCost() {
   updateAdvancedSummary();
   const m = state.models.find((x) => x.id === $('model').value);
   $('model-blurb').textContent = m ? m.blurb : '';
+  syncBatchAvailability(m);
   const money = (v) => (typeof v === 'number'
     ? `about $${v < 0.01 ? v.toFixed(3) : v.toFixed(2)}` : '');
 
@@ -8219,7 +8241,7 @@ $('save-settings').addEventListener('click', async () => {
     prep_output: $('prep-output-default').value,
   };
   [['anthropic', 'key-anthropic'], ['openai', 'key-openai'],
-   ['gemini', 'key-gemini']].forEach(([provider, field]) => {
+   ['gemini', 'key-gemini'], ['deepinfra', 'key-deepinfra']].forEach(([provider, field]) => {
     if ($(field).value) payload[`${provider}_key`] = $(field).value;
   });
   // Not an AI key and not billed for, but it is still a secret, so it goes the
@@ -8231,7 +8253,8 @@ $('save-settings').addEventListener('click', async () => {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  ['key-anthropic', 'key-openai', 'key-gemini', 'key-github'].forEach((f) => {
+  ['key-anthropic', 'key-openai', 'key-gemini', 'key-deepinfra',
+   'key-github'].forEach((f) => {
     $(f).value = '';
   });
   $('settings-saved').hidden = false;

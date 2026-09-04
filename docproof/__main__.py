@@ -3754,6 +3754,9 @@ def _flights_provider_of(cfg):
             elif name == "gemini":
                 from .providers.gemini_provider import GeminiProvider
                 cache[name] = GeminiProvider(**kwargs)
+            elif name == "deepinfra":
+                from .providers.deepinfra_provider import DeepInfraProvider
+                cache[name] = DeepInfraProvider(**kwargs)
             else:
                 raise ProviderError(
                     f"Unknown provider {name!r} for model {model_id!r}. Set "
