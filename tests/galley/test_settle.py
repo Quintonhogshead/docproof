@@ -1134,3 +1134,53 @@ def test_certify_artifact_scan_forgives_a_repeat_the_source_already_had(
          "confidence": "high"}])
     scan = next(c for c in certify_run(run).checks if c.name == "artifact scan")
     assert scan.status == "pass", scan.detail
+
+
+# --- Georgis final settle/certify: XML-safe text, local repeats only -----------
+
+def test_xml_safe_strips_what_ooxml_cannot_carry_and_nothing_else():
+    """A settle rebuild died with "All strings must be XML compatible" after a
+    judge reply smuggled a control character into a replacement."""
+    from galley.settle import (Decision, Residual, _question, judge_decision,
+                               xml_safe)
+    assert xml_safe("a\x00b\x08c\x0bd\x1fe\x7ff\x85g\ufffeh\uffffi") == \
+        "abcdefghi"
+    assert xml_safe("tab\tnew\nline\r ok — “curly” ’ é") == \
+        "tab\tnew\nline\r ok — “curly” ’ é"
+    assert xml_safe("") == "" and xml_safe(None) == ""
+    # every path a model string reaches the document by is covered
+    res = Residual.from_walk({"para_id": "p", "quote": "teh",
+                              "problem": "typo\x00", "suggestion": "the\x0b"})
+    assert res.suggestion == "the"
+    assert "\x00" not in _question(res) and _question(res).endswith("'the'")
+    fix = Residual.from_problem({"para_id": "p", "original_text": "a",
+                                 "corrected_text": "b", "fix": "c\x1f"})
+    assert fix.suggestion == "c"
+    parsed = {"action": "add", "replacement": "recei\x00ve", "reason": "",
+              "question": "why\x0c?"}
+    dec = judge_decision(res, ProviderResult(parsed=parsed, stop_reason="ok"))
+    assert isinstance(dec, Decision) and dec.replacement == "receive"
+    parsed["action"] = "query"
+    assert judge_decision(res, ProviderResult(parsed=parsed,
+                                              stop_reason="ok")).question == "why?"
+
+
+def test_introduced_fragments_counts_a_local_splice_not_a_far_repeat():
+    from galley.settle import introduced_fragments
+    # Georgis: the same clause fixed the same way twice in one paragraph —
+    # "for Peter and I to" -> "for Peter and me to" — repeats far apart.
+    far = ("It was time for Peter and me to leave the house, and the long "
+           "road to the harbor took us past the market, the church, and the "
+           "school before it was time for Peter and me to say goodbye.")
+    assert introduced_fragments("", far) == []
+    # A splice duplicates locally (the two copies within a clause).
+    local = ("Mr. Nestor jerked the reins to urge the horse into a trot, "
+             "jerked the reins to urge the horse into a trot, communicating "
+             "his frustration.")
+    frags = introduced_fragments("", local)
+    assert "jerked the reins to urge" in frags
+    # ...unless the source paragraph already repeated it.
+    assert introduced_fragments(local, local) == []
+    # the window is measured between the two copies' starts
+    tight = "one two three four five, one two three four five."
+    assert introduced_fragments("", tight) == ["one two three four five"]

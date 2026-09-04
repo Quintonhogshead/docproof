@@ -143,8 +143,8 @@ class Residual:
         sev = str(row.get("severity") or "medium")
         return cls(id=rid, kind="residual", para_id=pid, quote=quote,
                    problem=str(row.get("problem", "")),
-                   suggestion=str(row.get("suggestion", "")), severity=sev,
-                   round_seen=round_seen, raw=dict(row))
+                   suggestion=xml_safe(str(row.get("suggestion", ""))),
+                   severity=sev, round_seen=round_seen, raw=dict(row))
 
     @classmethod
     def from_problem(cls, row: Mapping[str, Any], round_seen: int = 0
@@ -156,7 +156,7 @@ class Residual:
         rid = str(row.get("problem_id") or problem_id(pid, orig, corr))
         return cls(id=rid, kind="edit_damage", para_id=pid, quote=corr,
                    problem=str(row.get("detail", "")),
-                   suggestion=str(row.get("fix", "")), severity="high",
+                   suggestion=xml_safe(str(row.get("fix", ""))), severity="high",
                    verdict=str(row.get("verdict", "")), owner_original=orig,
                    owner_corrected=corr, round_seen=round_seen, raw=dict(row))
 
@@ -621,6 +621,19 @@ def rewrite_class(before: str, after: str) -> str | None:
 
 # ---- duplicated fragments (Georgis, 2026-09-04) -------------------------------
 
+_XML_UNSAFE_RE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\ufffe\uffff]")
+
+
+def xml_safe(text: str) -> str:
+    """Strip characters OOXML cannot carry (C0/C1 controls, U+FFFE/FFFF).
+
+    A judge or walker reply that smuggles one in (Georgis 2026-09-04: a
+    settle rebuild died on "All strings must be XML compatible" after a
+    round's work) must not take the whole rebuild down; the text minus the
+    control character is what the author would have read anyway."""
+    return _XML_UNSAFE_RE.sub("", text or "")
+
+
 DUPLICATE_FRAGMENT_WORDS = 5
 _FRAG_WORD_RE = re.compile(r"[a-z0-9]+(?:['’][a-z]+)?")
 
@@ -652,7 +665,19 @@ def introduced_fragments(source: str, accepted: str,
     """The duplicated fragments of `accepted` that `source` did not already
     carry — the ones this run put there."""
     had = set(duplicated_fragments(source, n))
-    return [f for f in duplicated_fragments(accepted, n) if f not in had]
+    out: list[str] = []
+    for frag in duplicated_fragments(accepted, n):
+        if frag in had:
+            continue
+        # A splice duplicates LOCALLY (the two copies sit within a clause of
+        # each other); a clause fixed the same way twice in one paragraph
+        # ("for Peter and I to" -> "and me to", twice) repeats far apart and
+        # is not damage. Only the local repeat counts.
+        pat = r"\W+".join(re.escape(w) for w in frag.split())
+        pos = [mm.start() for mm in re.finditer(pat, accepted, re.I)]
+        if len(pos) >= 2 and min(b - a for a, b in zip(pos, pos[1:])) <= 80:
+            out.append(frag)
+    return out
 
 
 # ---- the sweep guard (Georgis, 2026-09-04) ------------------------------------
@@ -1004,8 +1029,8 @@ def _question(res: Residual, suggestion: str = "") -> str:
     sug = suggestion or res.suggestion
     what = res.problem.strip() or "possible error"
     if sug and sug != res.quote:
-        return f"{what} — suggested: {sug!r}"
-    return what
+        return xml_safe(f"{what} — suggested: {sug!r}")
+    return xml_safe(what)
 
 
 # ---- the narrow judge (A3, second half) ------------------------------------------
@@ -1113,9 +1138,9 @@ def judge_decision(res: Residual, result: Any) -> Decision:
     if result.stop_reason != "ok" or not isinstance(result.parsed, dict):
         return Decision("query", "no_suggestion", question=_question(res))
     action = str(result.parsed.get("action", "")).strip().lower()
-    replacement = str(result.parsed.get("replacement", "") or "")
+    replacement = xml_safe(str(result.parsed.get("replacement", "") or ""))
     reason = str(result.parsed.get("reason", "") or "").strip()[:160]
-    question = str(result.parsed.get("question", "") or "").strip()[:300]
+    question = xml_safe(str(result.parsed.get("question", "") or "")).strip()[:300]
     if action == "drop":
         return Decision("drop", f"voice:{reason}" if reason else "voice")
     if action == "query":
@@ -2275,7 +2300,7 @@ __all__ = [
     "artifact_in", "deletes_an_aside", "judge", "kept_rows",
     "looks_like_instruction", "rewrite_class", "duplicated_fragments",
     "introduced_fragments", "second_look", "SweepGuard", "judge_packet",
-    "judge_decision",
+    "judge_decision", "xml_safe",
     "DUPLICATE_FRAGMENT_WORDS",
     "align_to_sentence",
     "open_items", "resolve", "restore_rows", "rewrite_verify_artifacts",

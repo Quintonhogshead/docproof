@@ -1240,6 +1240,30 @@ def _duplicated_fragment_hits(run: Path) -> list[str]:
     return hits
 
 
+def _minus_preexisting(corrected: str, original: str) -> str:
+    """`corrected` with every artifact the ORIGINAL span already carried
+    blanked out, occurrence for occurrence.
+
+    A whole-paragraph row (a typed pass quoting the paragraph to add one
+    comma) carries the author's own pre-existing faults in its corrected
+    text — Georgis 2026-09-04: a source `“lady in red”.` inside a
+    compound_sentence_comma row failed certify although no edit touched it
+    and the sweeps had fixed it in the delivered text. Only an artifact the
+    edit INTRODUCED is a merge artifact."""
+    if not original:
+        return corrected
+    out = corrected
+    for pat in _ARTIFACTS:
+        had = len(pat.findall(original))
+        if not had:
+            continue
+        for _ in range(had):
+            out, n = pat.subn("", out, count=1)
+            if not n:
+                break
+    return out
+
+
 def _artifact_scan(run: Path) -> Check:
     """Scan what the author will actually READ after accepting the changes:
     every finding's corrected_text. Raw change-log / findings-file text is NOT
@@ -1261,7 +1285,8 @@ def _artifact_scan(run: Path) -> Check:
                 continue           # a question or a rejected row changes nothing
             corr = row.get("corrected_text")
             if isinstance(corr, str) and corr:
-                texts.append(corr)
+                texts.append(_minus_preexisting(
+                    corr, str(row.get("original_text") or "")))
     repeats = _duplicated_fragment_hits(run)
     if not texts and not repeats:
         return Check("artifact scan", "skip",
