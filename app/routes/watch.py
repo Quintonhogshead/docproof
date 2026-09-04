@@ -355,13 +355,25 @@ def register(app: FastAPI) -> None:
             raise
         except DriveError as e:
             raise HTTPException(400, str(e)) from None
+        # One count per automation the headline names, read off the same rows
+        # the table shows — so the sentence and the list can never disagree.
+        # `base_stage` drops the gate mark, which is a fact about how sure the
+        # preview is, not about what kind of row it is.
+        def counted(stage: str) -> int:
+            return sum(1 for _name, s in report.plan
+                       if watchlib.base_stage(s) == stage)
+
         return {
             "listed": report.listed,
             "new": report.new,
+            "proof": counted("proof"),
+            "promo": counted("promo"),
+            "plan_docs": counted("plan"),
             # The label comes from here rather than the page, so the words for
-            # a stage have one home.
+            # a stage — and the "if HubSpot says so" a dry run has to add when
+            # it could not apply a gate — have one home.
             "plan": [{"name": name, "stage": stage,
-                      "label": watchlib.PLAIN_STAGE.get(stage, stage)}
+                      "label": watchlib.plain_stage(stage)}
                      for name, stage in report.plan],
         }
 

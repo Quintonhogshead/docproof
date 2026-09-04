@@ -99,6 +99,21 @@ PROOF_FAILED = "failed"
 PROOF_TERMINAL = (PROOF_DONE, PROOF_HUMAN, PROOF_FAILED)
 
 
+# Two more rows a DRY RUN can produce, for the automations `classify` knows
+# nothing about: promo and the marketing plan have their own candidate tests
+# (`is_promo_candidate`, `is_plan_candidate`) rather than a `Stage`, because a
+# book can be a candidate for them whatever formatting has done to it. Only a
+# preview ever emits these; a real pass never puts them in `report.plan`.
+PREVIEW_PROMO = "promo"
+PREVIEW_PLAN = "plan"
+# Appended to a preview row whose gate the dry run could not apply. A dry run
+# lists what is in the folder; it does not ask HubSpot whether each book is
+# flagged (that question lives in the runners, past the read-only return), so a
+# row it cannot vouch for has to say so rather than promise a pass will act on
+# it. `status.plain_stage` turns the mark into words.
+PREVIEW_GATED = "?"
+
+
 class Stage(Enum):
     """Where a file is in the pipeline, from the folder's point of view."""
 
@@ -185,8 +200,9 @@ def is_proof_candidate(file: DriveFile) -> bool:
     "<surname> - Book 1" it has not already finished with.
 
     Proofing's input is a *name*, not a guess: the book it reads is the one the
-    developmental editors handed back, and the house calls that `Book 1`. So a
-    draft, a questionnaire, or the author's original beside it in the same
+    developmental editors handed back, and the house calls that `Book 1` — or
+    `Book One`, which the press writes just as often and which counts the same.
+    So a draft, a questionnaire, or the author's original beside it in the same
     folder is left alone rather than read at a novel's price.
 
     Blind to the formatting marker (`STATE_PROP`) on purpose, exactly as promo

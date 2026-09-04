@@ -177,3 +177,146 @@ def test_the_hand_off_names_all_hang_off_one_base():
     for suffix in (naming.LETTER_SUFFIX, naming.STYLE_SHEET_SUFFIX,
                    naming.DECISION_LOG_SUFFIX, naming.OUTCOME_SUFFIX):
         assert naming.is_output_name(f"{base}{suffix}.md")
+
+
+# --- the numbered stages, spelled either way ----------------------------------
+#
+# The press writes "Book 1" and "Book One" interchangeably, so both are read.
+# What is written back MIRRORS what came in, so a folder keeps one house style
+# per book; with nothing to mirror, the digit is the default.
+
+@pytest.mark.parametrize("name", [
+    "Grest - Book One.docx", "Grest - book one.docx", "Grest - BOOK ONE.docx",
+    "Grest — Book One.docx", "Grest – Book One.docx",   # em and en dash
+    "Grest - Book-One.docx", "Grest  -  Book  One.docx",
+    "St Denis - Book One.docx",
+    "Lichtenstein (and Dolores DelBello) - Book One.docx",
+])
+def test_the_spelled_out_book_one_is_read_as_proofings_source(name):
+    assert naming.has_proof_source_label(name) is True
+
+
+@pytest.mark.parametrize("name", [
+    "Grest - Book Twelve.docx",         # a different number, not Book One/Two
+    "Grest - Book 12.docx",
+    "Grest - Book Twenty.docx",
+    "Grest - Book Two.docx",            # proofing's OUTPUT, not its input
+    "Grest - Book Original.docx",
+    "Grest - book 0.docx",
+    "Grest - Book Ones.docx",           # a word that merely starts with it
+    "Book One.docx",                    # no surname before the token
+])
+def test_a_name_that_is_not_a_book_one_is_refused(name):
+    assert naming.has_proof_source_label(name) is False
+
+
+@pytest.mark.parametrize("name,last,want", [
+    ("Grest - Book One.docx", "Grest", True),
+    ("grest — book one.docx", "GREST", True),           # case both sides
+    ("Lichtenstein - Book One.docx",
+     "Lichtenstein (and Dolores DelBello)", True),      # co-author set aside
+    ("Grest - Book One.docx", "Smith", False),          # wrong surname
+    ("Ada Grest - Book One.docx", "Grest", False),      # a fuller name is not it
+    ("Grest - Book One.docx", "", False),               # no surname to match
+])
+def test_is_proof_source_name_reads_both_spellings_for_one_author(name, last,
+                                                                  want):
+    assert naming.is_proof_source_name(name, last) is want
+
+
+@pytest.mark.parametrize("stem,base", [
+    # Spelled in, spelled out.
+    ("Grest - Book One", "Grest - Book Two"),
+    ("Grest - book one", "Grest - Book Two"),
+    ("Grest — Book One", "Grest - Book Two"),
+    ("Grest - Book-One", "Grest - Book Two"),
+    ("St Denis - Book One", "St Denis - Book Two"),
+    # Digits in, digits out.
+    ("Grest - Book 1", "Grest - Book 2"),
+    ("Grest — book 1", "Grest - Book 2"),
+    # Nothing to mirror: the digit is the default.
+    ("Grest - Book Original", "Grest - Book 2"),
+    ("Grest - book 0", "Grest - Book 2"),
+    ("Wolves", "Wolves - Book 2"),
+    # Idempotent in both styles, so a re-run never doubles the token.
+    ("Grest - Book Two", "Grest - Book Two"),
+    ("Grest - Book 2", "Grest - Book 2"),
+])
+def test_proof_base_answers_in_the_style_it_was_asked_in(stem, base):
+    assert naming.proof_base(stem) == base
+
+
+@pytest.mark.parametrize("name,want", [
+    ("Grest - Book Two.docx", True),                    # the deliverable
+    ("Grest - Book Two - letter.md", True),
+    ("Grest - Book Two - decision-log.md", True),
+    ("Grest — book two - outcome.json", True),          # em dash, from a Mac
+    ("Grest - Book-Two.docx", True),
+    # Proofing's INPUT is not an output, in either spelling — calling it one
+    # would hide the stage's own source from it.
+    ("Grest - Book One.docx", False),
+    ("Grest - Book 1.docx", False),
+    # Nor is a different number that merely begins the same way.
+    ("Grest - Book Twelve.docx", False),
+    ("Grest - Book Twenty.docx", False),
+    ("Grest - Book Twosome.docx", False),
+    ("Grest - Book 12.docx", False),
+])
+def test_is_output_name_claims_book_two_in_either_spelling(name, want):
+    assert naming.is_output_name(name) is want
+
+
+def test_the_hand_off_names_mirror_the_source_spelling():
+    """The five files DocWatch looks for, and the five `galley/driver.py`
+    writes, come out of one transform — so a `Book One` source produces a
+    `Book Two` set on both sides and neither goes looking for the other's."""
+    from galley.driver import handoff_base
+
+    assert naming.proof_base("Johnson - Book One") == "Johnson - Book Two"
+    assert naming.proof_outcome_name("Johnson - Book One.docx") == \
+        "Johnson - Book Two - outcome.json"
+    assert handoff_base("Johnson - Book One.docx") == "Johnson - Book Two"
+    assert handoff_base("Johnson - Book 1.docx") == "Johnson - Book 2"
+    for suffix in (naming.LETTER_SUFFIX, naming.STYLE_SHEET_SUFFIX,
+                   naming.DECISION_LOG_SUFFIX, naming.OUTCOME_SUFFIX):
+        assert naming.is_output_name(f"Johnson - Book Two{suffix}.md")
+
+
+def test_an_outcome_file_is_accepted_in_either_spelling():
+    """What DocProof *writes* mirrors the source; what it *accepts* is either.
+    A practitioner who typed the digit for a spelled-out source has still
+    answered, and a book must not sit unread over a house-style disagreement."""
+    for source in ("Johnson - Book One", "Johnson - Book 1"):
+        for written in ("Johnson - Book Two - outcome.json",
+                        "Johnson - Book 2 - outcome.json",
+                        "Johnson — book two - outcome.json"):
+            assert naming.is_proof_outcome_name(written, source), (source, written)
+    # Still tied to the author, and still not some other file in the folder.
+    assert not naming.is_proof_outcome_name("Smith - Book Two - outcome.json",
+                                            "Johnson - Book One")
+    assert not naming.is_proof_outcome_name("Johnson - Book Two - letter.md",
+                                            "Johnson - Book One")
+
+
+def test_the_formatting_stage_is_untouched_by_the_spelling_rule():
+    """Only the numbered stages have two spellings. `book zero` is not a thing
+    the press writes, and formatting's recognizers are unchanged."""
+    assert naming.spellings_of(naming.SOURCE_STAGE) == (naming.SOURCE_STAGE,)
+    assert naming.spellings_of(naming.OUTPUT_STAGE) == (naming.OUTPUT_STAGE,)
+    assert naming.format_base("Grest - Book Original") == "Grest - book 0"
+    assert naming.is_output_name("Grest - book 0.docx") is True
+    assert naming.is_output_name("Grest - book zero.docx") is False
+    assert naming.has_source_label("Grest — Book Original.docx") is True
+
+
+def test_a_token_cannot_be_claimed_by_a_longer_word():
+    """The guard is read off each spelling's own last character — a digit may
+    not follow "Book 1", a letter may not follow "Book Original" — so no stage
+    can swallow a name that merely begins the same way. Formatting gets the
+    letter half of that for free, which is why "Book Originals" (a folder of
+    them, not the book) no longer resolves to the intake token."""
+    assert naming.format_base("Grest - Book Originals") == \
+        "Grest - Book Originals - book 0"
+    assert naming.format_base("Grest - Book Original") == "Grest - book 0"
+    assert naming.proof_base("Grest - Book Ones") == "Grest - Book Ones - Book 2"
+    assert naming.proof_base("Grest - Book One") == "Grest - Book Two"

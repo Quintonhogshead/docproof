@@ -19,6 +19,7 @@ import pytest
 
 from app.jobs import JobRunner, JobStore
 from app.settings import Paths
+from app.watch import status as statuslib
 from app.watch import tick as ticklib
 from app.watch.drive import FOLDER_MIME, GOOGLE_DOC_MIME
 from app.watch.hubspot import HubSpotAuthError
@@ -1492,3 +1493,128 @@ def test_a_finished_book_is_not_emailed_twice(tmp_path, ws, provider):
     assert second.prepped == ["Wolves.docx"]        # it was reconsidered
     assert len(provider.calls) == paid              # without re-spending
     assert len(opener.emails) == 1                  # and without a second email
+
+
+# --- what a preview says a pass would do --------------------------------------
+#
+# "Show me what a pass would do" has to speak for every automation, not just
+# formatting — and only as far as a dry run honestly can. A dry run lists a
+# folder; it does not ask HubSpot which books are flagged, because that question
+# lives inside the runners, past the read-only return.
+
+def preview_ws(**over):
+    """A flat-folder watcher with promo and the marketing plan switched on, so a
+    preview has all four automations to speak for."""
+    fields = dict(promo_enabled=True, hubspot_promo_ready_value="Ready Promo",
+                  hubspot_promo_done_value="Promo done",
+                  plan_enabled=True, hubspot_plan_property="marketing_plan",
+                  hubspot_plan_needed_value="Needed",
+                  hubspot_plan_done_value="Uploaded",
+                  proofing_enabled=True)
+    fields.update(over)
+    return hs_ws(**fields)
+
+
+def test_a_preview_itemizes_every_automation_not_just_formatting(tmp_path,
+                                                                 provider):
+    """One row per thing a pass could do to each file. A book can be a promo and
+    a plan candidate at once — they gate on different values of the dropdown —
+    so it earns a row for each rather than one row that has to choose."""
+    ws = preview_ws()
+    opener = fake_drive(folder(f_1=drive_entry("Wolves - Book Original.docx"),
+                               f_2=drive_entry("Wolves - Book 1.docx")),
+                        docx=MANUSCRIPT, hubspot={})
+
+    report = run(tmp_path, ws, opener, dry_run=True)
+
+    rows = {(name, stage) for name, stage in report.plan}
+    assert ("Wolves - Book Original.docx", "new?") in rows      # formatting
+    assert ("Wolves - Book 1.docx", "proof?") in rows           # proofing
+    # Both files are promo and plan candidates — those stages are blind to what
+    # formatting has done and gate on their own value.
+    assert ("Wolves - Book Original.docx", "promo?") in rows
+    assert ("Wolves - Book 1.docx", "promo?") in rows
+    assert ("Wolves - Book Original.docx", "plan?") in rows
+    assert ("Wolves - Book 1.docx", "plan?") in rows
+    assert provider.calls == []
+    assert not (tmp_path / "state.json").exists()
+
+
+def test_a_preview_says_so_when_it_could_not_ask_hubspot(tmp_path, provider):
+    """The honesty the gate mark buys: in flat mode the gate has not run yet, so
+    a candidate is a candidate, not a promise. A preview that said it would
+    prepare eleven books and then prepared one would be worse than none."""
+    ws = preview_ws()
+    opener = fake_drive(folder(f_1=drive_entry("Wolves - Book Original.docx")),
+                        docx=MANUSCRIPT, hubspot={})
+
+    report = run(tmp_path, ws, opener, dry_run=True)
+
+    labels = {statuslib.plain_stage(stage) for _n, stage in report.plan}
+    assert "to prepare — if HubSpot says so" in labels
+    assert "to write promo copy for — if HubSpot says so" in labels
+    assert "to write a marketing plan for — if HubSpot says so" in labels
+
+
+def test_with_the_gate_off_a_preview_promises_plainly(tmp_path, ws, provider):
+    """No gate to apply means nothing to hedge: what the folder holds is what a
+    pass would do."""
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")),
+                        docx=MANUSCRIPT)
+
+    report = run(tmp_path, ws, opener, dry_run=True)
+
+    assert report.plan == [("Wolves.docx", "new")]
+    assert statuslib.plain_stage("new") == "to prepare"
+
+
+def test_a_subfolder_preview_is_exact_because_the_gate_already_ran(tmp_path,
+                                                                   provider):
+    """`_discover` asked HubSpot who was ready before listing anything, so a
+    subfolder-mode row is not a guess and must not be hedged. Promo and the plan
+    stand aside in that mode, so a preview does not list work that cannot
+    happen."""
+    ws = preview_ws(subfolders_enabled=True, hubspot_first_property="firstname",
+                    hubspot_last_property="lastname")
+    opener = fake_drive({SUB: author_folder("Quinton Johnson"),
+                         "m-1": in_sub("Johnson - Book Original.docx")},
+                        docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener, dry_run=True)
+
+    assert ("Johnson - Book Original.docx", "new") in report.plan
+    assert not any(stage.endswith("?") for _n, stage in report.plan)
+    assert not any(stage in ("promo", "plan") for _n, stage in report.plan)
+
+
+def test_a_preview_never_adds_rows_a_real_pass_would_not_do(tmp_path, provider):
+    """The rows exist only in a preview. A real pass's `report.plan` is the
+    classification alone — promo and the plan report themselves through their
+    own lists, and inventing rows there would double-count the pass."""
+    ws = preview_ws(promo_enabled=False, plan_enabled=False)
+    opener = fake_drive(folder(f_1=drive_entry("Wolves - Book Original.docx")),
+                        docx=MANUSCRIPT, hubspot={})
+
+    dry = run(tmp_path, ws, opener, dry_run=True)
+    real = run(tmp_path, ws, opener)
+
+    assert all(stage in ("new?", "skip") for _n, stage in dry.plan)
+    assert all(not stage.endswith("?") for _n, stage in real.plan)
+    assert not any(stage in ("promo", "plan") for _n, stage in real.plan)
+
+
+def test_the_terminal_counts_every_automation_in_one_sentence():
+    """The CLI's headline is built from the same rows the table prints, so the
+    sentence and the list cannot drift."""
+    from app.watch import cli
+
+    report = ticklib.TickReport(dry_run=True, new=2, plan=[
+        ("a.docx", "new?"), ("b.docx", "new?"), ("c.docx", "proof?"),
+        ("a.docx", "promo?"), ("d.docx", "skip")])
+    assert cli._preview_counts(report) == (
+        "prepare 2 manuscript(s), proofread 1 and write promo copy for 1")
+
+    one = ticklib.TickReport(dry_run=True, plan=[("a.docx", "new")])
+    assert cli._preview_counts(one) == "prepare 1 manuscript(s)"
+    assert cli._preview_counts(ticklib.TickReport(dry_run=True)) == "do nothing"

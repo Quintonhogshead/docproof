@@ -904,3 +904,79 @@ def test_the_cli_can_set_the_proof_values(tmp_path):
 
     ws = WatchSettings.load(tmp_path)
     assert ws.hubspot_proof_done_value == "Formatting/Proofing Complete"
+
+
+# --- the spelled-out stage number ---------------------------------------------
+
+def test_a_spelled_out_book_one_is_proofread_into_a_book_two(tmp_path, galley):
+    """The press writes both. A "Book One" is discovered, read and flipped
+    exactly as a "Book 1" is — and what goes back into the folder mirrors the
+    spelling it came in with, so the author's folder keeps one house style."""
+    ws = proof_ws()
+    opener = fake_drive(folder(f_1=drive_entry("Johnson - Book One.docx")),
+                        docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_to_proof()})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.ok and report.proofed == ["Johnson - Book One.docx"]
+    assert set(uploads_in(opener)) == {
+        "Johnson - Book Two.docx", "Johnson - Book Two - letter.md",
+        "Johnson - Book Two - style-sheet.md",
+        "Johnson - Book Two - outcome.json"}
+    assert hs_props(opener)["docproof"] == "Proofing Complete"
+    assert len(patches(opener)) == 1
+    assert opener.files["f-1"]["appProperties"][PROOF_PROP] == PROOF_DONE
+
+
+def test_an_external_hand_off_lands_under_the_mirrored_name(tmp_path, galley):
+    """The practitioner writes what `naming.proof_base` says, so a "Book One"
+    source is answered by a "Book Two - outcome.json" — and DocWatch finds it."""
+    ws = proof_ws(proof_runner="external")
+    book = "Johnson - Book One.docx"
+    opener = fake_drive(folder(f_1=drive_entry(book)), docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_to_proof()})
+
+    first = run(tmp_path, ws, opener)
+    assert [n for n, _ in first.awaiting_proof] == [book]
+    assert "Johnson - Book Two - outcome.json" in first.awaiting_proof[0][1]
+
+    _hand_off(opener, {"outcome": "done", "reason": "no open items"},
+              name="Johnson - Book Two - outcome.json")
+    second = run(tmp_path, ws, opener)
+
+    assert second.proofed == [book]
+    assert hs_props(opener)["docproof"] == "Proofing Complete"
+
+
+def test_a_digit_spelled_hand_off_still_answers_a_spelled_out_source(
+        tmp_path, galley):
+    """What DocProof writes mirrors the source; what it accepts is either. A
+    practitioner who typed the digit has still answered."""
+    ws = proof_ws(proof_runner="external")
+    opener = fake_drive(folder(f_1=drive_entry("Johnson - Book One.docx")),
+                        docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_to_proof()})
+
+    run(tmp_path, ws, opener)
+    _hand_off(opener, {"outcome": "done", "reason": "clean"},
+              name="Johnson - Book 2 - outcome.json")
+    report = run(tmp_path, ws, opener)
+
+    assert report.proofed == ["Johnson - Book One.docx"]
+    assert hs_props(opener)["docproof"] == "Proofing Complete"
+
+
+def test_a_book_twelve_is_nobodys_book_one(tmp_path, galley):
+    """The guard that keeps one stage from claiming another's name: neither
+    spelling of twelve is a Book One or a Book Two."""
+    ws = proof_ws()
+    opener = fake_drive(folder(f_1=drive_entry("Johnson - Book Twelve.docx"),
+                               f_2=drive_entry("Johnson - Book 12.docx")),
+                        docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_to_proof()})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.proofed == [] and galley == []
+    assert uploads_in(opener) == {} and patches(opener) == []

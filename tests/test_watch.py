@@ -315,3 +315,19 @@ def test_the_google_token_rides_the_same_rails_as_every_other_secret():
     nothing ever offers to review a manuscript with it."""
     assert ENV_VARS["google"] == "GOOGLE_REFRESH_TOKEN"
     assert "google" not in PROVIDERS
+
+
+def test_a_spelled_out_book_one_is_the_same_answer_as_the_digit():
+    """The press writes "Book One" as often as "Book 1". Both are proofing's
+    input, so both must get proofing's answer — not `NEW_MANUSCRIPT` (which the
+    formatting stage would prepare) and not `OUTPUT` (which would hide the file
+    from the stage whose job is to read it)."""
+    for name in ("Grest - Book One.docx", "Grest — book one.docx",
+                 "Grest - Book-One.docx"):
+        assert classify(drive_file(name)) is Stage.PROOF_MANUSCRIPT, name
+    # And what proofing writes back is an output in either spelling.
+    for name in ("Grest - Book Two.docx", "Grest - Book Two - letter.md"):
+        assert classify(drive_file(name)) is Stage.OUTPUT, name
+    # A different number is neither.
+    assert classify(drive_file("Grest - Book Twelve.docx")) is \
+        Stage.NEW_MANUSCRIPT

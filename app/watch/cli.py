@@ -591,9 +591,17 @@ def cmd_once(args, home: Path) -> int:
 def _report(report: ticklib.TickReport) -> int:
     if report.dry_run:
         print(f"{report.listed} file(s) in the folder:\n")
-        for name, stage in report.plan:
-            print(f"  {_PLAIN.get(stage, stage):<22} {name}")
-        print(f"\nA real run would prepare {report.new} manuscript(s). "
+        # The label column is sized to the labels actually present rather than
+        # to a guess: "to write a marketing plan for — if HubSpot says so" is
+        # three times "to prepare", and a fixed width either wraps the long ones
+        # or leaves a canyon beside the short ones. A folder with nothing in it
+        # still needs a width, hence the default.
+        labels = [statuslib.plain_stage(stage) for _n, stage in report.plan]
+        width = max([len(label) for label in labels], default=0) + 2
+        for (name, _stage), label in zip(report.plan, labels):
+            print(f"  {label:<{width}}{name}")
+        counts = _preview_counts(report)
+        print(f"\nA real run would {counts}. "
               f"Nothing was downloaded, prepared or uploaded.")
         return OK
 
@@ -619,8 +627,31 @@ def _report(report: ticklib.TickReport) -> int:
     return OK if report.ok else PARTIAL
 
 
-# The same words the panel uses; one copy, in the library.
+# The same words the panel uses; one copy, in the library. (`plain_stage` is the
+# reader — it adds the "if HubSpot says so" a dry run owes a row whose gate it
+# could not apply — and this is kept for anything still naming the plain map.)
 _PLAIN = statuslib.PLAIN_STAGE
+
+
+def _preview_counts(report: ticklib.TickReport) -> str:
+    """"prepare 2 manuscript(s) and proofread 1" — one clause per automation
+    that has anything to do, so a dry run speaks for the whole pass rather than
+    for formatting alone. An empty pass says so in one word."""
+    kinds = [("prepare", "manuscript(s)", "new"),
+             ("proofread", "", "proof"),
+             ("write promo copy for", "", "promo"),
+             ("write a marketing plan for", "", "plan")]
+    clauses = []
+    for verb, noun, stage in kinds:
+        n = sum(1 for _name, s in report.plan
+                if statuslib.base_stage(s) == stage)
+        if n:
+            clauses.append(f"{verb} {n}" + (f" {noun}" if noun else ""))
+    if not clauses:
+        return "do nothing"
+    if len(clauses) == 1:
+        return clauses[0]
+    return ", ".join(clauses[:-1]) + " and " + clauses[-1]
 
 
 # --- what it has been doing ---------------------------------------------------

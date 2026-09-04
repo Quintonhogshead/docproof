@@ -88,7 +88,9 @@ DEFAULT_WRAPBIN = "~/galley-bin"
 #: The stage token the proofread deliverable carries in the hand-off. The house
 #: series is Book Original -> book 0 (formatting) -> Book 1 (the developmental
 #: edit) -> Book 2 (this); app/watch/naming.py owns it, and this is a re-export
-#: so the two sides of the hand-off cannot drift.
+#: so the two sides of the hand-off cannot drift. The numbered stages are
+#: written either way — a `Book One` source hands back a `Book Two` — which
+#: `naming.stage_base` decides, not this constant.
 HANDOFF_STAGE = "Book 2"
 #: Where the driver leaves its own log and ledger inside the workspace.
 DRIVER_DIR = "driver"
@@ -1136,12 +1138,14 @@ def _default_ask(subject: str, body: str, book: str) -> str:
 # --- hand-off ----------------------------------------------------------------
 
 def handoff_base(source_name: str, stage: str = HANDOFF_STAGE) -> str:
-    """``"Redding - Book 1.docx"`` -> ``"Redding - Book 2"``.
+    """``"Redding - Book 1.docx"`` -> ``"Redding - Book 2"``, and
+    ``"Redding - Book One.docx"`` -> ``"Redding - Book Two"``.
 
     Straight through ``app/watch/naming.stage_base``, so the surname is read
     exactly as the watcher reads it — dash-, case- and spacing-tolerant, and
-    tolerant of whichever stage token the source happens to carry — and the two
-    sides of the hand-off cannot disagree about what a file is called."""
+    tolerant of whichever stage token the source happens to carry — the number's
+    spelling is mirrored the same way, and the two sides of the hand-off cannot
+    disagree about what a file is called."""
     from app.watch import naming
     return naming.stage_base(Path(source_name).stem, stage)
 

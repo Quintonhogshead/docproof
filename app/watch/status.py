@@ -23,6 +23,7 @@ from . import daily
 from . import schedule as schedulelib
 from .schedule import ScheduleError
 from .settings import GOOGLE_KEY, WatchSettings
+from .stages import PREVIEW_GATED
 from .state import STATE_FILE, WatchState, last_tick
 
 log = logging.getLogger("docproof.app.watch.status")
@@ -31,9 +32,37 @@ log = logging.getLogger("docproof.app.watch.status")
 # copy, because the terminal and the panel saying different words about the
 # same file is how a support conversation goes wrong.
 PLAIN_STAGE = {"new": "to prepare", "proof": "to proofread",
+               # The two automations `classify` knows nothing about. A dry run
+               # itemizes them so "what a pass would do" speaks for every
+               # workflow, not only formatting; a real pass never emits them.
+               "promo": "to write promo copy for",
+               "plan": "to write a marketing plan for",
                "done": "already prepared",
                "failed": "needs attention", "output": "DocProof wrote this",
                "skip": "not a manuscript"}
+
+# What a row says when the dry run could not apply that stage's HubSpot gate:
+# the file is a candidate, and whether the pass acts on it is the CRM's answer,
+# not the folder's. Said out loud rather than implied — a preview that promised
+# to prepare eleven books and then prepared one would be worse than no preview.
+GATED_NOTE = " — if HubSpot says so"
+
+
+def plain_stage(stage: str) -> str:
+    """The words for one dry-run row, gate and all.
+
+    `report.plan` carries a stage value, optionally marked `PREVIEW_GATED`; this
+    is the single place that turns either into English, so the terminal and the
+    panel cannot describe the same row differently."""
+    gated = stage.endswith(PREVIEW_GATED)
+    base = base_stage(stage)
+    return PLAIN_STAGE.get(base, base) + (GATED_NOTE if gated else "")
+
+
+def base_stage(stage: str) -> str:
+    """A dry-run row's stage without its gate mark, for counting by kind."""
+    return stage[:-len(PREVIEW_GATED)] if stage.endswith(PREVIEW_GATED) else stage
+
 
 # What a file's marker means, said plainly. `marked` is the watcher's own word
 # for what it did; anything else is a job state and speaks for itself.
