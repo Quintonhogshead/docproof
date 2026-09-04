@@ -2412,6 +2412,10 @@ def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
     if result.reanchored:
         print(f"  --after-sweeps: re-anchored {result.reanchored} row(s) from "
               f"post-sweep to pre-sweep text")
+    for hit in result.artifacts:
+        print(f"  artifact scan: {hit.get('pattern')} in {hit.get('para_id')}"
+              + (f" — dropped the later row {hit.get('dropped_id')}"
+                 if hit.get("resolved") else " — UNRESOLVED"))
     findings, rejects, remapped, checked, tally = (
         result.findings, result.rejects, result.remapped, result.checked,
         result.tally)

@@ -530,27 +530,12 @@ def _norm_words(text: str) -> list[str]:
 # as a QUERY carrying the suggestion (reason `rewrite_class`), so the author
 # still sees it and nothing is lost — it just is not an edit.
 
-# Closed-class words a proofreader may insert, delete, or swap without
-# changing what a sentence says: articles, prepositions, conjunctions,
-# pronouns, determiners, auxiliaries, and the commonest adverbs of degree.
-_FUNCTION_WORDS = frozenset("""
-a an the this that these those my your his her its our their whose which what
-who whom i me you he him she it we us they them one ones oneself myself
-yourself himself herself itself ourselves themselves mine yours hers ours
-theirs
-and or but nor so yet for as if than then because although though while
-whereas unless until till since when whenever where wherever whether after
-before once
-at by in into on onto of off to from with within without about above across
-against along among around behind below beneath beside between beyond down
-during except inside like near out outside over past through throughout
-toward towards under underneath up upon via
-is am are was were be been being do does did done doing have has had having
-will would shall should can could may might must ought need dare
-not no nor never none nothing any some all both each either neither every
-few many much more most other another such very too quite rather also
-just only even still already yet again ever here there
-""".split())
+def _function_words() -> frozenset[str]:
+    """The closed-class list, shared with docproof.adjudicate's recurrence
+    seed guard so "function word" means one thing across the pipeline."""
+    from docproof.adjudicate import FUNCTION_WORDS
+    return FUNCTION_WORDS
+
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:['’][A-Za-z]+)?")
 
@@ -621,12 +606,13 @@ def rewrite_class(before: str, after: str) -> str | None:
     old_w, new_w = changes[0]
     old = old_w[0] if old_w else ""
     new = new_w[0] if new_w else ""
+    function_words = _function_words()
     if not old or not new:                   # one word inserted or deleted
         word = old or new
-        if word in _FUNCTION_WORDS:
+        if word in function_words:
             return None
         return f"{'deletes' if old else 'inserts'} {word!r}"
-    if old in _FUNCTION_WORDS and new in _FUNCTION_WORDS:
+    if old in function_words and new in function_words:
         return None
     if _same_stem(old, new):
         return None

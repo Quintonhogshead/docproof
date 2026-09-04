@@ -179,6 +179,77 @@ def _is_number_label(para, start: int, end: int) -> bool:
     return _looks_like_heading(getattr(para, "style", ""), line)
 
 
+_DOUBLED_WORD_RE = re.compile(r"\b([A-Za-z]+)[ \u00a0]+\1\b", re.IGNORECASE)
+
+
+def doubled_words(text: str) -> dict[str, int]:
+    """Each word that appears twice in a row (case-insensitive), with how
+    many times it does."""
+    out: dict[str, int] = {}
+    for m in _DOUBLED_WORD_RE.finditer(text):
+        w = m.group(1).lower()
+        out[w] = out.get(w, 0) + 1
+    return out
+
+
+def introduces_doubled_word(before: str, after: str) -> str | None:
+    """The doubled word `after` carries more of than `before` does, or None.
+    A Luna chapter-sweep proposal itself contained "and and," (Georgis,
+    2026-09-04); a fix that ships a doubled word the author did not write is
+    the artifact, whatever else it repairs. Compared as counts so a
+    deliberate doubling the original already had ("that that") passes."""
+    had = doubled_words(before)
+    for w, n in doubled_words(after).items():
+        if n > had.get(w, 0):
+            return w
+    return None
+
+
+def _word_continues(text: str, pos: int) -> bool:
+    """Whether the character at `pos` continues a word begun just before it:
+    a letter/digit, or an apostrophe that a letter follows ("apple’s")."""
+    if pos < 0 or pos >= len(text):
+        return False
+    c = text[pos]
+    if c.isalnum():
+        return True
+    return c in "’'" and pos + 1 < len(text) and text[pos + 1].isalnum()
+
+
+def anchors_midword(para_text: str, s: int, original: str,
+                    pre: int, deleted: str) -> bool:
+    """Whether a quote that anchored at `s` cuts a word in half at an edge the
+    minimal diff (`pre`, `deleted`) touches.
+
+    `import-findings` anchors by plain substring, so "our bond born" anchors
+    inside "our bond borne" and an edit to its last word splices INSIDE
+    "borne" (Georgis, 2026-09-04: it composed "was was born"). A quote may
+    still start or end mid-word when the edit sits elsewhere in it — only
+    the cut word the edit reaches is unsafe."""
+    if not original:
+        return False
+    end = s + len(original)
+    hi = pre + len(deleted)
+    # the cut word at the END of the quote
+    if original[-1].isalnum() and _word_continues(para_text, end):
+        wstart = len(original)
+        while wstart > 0 and original[wstart - 1].isalnum():
+            wstart -= 1
+        if hi > wstart or (not deleted and pre >= wstart):
+            return True
+    # the cut word at the START of the quote
+    if original[0].isalnum() and s > 0 and (
+            para_text[s - 1].isalnum()
+            or (para_text[s - 1] in "’'" and s > 1
+                and para_text[s - 2].isalnum())):
+        wend = 0
+        while wend < len(original) and original[wend].isalnum():
+            wend += 1
+        if pre < wend or (not deleted and pre <= wend):
+            return True
+    return False
+
+
 def _is_imported(f: Finding) -> bool:
     return (f.finding_id.split("-", 1)[0] in _IMPORT_ID_PREFIXES
             or f.error_type in ("imported_edit", "galley_settle"))
@@ -332,6 +403,28 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
         # byte-identical to `deleted`, so nothing changes on that path.)
         anchor = Anchor(start=start, end=end,
                         delete_text=para.text[start:end], insert_text=inserted)
+
+        # 2.4 — a quote that cuts a word in half at the edge the edit
+        # touches anchored INSIDE a longer word; applied, it would splice
+        # that word ("our bond born" over "our bond borne" -> "was was born",
+        # Georgis 2026-09-04). Refused with its own status so the report
+        # names the cause rather than filing it as a landed edit.
+        if anchors_midword(para.text, s, f.original_text, pre, deleted):
+            out.append(_status(f, "rejected_anchor_midword", anchor))
+            log.info("%s (%s): refused — the quote cuts a word at the edge "
+                     "the edit touches: %r in %r", f.finding_id, f.error_type,
+                     f.original_text[-40:], para.text[max(0, s - 10):end + 12])
+            continue
+
+        # 2.42 — a fix that ships a doubled word the paragraph did not have
+        # ("and and,") is itself the artifact, whatever else it repairs.
+        composed = para.text[:start] + inserted + para.text[end:]
+        dup = introduces_doubled_word(para.text, composed)
+        if dup is not None:
+            out.append(_status(f, "rejected_doubled_word_in_fix", anchor))
+            log.info("%s (%s): refused — the correction doubles %r: %r",
+                     f.finding_id, f.error_type, dup, inserted[:60])
+            continue
 
         # 2.45 — number labels. A number_style edit that lands on a LABEL — a
         # "Mindset Number 23", a "1)" list marker, a heading — is refused
@@ -503,7 +596,12 @@ def _oversteps(deleted: str, inserted: str, guard) -> bool:
 def _overlaps(s1: int, e1: int, s2: int, e2: int) -> bool:
     """True if two edits conflict and cannot both apply to one paragraph.
 
-    Two insertions conflict only at the same point. An insertion conflicts with
+    Two insertions conflict at the same point OR one character apart: two
+    rows inserting at the same seam — a comma after "luck" from the ladder
+    and from the fleet, ":00" from the time sweep and from the number audit —
+    compose into ",," and "7:00 :00 AM" whether their points coincide or sit
+    either side of the one space between them (Georgis, 2026-09-04). An
+    insertion conflicts with
     a replacement or deletion when its point is the span's START or lies inside
     it — the half-open range [start, end) — because both then act at the same
     offset and compose order-dependently into duplicated or garbled text:
@@ -514,8 +612,8 @@ def _overlaps(s1: int, e1: int, s2: int, e2: int) -> bool:
     the close gives "color,"), so it does not conflict. Two non-empty spans
     conflict when their intervals intersect; spans that only touch end-to-start
     (a [3, 5] beside a [5, 8]) do not."""
-    if s1 == e1 and s2 == e2:          # two insertions: only at the same point
-        return s1 == s2
+    if s1 == e1 and s2 == e2:          # two insertions: same point or adjacent
+        return abs(s1 - s2) <= 1
     if s1 == e1:                        # s1 an insertion into the s2..e2 span
         return s2 <= s1 < e2
     if s2 == e2:                        # s2 an insertion into the s1..e1 span

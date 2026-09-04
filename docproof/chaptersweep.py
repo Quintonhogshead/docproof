@@ -134,7 +134,8 @@ def propose(paragraphs: Sequence[ParagraphRef], provider, *, model: str,
     by_number: dict[int, ParagraphRef] = {
         n: p for rows in packed for n, p in rows}
     out: list[RewriteCandidate] = []
-    dropped = {"window_failed": 0, "unlocated": 0, "noop": 0, "unknown_para": 0}
+    dropped = {"window_failed": 0, "unlocated": 0, "noop": 0, "unknown_para": 0,
+               "doubled_word": 0}
     for index, rows in enumerate(packed):
         result = provider.complete_structured(
             model=model, system=system, user=_payload(rows),
@@ -163,6 +164,14 @@ def propose(paragraphs: Sequence[ParagraphRef], provider, *, model: str,
             correction = row.get("correction") or ""
             if not quote or correction == quote:
                 dropped["noop"] += 1
+                continue
+            # A proposal that itself carries a doubled word ("and and,",
+            # Georgis 2026-09-04) is the artifact; the validator would
+            # refuse it later, but a sweep should not spend a confirm call
+            # on it either.
+            from .validator import introduces_doubled_word
+            if introduces_doubled_word(quote, correction):
+                dropped["doubled_word"] += 1
                 continue
             span = _locate(para.text, quote)
             if span is None:

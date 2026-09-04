@@ -418,7 +418,9 @@ def test_overlaps_treats_a_boundary_touching_insertion_as_a_conflict():
     assert not _overlaps(8, 8, 3, 8)      # insertion abutting the span's end
     assert not _overlaps(3, 8, 8, 8)      # ...symmetric
     assert _overlaps(4, 4, 4, 4)          # two insertions at the same point
-    assert not _overlaps(4, 4, 5, 5)      # two insertions at different points
+    assert _overlaps(4, 4, 5, 5)          # ...or one char apart: the Georgis
+    assert _overlaps(5, 5, 4, 4)          #    ",," / "7:00 :00 AM" seam
+    assert not _overlaps(4, 4, 6, 6)      # two insertions genuinely apart
     assert _overlaps(3, 6, 5, 8)          # two spans that intersect
     assert not _overlaps(3, 5, 5, 8)      # two spans that only touch end-to-start
 
