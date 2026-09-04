@@ -793,3 +793,72 @@ def test_the_proofing_drawer_and_its_script_name_the_same_elements():
     # The runner's two values are the ones the API accepts, spelled in the page
     # rather than only in prose.
     assert 'value="external"' in page and 'value="app"' in page
+
+
+# --- the preview endpoint -----------------------------------------------------
+#
+# What the panel's "Show me what a pass would do" reads. The headline sentence
+# is built from these counts and the table from these rows, so both have to come
+# back from one call over one set of rows.
+
+def _preview(client, plan, **counts):
+    """Drive the endpoint with a canned dry-run report."""
+    client.app_state.watch.preview = lambda: TickReport(
+        dry_run=True, listed=len(plan), plan=plan, **counts)
+    return client.post("/api/watch/preview").json()
+
+
+def test_the_preview_counts_every_automation_the_headline_names(client):
+    configured(client)
+
+    body = _preview(client, [("a.docx", "new"), ("b.docx", "new"),
+                             ("c.docx", "proof"), ("a.docx", "promo"),
+                             ("b.docx", "plan"), ("d.docx", "skip")], new=2)
+
+    assert body["new"] == 2
+    assert body["proof"] == 1
+    assert body["promo"] == 1
+    assert body["plan_docs"] == 1
+    assert body["listed"] == 6
+
+
+def test_the_preview_counts_a_row_whose_gate_it_could_not_apply(client):
+    """The gate mark is a fact about how sure the preview is, not about what
+    kind of row it is — so a hedged row still counts toward its automation."""
+    configured(client)
+
+    body = _preview(client, [("a.docx", "new?"), ("c.docx", "proof?"),
+                             ("a.docx", "promo?"), ("b.docx", "plan?")], new=1)
+
+    assert body["new"] == 1 and body["proof"] == 1
+    assert body["promo"] == 1 and body["plan_docs"] == 1
+
+
+def test_the_preview_labels_say_when_hubspot_has_not_been_asked(client):
+    """The words live in the library, not the page, so the terminal and the
+    panel describe the same row the same way."""
+    configured(client)
+
+    body = _preview(client, [("a.docx", "new?"), ("b.docx", "promo?"),
+                             ("c.docx", "plan?"), ("d.docx", "proof?"),
+                             ("e.docx", "new")], new=2)
+
+    labels = {row["name"]: row["label"] for row in body["plan"]}
+    assert labels["a.docx"] == "to prepare — if HubSpot says so"
+    assert labels["b.docx"] == "to write promo copy for — if HubSpot says so"
+    assert labels["c.docx"] == \
+        "to write a marketing plan for — if HubSpot says so"
+    assert labels["d.docx"] == "to proofread — if HubSpot says so"
+    assert labels["e.docx"] == "to prepare"          # nothing to hedge
+
+
+def test_an_empty_preview_is_zeros_rather_than_missing_keys(client):
+    """The page reads all four counts unconditionally; a quiet folder must not
+    make the headline read "undefined"."""
+    configured(client)
+
+    body = _preview(client, [])
+
+    assert body["new"] == 0 and body["proof"] == 0
+    assert body["promo"] == 0 and body["plan_docs"] == 0
+    assert body["plan"] == []

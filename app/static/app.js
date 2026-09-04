@@ -7978,6 +7978,23 @@ $('watch-test-email').addEventListener('click', async () => {
   }
 });
 
+// The preview's headline sentence. One clause per automation that has something
+// to do — "prepare 2 manuscript(s) and proofread 1" — because the button says
+// "what a pass would do" and a pass is four workflows, not just formatting. The
+// numbers come from the endpoint, off the same rows the table below shows, so
+// the sentence and the list cannot disagree.
+function previewCounts(body) {
+  const clauses = [
+    ['prepare', ' manuscript(s)', body.new],
+    ['proofread', '', body.proof],
+    ['write promo copy for', '', body.promo],
+    ['write a marketing plan for', '', body.plan_docs],
+  ].filter(([, , n]) => n > 0).map(([verb, noun, n]) => `${verb} ${n}${noun}`);
+  if (!clauses.length) return 'do nothing';
+  if (clauses.length === 1) return clauses[0];
+  return clauses.slice(0, -1).join(', ') + ' and ' + clauses[clauses.length - 1];
+}
+
 $('watch-preview').addEventListener('click', async () => {
   const button = $('watch-preview');
   const note = $('watch-run-note');
@@ -7987,8 +8004,8 @@ $('watch-preview').addEventListener('click', async () => {
   try {
     const body = await api('/api/watch/preview', { method: 'POST' });
     renderWatchPlan(body.plan);
-    watchNote(note, `A pass would prepare ${body.new} manuscript(s). Nothing `
-      + 'was downloaded, prepared or uploaded.', 'muted');
+    watchNote(note, `A pass would ${previewCounts(body)}. Nothing was `
+      + 'downloaded, prepared or uploaded.', 'muted');
   } catch (err) {
     watchNoteWithFix(note, err.message);
   } finally {

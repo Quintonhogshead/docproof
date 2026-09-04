@@ -12,7 +12,9 @@ Three things differ from prep, and they are the whole reason this module exists.
 (the developmental edit, done by people) -> `Book 2` (this). So proofing's input
 is `<surname> - Book 1.docx` and its output is `<surname> - Book 2.*`, exactly
 the way formatting takes a `Book Original` and puts a `book 0` back in the same
-folder. `app/watch/naming.py` owns both tokens.
+folder. Either spelling of the number is read — `Book One` is the same file as
+`Book 1` — and what goes back mirrors what came in. `app/watch/naming.py` owns
+both tokens and both spellings.
 
 **There are two runners.** In `app` mode DocWatch runs the read itself, through
 the app's galley job (`app/jobs.py::_run_galley`): the practitioner wave loop,
@@ -189,7 +191,9 @@ def assess(job: Job, *, done_value: str,
 def hand_off_names(source_name: str) -> dict[str, str]:
     """The names this book's proofread is delivered under, keyed by role.
 
-    `"Johnson - Book 1.docx"` -> `"Johnson - Book 2.docx"` and its companions.
+    `"Johnson - Book 1.docx"` -> `"Johnson - Book 2.docx"` and its companions;
+    a `"Johnson - Book One.docx"` hands back `"Johnson - Book Two.*"`, because
+    the number's spelling is mirrored rather than normalised.
     One place, because two sides have to agree: DocWatch writes them here in
     `app` mode and looks for them here in `external` mode, and
     `galley/driver.py` builds the practitioner's hand-off from the same

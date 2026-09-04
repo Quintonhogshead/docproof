@@ -37,9 +37,10 @@ from .hubspot import HubSpotAuthError, HubSpotError
 from .keys import key_from_name
 from .settings import GOOGLE_KEY, HUBSPOT_KEY, WatchSettings
 from .stages import (FORMATTED, JOB_PROP, OUTPUT_PROP, PLAN_DONE, PLAN_FAILED,
-                     PLAN_PENDING, PROMO_DONE, PROMO_FAILED, PROMO_PENDING,
-                     PROOF_AWAITING, PROOF_DONE, PROOF_FAILED, PROOF_HUMAN,
-                     PROOF_PROP, PROOF_TERMINAL, SOURCE_PROP, Stage, classify,
+                     PLAN_PENDING, PREVIEW_GATED, PREVIEW_PLAN, PREVIEW_PROMO,
+                     PROMO_DONE, PROMO_FAILED, PROMO_PENDING, PROOF_AWAITING,
+                     PROOF_DONE, PROOF_FAILED, PROOF_HUMAN, PROOF_PROP,
+                     PROOF_TERMINAL, SOURCE_PROP, Stage, classify,
                      is_plan_candidate, is_promo_candidate, is_proof_candidate)
 from .state import WatchState, note_tick
 
@@ -1797,6 +1798,7 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
         # folder was made, no manuscript downloaded and no model called.
         report.new = sum(1 for _, stage in report.plan
                          if stage == Stage.NEW_MANUSCRIPT.value)
+        report.plan = _preview_rows(ws, every, report.plan)
         return report
 
     paths = Paths(root).ensure()
@@ -1844,6 +1846,54 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     # notify.maybe_notify — so the work above is never undone by a mail server.
     notify.maybe_notify(token, ws, report, opener=opener)
     return report
+
+
+def _preview_rows(ws: WatchSettings, listing: list[DriveFile],
+                  rows: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """What a dry run says a pass would do — for every automation, and only as
+    far as a dry run can honestly say it.
+
+    `classify` answers for formatting and proofing, which is what `rows` already
+    holds. Promo and the marketing plan have their own candidate tests instead
+    of a `Stage`, so their rows are added here; without them a preview claimed
+    to speak for "a pass" while describing one workflow out of four.
+
+    Two honesties, both about the gate. A dry run lists a folder; it does not
+    ask HubSpot which books are flagged — that question lives inside the
+    runners, past the read-only return above. So:
+
+    - In flat mode with the gate on, a `new` or `proof` row is a candidate, not
+      a promise: the gate runs later and may well stand the book down. Those
+      rows are marked, and `status.plain_stage` says "if HubSpot says so".
+    - In subfolder mode the gate has ALREADY run — `_discover` asked HubSpot who
+      was ready and looked only in those authors' folders — so those rows are
+      exact and are left unmarked.
+
+    Promo and the plan stand aside entirely in subfolder mode (see `run_promo`),
+    so a preview that listed them there would describe work that cannot happen.
+
+    Nothing here changes what a real pass does: `tick` returns before this on a
+    real pass, and the only caller is the dry-run branch.
+    """
+    gated = ws.hubspot_enabled and not ws.subfolders_enabled
+    if gated:
+        rows = [(name, stage + PREVIEW_GATED)
+                if stage in (Stage.NEW_MANUSCRIPT.value,
+                             Stage.PROOF_MANUSCRIPT.value)
+                else (name, stage)
+                for name, stage in rows]
+    if ws.subfolders_enabled:
+        return rows
+
+    mark = PREVIEW_GATED if ws.hubspot_enabled else ""
+    extra: list[tuple[str, str]] = []
+    if ws.promo_enabled:
+        extra += [(f.name, PREVIEW_PROMO + mark)
+                  for f in listing if is_promo_candidate(f)]
+    if ws.plan_enabled:
+        extra += [(f.name, PREVIEW_PLAN + mark)
+                  for f in listing if is_plan_candidate(f)]
+    return rows + extra
 
 
 def _drain(runner: JobRunner, state: WatchState,

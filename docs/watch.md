@@ -280,6 +280,17 @@ emailed, so the file gets uploaded or renamed rather than waiting unseen.
 the formatting stage will never prepare one, and it is never treated as an
 output to skip — which would hide proofing's own source from it.
 
+**Either spelling of the number counts.** The press writes `Johnson - Book 1`
+and `Johnson - Book One`, and both are the same file. What goes back **mirrors
+what came in**: a `Book One` is proofread into a `Book Two`, a `Book 1` into a
+`Book 2`, so an author's folder keeps one house style instead of DocProof
+imposing its own halfway through the series. Where there is nothing to mirror
+the digit is the default. Only the numbered stages have two spellings — there is
+no `book zero`.
+
+The guard against a stage claiming a neighbour's name is exact: `Book 12` and
+`Book Twelve` are neither a `Book 1` nor a `Book 2`, in any spelling.
+
 **What comes back.** Five files, in the folder the book was found in (the
 author's own subfolder, in subfolder mode), under the `Book 2` base:
 
@@ -291,11 +302,14 @@ Johnson - Book 2 - decision-log.md     every action taken, and why
 Johnson - Book 2 - outcome.json        the verdict, and the numbers behind it
 ```
 
-A file carrying a `book 0` or `Book 2` token is recognised as something DocProof
-wrote and is never picked up to work on again — by name, not only by marker,
-which matters because in external mode DocProof did not upload them. Case, an
-em- or en-dashed separator and doubled spaces are all forgiven, for the same
-reason: those names may be written on somebody's Mac.
+A file carrying a `book 0` or `Book 2`/`Book Two` token is recognised as
+something DocProof wrote and is never picked up to work on again — by name, not
+only by marker, which matters because in external mode DocProof did not upload
+them. Case, an em- or en-dashed separator and doubled spaces are all forgiven,
+for the same reason: those names may be written on somebody's Mac. And what
+DocProof *accepts* is looser than what it *writes*: a practitioner who answered
+a `Book One` with `Johnson - Book 2 - outcome.json` has still answered, and the
+book is not left unread over a house-style disagreement.
 
 **The verdict decides the CRM write, and both verdicts write.** `outcome.json`
 says either `done` or `needs_human`:
@@ -495,23 +509,45 @@ Two rehearsals, in order. Neither costs anything.
 docproof-watch once --dry-run
 ```
 
-Lists the folder and says what it would do with each file. It downloads
-nothing, prepares nothing and uploads nothing — the listing is the only
-request it makes.
+Lists the folder and says what it would do with each file — for **every**
+automation that is switched on, not just formatting. It downloads nothing,
+prepares nothing and uploads nothing; the listing is the only request it makes.
 
 ```
-6 file(s) in the folder:
+7 file(s) in the folder:
 
-  to prepare             Wolves of the Yard.docx
-  already prepared       Kestrel.docx
-  DocProof wrote this    Kestrel - book 0.docx
-  DocProof wrote this    Kestrel - book 0 - notes.md
-  not a manuscript       cover art.png
-  needs attention        Broken.docx
+  to prepare                             Wolves of the Yard.docx
+  to proofread                           Kestrel - Book One.docx
+  to write promo copy for                Kestrel - Book One.docx
+  already prepared                       Kestrel.docx
+  DocProof wrote this                    Kestrel - book 0.docx
+  DocProof wrote this                    Kestrel - book 0 - notes.md
+  not a manuscript                       cover art.png
+  needs attention                        Broken.docx
 
-A real run would prepare 1 manuscript(s). Nothing was downloaded, prepared or
-uploaded.
+A real run would prepare 1 manuscript(s), proofread 1 and write promo copy for
+1. Nothing was downloaded, prepared or uploaded.
 ```
+
+One file can earn several rows: promo and the marketing plan gate on their own
+values of the dropdown and are blind to what formatting has done, so a book can
+be a candidate for more than one thing at once.
+
+**A dry run does not ask HubSpot.** It lists a folder; whether each book is
+actually flagged is a question the gate asks inside a real pass. So in a
+flat watched folder with the gate on, the rows say so:
+
+```
+  to prepare — if HubSpot says so        Wolves of the Yard.docx
+```
+
+In per-author subfolder mode there is no such hedge, because the gate has
+already run: `_discover` asks HubSpot who is ready *before* listing anything, so
+those rows are exact. (Promo and the marketing plan stand aside in subfolder
+mode, so a preview does not list work that cannot happen.)
+
+The panel's **Show me what a pass would do** button reads the same numbers and
+the same rows.
 
 Then the full round trip with no model call:
 
