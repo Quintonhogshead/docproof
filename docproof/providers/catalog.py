@@ -13,14 +13,16 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class ModelInfo:
     id: str
-    provider: str                 # "anthropic" | "openai" | "gemini"
+    provider: str                 # "anthropic" | "openai" | "gemini" | "deepinfra"
     display: str                  # what a non-technical user reads
     blurb: str                    # one line of plain-language guidance
     input_per_mtok: float
     output_per_mtok: float
     supports_effort: bool = True  # cheap-mode hint (Anthropic output_config
                                   # .effort / OpenAI reasoning.effort)
-    batch_discount: float = 0.5   # both vendors: flat 50%, any hour of day
+    batch_discount: float = 0.5   # the three big vendors: flat 50%, any hour
+    supports_batch: bool = True   # False = no batch endpoint at all; the app
+                                  # greys out batch mode for the model
 
 
 MODELS: tuple[ModelInfo, ...] = (
@@ -70,6 +72,33 @@ MODELS: tuple[ModelInfo, ...] = (
     ModelInfo("gemini-3.1-flash-lite", "gemini", "Gemini 3.1 Flash Lite",
               "Fastest and cheapest Gemini option.",
               0.25, 1.50),
+    # --- DeepInfra (hosted open weights) ------------------------------------
+    # Open-weight models served per token. Prices from deepinfra.com model
+    # pages on 2026-09-04. Nothing here is watermarked and inputs are not
+    # retained after the call, but the text does transit a third party's GPU —
+    # the choice is the user's, and the blurbs say so. No batch endpoint.
+    # Context is what DeepInfra SERVES, which can be below the model's native
+    # window: all four here take a whole novel (131k / 262k / 1M tokens).
+    # Effort: gpt-oss takes reasoning_effort; the others are sent none, since
+    # an unsupported parameter is a 400 on this endpoint rather than ignored.
+    ModelInfo("openai/gpt-oss-120b", "deepinfra", "gpt-oss 120B (DeepInfra)",
+              "OpenAI's open model, hosted. Very cheap, reads a whole novel; "
+              "no watermark. Text leaves your machine for the call.",
+              0.037, 0.17, supports_batch=False),
+    ModelInfo("Qwen/Qwen3.6-27B", "deepinfra", "Qwen 3.6 27B (DeepInfra)",
+              "Strong open-weight writer, 256k context, hosted. "
+              "No watermark. Text leaves your machine for the call.",
+              0.32, 3.20, supports_effort=False, supports_batch=False),
+    ModelInfo("deepseek-ai/DeepSeek-V4-Flash", "deepinfra",
+              "DeepSeek V4 Flash (DeepInfra)",
+              "Cheapest frontier-class open model, 1M context, hosted. "
+              "No watermark. Text leaves your machine for the call.",
+              0.09, 0.18, supports_effort=False, supports_batch=False),
+    ModelInfo("deepseek-ai/DeepSeek-V4-Pro", "deepinfra",
+              "DeepSeek V4 Pro (DeepInfra)",
+              "Most thorough open model here, 1M context, hosted. "
+              "No watermark. Text leaves your machine for the call.",
+              1.30, 2.60, supports_effort=False, supports_batch=False),
 )
 
 BY_ID = {m.id: m for m in MODELS}
@@ -117,8 +146,12 @@ def effort_multiplier(model_id: str, effort: str | None) -> float:
 # (the write is just ordinary input), so 0.5x/1.0x. Reads dominate a repeated-
 # context run — the whole-book passes re-send the manuscript every call — so
 # dropping them (as the old estimate did) is the larger of the two errors.
-_CACHE_READ_MULT = {"anthropic": 0.10, "openai": 0.50, "gemini": 0.25}
-_CACHE_WRITE_MULT = {"anthropic": 1.25, "openai": 1.0, "gemini": 1.0}
+# DeepInfra lists a cached-input rate per model, 1/5 to 1/10 of input; 0.2 is
+# the conservative end.
+_CACHE_READ_MULT = {"anthropic": 0.10, "openai": 0.50, "gemini": 0.25,
+                    "deepinfra": 0.20}
+_CACHE_WRITE_MULT = {"anthropic": 1.25, "openai": 1.0, "gemini": 1.0,
+                     "deepinfra": 1.0}
 
 
 def estimate_cost(model_id: str, *, input_tokens: int, output_tokens: int,
@@ -135,7 +168,10 @@ def estimate_cost(model_id: str, *, input_tokens: int, output_tokens: int,
     info = lookup(model_id)
     if info is None:
         return None
-    rate = info.batch_discount if batch else 1.0
+    # A vendor with no batch endpoint has no batch price: the estimate for a
+    # batch run is the same money as running it now, which is also what the
+    # app shows beside a greyed-out batch option.
+    rate = info.batch_discount if batch and info.supports_batch else 1.0
     scaled_output = output_tokens * effort_multiplier(model_id, effort)
     read_rate = info.input_per_mtok * _CACHE_READ_MULT.get(info.provider, 0.5)
     write_rate = info.input_per_mtok * _CACHE_WRITE_MULT.get(info.provider, 1.0)

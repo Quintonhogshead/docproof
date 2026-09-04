@@ -1279,7 +1279,12 @@ def test_models_endpoint_prices_the_staged_files(client):
     by_id = {m["id"]: m for m in body["models"]}
 
     assert {m["provider"] for m in body["models"]} == {"anthropic", "openai",
-                                                       "gemini"}
+                                                       "gemini", "deepinfra"}
+    # A vendor with no batch endpoint says so, and its batch price is its
+    # run-now price, so the picker can grey out the option honestly.
+    hosted = by_id["openai/gpt-oss-120b"]
+    assert hosted["supports_batch"] is False
+    assert hosted["cost_batch"] == hosted["cost_now"]
     opus = by_id["claude-opus-5"]
     assert opus["cost_now"] > opus["cost_batch"] > 0
     # Batch is exactly half, at any hour — the UI copy depends on this.

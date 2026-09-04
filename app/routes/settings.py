@@ -26,6 +26,7 @@ class SettingsUpdate(BaseModel):
     anthropic_key: str | None = None
     openai_key: str | None = None
     gemini_key: str | None = None
+    deepinfra_key: str | None = None
     # Not an AI key: a read-only token for checking published releases.
     github_token: str | None = None
 
@@ -76,6 +77,7 @@ def register(app: FastAPI) -> None:
         for provider, value in (("anthropic", update.anthropic_key),
                                 ("openai", update.openai_key),
                                 ("gemini", update.gemini_key),
+                                ("deepinfra", update.deepinfra_key),
                                 ("github", update.github_token)):
             if value is None:
                 continue
@@ -101,7 +103,7 @@ def register(app: FastAPI) -> None:
             except SaplingError as e:
                 return {"ok": False, "message": str(e)}
             return {"ok": True, "message": "Key works."}
-        if provider not in ("anthropic", "openai", "gemini"):
+        if provider not in settingslib.PROVIDERS:
             raise HTTPException(404, "Unknown provider")
         key = settingslib.get_api_key(provider)
         if not key:

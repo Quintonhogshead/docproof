@@ -40,10 +40,14 @@ KEYCHAIN_SERVICE = "docproof"
 # that review documents, so nothing offers to review one with a Drive, HubSpot
 # or Sapling key — do not add any of those here.
 ENV_VARS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
-            "gemini": "GEMINI_API_KEY", "github": "GITHUB_TOKEN",
+            "gemini": "GEMINI_API_KEY", "deepinfra": "DEEPINFRA_API_KEY",
+            "github": "GITHUB_TOKEN",
             "google": "GOOGLE_REFRESH_TOKEN", "hubspot": "HUBSPOT_TOKEN",
             "sapling": "SAPLING_API_KEY"}
-PROVIDERS = ("anthropic", "openai", "gemini")
+# DeepInfra is the hosted-open-weights vendor: the same models a local machine
+# would run, billed per token, no watermark, no retention — but the text does
+# leave the building for the call, which the model blurbs say plainly.
+PROVIDERS = ("anthropic", "openai", "gemini", "deepinfra")
 
 # Sapling is not a review provider — no review can run on its key alone — but
 # the key serves two surfaces: the standalone test panel, and the opt-in

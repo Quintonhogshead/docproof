@@ -14,7 +14,7 @@ class APIConfig(BaseModel):
     model: str = "claude-opus-5"
     # Which vendor serves `model`. Only consulted for models the catalog
     # doesn't recognise — a known model brings its own provider.
-    provider: Literal["anthropic", "openai", "gemini"] = "anthropic"
+    provider: Literal["anthropic", "openai", "gemini", "deepinfra"] = "anthropic"
     max_retries: int = Field(default=2, ge=0)
     max_output_tokens: int = Field(default=16000, ge=1)
     prompt_caching: bool = True
@@ -43,8 +43,8 @@ class APIConfig(BaseModel):
     # Anthropic keeps the conservative number: its headroom has never been
     # measured, and a 429 that outlives max_retries is not retried — it becomes
     # a silent coverage gap, not a loud failure. Guessing there is expensive.
-    # Keyed by vendor id — "anthropic" | "openai" | "gemini". See
-    # `Config.concurrency_for`.
+    # Keyed by vendor id — "anthropic" | "openai" | "gemini" | "deepinfra".
+    # See `Config.concurrency_for`.
     concurrency_by_provider: dict[str, int] = Field(
         default_factory=lambda: {"openai": 24})
 
@@ -52,9 +52,9 @@ class APIConfig(BaseModel):
     @classmethod
     def _known_providers(cls, value):
         """A misspelled vendor would silently do nothing — the lookup would miss
-        and the floor would apply — so it is refused at load instead. Same three
+        and the floor would apply — so it is refused at load instead. Same
         names as `provider`."""
-        allowed = ("anthropic", "openai", "gemini")
+        allowed = ("anthropic", "openai", "gemini", "deepinfra")
         for name, n in value.items():
             if name not in allowed:
                 raise ValueError(

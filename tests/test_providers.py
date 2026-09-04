@@ -90,6 +90,7 @@ def test_catalog_drives_provider_selection():
     assert provider_for("claude-opus-5", "openai") == "anthropic"
     assert provider_for("gpt-5.6-terra", "anthropic") == "openai"
     assert provider_for("gemini-3.6-flash", "openai") == "gemini"
+    assert provider_for("openai/gpt-oss-120b", "openai") == "deepinfra"
     # Unknown model falls back to the configured provider.
     assert provider_for("some-future-model", "openai") == "openai"
 
@@ -98,6 +99,7 @@ def test_catalog_drives_provider_selection():
     ("claude-opus-5", "ANTHROPIC_API_KEY", "Claude"),
     ("gpt-5.6-terra", "OPENAI_API_KEY", "ChatGPT"),
     ("gemini-3.6-flash", "GEMINI_API_KEY", "Gemini"),
+    ("openai/gpt-oss-120b", "DEEPINFRA_API_KEY", "DeepInfra"),
 ])
 def test_build_provider_reports_missing_key(monkeypatch, model, var, name):
     monkeypatch.delenv(var, raising=False)
@@ -179,10 +181,26 @@ def test_cost_estimate_uses_catalog_and_batch_discount():
 
 def test_every_catalog_model_has_sane_pricing():
     from docproof.providers.catalog import MODELS
-    assert {m.provider for m in MODELS} == {"anthropic", "openai", "gemini"}
+    assert {m.provider for m in MODELS} == {"anthropic", "openai", "gemini",
+                                            "deepinfra"}
     for m in MODELS:
         assert m.input_per_mtok > 0 and m.output_per_mtok > m.input_per_mtok
         assert lookup(m.id) is m
+
+
+def test_a_vendor_without_batch_has_no_batch_discount():
+    # DeepInfra has no batch endpoint, so a "batch" estimate is the same money
+    # as running now — the app shows that beside a greyed-out batch option.
+    from docproof.providers.catalog import MODELS
+    hosted = [m for m in MODELS if m.provider == "deepinfra"]
+    assert hosted and not any(m.supports_batch for m in hosted)
+    now = estimate_cost(hosted[0].id, input_tokens=1000, output_tokens=100)
+    assert estimate_cost(hosted[0].id, input_tokens=1000, output_tokens=100,
+                         batch=True) == now
+    # The three big vendors still halve.
+    assert estimate_cost("claude-opus-5", input_tokens=1000, output_tokens=100,
+                         batch=True) == pytest.approx(
+        estimate_cost("claude-opus-5", input_tokens=1000, output_tokens=100) / 2)
 
 
 def test_estimate_cost_prices_cache_below_the_input_rate():
@@ -328,6 +346,98 @@ def test_openai_truncation_and_refusal_map_to_stop_reasons():
 
     empty = result_from_response(_openai_body(output=[]))
     assert empty.stop_reason == "error"
+
+
+# --- DeepInfra request and response shape (no network) ------------------------
+
+def _completion(**over):
+    body = {
+        "choices": [{"finish_reason": "stop",
+                     "message": {"role": "assistant",
+                                 "content": '{"findings": []}'}}],
+        "usage": {"prompt_tokens": 300, "completion_tokens": 40,
+                  "prompt_tokens_details": {"cached_tokens": 200}},
+    }
+    body.update(over)
+    return body
+
+
+def test_deepinfra_usage_splits_cached_from_fresh_input():
+    from docproof.providers.deepinfra_provider import result_from_completion
+    result = result_from_completion(_completion())
+    assert result.stop_reason == "ok"
+    assert result.parsed == {"findings": []}
+    assert result.usage.input_tokens == 100
+    assert result.usage.cache_read_input_tokens == 200
+    assert result.usage.output_tokens == 40
+
+
+def test_deepinfra_stop_reasons_and_think_blocks():
+    from docproof.providers.deepinfra_provider import result_from_completion
+
+    truncated = result_from_completion(_completion(choices=[
+        {"finish_reason": "length", "message": {"content": '{"find'}}]))
+    assert truncated.stop_reason == "max_tokens"
+
+    refused = result_from_completion(_completion(choices=[
+        {"finish_reason": "stop", "message": {"content": "",
+                                              "refusal": "no thanks"}}]))
+    assert refused.stop_reason == "refusal"
+
+    filtered = result_from_completion(_completion(choices=[
+        {"finish_reason": "content_filter", "message": {"content": ""}}]))
+    assert filtered.stop_reason == "refusal"
+
+    # An open reasoning model that echoes its thinking ahead of the object.
+    thought = result_from_completion(_completion(choices=[
+        {"finish_reason": "stop", "message": {
+            "content": '<think>\nhmm\n</think>\n{"findings": []}'}}]))
+    assert thought.stop_reason == "ok" and thought.parsed == {"findings": []}
+
+    assert result_from_completion(_completion(choices=[])).stop_reason == "error"
+    assert result_from_completion(_completion(choices=[
+        {"finish_reason": "stop", "message": {"content": "not json"}}]
+    )).stop_reason == "error"
+
+
+def test_deepinfra_request_is_chat_completions_with_strict_schema(monkeypatch):
+    monkeypatch.setenv("DEEPINFRA_API_KEY", "test-key")
+    from docproof.providers.deepinfra_provider import (BASE_URL,
+                                                       DeepInfraProvider)
+    p = DeepInfraProvider(effort="max")
+    assert str(p.client.base_url).rstrip("/") == BASE_URL
+    schema = {"type": "object", "$defs": {"F": {"type": "string"}},
+              "properties": {"f": {"$ref": "#/$defs/F"}},
+              "required": ["f"], "additionalProperties": False}
+    body = p._body(model="openai/gpt-oss-120b", system="sys", user="usr",
+                   schema=schema, schema_name="findings", max_tokens=99)
+    assert body["messages"] == [{"role": "system", "content": "sys"},
+                                {"role": "user", "content": "usr"}]
+    assert body["max_tokens"] == 99
+    fmt = body["response_format"]
+    assert fmt["type"] == "json_schema"
+    assert fmt["json_schema"]["name"] == "findings"
+    assert fmt["json_schema"]["strict"] is True
+    # Inlined: no $defs on the wire, and max collapses onto high.
+    assert "$defs" not in fmt["json_schema"]["schema"]
+    assert fmt["json_schema"]["schema"]["properties"]["f"] == {"type": "string"}
+    assert body["reasoning_effort"] == "high"
+    # A model the catalog marks as not taking an effort is sent none, and so
+    # is a model the catalog has never heard of — a 400 there, not a no-op.
+    for model in ("Qwen/Qwen3.6-27B", "some-future-model"):
+        assert "reasoning_effort" not in p._body(
+            model=model, system="s", user="u", schema=schema,
+            schema_name="x", max_tokens=1)
+
+
+def test_deepinfra_refuses_batch_before_billing(monkeypatch):
+    monkeypatch.setenv("DEEPINFRA_API_KEY", "test-key")
+    from docproof.providers.deepinfra_provider import DeepInfraProvider
+    p = DeepInfraProvider()
+    with pytest.raises(ProviderError, match="no batch mode"):
+        p.submit_batch(model="openai/gpt-oss-120b", requests=[], max_tokens=1)
+    with pytest.raises(ProviderError):
+        p.poll_batch("x")
 
 
 # --- Gemini schema and response parsing (no network) --------------------------

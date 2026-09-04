@@ -33,7 +33,10 @@ def register(app: FastAPI) -> None:
                      "input_per_mtok": m.input_per_mtok,
                      "output_per_mtok": m.output_per_mtok,
                      "supports_effort": m.supports_effort,
-                     "batch_discount": m.batch_discount}
+                     "batch_discount": m.batch_discount,
+                     # False for a vendor with no batch endpoint (DeepInfra);
+                     # the picker greys out batch mode for such a model.
+                     "supports_batch": m.supports_batch}
             if totals:
                 inp, req = totals
                 entry["cost_now"] = estimate_cost(
