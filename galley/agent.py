@@ -272,6 +272,14 @@ def fetch_awaiting(env: AgentEnv, *, opener=_open_url) -> list[AwaitingBook]:
 # --- the ledger ---------------------------------------------------------------
 
 CLAIMED, FINISHED, FAILED = "claimed", "finished", "failed"
+#: The proofread reached a verdict but the hand-off could not be uploaded:
+#: delivery is owed and retried on later polls without rerunning the book
+#: (GALLEY-005). Bounded: after MAX_DELIVERY_ATTEMPTS the book is recorded
+#: failed with `delivery: "abandoned"` and a person is told.
+PENDING_DELIVERY = "pending_delivery"
+MAX_DELIVERY_ATTEMPTS = 6
+#: Backoff between delivery retries, in poll intervals: 1, 2, 4, 8, ...
+DELIVERY_BACKOFF_BASE = 2
 
 
 @dataclass
@@ -324,21 +332,32 @@ class Ledger:
         return sorted(k for k, v in self.books.items()
                       if v.get("state") == CLAIMED)
 
+    def pending_deliveries(self) -> list[str]:
+        """Books whose verdict is written but not yet uploaded."""
+        return sorted(k for k, v in self.books.items()
+                      if v.get("state") == PENDING_DELIVERY)
+
 
 # --- naming -------------------------------------------------------------------
 
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 
 
-def slug_for(name: str, author_last: str = "") -> str:
-    """The workspace name for a book: `"Test - Book 1.docx"` -> `test-book-1`.
+def slug_for(name: str, author_last: str = "", file_id: str = "") -> str:
+    """The workspace name for a book.
 
-    Built from the file's own stem rather than a template, so the stage the
-    workspace is named for is the stage the file actually carries — a
-    `"Test - Book One.docx"` becomes `test-book-one` and nobody has to wonder
-    which of two workspaces held which spelling. A file whose stem slugs to
-    nothing falls back to the author's surname, and then to the Drive id's
-    shape, because a workspace must always have a name."""
+    With a Drive file id (the agent always has one): the author's surname
+    plus the id's last eight characters — `"Test - Book 1.docx"`, `"Test"`,
+    `"drive-1"` -> `test-drive-1` — so two different manuscripts that share
+    a filename (a re-upload, a second "Book 1") never share a workspace
+    (GALLEY-006: reseeding by filename replaced the source while keeping the
+    previous run's state). Without an id, the file's own stem names it
+    (`test-book-1`), the pre-agent shape; a stem that slugs to nothing falls
+    back to the surname, then to a placeholder, because a workspace must
+    always have a name."""
+    if file_id:
+        from galley.driver import workspace_slug
+        return workspace_slug(name, author_last, file_id)
     stem = Path(name).stem
     slug = _SLUG_STRIP.sub("-", stem.lower()).strip("-")
     if slug:
@@ -358,6 +377,7 @@ class RunReport:
     outcome: str = ""
     reason: str = ""
     skipped: list[str] = field(default_factory=list)
+    delivered: list[str] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return {"looked_at": self.looked_at, "claimed": self.claimed,
@@ -405,9 +425,14 @@ class Agent:
         report.looked_at = len(books)
         ledger = self.ledger()
 
+        # Delivery owed from an earlier poll comes first: the proofread is
+        # done, only the upload is missing, and retrying it costs no model
+        # call (GALLEY-005).
+        self.retry_deliveries(ledger, report)
+
         for book in books:
             state = ledger.state(book.file_id)
-            if state in (FINISHED, FAILED):
+            if state in (FINISHED, FAILED, PENDING_DELIVERY):
                 report.skipped.append(f"{book.name} ({state})")
                 continue
             resume = state == CLAIMED
@@ -441,7 +466,7 @@ class Agent:
         model call — because the failure this guards against is running a whole
         novel twice, and a claim written afterwards would be written after the
         crash that loses it."""
-        slug = slug_for(book.name, book.author_last)
+        slug = slug_for(book.name, book.author_last, book.file_id)
         report.claimed = book.name
         folder = self.drive_folder_override or book.folder_id
         ledger.record(book.file_id, CLAIMED, name=book.name, slug=slug,
@@ -460,6 +485,7 @@ class Agent:
                          f"sign-in on the practitioner's Mac.")
             return
 
+        self._file_id = book.file_id
         try:
             result = self.drive_book(local, slug, folder, resume=resume)
         except Exception as e:                              # noqa: BLE001
@@ -473,10 +499,19 @@ class Agent:
         outcome = getattr(result, "outcome", "needs_human")
         reason = getattr(result, "reason", "")
         report.outcome, report.reason = outcome, reason
+        uploaded = list(getattr(result, "uploaded", []) or [])
+        handoff = [Path(p) for p in (getattr(result, "handoff", []) or [])]
+        if folder and handoff and not uploaded:
+            # The driver built the hand-off but its upload failed (its reason
+            # says so): the verdict is owed to the author's folder, and the
+            # book must not be recorded finished until it is there.
+            self.owe_delivery(book, ledger, slug, folder, outcome, reason,
+                              handoff, why="the driver's upload failed")
+            return
         ledger.record(book.file_id, FINISHED if outcome == "done" else FAILED,
                       name=book.name, slug=slug, folder_id=folder,
                       outcome=outcome, reason=reason[:400],
-                      uploaded=list(getattr(result, "uploaded", []) or []))
+                      uploaded=uploaded)
         self.log(f"{book.name}: {outcome} — {reason[:200]}")
 
     def fetch_book(self, book: AwaitingBook) -> Path:
@@ -512,7 +547,7 @@ class Agent:
                 self.log(f"Resuming {slug} from the {start} phase.")
         runner = self.run_driver or _run_driver
         return runner(book=local, slug=slug, workspace_root=self.root,
-                      drive_folder_id=folder_id,
+                      drive_folder_id=folder_id, source_id=self._file_id,
                       env=self.driver_env(), upload=self.upload, **kwargs)
 
     def resume_phase(self, slug: str) -> str:
@@ -569,22 +604,133 @@ class Agent:
         retried, because a loop that retries a crash is a loop that crashes
         forever."""
         report.outcome, report.reason = "needs_human", reason
-        uploaded: list[str] = []
         try:
             files = self.write_failure(slug, book.name, reason)
-            if folder_id and files:
-                uploader = self.upload or _default_upload
-                uploaded = uploader(files, folder_id)
         except Exception as e:                              # noqa: BLE001
-            log.exception("Could not deliver the failure verdict for %s",
+            log.exception("Could not write the failure verdict for %s",
                           book.name)
-            self.log(f"{book.name} failed and its verdict could not be "
-                     f"delivered ({e}) — DocWatch will keep waiting on this "
+            ledger.record(book.file_id, FAILED, name=book.name, slug=slug,
+                          folder_id=folder_id, outcome="needs_human",
+                          reason=reason[:400], uploaded=[],
+                          delivery="unwritten", delivery_error=str(e)[:300])
+            self.log(f"{book.name} failed and its verdict could not even be "
+                     f"written ({e}) — DocWatch will keep waiting on this "
                      f"book until somebody looks at it.")
-        ledger.record(book.file_id, FAILED, name=book.name, slug=slug,
-                      folder_id=folder_id, outcome="needs_human",
-                      reason=reason[:400], uploaded=uploaded)
-        self.log(f"{book.name}: needs_human — {reason[:200]}")
+            return
+        if not folder_id or not files:
+            ledger.record(book.file_id, FAILED, name=book.name, slug=slug,
+                          folder_id=folder_id, outcome="needs_human",
+                          reason=reason[:400], uploaded=[])
+            self.log(f"{book.name}: needs_human — {reason[:200]}")
+            return
+        self.owe_delivery(book, ledger, slug, folder_id, "needs_human",
+                          reason, files, why="")
+
+    # -- delivery: owed, retried, idempotent --
+
+    def owe_delivery(self, book: AwaitingBook, ledger: Ledger, slug: str,
+                     folder_id: str, outcome: str, reason: str,
+                     files: list[Path], *, why: str) -> None:
+        """Try the upload now; on failure record a DURABLE pending delivery
+        that later polls retry without rerunning the proofread (GALLEY-005).
+        The upload is one file at a time and each success is recorded at
+        once, so a retry uploads only what is still missing — never a second
+        copy of a file that already landed."""
+        entry = ledger.claimed(book.file_id)
+        uploaded_names = dict(entry.get("uploaded_names") or {})
+        ok = self._upload_missing(files, folder_id, uploaded_names)
+        if ok:
+            ledger.record(book.file_id, FINISHED if outcome == "done" else FAILED,
+                          name=book.name, slug=slug, folder_id=folder_id,
+                          outcome=outcome, reason=reason[:400],
+                          uploaded=list(uploaded_names.values()),
+                          uploaded_names=uploaded_names, delivery="delivered")
+            self.log(f"{book.name}: {outcome} — {reason[:200]}")
+            return
+        attempts = int(entry.get("delivery_attempts") or 0) + 1
+        wait = self.poll_interval_s * (DELIVERY_BACKOFF_BASE ** (attempts - 1))
+        ledger.record(book.file_id, PENDING_DELIVERY, name=book.name,
+                      slug=slug, folder_id=folder_id, outcome=outcome,
+                      reason=reason[:400],
+                      handoff_files=[str(p) for p in files],
+                      uploaded_names=uploaded_names,
+                      uploaded=list(uploaded_names.values()),
+                      delivery_attempts=attempts,
+                      next_delivery_at=time.time() + wait,
+                      delivery_error=str(entry.get("delivery_error") or "")[:300])
+        self.log(f"{book.name}: {outcome} — the verdict is written but "
+                 f"{len(files) - len(uploaded_names)} hand-off file(s) could "
+                 f"not be uploaded{f' ({why})' if why else ''}; delivery "
+                 f"will be retried (attempt {attempts} of "
+                 f"{MAX_DELIVERY_ATTEMPTS}).")
+
+    def _upload_missing(self, files: list[Path], folder_id: str,
+                        uploaded_names: dict[str, str]) -> bool:
+        """Upload every file not yet in `uploaded_names` (name -> Drive id),
+        one at a time, recording each success in place. True when every file
+        is up."""
+        uploader = self.upload or _default_upload
+        for path in files:
+            if path.name in uploaded_names:
+                continue
+            if not path.is_file():
+                log.warning("hand-off file %s is missing; skipped", path)
+                continue
+            try:
+                ids = uploader([path], folder_id)
+            except Exception as e:                          # noqa: BLE001
+                log.warning("upload of %s failed: %s", path.name, e)
+                self._last_delivery_error = str(e)
+                return False
+            uploaded_names[path.name] = str(ids[0]) if ids else ""
+        return all(p.name in uploaded_names for p in files if p.is_file())
+
+    _last_delivery_error: str = ""
+    _file_id: str = ""
+
+    def retry_deliveries(self, ledger: Ledger, report: RunReport,
+                         *, now: float | None = None) -> None:
+        """Retry every pending delivery whose backoff has elapsed. A delivery
+        past MAX_DELIVERY_ATTEMPTS is abandoned — recorded failed with
+        `delivery: "abandoned"` so a person puts the files in the folder by
+        hand — never retried forever."""
+        clock = time.time() if now is None else now
+        for file_id in ledger.pending_deliveries():
+            entry = ledger.claimed(file_id)
+            if float(entry.get("next_delivery_at") or 0) > clock:
+                continue
+            files = [Path(p) for p in (entry.get("handoff_files") or [])]
+            folder = str(entry.get("folder_id") or "")
+            name = str(entry.get("name") or file_id)
+            outcome = str(entry.get("outcome") or "needs_human")
+            attempts = int(entry.get("delivery_attempts") or 0)
+            if attempts >= MAX_DELIVERY_ATTEMPTS:
+                ledger.record(file_id, FAILED, delivery="abandoned")
+                self.log(f"{name}: delivery abandoned after {attempts} "
+                         f"attempt(s) — put {len(files)} hand-off file(s) in "
+                         f"folder {folder} by hand.")
+                report.skipped.append(f"{name} (delivery abandoned)")
+                continue
+            uploaded_names = dict(entry.get("uploaded_names") or {})
+            if self._upload_missing(files, folder, uploaded_names):
+                ledger.record(file_id, FINISHED if outcome == "done" else FAILED,
+                              uploaded=list(uploaded_names.values()),
+                              uploaded_names=uploaded_names,
+                              delivery="delivered")
+                self.log(f"{name}: delivered on retry {attempts + 1} "
+                         f"({outcome}).")
+                report.delivered.append(name)
+                continue
+            attempts += 1
+            wait = self.poll_interval_s * (DELIVERY_BACKOFF_BASE ** (attempts - 1))
+            ledger.record(file_id, PENDING_DELIVERY,
+                          uploaded_names=uploaded_names,
+                          uploaded=list(uploaded_names.values()),
+                          delivery_attempts=attempts,
+                          next_delivery_at=clock + wait,
+                          delivery_error=self._last_delivery_error[:300])
+            self.log(f"{name}: delivery retry {attempts} failed; next in "
+                     f"{wait / 60:.0f} min.")
 
     def write_failure(self, slug: str, source_name: str,
                       reason: str) -> list[Path]:
@@ -629,7 +775,8 @@ class Agent:
                 "ledger": str(self.ledger_path),
                 "app": self.env.awaiting_url,
                 "books": ledger.books,
-                "pending": ledger.pending()}
+                "pending": ledger.pending(),
+                "pending_deliveries": ledger.pending_deliveries()}
 
 
 def _state_index(state: str) -> int:
@@ -665,6 +812,7 @@ def _run_driver(**kwargs: Any) -> Any:
     from galley.driver import Driver
 
     upload = kwargs.pop("upload", None)
+    kwargs.setdefault("on_source_change", "revise")
     driver = Driver(approve="auto", mechanical_only=True, **kwargs)
     if upload is not None:
         driver.upload = upload

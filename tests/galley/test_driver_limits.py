@@ -150,10 +150,15 @@ def test_a_phase_at_its_turn_cap_ends_the_run(book, tmp_path):
     assert "turn cap of 120" in result.reason
 
 
-def test_the_turn_cap_is_read_off_the_log():
+def test_the_turn_cap_is_read_off_the_transcript_not_the_header():
     assert gd.detect_turn_cap("Reached max turns (100)")
     assert gd.detect_turn_cap("error: maximum turns exceeded")
     assert not gd.detect_turn_cap("wrote runs/ladder/findings.json")
+    # GALLEY-003: the driver's own header names the cap; that is not the
+    # session hitting it.
+    assert not gd.detect_turn_cap(
+        "# galley driver: phase sweeps at t (max-turns 120, timeout 2.0h)\n"
+        "wrote runs/sweeps.txt")
 
 
 # --- the settle policy -------------------------------------------------------

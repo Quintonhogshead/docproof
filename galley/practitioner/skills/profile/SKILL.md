@@ -33,6 +33,16 @@ book.
    proposals for the plan gate (`docproof sweep --rule` dry-run gives you the
    canonical-form check for free — quotes are already curled post-normalization,
    so target the canonical form).
+1b. **Chapter/part label map ($0) — and the renumber rows.** `galley
+   profile` lists every "Chapter N"/"Part N" line as written (`chapter_labels`)
+   and, when any is out of sequence or style, the import-findings rows that
+   make the sequence continuous in the dominant style
+   (`chapter_label_rows`; `--chapter-rows runs/chapter_rows.json` writes
+   them). Labels are MECHANICS, not facts (Quinton, 2026-09-04): a gap
+   (Fifteen, Seventeen…), a mangled number ("Twenty-Thirty"), "PART 3" beside
+   "PART ONE" — import the rows as tracked heading edits, note the renumbering
+   once in the letter, never query the author. The fact guards (settle, the
+   flights judge) stand down on label paragraphs.
 3b. **Number extraction ($0) — every number, always.** Grep the canonical
    text for every numeral (`\d`) and every spelled number (one … one
    hundred, thousand, million, ordinals, `half`/`dozen`) and write each hit

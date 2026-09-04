@@ -1026,7 +1026,11 @@ def findings_from_accepted(accepted: Sequence[tuple[Cluster, "_Verdict"]],
                       if rationale else
                       f'"{cluster.original}" -> "{v.chosen_text}" '
                       f'({"/".join(lenses)})')
-        fact = fact_change(cluster.original, v.chosen_text)
+        # A chapter/part label's number is mechanics, not a fact (Quinton,
+        # 2026-09-04): renumbering a heading ships as a tracked edit.
+        from .chapter_labels import is_chapter_label
+        fact = (None if is_chapter_label(cluster.sentence or quote)
+                else fact_change(cluster.original, v.chosen_text))
         force_query = fact is not None
         if force_query:
             demoted += 1

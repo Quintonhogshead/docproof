@@ -149,6 +149,24 @@ def test_walk_reads_respect_the_char_budget():
 
 # --- certify hooks ------------------------------------------------------------
 
+
+def _bind(run, *names):
+    """A tiny deliverable beside the artifacts, and each named artifact
+    stamped with its fingerprint — the binding certify now requires
+    (GALLEY-002) before a verify record counts as evidence."""
+    import docx as _docx
+    from galley.verify import build_fingerprints
+    d = _docx.Document()
+    d.add_paragraph("Bound text.")
+    d.save(run / "book - Atmosphere Press Proofreader.docx")
+    fp = build_fingerprints(run)
+    for name in names:
+        payload = json.loads((run / name).read_text("utf-8"))
+        payload.update(accepted_sha256=fp["accepted_sha256"],
+                       build_sha256=fp["build_sha256"])
+        (run / name).write_text(json.dumps(payload), "utf-8")
+
+
 def test_certify_change_verify_fails_on_a_recorded_problem(tmp_path):
     (tmp_path / "change_verify.json").write_text(json.dumps({
         "applied_edits": 10,
@@ -158,10 +176,15 @@ def test_certify_change_verify_fails_on_a_recorded_problem(tmp_path):
     assert check.status == "fail" and "voice_damage" in check.detail
 
 
-def test_certify_change_verify_passes_when_clean_and_skips_when_absent(tmp_path):
+def test_certify_change_verify_passes_when_clean_and_bound_skips_when_absent(
+        tmp_path):
     assert _certify_change_verify(tmp_path).status == "skip"
     (tmp_path / "change_verify.json").write_text(
         json.dumps({"applied_edits": 5, "problems": []}), encoding="utf-8")
+    # clean but bound to no build: not evidence (GALLEY-002)
+    unbound = _certify_change_verify(tmp_path)
+    assert unbound.status == "fail" and "binding" in unbound.detail
+    _bind(tmp_path, "change_verify.json")
     assert _certify_change_verify(tmp_path).status == "pass"
 
 
@@ -181,6 +204,7 @@ def test_certify_finished_walk_fails_on_any_unsettled_residual(tmp_path):
                                        None, "", "", "unresolved_after_1",
                                        "deterministic", para_id="p1"))
     st.save(tmp_path)
+    _bind(tmp_path, "finished_walk.json")
     assert _certify_finished_walk(tmp_path).status == "pass"
 
 

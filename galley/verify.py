@@ -29,7 +29,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from docproof.models import Usage
 
@@ -400,6 +400,11 @@ _LOSSES: list[tuple[str, str, str]] = []
 # finished_walk.json as `unread_paragraphs` so the next verb (a --paragraphs
 # re-read, or settle) can see the hole instead of taking silence for clean.
 UNREAD: list[str] = []
+# The change-verifier batches the last run could not read after their retry:
+# [{"index": n, "para_ids": [...], "edits": k}]. Written into
+# change_verify.json as `unread_batches`; certify refuses to pass a record
+# with any (GALLEY-002: an unread batch is not a clean read).
+UNREAD_BATCHES: list[dict[str, Any]] = []
 
 
 def _ask_with_retry(provider, *, model: str, system: str, user: str,
@@ -456,6 +461,7 @@ def verify_changes(edits: Sequence[dict[str, Any]], accepted: dict[str, str],
     problems: list[ChangeProblem] = []
     edits = list(edits)
     batches = _chunks(list(range(len(edits))), batch_size)
+    UNREAD_BATCHES.clear()
 
     def fetch(numbered):
         n, batch_idx = numbered
@@ -485,6 +491,9 @@ def verify_changes(edits: Sequence[dict[str, Any]], accepted: dict[str, str],
                         "edit(s) unread this batch", result.stop_reason,
                         f": {result.error}" if result.error else "", len(batch))
             _LOSSES.append(("changes", result.stop_reason, result.error or ""))
+            UNREAD_BATCHES.append({
+                "index": n, "edits": len(batch),
+                "para_ids": sorted({str(e.get("para_id", "")) for e in batch})})
             continue
         for row in (result.parsed or {}).get("problems", []):
             if not isinstance(row, dict):
@@ -691,37 +700,165 @@ def verify_delta(run_dir: str | Path, para_ids: Sequence[str], provider,
                            ran_walk=run_walk)
 
 
+def accepted_fingerprint(accepted: Mapping[str, str]) -> str:
+    """One hash over the ACCEPTED text, paragraph by paragraph — the identity
+    of "the document version that was verified". Comments and margin queries
+    do not change it; any tracked edit does. Certify compares a verify
+    artifact's recorded fingerprint with the deliverable's current one
+    (GALLEY-002: document changes invalidate verification evidence)."""
+    h = hashlib.sha256()
+    for pid in sorted(accepted):
+        h.update(pid.encode("utf-8"))
+        h.update(b"\x1f")
+        h.update((accepted[pid] or "").encode("utf-8"))
+        h.update(b"\x1e")
+    return h.hexdigest()
+
+
+def paragraph_fingerprints(accepted: Mapping[str, str]) -> dict[str, str]:
+    """sha256 per accepted paragraph, for the per-paragraph coverage record."""
+    return {pid: hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:16]
+            for pid, text in accepted.items()}
+
+
+def build_fingerprints(run_dir: str | Path) -> dict[str, Any]:
+    """The build identity a verify artifact is bound to: the deliverable's
+    file hash and its accepted-text fingerprint, plus the per-paragraph
+    fingerprints. Empty when there is no deliverable."""
+    path = deliverable_docx(run_dir)
+    if path is None:
+        return {}
+    from galley.manifest import sha256_file
+    _orig, accepted = paragraph_views(run_dir)
+    return {"build_sha256": sha256_file(path),
+            "accepted_sha256": accepted_fingerprint(accepted),
+            "paragraph_sha256": paragraph_fingerprints(accepted)}
+
+
+def _load_artifact(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _merge_rows(old_rows: list, new_rows: list, para_ids: set[str],
+                key: str) -> list:
+    """Rows for paragraphs OUTSIDE the re-read keep their previous verdicts;
+    rows for the re-read paragraphs are replaced by the new read's."""
+    kept = [r for r in old_rows
+            if isinstance(r, dict) and str(r.get(key, "")) not in para_ids]
+    return kept + list(new_rows)
+
+
 def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
                     walk: VerifyRunResult, *, model: str, engine: str,
                     usage_changes: Usage, usage_walk: Usage,
                     applied: int, paragraphs: int,
-                    para_ids: Sequence[str] | None = None) -> tuple[Path, Path]:
+                    para_ids: Sequence[str] | None = None,
+                    merge: bool = False) -> tuple[Path, Path]:
     """Write change_verify.json and finished_walk.json in the shape the CLI
-    writes and certify reads (generated_at, ran/reason, cost). Shared by the
-    `galley verify` verb and the settle loop's fresh sweep."""
+    writes and certify reads (generated_at, ran/reason, cost, coverage, and
+    the BUILD BINDING: `build_sha256` / `accepted_sha256` /
+    `paragraph_sha256` of the deliverable the read was made against).
+
+    `merge=True` is a partial re-read (`--paragraphs`, or settle's delta): the
+    existing artifact's rows for paragraphs outside `para_ids` are kept, the
+    re-read paragraphs' rows are replaced, `unread_*` shrink by what was read
+    successfully and grow by what was lost, and `ran`/`reason` are NEVER
+    upgraded by a read that read nothing (GALLEY-002: settlement cannot turn
+    a failed read into a successful one). The binding is stamped to the
+    current build only when nothing is left unread or unverified; otherwise
+    the previous binding stands and certify says what is missing.
+
+    Shared by the `galley verify` verb and the settle loop."""
     from datetime import datetime, timezone
 
     from docproof.contract import build_envelope
     now = datetime.now(timezone.utc).isoformat()
     run = Path(run_dir)
     run.mkdir(parents=True, exist_ok=True)
-    cv = {"generated_at": now, "results_dir": str(run), "model": model,
-          "engine": engine, "paragraphs_verified": list(para_ids or []) or None,
-          "ran": changes.ran_changes, "reason": changes.reason,
-          "applied_edits": applied,
-          "problems": [p.to_json() for p in changes.problems],
-          "cost": build_envelope(findings=(), usage=usage_changes,
-                                 fallback_model=model)["cost"]}
-    fw = {"generated_at": now, "results_dir": str(run), "model": model,
-          "engine": engine, "paragraphs_verified": list(para_ids or []) or None,
-          "ran": walk.ran_walk, "reason": walk.reason,
-          "paragraphs": paragraphs,
-          "residuals": [r.to_json() for r in walk.residuals],
-          "unread_paragraphs": list(UNREAD),
-          "cost": build_envelope(findings=(), usage=usage_walk,
-                                 fallback_model=model)["cost"]}
     cv_path = run / "change_verify.json"
     fw_path = run / "finished_walk.json"
+    ids = {str(p) for p in (para_ids or [])}
+    fp = build_fingerprints(run)
+    old_cv = _load_artifact(cv_path) if merge else {}
+    old_fw = _load_artifact(fw_path) if merge else {}
+
+    # -- change verifier ------------------------------------------------------
+    problems = [p.to_json() for p in changes.problems]
+    unread_batches = list(UNREAD_BATCHES)
+    if merge and old_cv:
+        problems = _merge_rows(old_cv.get("problems") or [], problems, ids,
+                               "para_id")
+        # a previously unread batch whose paragraphs were all re-read is
+        # covered now; a batch lost this time is added
+        prior = [b for b in (old_cv.get("unread_batches") or [])
+                 if isinstance(b, dict)
+                 and not set(b.get("para_ids") or []) <= ids]
+        unread_batches = prior + unread_batches
+    ran_changes = changes.ran_changes or bool(merge and old_cv.get("ran"))
+    reason_cv = changes.reason if changes.ran_changes else \
+        (old_cv.get("reason") or changes.reason)
+    if merge and old_cv and not changes.ran_changes and old_cv.get("ran"):
+        # a delta that read nothing keeps the previous verdicts whole
+        problems = old_cv.get("problems") or []
+    cv = {**old_cv, "generated_at": now, "results_dir": str(run),
+          "model": model, "engine": engine,
+          "paragraphs_verified": sorted(ids) or None,
+          "ran": ran_changes, "reason": reason_cv,
+          "applied_edits": applied, "problems": problems,
+          "unread_batches": unread_batches,
+          "cost": build_envelope(findings=(), usage=usage_changes,
+                                 fallback_model=model)["cost"]}
+    cv.pop("settled", None)
+
+    # -- finished-text walk ---------------------------------------------------
+    residuals = [r.to_json() for r in walk.residuals]
+    unread = list(UNREAD)
+    if merge and old_fw:
+        residuals = _merge_rows(old_fw.get("residuals") or [], residuals, ids,
+                                "para_id")
+        read_ok = ids - set(unread)
+        prior_unread = [p for p in (old_fw.get("unread_paragraphs") or [])
+                        if p not in read_ok]
+        unread = sorted(set(prior_unread) | set(unread))
+    ran_walk = walk.ran_walk or bool(merge and old_fw.get("ran"))
+    reason_fw = walk.reason if walk.ran_walk else \
+        (old_fw.get("reason") or walk.reason)
+    if merge and old_fw and not walk.ran_walk and old_fw.get("ran"):
+        residuals = old_fw.get("residuals") or []
+    fw = {**old_fw, "generated_at": now, "results_dir": str(run),
+          "model": model, "engine": engine,
+          "paragraphs_verified": sorted(ids) or None,
+          "ran": ran_walk, "reason": reason_fw,
+          "paragraphs": paragraphs, "residuals": residuals,
+          "unread_paragraphs": unread,
+          "cost": build_envelope(findings=(), usage=usage_walk,
+                                 fallback_model=model)["cost"]}
+    fw.pop("settled", None)
+
+    # -- the binding ----------------------------------------------------------
+    for payload, complete in ((cv, ran_changes and not unread_batches),
+                              (fw, ran_walk and not unread)):
+        unverified = [p for p in (payload.get("unverified_paragraphs") or [])
+                      if p not in ids] if merge else []
+        payload["unverified_paragraphs"] = unverified
+        if fp and complete and not unverified and (not merge or ids or
+                                                   payload.get("ran")):
+            # A full read, or a partial one that leaves nothing unread and
+            # nothing unverified: the artifact now describes THIS build.
+            if not merge or not payload.get("accepted_sha256") or ids:
+                payload["build_sha256"] = fp["build_sha256"]
+                payload["accepted_sha256"] = fp["accepted_sha256"]
+        if fp:
+            per = dict(payload.get("paragraph_sha256") or {}) if merge else {}
+            read = ids if merge else set(fp["paragraph_sha256"])
+            for pid in read:
+                if pid in fp["paragraph_sha256"] and pid not in unread:
+                    per[pid] = fp["paragraph_sha256"][pid]
+            payload["paragraph_sha256"] = per
     cv_path.write_text(json.dumps(cv, indent=2, ensure_ascii=False),
                        encoding="utf-8")
     fw_path.write_text(json.dumps(fw, indent=2, ensure_ascii=False),
@@ -729,11 +866,31 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
     return cv_path, fw_path
 
 
+def mark_unverified(run_dir: str | Path, para_ids: Sequence[str]) -> None:
+    """Record that `para_ids` changed AFTER their last read and were not read
+    again — what a settle round leaves behind when it has no engine to
+    re-verify with. Certify refuses to pass an artifact carrying any."""
+    run = Path(run_dir)
+    ids = sorted({str(p) for p in para_ids})
+    if not ids:
+        return
+    for name in ("change_verify.json", "finished_walk.json"):
+        path = run / name
+        payload = _load_artifact(path)
+        if not payload:
+            continue
+        have = set(payload.get("unverified_paragraphs") or [])
+        payload["unverified_paragraphs"] = sorted(have | set(ids))
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
+                        encoding="utf-8")
+
+
 __all__ = [
     "ChangeProblem", "ResidualFinding", "VerifyRunResult", "accepted_text",
     "write_artifacts",
     "problem_id", "residual_id", "verify_delta", "MAX_RESIDUALS_PER_READ",
-    "UNREAD",
+    "UNREAD", "UNREAD_BATCHES", "accepted_fingerprint", "build_fingerprints",
+    "paragraph_fingerprints", "mark_unverified",
     "applied_edits", "deliverable_docx", "paragraph_views", "verify_changes",
     "walk_finished_text", "verify_run", "MAX_PROBLEMS", "MAX_RESIDUALS",
 ]

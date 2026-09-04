@@ -331,9 +331,26 @@ class Check:
     name: str
     status: str          # "pass" | "fail" | "skip" | "warn" (never blocks)
     detail: str = ""
+    # A REQUIRED check must PASS for the certificate to pass: a skip is
+    # missing evidence, not a free pass (GALLEY-001 — certify printed eight
+    # [skip] lines and PASSED a build nothing had verified). Optional checks
+    # (two-author attribution on a one-lane run, intent zones when none are
+    # declared) keep their honest skip.
+    required: bool = False
 
-    def to_json(self) -> dict[str, str]:
-        return {"name": self.name, "status": self.status, "detail": self.detail}
+    def to_json(self) -> dict[str, Any]:
+        return {"name": self.name, "status": self.status,
+                "detail": self.detail, "required": self.required}
+
+
+# The delivery evidence a certificate cannot pass without: the two verify
+# gates, the settlement, the recorded outcome, and the run's state machine.
+MANDATORY_CHECKS = ("change verifier", "finished-text walk",
+                    "residual settlement", "outcome", "run state")
+
+
+def _required(check: Check) -> Check:
+    return Check(check.name, check.status, check.detail, required=True)
 
 
 @dataclass
@@ -345,13 +362,20 @@ class Certificate:
         return [c for c in self.checks if c.status == "fail"]
 
     @property
+    def missing(self) -> list[Check]:
+        """Required checks that did not PASS (skipped, warned, or failed):
+        what stands between this run and delivery."""
+        return [c for c in self.checks if c.required and c.status != "pass"]
+
+    @property
     def passed(self) -> bool:
-        return not self.failed
+        return not self.failed and not self.missing
 
     def to_json(self) -> dict[str, Any]:
         return {"passed": self.passed,
                 "checks": [c.to_json() for c in self.checks],
-                "failed": len(self.failed)}
+                "failed": len(self.failed),
+                "missing": [c.name for c in self.missing]}
 
 
 def _load_json(path: Path) -> Any | None:
@@ -500,7 +524,7 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
 
     # 7. Run state machine, if present — a delivery certificate expects the run
     # to have reached at least the audited state.
-    cert.checks.append(_certify_run_state(run))
+    cert.checks.append(_required(_certify_run_state(run)))
 
     # 8. Text hygiene over the delivered .docx itself: no double spaces, no
     # paragraph-trailing whitespace. The Johnson run shipped 84 double spaces
@@ -520,16 +544,16 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
     # settlement record fails delivery (run `galley settle`); a settled record
     # passes; no record skips loudly (run `galley verify`) so an unread
     # deliverable never reads as a certified-clean one.
-    cert.checks.append(_certify_change_verify(run))
-    cert.checks.append(_certify_finished_walk(run))
+    cert.checks.append(_required(_certify_change_verify(run)))
+    cert.checks.append(_required(_certify_finished_walk(run)))
 
     # 10. Residual settlement (I1/I7): every finding in a terminal state, and
     # every residual/problem the verify gates raised carrying a settlement
     # record. Certify is the only definition of done.
     if envelope is not None:
         cert.checks.append(_certify_terminal_states(envelope))
-    cert.checks.append(_certify_settlement(run))
-    cert.checks.append(_certify_outcome(run))
+    cert.checks.append(_required(_certify_settlement(run)))
+    cert.checks.append(_required(_certify_outcome(run)))
 
     # 11. Scope. An approval that declares mechanical-only is a promise about
     # WHAT was done, not only what it cost; certify is where that promise is
@@ -655,6 +679,64 @@ def _certify_outcome(run: Path) -> Check:
     return Check("outcome", "pass", f"{oc.outcome}: {oc.reason[:160]}")
 
 
+def _binding_problem(run: Path, artifact: str, payload: dict[str, Any]
+                     ) -> str:
+    """Why a verify artifact does not describe THIS deliverable, or "".
+
+    GALLEY-002: a record whose read failed, that left paragraphs or edit
+    batches unread, that names paragraphs changed after their last read, or
+    that was made against a different accepted text is not evidence for the
+    build in the run directory. A record with no binding at all is an older
+    artifact (or a hand-planted one) and is refused too — re-run `galley
+    verify`, which stamps one."""
+    unread = [p for p in (payload.get("unread_paragraphs") or []) if p]
+    if unread:
+        return (f"{len(unread)} paragraph(s) stayed unread ({', '.join(unread[:5])}"
+                f"{'…' if len(unread) > 5 else ''}) — re-run `galley verify "
+                f"--paragraphs` on them")
+    batches = [b for b in (payload.get("unread_batches") or [])
+               if isinstance(b, dict)]
+    if batches:
+        return (f"{len(batches)} change-verifier batch(es) stayed unread "
+                f"({sum(int(b.get('edits', 0) or 0) for b in batches)} "
+                f"edit(s)) — re-run `galley verify`")
+    dirty = [p for p in (payload.get("unverified_paragraphs") or []) if p]
+    if dirty:
+        return (f"{len(dirty)} paragraph(s) changed after their last read "
+                f"and were not re-read ({', '.join(dirty[:5])}"
+                f"{'…' if len(dirty) > 5 else ''}) — re-run `galley verify "
+                f"--paragraphs` (or settle with an engine)")
+    recorded = str(payload.get("accepted_sha256") or "")
+    if not recorded:
+        return (f"{artifact} carries no build binding (accepted_sha256) — "
+                f"re-run `galley verify` on this build")
+    try:
+        from galley.verify import build_fingerprints
+        fp = build_fingerprints(run)
+    except Exception as e:                               # noqa: BLE001
+        return f"the deliverable could not be fingerprinted ({e})"
+    if not fp:
+        return "no deliverable .docx to bind the verification to"
+    if fp["accepted_sha256"] != recorded:
+        return (f"{artifact} verified a different accepted text "
+                f"({recorded[:12]}… vs this build's "
+                f"{fp['accepted_sha256'][:12]}…) — the deliverable changed "
+                f"after verify; re-run `galley verify`")
+    return ""
+
+
+def _pass_if_bound(run: Path, artifact: str, name: str,
+                   payload: dict[str, Any], detail: str) -> Check:
+    """The verdict is clean (or fully settled): it PASSES only if the record
+    is complete and bound to this build (see _binding_problem); an unsettled
+    problem is reported ahead of a binding gap, because it is the more useful
+    thing to fix first."""
+    bound = _binding_problem(run, artifact, payload)
+    if bound:
+        return Check(name, "fail", bound)
+    return Check(name, "pass", detail)
+
+
 def _certify_change_verify(run: Path) -> Check:
     """Read change_verify.json (from `galley verify`): the change verifier's
     verdict on every applied edit. Any recorded problem fails delivery."""
@@ -665,13 +747,13 @@ def _certify_change_verify(run: Path) -> Check:
                      "every applied edit for meaning/grammar/voice damage")
     stale = _is_stale(run, "change_verify.json", payload)
     if stale:
-        return Check("change verifier", "skip", f"{stale}: {_STALE}")
+        return Check("change verifier", "fail", f"{stale}: {_STALE}")
     # `galley verify` records whether this gate actually ran (`--walk-only`
     # writes the file with ran: false and no problems, which is NOT a clean
     # read). Absent `ran` is an older record that always ran both gates.
     if payload.get("ran") is False:
         why = payload.get("reason") or "verify ran with --walk-only"
-        return Check("change verifier", "skip",
+        return Check("change verifier", "fail",
                      f"{why}; change verifier did not run — re-run `galley "
                      f"verify` without --walk-only before delivery")
     problems = [p for p in (payload.get("problems") or []) if isinstance(p, dict)]
@@ -686,12 +768,12 @@ def _certify_change_verify(run: Path) -> Check:
                          f"unsettled ("
                          + ", ".join(f"{v}={n}" for v, n in counts.most_common())
                          + ") — run `galley settle`; see change_verify.json")
-        return Check("change verifier", "pass",
-                     f"{len(problems)} flagged edit(s), every one settled "
-                     f"(see settlement.json)")
-    return Check("change verifier", "pass",
-                 f"{payload.get('applied_edits', 0)} applied edit(s) re-read, "
-                 f"no meaning/grammar/voice damage")
+        return _pass_if_bound(run, "change_verify.json", "change verifier",
+                              payload, f"{len(problems)} flagged edit(s), "
+                              f"every one settled (see settlement.json)")
+    return _pass_if_bound(run, "change_verify.json", "change verifier", payload,
+                          f"{payload.get('applied_edits', 0)} applied edit(s) "
+                          f"re-read, no meaning/grammar/voice damage")
 
 
 def _certify_finished_walk(run: Path) -> Check:
@@ -705,10 +787,10 @@ def _certify_finished_walk(run: Path) -> Check:
                      "the accepted text for residual errors")
     stale = _is_stale(run, "finished_walk.json", payload)
     if stale:
-        return Check("finished-text walk", "skip", f"{stale}: {_STALE}")
+        return Check("finished-text walk", "fail", f"{stale}: {_STALE}")
     if payload.get("ran") is False:
         why = payload.get("reason") or "verify ran with --changes-only"
-        return Check("finished-text walk", "skip",
+        return Check("finished-text walk", "fail",
                      f"{why}; finished-text walk did not run — re-run `galley "
                      f"verify` without --changes-only before delivery")
     residuals = [r for r in (payload.get("residuals") or []) if isinstance(r, dict)]
@@ -721,11 +803,11 @@ def _certify_finished_walk(run: Path) -> Check:
                          f"{len(open_res)} unsettled residual(s) of "
                          f"{len(residuals)} ({highs} high) — run `galley "
                          f"settle`; see finished_walk.json")
-        return Check("finished-text walk", "pass",
-                     f"{len(residuals)} residual(s), every one settled "
-                     f"(see settlement.json)")
-    return Check("finished-text walk", "pass",
-                 "accepted text read, no residual errors")
+        return _pass_if_bound(run, "finished_walk.json", "finished-text walk",
+                              payload, f"{len(residuals)} residual(s), every "
+                              f"one settled (see settlement.json)")
+    return _pass_if_bound(run, "finished_walk.json", "finished-text walk",
+                          payload, "accepted text read, no residual errors")
 
 
 # How much of a hygiene hit's surrounding text must match the source
@@ -1361,7 +1443,8 @@ def _artifact_scan(run: Path) -> Check:
 
 
 __all__ = [
-    "MANIFEST_SCHEMA_VERSION", "COPYEDIT_LANES", "ModelRoute", "Deviation",
+    "MANIFEST_SCHEMA_VERSION", "COPYEDIT_LANES", "MANDATORY_CHECKS",
+    "ModelRoute", "Deviation",
     "Check", "Certificate", "sha256_file", "config_hash", "model_routes",
     "providers_in_use", "build_manifest", "verify_plan", "certify_run",
     "unresolved_field_results",

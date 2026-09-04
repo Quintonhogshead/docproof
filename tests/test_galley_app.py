@@ -65,7 +65,9 @@ def test_a_galley_job_runs_to_done(client):
     assert staged["ok"]
     job = _run_galley(client, staged["id"])
 
-    assert job["state"] == "done"
+    # GALLEY-004: the app runs the certify gate; with no verify/settle
+    # evidence the job is needs_human, its deliverables kept and exposed.
+    assert job["state"] == "needs_human"
     assert job["is_galley"] is True
     # to_api carries wave and spend.
     assert job["galley_wave"] == 1

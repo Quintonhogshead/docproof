@@ -201,8 +201,12 @@ def test_settle_closes_owned_unowned_zone_note_and_fact_residuals(tmp_path):
     cert = certify_run(run)
     by = {c.name: c for c in cert.checks}
     assert by["residual settlement"].status == "pass"
-    assert by["finished-text walk"].status == "pass"
-    assert by["change verifier"].status == "pass"
+    # A deterministic settle changed p0/p1 with no engine to re-read them:
+    # the verify records are merged, not restamped, and name the paragraphs
+    # a `galley verify --paragraphs` must cover before delivery (GALLEY-002).
+    assert by["finished-text walk"].status == "fail"
+    assert "changed after their last read" in by["finished-text walk"].detail
+    assert by["change verifier"].status == "fail"
     assert by["terminal states"].status == "pass"
     assert by["outcome"].status == "pass" and "done" in by["outcome"].detail
     assert (run / "outcome.json").exists()
@@ -239,7 +243,7 @@ def test_settle_reverts_a_flagged_edit_and_revises_another(tmp_path):
     assert "receive the letter" in acc[p1]      # revised in place
     cert = certify_run(run)
     by = {c.name: c for c in cert.checks}
-    assert by["change verifier"].status == "pass"
+    assert by["change verifier"].status == "fail"     # changed, not re-read
     assert by["residual settlement"].status == "pass"
 
 
@@ -359,7 +363,11 @@ def test_a_verifier_flag_on_a_composite_reverts_it_to_a_query(tmp_path,
                        "detail": "author wrote thee on purpose",
                        "fix": "thee"}]},
         {"findings": []},
-        {"answer": "revert", "reason": "archaic voice, deliberate"})
+        {"answer": "revert", "reason": "archaic voice, deliberate"},
+        # the reverted paragraph is re-read so the artifacts describe the
+        # text as it now stands (GALLEY-002): one change batch, one walk read
+        {"problems": []},
+        {"findings": []})
     monkeypatch.setattr(m, "_resolve_engine",
                         lambda args, cfg, default_model=None:
                         ("provider", prov, "fake-model"))
@@ -374,7 +382,7 @@ def test_a_verifier_flag_on_a_composite_reverts_it_to_a_query(tmp_path,
     env = json.loads((run / "findings.json").read_text("utf-8"))
     assert any(row.get("queried") and row["para_id"] == p0
                for row in env["findings"])
-    assert len(prov.calls) == 3
+    assert len(prov.calls) == 5
     look = prov.calls[2]
     assert "VERIFIER SAYS (voice_damage)" in look["user"]
     assert "HOUSE STYLE" in look["system"]
