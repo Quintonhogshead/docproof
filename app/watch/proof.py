@@ -1,35 +1,44 @@
 """One manuscript, proofread, and the proofread back to the folder.
 
 The Galley analog of `prep.py`, and the same idempotent shape: fetch the book,
-read it, put the four hand-off files beside it, mark it done — with the marker
-that hides the file from the next tick written last, so it means "everything
-before me finished".
+read it, put the hand-off files beside it, mark it done — with the marker that
+hides the file from the next tick written last, so it means "everything before
+me finished".
 
-Two things differ from prep, and they are the whole reason this module exists.
+Three things differ from prep, and they are the whole reason this module exists.
+
+**The book it reads is the dev-edited one.** The house stage series runs
+`Book Original` (what the author sends) -> `book 0` (formatting) -> `Book 1`
+(the developmental edit, done by people) -> `Book 2` (this). So proofing's input
+is `<surname> - Book 1.docx` and its output is `<surname> - Book 2.*`, exactly
+the way formatting takes a `Book Original` and puts a `book 0` back in the same
+folder. `app/watch/naming.py` owns both tokens.
 
 **There are two runners.** In `app` mode DocWatch runs the read itself, through
 the app's galley job (`app/jobs.py::_run_galley`): the practitioner wave loop,
 adjudication, a $0 tracked-changes deliverable, the editorial letter and the
 style sheet. In `external` mode DocWatch runs nothing — the Mac-side
-practitioner loop does, on a Claude Max subscription that cannot live on Fly —
-and this module only reads the verdict it left in the folder. Both end at the
-same four files under the same four names, which is the contract:
+practitioner loop does (`galley/driver.py`), on a Claude Max subscription that
+cannot live on Fly — and this module only reads the verdict it left in the
+folder. Both end at the same names, which is the contract:
 
-    <surname> - book 1.docx              the tracked-changes proofread
-    <surname> - book 1 - letter.md       the editorial letter        (optional)
-    <surname> - book 1 - style-sheet.md  the style sheet             (optional)
-    <surname> - book 1 - outcome.json    the verdict                 (required)
+    <surname> - Book 2.docx               the tracked-changes proofread
+    <surname> - Book 2 - letter.md        the editorial letter       (optional)
+    <surname> - Book 2 - style-sheet.md   the style sheet            (optional)
+    <surname> - Book 2 - decision-log.md  every action, and why      (optional)
+    <surname> - Book 2 - outcome.json     the verdict                (required)
 
-**The verdict decides the CRM write, and only one of the two verdicts writes.**
-`done` moves the status dropdown to its proofing-done value. `needs_human`
-writes *nothing*: there is no option on the property for it, so the book stays
-at "Ready for Proofing" — which is exactly what tells a person to pick it up —
-and the reason reaches its owner through the watcher's needs-a-person email.
+**The verdict decides the CRM write, and both verdicts write.** `done` moves the
+status dropdown to its proofing-done value ("Proofing Complete"); `needs_human`
+moves it to "Needs Human PR", the option that puts the book in front of a human
+proofreader, and *also* sends the reason to the watcher's needs-a-person email —
+the CRM value says what, the email says why. Either way the book leaves "Ready
+for Proofing", because a book left sitting at ready is one nobody would notice.
 
 What is read out of outcome.json is the verdict and its reason, never the
-property to write. The file may have been placed in Drive by something outside
-DocProof, and a file in a folder does not get to name a CRM field: the property
-and the value both come from the watcher's own settings. See `tick`.
+property or the value to write. The file may have been placed in Drive by
+something outside DocProof, and a file in a folder does not get to name a CRM
+field: both come from the watcher's own settings. See `tick`.
 """
 from __future__ import annotations
 
@@ -139,7 +148,8 @@ def run_job(runner: JobRunner, store: JobStore, job: Job) -> Job:
     return store.get(job.id) or job
 
 
-def assess(job: Job, *, done_value: str) -> Verdict:
+def assess(job: Job, *, done_value: str,
+           needs_human_value: str = "") -> Verdict:
     """The verdict for a finished galley job, written to outcome.json in the
     job's own results folder so the file that goes to Drive is the file the
     numbers were read from.
@@ -161,7 +171,8 @@ def assess(job: Job, *, done_value: str) -> Verdict:
                        "The proofread produced no results folder, so there is "
                        "nothing to judge it by.")
     try:
-        outcome = galley_assess(out, done_value=done_value)
+        outcome = galley_assess(out, done_value=done_value,
+                                needs_human_value=needs_human_value)
     except Exception as e:                # noqa: BLE001 - a verdict, not a crash
         log.exception("Could not assess the proofread of %s", job.filename)
         outcome = Outcome(
@@ -176,16 +187,19 @@ def assess(job: Job, *, done_value: str) -> Verdict:
 # --- the hand-off names -------------------------------------------------------
 
 def hand_off_names(source_name: str) -> dict[str, str]:
-    """The four names this book's proofread is delivered under, keyed by role.
+    """The names this book's proofread is delivered under, keyed by role.
 
+    `"Johnson - Book 1.docx"` -> `"Johnson - Book 2.docx"` and its companions.
     One place, because two sides have to agree: DocWatch writes them here in
-    `app` mode and looks for them here in `external` mode, and the Mac-side
-    practitioner writes them from the same contract."""
+    `app` mode and looks for them here in `external` mode, and
+    `galley/driver.py` builds the practitioner's hand-off from the same
+    `naming.proof_base`."""
     base = naming.proof_base(Path(source_name).stem or "manuscript")
     return {
         "manuscript": f"{base}.docx",
         "letter": f"{base}{naming.LETTER_SUFFIX}.md",
         "style_sheet": f"{base}{naming.STYLE_SHEET_SUFFIX}.md",
+        "decision_log": f"{base}{naming.DECISION_LOG_SUFFIX}.md",
         "outcome": f"{base}{naming.OUTCOME_SUFFIX}.json",
     }
 
@@ -196,13 +210,15 @@ def artifacts(job: Job, source_name: str) -> list[Artifact]:
 
     Galley writes internal names — the tracked-changes manuscript under
     DocProof's own "- Atmosphere Press Proofreader" suffix, `letter.md`,
-    `style-sheet.md`, `outcome.json`. The folder belongs to people, so each is
-    renamed onto the "<surname> - book 1" base on the way out.
+    `style-sheet.md`, `DECISION_LOG.md`, `outcome.json`. The folder belongs to
+    people, so each is renamed onto the "<surname> - Book 2" base on the way out.
 
     The change log, the case file, findings.json and the rest of the run stay
     local: they are DocProof's record, and the archive is where that belongs.
-    The letter and the style sheet are optional — the galley runner renders them
-    best-effort — so a run that produced neither still delivers."""
+    Everything but the manuscript and the verdict is optional — the galley
+    runner renders the letter and the style sheet best-effort, and the decision
+    log is the external driver's (`galley/journal.py`) rather than the app
+    runner's — so a run that produced none of them still delivers."""
     out = Path(job.results_dir or "")
     if not out.is_dir():
         return []
@@ -213,7 +229,8 @@ def artifacts(job: Job, source_name: str) -> list[Artifact]:
     if reviewed is not None:
         found.append(Artifact(reviewed, names["manuscript"], DOCX_MIME))
     for role, filename in (("letter", "letter.md"),
-                           ("style_sheet", "style-sheet.md")):
+                           ("style_sheet", "style-sheet.md"),
+                           ("decision_log", "DECISION_LOG.md")):
         path = out / filename
         if path.is_file():
             found.append(Artifact(path, names[role], MARKDOWN_MIME))

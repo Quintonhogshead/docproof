@@ -72,7 +72,7 @@ book with major grammatical problems where most sentences must be rewritten
 of paragraphs left as undecidable questions, or the verifier flagged ≥20 % of
 applied edits). `galley outcome RUN --set needs_human --reason "…"` overrules
 with a stated reason. The file carries the HubSpot property/value DocWatch
-flips (`docproof` → `Proofing Complete` / `Needs Human Proofreader`).
+flips (`docproof` → `Proofing Complete` / `Needs Human PR`).
 
 ## Never
 

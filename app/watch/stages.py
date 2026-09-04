@@ -26,7 +26,7 @@ from docproof.formats.base import DocumentFormat
 from docproof.prep.convert import CONVERTIBLE
 
 from .drive import DriveFile, GOOGLE_DOC_MIME
-from .naming import has_source_label, is_output_name
+from .naming import (has_proof_source_label, has_source_label, is_output_name)
 
 # What prep can read: Word, plus everything LibreOffice converts for it. Taken
 # from prep itself so the two cannot drift — a format added there is watched
@@ -103,6 +103,7 @@ class Stage(Enum):
     """Where a file is in the pipeline, from the folder's point of view."""
 
     NEW_MANUSCRIPT = "new"      # version zero: prepare it
+    PROOF_MANUSCRIPT = "proof"  # the dev-edited "Book 1": proofing's input
     OUTPUT = "output"           # DocProof wrote this; never an input
     DONE = "done"               # already prepared
     FAILED = "failed"           # tried, and needs a person before trying again
@@ -124,6 +125,14 @@ def classify(file: DriveFile) -> Stage:
         return Stage.SKIP
     if _looks_like_output(file.name):
         return Stage.OUTPUT
+    # The dev-edited book is a manuscript, but not the formatting stage's. It
+    # gets its own answer rather than `NEW_MANUSCRIPT` so `run_prep` — which
+    # prepares every NEW_MANUSCRIPT in its listing — can never format one, and
+    # rather than `SKIP`, which would tell a person reading the pass report that
+    # a real book is "not a manuscript". Proofing asks `is_proof_candidate`,
+    # which is where its own markers are read.
+    if has_proof_source_label(file.name):
+        return Stage.PROOF_MANUSCRIPT
     if file.is_google_doc or _is_manuscript(file.name):
         return Stage.NEW_MANUSCRIPT
     return Stage.SKIP
@@ -172,20 +181,23 @@ def is_plan_candidate(file: DriveFile) -> bool:
 
 
 def is_proof_candidate(file: DriveFile) -> bool:
-    """Whether the proofing stage should consider this file — a manuscript it
-    has not already finished with.
+    """Whether the proofing stage should consider this file — the dev-edited
+    "<surname> - Book 1" it has not already finished with.
+
+    Proofing's input is a *name*, not a guess: the book it reads is the one the
+    developmental editors handed back, and the house calls that `Book 1`. So a
+    draft, a questionnaire, or the author's original beside it in the same
+    folder is left alone rather than read at a novel's price.
 
     Blind to the formatting marker (`STATE_PROP`) on purpose, exactly as promo
-    and the plan are: proofing runs *after* formatting on the same intake file,
-    so a book marked `formatted` is precisely the book to proofread. The two
-    stages gate on different values of the same HubSpot dropdown, which is the
-    real control over which of them runs.
+    and the plan are: the two stages gate on different values of the same
+    HubSpot dropdown, which is the real control over which of them runs.
 
-    What it does exclude is anything DocProof wrote (the marker or the "- book
-    0"/"- book 1" name), and anything proofing has finished with — `PROOF_PROP`
-    at a *terminal* value. "awaiting" is not terminal: an external practitioner
-    is holding that book, and the tick that finds its outcome.json has to be
-    able to see the manuscript to apply it."""
+    What it does exclude is anything DocProof wrote (the marker, or a "- book 0"
+    / "- Book 2" name) and anything proofing has finished with — `PROOF_PROP` at
+    a *terminal* value. "awaiting" is not terminal: an external practitioner is
+    holding that book, and the tick that finds its outcome.json has to be able
+    to see the manuscript to apply it."""
     if file.is_folder:
         return False
     props = file.app_properties
@@ -195,7 +207,7 @@ def is_proof_candidate(file: DriveFile) -> bool:
         return False
     if _looks_like_output(file.name):
         return False
-    return file.is_google_doc or _is_manuscript(file.name)
+    return has_proof_source_label(file.name)
 
 
 def _looks_like_output(name: str) -> bool:
@@ -211,8 +223,9 @@ def _is_manuscript(name: str) -> bool:
     # A file that arrives with no extension at all — a Word doc or a Google Doc
     # someone renamed to "<surname> - Book Original" and dropped the ".docx" —
     # is still the intake manuscript when it carries the house label. The token
-    # is specific enough to trust on its own: an output is "- book 0", never
-    # "- Book Original", and `classify` has already ruled outputs out before it
+    # is specific enough to trust on its own: an output is "- book 0" or
+    # "- Book 2", never "- Book Original", and `classify` has already ruled
+    # outputs — and the dev-edited "- Book 1" — out before it
     # asks this. Without it such a file was silently skipped until a person
     # re-added the extension by hand.
     return not Path(name).suffix and has_source_label(name)

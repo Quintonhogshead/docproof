@@ -951,9 +951,8 @@ def _galley_parser(sub) -> None:
                      help="HubSpot value outcome.json carries for done "
                           "(default 'Proofing Complete')")
     gse.add_argument("--needs-human-value", default=None,
-                     help="HubSpot value for needs_human (default: none — "
-                          "there is no such option on the property, so the "
-                          "book stays at 'Ready for Proofing' for a person)")
+                     help="HubSpot value outcome.json carries for needs_human "
+                          "(default 'Needs Human PR')")
     _galley_spend_args(gse)
     gse.add_argument("--json", action="store_true")
 

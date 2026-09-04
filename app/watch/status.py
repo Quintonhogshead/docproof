@@ -30,7 +30,8 @@ log = logging.getLogger("docproof.app.watch.status")
 # What each answer from `stages.classify` is called in front of a person. One
 # copy, because the terminal and the panel saying different words about the
 # same file is how a support conversation goes wrong.
-PLAIN_STAGE = {"new": "to prepare", "done": "already prepared",
+PLAIN_STAGE = {"new": "to prepare", "proof": "to proofread",
+               "done": "already prepared",
                "failed": "needs attention", "output": "DocProof wrote this",
                "skip": "not a manuscript"}
 
@@ -81,6 +82,11 @@ def status(home: str | Path, *, get_key=None,
         # person changes book to book are surfaced.
         "proofing_enabled": ws.proofing_enabled,
         "proof_runner": ws.proof_runner,
+        # Read-only here, and only so a panel can show what a verdict will do to
+        # the CRM. Setting them stays CLI-only, like the formatting pair.
+        "hubspot_proof_ready_value": ws.hubspot_proof_ready_value,
+        "hubspot_proof_done_value": ws.hubspot_proof_done_value,
+        "hubspot_proof_needs_human_value": ws.hubspot_proof_needs_human_value,
         "max_files_per_tick": ws.max_files_per_tick,
         "auto_ticks": ws.auto_ticks,
         "tick_every_minutes": ws.tick_every_minutes,

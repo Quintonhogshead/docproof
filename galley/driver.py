@@ -85,9 +85,11 @@ DEFAULT_MODEL = "claude-fable-5-1"
 DEFAULT_PERMISSION_MODE = "acceptEdits"
 DEFAULT_WORKSPACE_ROOT = "~/galley-workspaces"
 DEFAULT_WRAPBIN = "~/galley-bin"
-#: The stage token the proofread deliverable carries in the hand-off, beside
-#: the formatting stage's "book 0" (app/watch/naming.py owns that series).
-HANDOFF_STAGE = "book 1"
+#: The stage token the proofread deliverable carries in the hand-off. The house
+#: series is Book Original -> book 0 (formatting) -> Book 1 (the developmental
+#: edit) -> Book 2 (this); app/watch/naming.py owns it, and this is a re-export
+#: so the two sides of the hand-off cannot drift.
+HANDOFF_STAGE = "Book 2"
 #: Where the driver leaves its own log and ledger inside the workspace.
 DRIVER_DIR = "driver"
 #: The decision log Galley ships beside the manuscript (galley/journal.py).
@@ -1134,16 +1136,14 @@ def _default_ask(subject: str, body: str, book: str) -> str:
 # --- hand-off ----------------------------------------------------------------
 
 def handoff_base(source_name: str, stage: str = HANDOFF_STAGE) -> str:
-    """``"Redding - Book Original.docx"`` -> ``"Redding - book 1"``.
+    """``"Redding - Book 1.docx"`` -> ``"Redding - Book 2"``.
 
-    Built on app/watch/naming.format_base so the surname is read exactly as the
-    watcher reads it (dash-, case- and spacing-tolerant), then re-stamped with
-    the proofing stage instead of the formatting one."""
+    Straight through ``app/watch/naming.stage_base``, so the surname is read
+    exactly as the watcher reads it — dash-, case- and spacing-tolerant, and
+    tolerant of whichever stage token the source happens to carry — and the two
+    sides of the hand-off cannot disagree about what a file is called."""
     from app.watch import naming
-    base = naming.format_base(Path(source_name).stem)
-    suffix = f" - {naming.OUTPUT_STAGE}"
-    author = base[:-len(suffix)] if base.endswith(suffix) else base
-    return f"{author} - {stage}"
+    return naming.stage_base(Path(source_name).stem, stage)
 
 
 #: The hand-off contract DocWatch reads (sibling agent owns the other side):
@@ -1158,7 +1158,7 @@ def build_handoff(workspace: str | Path, source_name: str,
                   outcome_sources: Iterable[Path] = ()) -> list[Path]:
     """Copy the four hand-off files into ``handoff_dir`` under house names.
 
-    ``<surname> - book 1.docx`` (the tracked-changes proofread manuscript),
+    ``<surname> - Book 2.docx`` (the tracked-changes proofread manuscript),
     ``… - letter.md``, ``… - style-sheet.md``, ``… - decision-log.md``,
     ``… - outcome.json``. Every one is required: a hand-off missing a piece is
     not a hand-off, so a missing file raises rather than shipping a partial

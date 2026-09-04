@@ -16,7 +16,7 @@ from .test_driver import (FIXTURE, FakeSpawner, MECH_PLAN, _deliverable,
 
 @pytest.fixture()
 def book(tmp_path) -> Path:
-    dest = tmp_path / "Ford - Book Original.docx"
+    dest = tmp_path / "Ford - Book 1.docx"
     dest.write_bytes(FIXTURE.read_bytes())
     return dest
 
@@ -266,6 +266,6 @@ def test_a_finished_run_ships_a_decision_log(book, tmp_path):
     log = ws / "deliverable" / gd.DECISION_LOG_NAME
     assert log.is_file()
     text = log.read_text("utf-8")
-    assert text.startswith("# Decision log — Ford - Book Original.docx")
+    assert text.startswith("# Decision log — Ford - Book 1.docx")
     assert "**Plan gate (auto): approved**" in text
-    assert (tmp_path / "handoff" / "Ford - book 1 - decision-log.md").is_file()
+    assert (tmp_path / "handoff" / "Ford - Book 2 - decision-log.md").is_file()

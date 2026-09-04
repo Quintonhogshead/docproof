@@ -20,7 +20,7 @@ PLAN = ("# PLAN — Ford\n\n1. sweeps $0\n2. ladder $1.40\n\n"
 
 @pytest.fixture()
 def book(tmp_path) -> Path:
-    dest = tmp_path / "Ford - Book Original.docx"
+    dest = tmp_path / "Ford - Book 1.docx"
     dest.write_bytes(FIXTURE.read_bytes())
     return dest
 

@@ -101,12 +101,30 @@ def test_something_docproof_wrote_is_never_an_input():
 @pytest.mark.parametrize("name", ["tagged_Book.docx", "tracked_Book.docx",
                                   "reviewed_Book.docx", "prep_notes_Book.md",
                                   "PREP_NOTES_Book.md", "Grest - book 0.docx",
-                                  "Grest - book 0 - notes.md"])
+                                  "Grest - book 0 - notes.md",
+                                  "Grest - Book 2.docx",
+                                  "Grest - Book 2 - letter.md",
+                                  "Grest — Book 2 - outcome.json"])
 def test_an_output_is_recognised_by_name_when_its_marker_is_gone(name):
     """Somebody duplicates a file, or re-uploads one out of Downloads, and the
     properties do not come with it. Preparing an already-prepared manuscript is
     the one mistake in this folder that costs money."""
     assert classify(drive_file(name)) is Stage.OUTPUT
+
+
+def test_the_dev_edited_book_1_is_its_own_answer():
+    """`Book 1` is the developmental edit — proofing's input. It must not read
+    as `NEW_MANUSCRIPT` (the formatting stage prepares every one of those in its
+    listing without asking again, so it would be formatted a second time) and it
+    must not read as `OUTPUT` (which would hide proofing's source from proofing).
+    So it gets its own answer, and a person reading the pass report is told a
+    real book is there rather than "not a manuscript"."""
+    assert classify(drive_file("Grest - Book 1.docx")) is Stage.PROOF_MANUSCRIPT
+    assert classify(drive_file("Grest — book 1.docx")) is Stage.PROOF_MANUSCRIPT
+    # Its neighbours in the series are unchanged.
+    assert classify(drive_file("Grest - Book Original.docx")) is \
+        Stage.NEW_MANUSCRIPT
+    assert classify(drive_file("Grest - Book 2.docx")) is Stage.OUTPUT
 
 
 def test_a_marker_beats_a_name():

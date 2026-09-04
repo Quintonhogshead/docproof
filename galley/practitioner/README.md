@@ -104,17 +104,24 @@ session asked something nobody is there to answer). Exit codes: **0** finished,
 **7** stopped needing a human (read `runs/outcome.json`), **2** a setup error.
 Per-phase logs and the driver's own ledger are in `runs/driver/`.
 
-**The DocWatch hand-off.** After `deliver`, four files land in the hand-off
-directory under the house series (surname read by `app/watch/naming.py` from
-`<surname> - Book Original.docx`):
+**The DocWatch hand-off.** After `deliver`, five files land in the hand-off
+directory under the house series. That series is `Book Original` (what the
+author sends) -> `book 0` (formatting) -> `Book 1` (the developmental edit) ->
+`Book 2` (this), so a proofread reads `<surname> - Book 1.docx` and hands back
+`<surname> - Book 2.*`; the surname is read by `app/watch/naming.py`, the same
+transform DocWatch looks for them with.
 
 ```
-<surname> - book 1.docx                the tracked-changes proofread manuscript
-<surname> - book 1 - letter.md         the editor's letter
-<surname> - book 1 - style-sheet.md    the style sheet
-<surname> - book 1 - decision-log.md   every action taken, and why
-<surname> - book 1 - outcome.json      done | needs_human, with the reason
+<surname> - Book 2.docx                the tracked-changes proofread manuscript
+<surname> - Book 2 - letter.md         the editor's letter
+<surname> - Book 2 - style-sheet.md    the style sheet
+<surname> - Book 2 - decision-log.md   every action taken, and why
+<surname> - Book 2 - outcome.json      done | needs_human, with the reason
 ```
+
+Both outcomes move the book on in HubSpot — `done` to `Proofing Complete`,
+`needs_human` to `Needs Human PR` — so nothing is left sitting at
+`Ready for Proofing` for nobody to notice. DocWatch owns that write.
 
 **The decision log** (`galley/journal.py`) is rendered from the run's own
 artifacts: driver events and the gate decision, the plan's G-items and how they

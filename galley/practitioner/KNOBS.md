@@ -19,10 +19,12 @@ ESCALATION (the knob may not exist), not a reason to go read the source.
   the figure it decides against AND the figure the `approve` phase freezes into
   `approval.json`;
   `--from PHASE` / `--phases …` restart or narrow; `--handoff DIR` and
-  `--drive-folder-id` put the four hand-off files (`<surname> - book 1.docx`,
-  `… - letter.md`, `… - style-sheet.md`, `… - outcome.json`) where DocWatch
-  reads them. Exit 0 = the run finished; 7 = it stopped and
-  `runs/outcome.json` says `needs_human` and why; 2 = a setup error.
+  `--drive-folder-id` put the five hand-off files (`<surname> - Book 2.docx`,
+  `… - letter.md`, `… - style-sheet.md`, `… - decision-log.md`,
+  `… - outcome.json`) where DocWatch reads them. The book it reads is
+  `<surname> - Book 1.docx`, the developmental edit.
+  Exit 0 = the run finished; 7 = it stopped and `runs/outcome.json` says
+  `needs_human` and why; 2 = a setup error.
 - **Mechanical-only scope (go-live).** `flights` and `reread` are not run.
   `docproof galley approve … --stage mechanical-wave --mechanical-only`
   stamps `mechanical_only: true` on `approval.json` and REFUSES over a config

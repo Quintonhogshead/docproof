@@ -764,11 +764,13 @@ def _finish_hubspot_plan(hs_token: str | None, ws: WatchSettings,
 # (see `proof.hand_off_names`). Either way the pass ends at the same place: read
 # the verdict, and act on it.
 #
-# The verdict is the only thing that decides the CRM write, and only one of the
-# two verdicts writes at all. `done` moves the property on, once. `needs_human`
-# writes NOTHING — there is no option on the property for it, so the book stays
-# at "Ready for Proofing", which is what tells a person to pick it up, and the
-# reason rides the needs-a-person email.
+# The verdict is the only thing that decides the CRM write, and both verdicts
+# write: `done` moves the property to "Proofing Complete", `needs_human` to
+# "Needs Human PR" — the option that puts the book in front of a human
+# proofreader. Exactly one PATCH per book either way. A book never sits at
+# "Ready for Proofing" after a verdict, because that is the state nobody would
+# notice; `needs_human` also rides the needs-a-person email, because the CRM
+# value alone does not say why.
 
 def run_proof(token: str, home: Path, ws: WatchSettings,
               listing: list[DriveFile], state: WatchState, runner: JobRunner,
@@ -786,14 +788,13 @@ def run_proof(token: str, home: Path, ws: WatchSettings,
         return
     routes = routes or {}
 
+    # The house convention is not optional here, `require_source_label` or not:
+    # `is_proof_candidate` accepts only "<surname> - Book 1", the dev-edited
+    # book. Proofing reads a whole novel at a novel's price, so which file it
+    # reads is a name and never a guess — a draft or the author's original in
+    # the same folder is left alone. In subfolder mode `_discover_ready` has
+    # already tied that name to the ready record's own surname.
     todo = [f for f in listing if is_proof_candidate(f)]
-
-    # The house convention as a hard rule, the flat path's copy of what
-    # `_discover_ready` already applied in subfolder mode: with the label
-    # required, only "<surname> - Book Original" is the book to read.
-    if ws.require_source_label and not ws.subfolders_enabled:
-        todo = [f for f in todo if naming.has_source_label(f.name)]
-
     todo.sort(key=lambda f: (f.modified_time, f.name))
 
     if not ws.subfolders_enabled:
@@ -892,7 +893,9 @@ def _one_proof(token: str, home: Path, ws: WatchSettings, file: DriveFile,
     # The verdict is assessed BEFORE the upload, so outcome.json is written into
     # the results folder and then goes to Drive with everything else — one file,
     # one set of numbers, whichever side reads it.
-    verdict = proof.assess(job, done_value=ws.hubspot_proof_done_value)
+    verdict = proof.assess(
+        job, done_value=ws.hubspot_proof_done_value,
+        needs_human_value=ws.hubspot_proof_needs_human_value)
     uploaded = proof.upload_outputs(token, file, job, ws, rec, state,
                                     folder_files,
                                     dest_folder_id=dest_folder_id,
@@ -963,23 +966,29 @@ def _apply_proof_outcome(hs_token: str | None, token: str, ws: WatchSettings,
                          file: DriveFile, rec, state: WatchState,
                          verdict: "proof.Verdict", *, opener,
                          report: TickReport) -> None:
-    """Act on a verdict: move the record on, or leave it for a person.
+    """Act on a verdict: move the record on, either way.
 
-    `done` writes the proofing done value once and marks the manuscript. That
-    order is prep's, for prep's reason: the local record is written before the
-    Drive marker, so a file that reads `done` in Drive was done in HubSpot
-    first, and the two can never disagree in the direction that strands a book.
+    A proofread ends at one of two verdicts and BOTH move the book off "Ready
+    for Proofing" — `done` to "Proofing Complete", `needs_human` to "Needs Human
+    PR", the option that puts it in front of a human proofreader. Neither leaves
+    a book sitting at ready, which is the state nobody would notice.
 
-    `needs_human` writes nothing to HubSpot at all — the record keeps "Ready for
-    Proofing", and the reason goes to `needs_human` so it reaches the owner by
-    email. The manuscript is still marked, because the read has been paid for
-    and repeating it would only buy the same answer again."""
+    Exactly one PATCH either way, guarded by `proof_hubspot_done`; the local
+    record is written before the Drive marker, which is prep's order for prep's
+    reason — a file that reads finished in Drive was finished in HubSpot first,
+    so the two can never disagree in the direction that strands a book.
+
+    `needs_human` also earns its report line and the owner's email, because the
+    CRM value alone does not say *why*. The manuscript is marked terminally
+    either way: the read has been paid for, and repeating it would buy the same
+    answer at the same price."""
     rec.proof_outcome = verdict.outcome
     rec.proof_outcome_reason = verdict.reason
     state.record(rec)
 
     if verdict.done:
-        _finish_hubspot_proof(hs_token, ws, file, rec, state, opener=opener)
+        _finish_hubspot_proof(hs_token, ws, file, rec, state,
+                              value=ws.hubspot_proof_done_value, opener=opener)
         proof.mark_source(token, file, rec, state, status=PROOF_DONE,
                           opener=opener)
         return
@@ -988,30 +997,35 @@ def _apply_proof_outcome(hs_token: str | None, token: str, ws: WatchSettings,
               or "the proofread finished but the book needs a human "
                  "proofreader.")
     log.warning("Needs a person: %s (%s)", file.name, reason)
+    _finish_hubspot_proof(hs_token, ws, file, rec, state,
+                          value=ws.hubspot_proof_needs_human_value,
+                          opener=opener)
     report.needs_human.append(
         (file.name, f"was proofread and needs a human proofreader: {reason} "
-                    f"HubSpot was left at "
-                    f"'{ws.hubspot_proof_ready_value}' on purpose."))
+                    f"HubSpot was moved to "
+                    f"'{ws.hubspot_proof_needs_human_value}'."))
     proof.mark_source(token, file, rec, state, status=PROOF_HUMAN,
                       reason=reason, opener=opener)
 
 
 def _finish_hubspot_proof(hs_token: str | None, ws: WatchSettings,
                           file: DriveFile, rec, state: WatchState, *,
-                          opener) -> None:
-    """Move the status property to its proofing done value on the book just
-    proofread.
+                          value: str, opener) -> None:
+    """Move the status property to `value` on the book just proofread — either
+    the proofing done value or the needs-a-human one, whichever the verdict
+    named.
 
     The promo/plan twin, with the same guards: read-only mode leaves the CRM
-    untouched, and a blank done value is refused rather than blanking the
-    property. `proof_hubspot_done` makes it exactly one write per book — writing
-    a value already set is harmless, which is what makes the whole step safe to
-    repeat after an interrupted tick.
+    untouched, and a blank value is refused rather than blanking the property.
+    `proof_hubspot_done` makes it exactly one write per book — writing a value
+    already set is harmless, which is what makes the whole step safe to repeat
+    after an interrupted tick.
 
     The property and the value come from the watcher's settings, never from the
     outcome.json that was read. That file carries a `hubspot` block, and in
     `external` mode it was placed in Drive by something outside DocProof: a file
-    in a folder does not get to name the CRM field DocProof writes."""
+    in a folder does not get to name the CRM field DocProof writes, nor the
+    value it writes there."""
     if not (ws.hubspot_enabled and rec.proof_hubspot_id
             and not rec.proof_hubspot_done):
         return
@@ -1019,11 +1033,12 @@ def _finish_hubspot_proof(hs_token: str | None, ws: WatchSettings,
         log.info("HubSpot is read-only: leaving %s at its current status.",
                  file.name)
         return
-    if not ws.hubspot_proof_done_value:
-        log.warning("HubSpot proofing done-value is empty: leaving %s at its "
-                    "current status rather than blanking it.", file.name)
+    if not value:
+        log.warning("The HubSpot value for this proofing verdict is empty: "
+                    "leaving %s at its current status rather than blanking it.",
+                    file.name)
         return
-    props = {ws.hubspot_status_property: ws.hubspot_proof_done_value}
+    props = {ws.hubspot_status_property: value}
     hubspot.set_properties(hs_token, ws.hubspot_object, rec.proof_hubspot_id,
                            props, allow={ws.hubspot_status_property},
                            opener=opener)
@@ -1053,6 +1068,19 @@ class DiscoveryStage:
     # Whether this record is still this stage's to finish — the test that
     # re-lists an in-flight book's folder after its status has moved off ready.
     in_flight: Callable[[Any], bool]
+    # The file this stage READS, by house name. Each stage in the series reads
+    # what the one before it left — formatting reads "<surname> - Book Original",
+    # proofing reads the dev-edited "<surname> - Book 1" — so "which file in this
+    # author's folder is the book" has a different answer per stage, and the
+    # sentence a person is emailed has to name the right one.
+    source_stage: str
+    source_name: Callable[[str, str], bool]      # (filename, surname) -> bool
+    # Whether that name is required, or only checked when `require_source_label`
+    # is on. Formatting leaves it optional for an install that does not follow
+    # the house convention; proofing does not, because a proofread costs a
+    # novel's worth of model time and "which file is the book" must never be a
+    # guess.
+    label_always: bool = False
 
 
 def format_stage(ws: WatchSettings) -> DiscoveryStage:
@@ -1065,6 +1093,8 @@ def format_stage(ws: WatchSettings) -> DiscoveryStage:
         candidate=lambda f: classify(f) is Stage.NEW_MANUSCRIPT,
         already_done=lambda f: classify(f) is Stage.DONE,
         in_flight=lambda r: r.marked != FORMATTED,
+        source_stage=naming.SOURCE_STAGE,
+        source_name=naming.is_source_name,
     )
 
 
@@ -1084,6 +1114,9 @@ def proof_stage(ws: WatchSettings) -> DiscoveryStage:
         already_done=lambda f: (f.app_properties.get(PROOF_PROP)
                                 in PROOF_TERMINAL),
         in_flight=lambda r: r.proof_marked not in PROOF_TERMINAL,
+        source_stage=naming.PROOF_SOURCE_STAGE,
+        source_name=naming.is_proof_source_name,
+        label_always=True,
     )
 
 
@@ -1202,27 +1235,23 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
                              opener=opener, report=report, dry_run=dry_run)
             return
 
-    # Is the author's intake file in the folder at all — a new one to prepare, or
-    # an already-formatted one still sitting there (marked done, so out of
-    # `manuscripts`)? This is the real question behind "is the Book Original
-    # missing", and it is asked by name, not by marker: a "- book 0" a human
-    # placed and named is an output, not the intake, so a folder holding only
-    # that still counts as missing its Book Original and is reported. Asking
-    # instead whether *any* output was present was the bug — it silently skipped
-    # exactly that author.
-    # Is the author's intake file in the folder at all — by name, not marker? A
-    # "- book 0" a human placed is an output, not the intake, so a folder holding
-    # only that still counts as missing its Book Original. And which state it is
-    # in matters: a "<surname> - Book Original" marked done is a finished book
+    # Is the file this stage reads in the folder at all — a fresh one to work
+    # on, or one already finished with (marked done, so out of `manuscripts`)?
+    # It is asked by NAME, not by marker: an output a human placed and named is
+    # an output, not the intake, so a folder holding only that still counts as
+    # missing its source and is reported. Asking instead whether *any* output
+    # was present was the bug — it silently skipped exactly that author. And
+    # which state it is in matters: a source marked done is a finished book
     # whose HubSpot status simply never moved, not a missing one.
-    intake_files = [f for f in contents if naming.is_source_name(f.name, last)]
+    intake_files = [f for f in contents if stage.source_name(f.name, last)]
     intake_done = any(stage.already_done(f) for f in intake_files)
 
     def _unprepared(missing_detail: str) -> None:
         """Account for a ready author with no book to prepare — none dropped
         silently. A finished book whose status stuck gets its own alert (so a
-        person can move HubSpot on); a genuine absence is a missing Book
-        Original; an intake present but unfinished was already reported when the
+        person can move HubSpot on); a genuine absence is a missing source file
+        — the `Book Original` for formatting, the dev-edited `Book 1` for
+        proofing; an intake present but unfinished was already reported when the
         run failed, so it is not raised again."""
         ready = stage.ready_value
         if intake_done:
@@ -1231,7 +1260,7 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
                      stage.done_word)
             report.stuck_ready.append(
                 (author, f"flagged '{ready}' but its "
-                         f"'{last} - {naming.SOURCE_STAGE}' is already "
+                         f"'{last} - {stage.source_stage}' is already "
                          f"{stage.done_word} — the status never moved on, so "
                          f"check the write-back."))
         elif intake_files:
@@ -1247,18 +1276,21 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
     if not manuscripts:
         _unprepared("its folder is empty" if not contents else
                     f"its folder holds {len(contents)} file(s) but none is a "
-                    f"'{last} - {naming.SOURCE_STAGE}'")
+                    f"'{last} - {stage.source_stage}'")
         report.waiting += 1
         return
 
-    # When the house convention is enforced, only "<surname> - Book Original" is
-    # the book to prepare — the surname the author's own HubSpot record carries.
-    # A draft or a developmental copy in the same folder is left alone, not
-    # guessed at, so the label is what says "this is the one".
-    if ws.require_source_label:
-        labelled = [f for f in manuscripts if naming.is_source_name(f.name, last)]
+    # Only "<surname> - <this stage's source>" is the book to work on — the
+    # surname coming from the author's own HubSpot record, so the file is tied
+    # to the right book and a draft beside it is left alone rather than guessed
+    # at. Formatting makes this optional (`require_source_label`, off on an
+    # install that does not follow the house convention). Proofing does not:
+    # `label_always` is set because a proofread costs a novel's worth of model
+    # time, which is far too much to spend on a file nobody named.
+    if ws.require_source_label or stage.label_always:
+        labelled = [f for f in manuscripts if stage.source_name(f.name, last)]
         if not labelled:
-            _unprepared(f"no file is named '{last} - {naming.SOURCE_STAGE}' "
+            _unprepared(f"no file is named '{last} - {stage.source_stage}' "
                         f"({len(manuscripts)} other manuscript(s) in the folder)")
             report.waiting += 1
             return
@@ -1314,9 +1346,9 @@ def _discover_nested(token: str, ws: WatchSettings, record, first: str,
     for folder in book_folders:
         contents = drive.list_folder(token, folder.id, opener=opener)
         manuscripts = [f for f in contents if stage.candidate(f)]
-        if ws.require_source_label:
+        if ws.require_source_label or stage.label_always:
             manuscripts = [f for f in manuscripts
-                           if naming.is_source_name(f.name, last)]
+                           if stage.source_name(f.name, last)]
         if not manuscripts:
             continue
         if len(manuscripts) > 1:
@@ -1350,7 +1382,7 @@ def _discover_nested(token: str, ws: WatchSettings, record, first: str,
         return
     ready = stage.ready_value
     detail = (f"none of its {len(book_folders)} book folder(s) holds a "
-              f"'{last} - {naming.SOURCE_STAGE}'")
+              f"'{last} - {stage.source_stage}'")
     log.info("Waiting: %s is flagged ready but %s.", author, detail)
     report.missing_source.append((author, f"flagged '{ready}' but {detail}."))
     report.waiting += 1
@@ -1644,6 +1676,8 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
         blanks = [name for name, value in (
             ("hubspot_proof_ready_value", ws.hubspot_proof_ready_value),
             ("hubspot_proof_done_value", ws.hubspot_proof_done_value),
+            ("hubspot_proof_needs_human_value",
+             ws.hubspot_proof_needs_human_value),
         ) if not value]
         if blanks:
             raise NotConfigured(
