@@ -172,9 +172,12 @@ _PROMPTS: dict[str, str] = {
         "Intake: manuscript at source/{book}. Read CLAUDE.md's Context "
         "discipline first. Open the state machine (`docproof galley state . "
         "--advance intake --source source/{book} --config CONFIG` — always "
-        "BOTH flags). Run /profile then /draft-plan (both $0). Write "
-        "profile.json and PLAN.md. STOP at the plan gate — do not spend past "
-        "it."),
+        "BOTH flags). Run /profile then /draft-plan (both $0). The profile "
+        "includes the NUMBER AUDIT extraction: every numeral and spelled "
+        "number with context, to runs/numbers.txt, reviewed for house style, "
+        "consistency, and arithmetic (contradictions become author queries). "
+        "Write profile.json and PLAN.md. STOP at the plan gate — do not "
+        "spend past it."),
     "approve": (
         "Phase: freeze the approved plan. Read PLAN.md (the plan has been "
         "approved — the approval line is at the bottom of the file). "
@@ -199,7 +202,11 @@ _PROMPTS: dict[str, str] = {
         "escalation (`docproof galley ask`), not a judgment call. Do NOT read "
         "sweeps.py or the manuscript whole."),
     "ladder": (
-        "Phase: mechanical ladder. Write the run config from PLAN.md + "
+        "Phase: mechanical ladder. The six-window chapter sweep is wave 1 "
+        "line 1 — `chapter_sweep` on Luna in the run config (the "
+        "mechanical-wave stage enables it) PLUS the six-window Sonnet $0 "
+        "session-subagent sweep, imported before the ladder's own findings. "
+        "Write the run config from PLAN.md + "
         "KNOBS.md (config REPLACES default.yaml — restate every section). Run "
         "`docproof review … --approval approval.json` to runs/ladder/ with "
         "output redirected to runs/ladder.log; read only the summary + counts "
@@ -246,7 +253,8 @@ _PROMPTS: dict[str, str] = {
     "settle": (
         "Phase: residual settlement — zero open candidates. Follow /settle. "
         "Run `docproof galley settle runs/<final> --source source/{book} "
-        "--config <run config> --engine subagent {settle_flags} > "
+        "--config <run config> --engine subagent --approval approval.json "
+        "{settle_flags} > "
         "runs/settle.log 2>&1` (the config is the $0 replay config the final "
         "build used; run from the workspace root so a relative "
         "intent_zones_file resolves). Those flags are REQUIRED and exact: "

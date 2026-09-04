@@ -196,129 +196,6 @@ def applied_edits(run_dir: str | Path) -> list[dict[str, Any]]:
     return out
 
 
-def _sentence_around(text: str, needle: str) -> str:
-    """The sentence of `text` that contains `needle` (its finished context), or
-    the whole paragraph when the span cannot be located (an edit that a later
-    edit further changed). Deterministic: first occurrence, sentence bounded by
-    ., !, ? or the paragraph edges."""
-    if not text:
-        return needle
-    idx = text.find(needle)
-    if idx == -1:
-        return text
-    lo = 0
-    for m in range(idx - 1, -1, -1):
-        if text[m] in ".!?":
-            lo = m + 1
-            break
-    hi = len(text)
-    for m in range(idx + len(needle), len(text)):
-        if text[m] in ".!?":
-            hi = m + 1
-            break
-    return text[lo:hi].strip()
-
-
-def _sentence_bounds(text: str, start: int, end: int) -> tuple[int, int]:
-    """The ``[lo, hi)`` bounds of the sentence of `text` that spans the offsets
-    ``start..end`` — bounded by ., !, ? or the paragraph edges, the same rule
-    :func:`_sentence_around` applies, but located by OFFSET rather than by
-    searching for a needle (a minimal-diff row whose corrected_text is "," or
-    "" finds the wrong sentence, or none, by text)."""
-    start = max(0, min(start, len(text)))
-    end = max(start, min(end, len(text)))
-    lo = 0
-    for m in range(start - 1, -1, -1):
-        if text[m] in ".!?":
-            lo = m + 1
-            break
-    hi = len(text)
-    for m in range(end, len(text)):
-        if text[m] in ".!?":
-            hi = m + 1
-            break
-    return lo, hi
-
-
-def _anchor_of(edit: dict[str, Any]) -> dict[str, Any] | None:
-    """The row's validator anchor when it carries a usable one, else None."""
-    a = edit.get("anchor")
-    if (isinstance(a, dict) and isinstance(a.get("start"), int)
-            and isinstance(a.get("end"), int) and a["start"] <= a["end"]):
-        return a
-    return None
-
-
-def _accepted_starts(edits: Sequence[dict[str, Any]]) -> list[int | None]:
-    """For each anchored edit, where its inserted text begins in the ACCEPTED
-    paragraph: the anchor's start (an offset into the ORIGINAL text) shifted by
-    the net length change of every anchored edit earlier in the same paragraph.
-    Exact when the applied rows are the paragraph's every tracked change (they
-    are — that is what :func:`applied_edits` selects); `_finished_context`
-    re-checks the inserted text sits there and hunts nearby when it does not.
-    None for an edit with no anchor."""
-    out: list[int | None] = [None] * len(edits)
-    by_para: dict[str, list[int]] = {}
-    for i, e in enumerate(edits):
-        if _anchor_of(e) is not None:
-            by_para.setdefault(str(e.get("para_id", "")), []).append(i)
-    for idxs in by_para.values():
-        idxs.sort(key=lambda i: (edits[i]["anchor"]["start"],
-                                 edits[i]["anchor"]["end"]))
-        shift = 0
-        for i in idxs:
-            a = edits[i]["anchor"]
-            out[i] = a["start"] + shift
-            shift += len(str(a.get("insert_text") or "")) - (a["end"] - a["start"])
-    return out
-
-
-def _nearest(text: str, needle: str, pos: int) -> int | None:
-    """The occurrence of `needle` in `text` closest to `pos`, or None."""
-    best: int | None = None
-    idx = text.find(needle)
-    while idx != -1:
-        if best is None or abs(idx - pos) < abs(best - pos):
-            best = idx
-        idx = text.find(needle, idx + 1)
-    return best
-
-
-def _finished_context(edit: dict[str, Any], acc_start: int | None,
-                      original: dict[str, str], accepted: dict[str, str]
-                      ) -> tuple[str, str]:
-    """The ``(before, after)`` sentence pair for one applied edit: the sentence
-    as it was ingested and the sentence as it now reads. Located by the row's
-    anchor offsets — into the original text for `before`, into the accepted
-    text (via `acc_start`) for `after` — so a minimal-diff row ("," or a pure
-    deletion) lands on ITS sentence, not the first sentence that happens to
-    contain a comma. Falls back to the needle search only for a row with no
-    anchor, and to composing the after-sentence from the before-sentence when
-    the accepted view cannot be read."""
-    pid = str(edit.get("para_id", ""))
-    orig_para = original.get(pid, "")
-    acc_para = accepted.get(pid, "")
-    a = _anchor_of(edit)
-    if a is None or not orig_para:
-        before = edit.get("original_text", "")
-        after = _sentence_around(acc_para, edit.get("corrected_text", ""))
-        return before, after
-    lo, hi = _sentence_bounds(orig_para, a["start"], a["end"])
-    before = orig_para[lo:hi].strip()
-    ins = str(a.get("insert_text") or "")
-    if acc_para and acc_start is not None:
-        s: int | None = acc_start
-        if ins and acc_para[acc_start:acc_start + len(ins)] != ins:
-            # An untracked change shifted the paragraph; the inserted text is
-            # still there, just not where the arithmetic put it.
-            s = _nearest(acc_para, ins, acc_start)
-        if s is not None:
-            alo, ahi = _sentence_bounds(acc_para, s, s + len(ins))
-            return before, acc_para[alo:ahi].strip()
-    composed = (orig_para[lo:a["start"]] + ins + orig_para[a["end"]:hi]).strip()
-    return before, composed
-
-
 def _chunks(items: Sequence[Any], size: int) -> list[list[Any]]:
     return [list(items[i:i + size]) for i in range(0, len(items), size)]
 
@@ -383,10 +260,14 @@ def _walk_schema() -> tuple[dict[str, Any], str]:
 
 _CHANGE_SYSTEM = """\
 You are an adversarial change verifier on a finished book proofread. You are
-shown edits that were APPLIED to the manuscript, each with the sentence as it
-was BEFORE the change and the sentence AS IT NOW READS after it. Your only job
-is to catch a change that made the book WORSE. Judge each edit and report ONLY
-the ones that are a real problem.
+shown edits that were APPLIED to the manuscript. Each paragraph an edit sits in
+is given ONCE, whole, in both views — BEFORE (as the author wrote it) and NOW
+READS (after every tracked change was accepted) — and each edit names its
+paragraph and its own before -> after span. Judge the edit inside the whole
+paragraph: a span that looks cut off, or a quotation mark that looks stray, is
+only a problem if the PARAGRAPH reads that way. Your only job is to catch a
+change that made the book WORSE. Judge each edit and report ONLY the ones that
+are a real problem.
 
 An edit is a problem when, in its finished context, it:
   - breaks_meaning: changes what the sentence says, drops a negation, or leaves
@@ -400,10 +281,12 @@ An edit is a problem when, in its finished context, it:
   - wrong_rule: applies a rule that does not hold here (de-accenting a word the
     dictionary spells with the accent; closing a compound the author keeps open).
 
-Standard: U.S. English, Chicago 17, Merriam-Webster, the house style and voice
-notes below. The bar is a REAL problem — do not relitigate a defensible call, a
-matter of taste, or a change that is simply one of two acceptable forms. When
-unsure whether something is the author's voice, it is voice: leave it alone.
+Standard: U.S. English, Chicago 17, Merriam-Webster — and the HOUSE STYLE
+below, which overrides Chicago wherever the two differ: an edit that installs a
+house form is correct, and an edit into a house form is never `wrong_rule`. The
+bar is a REAL problem — do not relitigate a defensible call, a matter of taste,
+or a change that is simply one of two acceptable forms. When unsure whether
+something is the author's voice, it is voice: leave it alone.
 
 Return JSON {"problems": [...]}. For each PROBLEM only, give the 1-based `index`
 of the edit, a `verdict` from exactly {breaks_meaning, breaks_grammar,
@@ -423,7 +306,9 @@ This is mechanics only. Style, tense inside a flashback, sentence rhythm, and
 VOICE are NOT errors — deliberate coinages, slang, brand names, profanity, and
 intentional repetition are the author's and must never be flagged. When unsure
 whether something is voice, it is voice. Standard: U.S. English, Chicago 17,
-Merriam-Webster, the house style and voice notes below.
+Merriam-Webster — and the HOUSE STYLE below, which overrides Chicago wherever
+the two differ. Text already in a house form (“4:00 AM”, “40 percent”, an
+unspaced em dash) is correct: never flag it and never suggest the Chicago form.
 
 Return JSON {"findings": [...]}. Each row: the `para_id` it is in (from the
 labels below), a verbatim minimal `quote` of the problem span, a one-sentence
@@ -431,30 +316,73 @@ labels below), a verbatim minimal `quote` of the problem span, a one-sentence
 list is a valid, good result — return {"findings": []} if the text is clean."""
 
 
+def _paragraph_before(after: str, edits: Sequence[dict[str, Any]]) -> str:
+    """The paragraph as it read before its edits, composed from the accepted
+    view by undoing each edit's own span — the fallback for a caller that has
+    no reject-all view. Approximate (first occurrence), but a whole paragraph
+    either way."""
+    text = after
+    for e in edits:
+        corr = str(e.get("corrected_text", "") or "")
+        orig = str(e.get("original_text", "") or "")
+        if corr and corr in text:
+            text = text.replace(corr, orig, 1)
+    return text
+
+
 def _change_user(batch: list[dict[str, Any]], accepted: dict[str, str],
-                 original: dict[str, str] | None = None,
-                 acc_starts: Sequence[int | None] | None = None) -> str:
-    lines = []
+                 original: dict[str, str] | None = None) -> str:
+    """The change-verify packet: every paragraph the batch touches, ONCE, in
+    both views — as ingested and as it now reads — then the edits, each naming
+    its paragraph and its own before -> after span.
+
+    WHOLE paragraphs, never a sentence slice. An earlier packet cut the
+    accepted text at the nearest `.`, `!`, or `?` around the edit, so an edit
+    containing a period or a quote mark — "$0.05", "Slow down!”" — reached the
+    verifier as a fragment ending mid-amount or opening on a closing quote,
+    and was reported as "truncated" / "stray closing quotation mark" (Georgis,
+    2026-09-04). The paragraph is the unit the author reads; it is the unit
+    the verifier judges."""
+    original = original or {}
+    order: list[str] = []
+    by_para: dict[str, list[dict[str, Any]]] = {}
+    for e in batch:
+        pid = str(e.get("para_id", ""))
+        if pid not in by_para:
+            order.append(pid)
+            by_para[pid] = []
+        by_para[pid].append(e)
+    paras: list[str] = []
+    for pid in order:
+        after = accepted.get(pid, "")
+        before = original.get(pid) or (_paragraph_before(after, by_para[pid])
+                                       if after else "")
+        paras.append(f"[{pid}] BEFORE: {before or '(not available)'}\n"
+                     f"[{pid}] NOW READS: {after or '(not available)'}")
+    lines: list[str] = []
     for n, e in enumerate(batch, 1):
-        acc_start = acc_starts[n - 1] if acc_starts is not None else None
-        before, after = _finished_context(e, acc_start, original or {}, accepted)
         lines.append(
-            f"{n}. rule: {e.get('error_type', '?')}\n"
+            f"{n}. in [{e.get('para_id', '')}] rule: {e.get('error_type', '?')}\n"
             f"   edit: {e.get('original_text', '')!r} -> "
-            f"{e.get('corrected_text', '')!r}\n"
-            f"   before: {before}\n"
-            f"   now reads: {after}")
-    return "\n\n".join(lines)
+            f"{e.get('corrected_text', '')!r}")
+    return ("PARAGRAPHS (whole, both views):\n\n" + "\n\n".join(paras)
+            + "\n\nEDITS:\n\n" + "\n\n".join(lines))
 
 
 def _walk_user(read: list[tuple[str, str]]) -> str:
     return "\n\n".join(f"[{pid}] {text}" for pid, text in read)
 
 
-def _context_block(context: str) -> str:
+def _context_block(context: str, role: str = "reader") -> str:
+    """The shared house-rule block (galley/house_style.py — one constant for
+    the walk, the verifier, and the settle judge) followed by the run's own
+    voice notes. The house block comes first and unconditionally: it is what
+    keeps a Chicago-trained reader from flagging “4:00 AM”."""
+    from galley.house_style import house_rules_block
     context = (context or "").strip()
     body = context if context else "No special voice notes were supplied."
-    return f"\n\nHOUSE STYLE AND VOICE NOTES:\n{body}"
+    return (f"\n\n{house_rules_block(role)}"
+            f"\n\nVOICE NOTES FOR THIS BOOK:\n{body}")
 
 
 # ---- the gates ---------------------------------------------------------------
@@ -508,34 +436,50 @@ def verify_changes(edits: Sequence[dict[str, Any]], accepted: dict[str, str],
                    provider, model: str, usage: Usage, *,
                    context: str = "", batch_size: int = DEFAULT_CHANGE_BATCH,
                    max_tokens: int = DEFAULT_MAX_TOKENS,
-                   original: dict[str, str] | None = None) -> list[ChangeProblem]:
+                   original: dict[str, str] | None = None,
+                   concurrency: int = 1) -> list[ChangeProblem]:
     """Re-read every applied edit in its finished context and return the ones
     that are a real problem. One `complete_structured` call per `batch_size`
     edits; a reply that did not come back clean is a loss (no problems), never a
     parse of a half-answer. `original` is the reject-all view (see
-    :func:`paragraph_views`); with it, each edit's before/after sentence pair is
-    located by its anchor offsets rather than by searching for its text."""
+    :func:`paragraph_views`); with it, each paragraph's BEFORE view is the
+    text as ingested rather than one recomposed from the accepted view.
+
+    `concurrency` batches are in flight at once (`docproof.fanout.fan_out`);
+    replies are folded in BATCH ORDER on this thread, so the problems list,
+    the usage ledger, and the loss record read exactly as the sequential
+    loop's did. On Georgis (2026-09-04) ~95 verify calls took ~5 minutes one
+    at a time under an `api.concurrency` of 8."""
+    from docproof.fanout import fan_out, fold_usage
     schema, schema_name = _change_schema()
-    system = _CHANGE_SYSTEM + _context_block(context)
+    system = _CHANGE_SYSTEM + _context_block(context, "verifier")
     problems: list[ChangeProblem] = []
     edits = list(edits)
-    acc_starts = _accepted_starts(edits)
     batches = _chunks(list(range(len(edits))), batch_size)
-    for n, batch_idx in enumerate(batches, 1):
+
+    def fetch(numbered):
+        n, batch_idx = numbered
         batch = [edits[i] for i in batch_idx]
-        user = _change_user(batch, accepted, original,
-                            [acc_starts[i] for i in batch_idx])
+        user = _change_user(batch, accepted, original)
         # Progress for a headless run: each call is a model turn (a whole
         # subprocess on the subagent lane), and a 2,000-edit book is ~80 of
         # them in silence otherwise.
-        log.info("change verifier: batch %d/%d (%d edit(s)) on %s — %d "
-                 "problem(s) so far", n, len(batches), len(batch), model,
-                 len(problems))
+        log.info("change verifier: batch %d/%d (%d edit(s)) on %s", n,
+                 len(batches), len(batch), model)
+        local = Usage()                 # folded on the calling thread
         result = _ask_with_retry(provider, model=model, system=system,
                                  user=user, schema=schema,
                                  schema_name=schema_name, max_tokens=max_tokens,
-                                 usage=usage,
+                                 usage=local,
                                  what=f"change batch {n}/{len(batches)}")
+        return result, local
+
+    for (n, batch_idx), (result, local) in fan_out(
+            list(enumerate(batches, 1)), fetch, concurrency=concurrency):
+        batch = [edits[i] for i in batch_idx]
+        fold_usage(usage, local)
+        log.info("change verifier: batch %d/%d done — %d problem(s) so far",
+                 n, len(batches), len(problems))
         if result.stop_reason != "ok":
             log.warning("verify_changes: reply not ok (stop_reason=%s%s) — %d "
                         "edit(s) unread this batch", result.stop_reason,
@@ -564,25 +508,39 @@ def verify_changes(edits: Sequence[dict[str, Any]], accepted: dict[str, str],
 def walk_finished_text(accepted: dict[str, str], provider, model: str,
                        usage: Usage, *, context: str = "",
                        char_budget: int = DEFAULT_WALK_CHARS,
-                       max_tokens: int = DEFAULT_MAX_TOKENS) -> list[ResidualFinding]:
+                       max_tokens: int = DEFAULT_MAX_TOKENS,
+                       concurrency: int = 1) -> list[ResidualFinding]:
     """Proofread the accepted text for residual errors and return them. One
     `complete_structured` call per read (a `char_budget` slice of paragraphs);
-    a non-clean reply is a loss for that read, not a parse of a truncation."""
+    a non-clean reply is a loss for that read, not a parse of a truncation.
+    `concurrency` reads are in flight at once, folded in READ ORDER (see
+    :func:`verify_changes`)."""
+    from docproof.fanout import fan_out, fold_usage
     schema, schema_name = _walk_schema()
-    system = _WALK_SYSTEM + _context_block(context)
+    system = _WALK_SYSTEM + _context_block(context, "proofreader")
     valid_ids = set(accepted)
     found: list[ResidualFinding] = []
     reads = _walk_reads(accepted, char_budget)
     unread_paragraphs: list[str] = []
     UNREAD.clear()
-    for n, read in enumerate(reads, 1):
+
+    def fetch(numbered):
+        n, read = numbered
         log.info("finished-text walk: read %d/%d (%d paragraph(s), %s..%s) "
-                 "on %s — %d residual(s) so far", n, len(reads), len(read),
-                 read[0][0], read[-1][0], model, len(found))
+                 "on %s", n, len(reads), len(read), read[0][0], read[-1][0],
+                 model)
+        local = Usage()                 # folded on the calling thread
         result = _ask_with_retry(provider, model=model, system=system,
                                  user=_walk_user(read), schema=schema,
                                  schema_name=schema_name, max_tokens=max_tokens,
-                                 usage=usage, what=f"walk read {n}/{len(reads)}")
+                                 usage=local, what=f"walk read {n}/{len(reads)}")
+        return result, local
+
+    for (n, read), (result, local) in fan_out(
+            list(enumerate(reads, 1)), fetch, concurrency=concurrency):
+        fold_usage(usage, local)
+        log.info("finished-text walk: read %d/%d done — %d residual(s) so far",
+                 n, len(reads), len(found))
         if result.stop_reason != "ok":
             log.warning("walk_finished_text: reply not ok (stop_reason=%s%s) — a "
                         "read of %d paragraph(s) went unread", result.stop_reason,
@@ -648,7 +606,7 @@ class VerifyRunResult:
 def verify_run(run_dir: str | Path, provider, model: str, usage: Usage, *,
                context: str = "", run_changes: bool = True,
                run_walk: bool = True, max_tokens: int = DEFAULT_MAX_TOKENS,
-               ) -> VerifyRunResult:
+               concurrency: int = 1) -> VerifyRunResult:
     """Both gates over a finished run dir. Reads the deliverable's two views and
     findings.json deterministically, then spends one model call per batch/read.
     With NO accepted text — no deliverable, or the OOXML tooling is missing —
@@ -670,7 +628,7 @@ def verify_run(run_dir: str | Path, provider, model: str, usage: Usage, *,
         _take_losses("changes")
         problems = verify_changes(edits, accepted, provider, model, usage,
                                   context=context, max_tokens=max_tokens,
-                                  original=original)
+                                  original=original, concurrency=concurrency)
         lost = _take_losses("changes")
         n_calls = -(-len(edits) // DEFAULT_CHANGE_BATCH) if edits else 0
         if n_calls and len(lost) >= n_calls:
@@ -681,7 +639,8 @@ def verify_run(run_dir: str | Path, provider, model: str, usage: Usage, *,
     if run_walk:
         _take_losses("walk")
         residuals = walk_finished_text(accepted, provider, model, usage,
-                                       context=context, max_tokens=max_tokens)
+                                       context=context, max_tokens=max_tokens,
+                                       concurrency=concurrency)
         lost = _take_losses("walk")
         n_calls = len(_walk_reads(accepted, DEFAULT_WALK_CHARS))
         if n_calls and len(lost) >= n_calls:
@@ -698,7 +657,8 @@ def verify_delta(run_dir: str | Path, para_ids: Sequence[str], provider,
                  model: str, usage: Usage, *, context: str = "",
                  run_changes: bool = True, run_walk: bool = True,
                  max_tokens: int = DEFAULT_MAX_TOKENS,
-                 char_budget: int = DEFAULT_WALK_CHARS) -> VerifyRunResult:
+                 char_budget: int = DEFAULT_WALK_CHARS,
+                 concurrency: int = 1) -> VerifyRunResult:
     """Both gates over ONLY the named paragraphs of a run — what the settle
     loop re-reads after a round touched them. Same packets and prompts as the
     full run (an applied edit in its finished context; the accepted text of
@@ -721,11 +681,12 @@ def verify_delta(run_dir: str | Path, para_ids: Sequence[str], provider,
         if edits:
             problems = verify_changes(edits, acc, provider, model, usage,
                                       context=context, max_tokens=max_tokens,
-                                      original=orig)
+                                      original=orig, concurrency=concurrency)
     if run_walk and acc:
         residuals = walk_finished_text(acc, provider, model, usage,
                                        context=context, max_tokens=max_tokens,
-                                       char_budget=char_budget)
+                                       char_budget=char_budget,
+                                       concurrency=concurrency)
     return VerifyRunResult(problems, residuals, ran_changes=run_changes,
                            ran_walk=run_walk)
 

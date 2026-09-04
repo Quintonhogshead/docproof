@@ -299,14 +299,17 @@ def test_a_clean_rewrite_that_does_not_repeat_the_mechanical_fix_still_loses():
 def test_disjoint_minimal_diffs_inside_one_rewritten_sentence_do_not_compose():
     # The production failure itself: the mechanical fix and the rewrite touch
     # DIFFERENT characters, so their shrunk spans miss each other and the
-    # validator would have let both land — composing "was was". The copy-edit
-    # row claims its whole quote, so the two are contested and only one lands.
-    doc = _doc("The response was corrupted and the text read badly.")
-    mech = [_finding("m-1", "body-0000", "The response was corrupted",
-                     "The response was was corrupted")]
+    # validator would have let both land — composing a garbled third version.
+    # The copy-edit row claims its whole quote, so the two are contested and
+    # only one lands. (The mechanical row is a real typo fix: a row that
+    # itself ships a doubled word is refused outright by the validator's
+    # doubled-word guard, Georgis 2026-09-04, and never reaches a contest.)
+    doc = _doc("The response was corupted and the text read badly.")
+    mech = [_finding("m-1", "body-0000", "The response was corupted",
+                     "The response was corrupted")]
     ce = [_finding("c-1", "body-0000",
-                   "The response was corrupted and the text read badly.",
-                   "The response was corrupted, and the text read badly.",
+                   "The response was corupted and the text read badly.",
+                   "The response was corupted, and the text read badly.",
                    lane="copyedit")]
     result = md.merge_lanes(mech, ce, doc, rewrite_checker=ALWAYS_CLEAN)
     landed = [f for f in result.validated if f.status == "validated"]

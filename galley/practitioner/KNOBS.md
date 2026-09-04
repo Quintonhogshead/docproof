@@ -351,7 +351,7 @@ wrongly dropped on a bad grep.)
 | `error_types[key]` | `{group,passes,token_budget}` | Per-category repeat reads. `passes:2` = union re-read (house-comma recipe); costs ~2× that category. Custom EDIT-channel replay types go here (see below). |
 | `languagetool.picky` | off | +~1 candidate/44k words; most picky rules are the filtered style class. |
 | `languagetool.edit_word_replacements` | off | Whether an LT suggestion that swaps one WORD for another (boop→book, sesh→mesh) may become a tracked edit. OFF: every real-word swap routes to a margin QUERY instead — LT still edits punctuation/spacing/casing/en-dash blind, still ASKS about a word change, but never applies one silently (Purpura: 35 auto-applied corruptions). LT also never de-accents a word MW spells with the accent (cliché), and now respects the protected-noun allowlist for EVERY rule, not just misspellings. Turn on only for a house that has measured LT word edits safe. |
-| `sweeps` | 15 rules | Deterministic $0 rules. OMITTING THE SECTION KILLS ALL OF THEM. Add bespoke `.py`/regex keys here. |
+| `sweeps` | 16 rules | Deterministic $0 rules. OMITTING THE SECTION KILLS ALL OF THEM. Built-in keys ONLY — Config rejects a path or a bespoke key ("unknown sweep"). Bespoke rules run through `docproof sweep IN --rule F` and fold in as `import-findings` rows (see the bespoke sweep contract below). |
 | `smoothing.max_per_1000_words` | preset (5.0 business) | Copy-edit volume ceiling. Drop toward 2.5 for voice-heavy authors (fragments/profanity/initial conjunctions are the product). |
 | `residuals.max_per_rule` | 150 | Cap on same-rule findings before overflow is DROPPED. Raise (e.g. 300) when a legit high-count class (numerals) would overflow. |
 | `edit_guard.max_added_chars` | 16 | Max chars an edit may ADD before it must ride as a query. Raise ONLY for hand-verified composites. |
@@ -359,7 +359,7 @@ wrongly dropped on a bad grep.)
 | `low_confidence` (`confirm`) | on | Recovers stranded low-conf edits (compound_sentence_comma / comma_splice in dialogue). |
 | `repair` | trigger ≥3 flags/sentence | Broken sentences fixed as atomic clusters via Fable. |
 | `meaning_check` / `fix_check` | off in base; ON via `--stage mechanical-wave` | The two gates. The BASE config ships them off; the mechanical-wave stage turns both on (that stage IS the "both gates" recipe). `meaning` punctuation/case-only diffs bypass to `fix` only (deterministic) — do not disable to "save a hold". |
-| `chapter_sweep` | off | ~$18 Fable / ~$3 Sonnet, or $0 as subagents. Plan line, never default. |
+| `chapter_sweep` | **ON under `--stage mechanical-wave`, model `gpt-5.6-luna`** (base off) | The six-window chapter sweep is Galley's FIRST lane on every book — wave 1 line 1, before the ladder (Quinton, 2026-09-04: best bang for the buck, by far). Luna ≈ $1–2/book paid; PLUS a six-window Sonnet sweep as $0 session subagents, imported. Fable ≈ $18 only when a thread spans the book. The driver's mechanical-wave stage enables it; a bare `review` config still ships it off. |
 | `sapling` | off | ~$34/long novel, key is FLY-ONLY (no-ops silently local). Explicit char budget or leave off. |
 | `tracked_changes_policy` | `abort` | `accept_all_first` to review a doc that already has tracked changes. |
 | `recurrence` | on | Propagates a fix to identical surfaces — degenerate-surface flood guard is in ≥v0.116; never seeds from a curated/imported row. |
@@ -402,6 +402,12 @@ whole-book facts (names, established directions/quantities, refrains seen) —
 never the whole book in one context. One Opus subagent per window is the
 default; use Fable when a thread genuinely spans the book. Require each
 subagent to WRITE its rows to a file (subagents that answer inline lose work).
+
+**The strict screen (before any fleet row is imported).** Read the WHOLE
+sentence with the change applied before deciding; reject if the applied
+sentence is ungrammatical. A row that reads fine in isolation can break its
+sentence: Georgis (2026-09-04), "standing silent" → "stood silent" produced
+"was stood silent". The screen has the full sentence — use it.
 
 **Output contract.** Verbatim quote→correction rows, `import-findings`
 schema, on the **EDIT-channel `galley_read` type** (declared in
@@ -478,8 +484,33 @@ on this path (rows are curated); the word-count delta guard still does.
   edit_damage}], "open": [], "residuals_seen": [...], "cost", "notes"}`.
   Reason prefixes: `duplicate | overlap_loser | voice | intent_zone |
   style_only | fact | unanchorable | walker_wrong | unresolved_after_N |
-  ambiguous_anchor | editorial_note | verifier_reverted | oversize |
-  space_deletion | rejected_* | no_suggestion | edit_damage:<verdict>`.
+  ambiguous_anchor | editorial_note | verifier_reverted | verifier_confirmed |
+  verifier_overruled | oversize | space_deletion | rejected_* |
+  no_suggestion | edit_damage:<verdict> | rewrite_class:<why> |
+  undoes_house_style:<sweep key> | composite_mismatch | duplicated_fragment`.
+- **Settle guards (v0.185.0, from the Georgis run).** (1) The walk, the
+  change verifier, and the settle judge all carry ONE house-rule block
+  (`galley/house_style.py`) and are told a house form (`4:00 AM`, `40
+  percent`, unspaced em dash, serial comma, punctuation inside quotes,
+  singles inside dialogue, numbers spelled to one hundred) is never an
+  error; settle additionally sweeps the candidate paragraph and DROPS any
+  settlement the configured sweeps would re-fire on (`undoes_house_style`).
+  (2) `--mechanical-only` (implied by `--approval` whose manifest says
+  `mechanical_only`): a suggestion may become an edit only when it is
+  punctuation/case/hyphen/space-only, or changes at most ONE word and that
+  word is a function word or a same-stem spelling/inflection fix (≤2 edits);
+  anything larger ships as a QUERY carrying the suggestion
+  (`rewrite_class:<why>`). (3) After every rebuild the paragraphs the round
+  wrote are read back and compared with what the decisions said they should
+  read; a mismatch, or a five-word run now repeated inside the paragraph
+  that the source did not repeat, reverts the round's settlements there to
+  queries (`composite_mismatch` / `duplicated_fragment`). certify's artifact
+  scan fails on the same repeat. (4) A verifier flag on a composite gets a
+  judge SECOND LOOK (keep|revert) before a revert: `verifier_overruled`
+  keeps it, `verifier_confirmed` reverts; `verifier_reverted` only when the
+  second look could not be had (deterministic engine unchanged). (5) The
+  change verifier's packet is the WHOLE paragraph in both views — never a
+  sentence slice — so "$0.05" and "Slow down!”" no longer read as truncated.
 - **`outcome.json`**: `{"outcome": done|needs_human, "reason", "evidence":
   {words, applied_edits, edit_density_per_kword, rewrite_share,
   unresolved_queries, edit_damage, …}, "hubspot": {"object": "0-970",
@@ -490,9 +521,26 @@ on this path (rows are curated); the word-count delta guard still does.
 
 ## Bespoke sweep contract (so you never read `sweeps.py`)
 
+- A bespoke rule is NOT a `sweeps:` key: Config accepts only the built-in
+  keys and rejects a path or a custom name ("unknown sweep"). Bespoke rules
+  live outside the run config and enter the build as import rows.
 - Author a `.py` sweep or a yaml regex; run `docproof sweep IN --rule F`
   **dry-run first** — it prints the POST-NORMALIZATION canonical text your rule
-  must target (quotes already curled, canonical spaces). Then `--apply`.
+  must target (quotes already curled, canonical spaces) and the match count.
+- **Fold the matches in as `import-findings` rows** (the Georgis path,
+  2026-09-04), rather than `--apply`-ing a separate build: `docproof sweep IN
+  --rule F --json > runs/sweep_<key>.json` gives one finding per match; write
+  one import row per match with `para_id`, `original_text` = a ~12-character
+  window around the match (the matched text plus a few characters either
+  side — NOT the whole sentence, so the row cannot collide with another
+  row's claim on the same sentence), `corrected_text` = that window with the
+  fix applied, `occurrence` = which occurrence of that window in the
+  paragraph (count from the canonical text; a 12-char window repeats more
+  often than a sentence does), `error_type` = the rule key (declare it in
+  `error_types` or let intake remap it onto `imported_edit`), `confidence:
+  high`. Then `docproof import-findings ROWS IN --config C --out RUN` with
+  the rest of the curated rows. `--apply` remains for a one-off standalone
+  build only.
 - Must be **idempotent** — running twice changes nothing the second time; the
   verb refuses non-idempotent rules.
 - Sweeps **claim spans first**: a curated edit whose span contains an ellipsis

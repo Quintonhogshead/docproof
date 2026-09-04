@@ -153,7 +153,11 @@ def test_common_word_surface_is_dropped_not_flooded(caplog):
     with caplog.at_level("INFO"):
         out = propagate_recurrences([seed], ps)
     assert out == []
-    assert any("common word" in r.message for r in caplog.records)
+    # "and" is a function word, so the seed guard (Georgis, 2026-09-04) now
+    # refuses it before the site count is ever taken; either refusal is the
+    # right outcome, and both are logged rather than silent.
+    assert any("common word" in r.message or "degenerate seed" in r.message
+               for r in caplog.records)
 
 
 def test_a_real_word_recurring_a_few_times_is_still_queried():

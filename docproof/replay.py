@@ -446,6 +446,10 @@ class RebuildResult:
     tally: dict[str, int]
     reanchored: int = 0
     outputs: Any = None
+    # Rows the post-validation artifact scan dropped (mergedesk.ArtifactHit
+    # dicts): two rows that each pass the validator's overlap check and still
+    # compose into ",," / "7:00 :00 AM" lose the later one (Georgis).
+    artifacts: list = dataclasses.field(default_factory=list)
 
 
 def rebuild_from_rows(cfg: Config, *, manuscript: str | Path, rows: list[dict],
@@ -500,15 +504,46 @@ def rebuild_from_rows(cfg: Config, *, manuscript: str | Path, rows: list[dict],
         remap_unchanneled=remap_unchanneled, id_prefix=id_prefix,
         format_round_trip=True,
         paragraphs={p.para_id: p.text for p in prepared.doc.paragraphs})
+    from .sweepguard import SweepGuard
+    sweep_guard = SweepGuard.from_config(cfg, prepared.variant)
     checked = validate_findings(findings, prepared.doc, cfg.min_confidence,
                                 query_types=prepared.query_types,
-                                format_types=prepared.format_types)
+                                format_types=prepared.format_types,
+                                sweep_guard=sweep_guard)
+    # The merged-result artifact scan the merge desk runs for two lanes, run
+    # here for rows composed from any number of lanes: two rows that each
+    # pass the validator's overlap check can still splice into ",," or a
+    # space before punctuation. The LATER row loses (rows arrive mechanics
+    # first), and the loop is bounded and re-validates from scratch.
+    artifacts: list[dict] = []
+    if any(f.status == "validated" for f in checked):
+        from .mergedesk import MergeResult, iterate_until_clean
+        merged, hits = iterate_until_clean(
+            MergeResult(findings=list(findings)), prepared.doc,
+            min_confidence=cfg.min_confidence,
+            query_types=prepared.query_types,
+            format_types=prepared.format_types, later_loses=True,
+            sweep_guard=sweep_guard)
+        if hits:
+            keep = {f.finding_id for f in merged.findings}
+            dropped_rows = [f for f in findings if f.finding_id not in keep]
+            findings = [f for f in findings if f.finding_id in keep]
+            checked = merged.validated + [
+                dataclasses.replace(f, status="rejected_overlap")
+                for f in dropped_rows]
+            artifacts = [h.to_json() for h in hits]
+            for h in hits:
+                log.warning("rebuild: artifact %r in %s — %s", h.pattern,
+                            h.para_id,
+                            f"dropped {h.dropped_id}" if h.resolved
+                            else "UNRESOLVED")
     tally: dict[str, int] = {}
     for f in checked:
         tally[f.status] = tally.get(f.status, 0) + 1
     result = RebuildResult(prepared=prepared, findings=findings,
                            rejects=rejects, remapped=remapped, checked=checked,
-                           tally=tally, reanchored=reanchored)
+                           tally=tally, reanchored=reanchored,
+                           artifacts=artifacts)
     if dry_run:
         return result
     from .models import Usage

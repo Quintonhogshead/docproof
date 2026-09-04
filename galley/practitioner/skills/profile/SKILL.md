@@ -33,6 +33,17 @@ book.
    proposals for the plan gate (`docproof sweep --rule` dry-run gives you the
    canonical-form check for free — quotes are already curled post-normalization,
    so target the canonical form).
+3b. **Number extraction ($0) — every number, always.** Grep the canonical
+   text for every numeral (`\d`) and every spelled number (one … one
+   hundred, thousand, million, ordinals, `half`/`dozen`) and write each hit
+   with its para_id and a line of context to `runs/numbers.txt`. Tag each
+   as age / date / year / time / sum / count / distance / other. This file is
+   the NUMBER AUDIT's input (Quinton, 2026-09-04: Galley audits every number
+   in the text): wave 1 reviews it for house style (spell out to one hundred,
+   `4:00 AM`, `40 percent`), internal consistency (ages vs. years, running
+   totals, weekday vs. date), and arithmetic against the rest of the book.
+   A contradiction is an author QUERY, never an edit. Record the count in the
+   profile (`numbers: {count, by_kind}`).
 4. **Intent zones.** Read for author-declared conventions: capitalized terms of
    art ("my Mom" declared in-text), deliberate wordplay or big-letter passages,
    meta-text that discusses its own wording ("TRY and live by"), dialect and
@@ -50,8 +61,8 @@ book.
    Mechanics posture is identical for all: hammered.
 6. **Write the profile JSON** into the workspace and the casefile: genre,
    posture, word count, chapters, proper_nouns{enforce,protect}, tics[],
-   intent_zones[], bespoke_sweeps[], comment_budget (≈1 per 1k words unless
-   told otherwise), reading band.
+   intent_zones[], bespoke_sweeps[], numbers{count, by_kind, file},
+   comment_budget (≈1 per 1k words unless told otherwise), reading band.
 
 ## Outputs feed
 

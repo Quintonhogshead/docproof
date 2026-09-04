@@ -352,12 +352,14 @@ def test_a_verifier_flag_on_a_composite_reverts_it_to_a_query(tmp_path,
     _walk(run, [{"para_id": p0, "quote": "thee", "problem": "wrong word",
                  "suggestion": "the", "severity": "high"}])
     # round 1 delta verify: the change verifier flags the composite (index 1
-    # of the paragraph's applied edits), the walk is clean; nothing after.
+    # of the paragraph's applied edits), the walk is clean; the judge gets a
+    # second look and CONFIRMS the verifier; nothing after.
     prov = _Provider(
         {"problems": [{"index": 1, "verdict": "voice_damage",
                        "detail": "author wrote thee on purpose",
                        "fix": "thee"}]},
-        {"findings": []})
+        {"findings": []},
+        {"answer": "revert", "reason": "archaic voice, deliberate"})
     monkeypatch.setattr(m, "_resolve_engine",
                         lambda args, cfg, default_model=None:
                         ("provider", prov, "fake-model"))
@@ -366,13 +368,16 @@ def test_a_verifier_flag_on_a_composite_reverts_it_to_a_query(tmp_path,
     assert rc == 0
     recs, st = _records(run)
     r = recs[residual_id(p0, "thee")]
-    assert r.action == "query" and r.reason == "verifier_reverted"
+    assert r.action == "query" and r.reason == "verifier_confirmed"
     acc = _accepted(run)
     assert "thee desk" in acc[p0]               # the owner's edit stands
     env = json.loads((run / "findings.json").read_text("utf-8"))
     assert any(row.get("queried") and row["para_id"] == p0
                for row in env["findings"])
-    assert len(prov.calls) == 2
+    assert len(prov.calls) == 3
+    look = prov.calls[2]
+    assert "VERIFIER SAYS (voice_damage)" in look["user"]
+    assert "HOUSE STYLE" in look["system"]
     assert certify_run(run).checks and {
         c.name: c.status for c in certify_run(run).checks
     }["residual settlement"] == "pass"
@@ -858,3 +863,324 @@ def test_outcome_density_counts_wording_edits_not_mechanics(tmp_path, capsys):
     assert oc["outcome"] == "done"
     assert oc["evidence"]["mechanical_edits"] >= 4
     assert oc["evidence"]["wording_edits"] == 0
+
+
+# --- Georgis (2026-09-04): the verifier's second look ---------------------------
+
+def test_the_judge_can_overrule_the_verifier_and_the_composite_stands(
+        tmp_path, monkeypatch):
+    """The verifier is Chicago-trained; the house is not. When the judge,
+    told the house rules, answers `keep`, the settlement stays applied and
+    the record says `verifier_overruled` — no revert, no query."""
+    src = _manuscript(tmp_path)
+    ids, _doc = _para_ids(src)
+    p0 = ids[0]
+    run = _build(tmp_path, src, [
+        {"para_id": p0, "original_text": "teh", "corrected_text": "thee",
+         "confidence": "high"}])
+    _walk(run, [{"para_id": p0, "quote": "thee", "problem": "wrong word",
+                 "suggestion": "the", "severity": "high"}])
+    prov = _Provider(
+        {"problems": [{"index": 1, "verdict": "wrong_rule",
+                       "detail": "should be thee", "fix": "thee"}]},
+        {"findings": []},
+        {"answer": "keep", "reason": "the is the plain typo fix"})
+    monkeypatch.setattr(m, "_resolve_engine",
+                        lambda args, cfg, default_model=None:
+                        ("provider", prov, "fake-model"))
+    rc = main(["galley", "settle", str(run), "--source", str(src),
+               "--config", _replay_config(tmp_path), "--engine", "provider"])
+    assert rc == 0
+    recs, st = _records(run)
+    r = recs[residual_id(p0, "thee")]
+    assert r.action == "absorb" and r.reason.startswith("verifier_overruled")
+    assert "the desk" in _accepted(run)[p0]
+    assert len(prov.calls) == 3
+    assert certify_run(run).checks and {
+        c.name: c.status for c in certify_run(run).checks
+    }["residual settlement"] == "pass"
+
+
+def test_a_failed_second_look_keeps_todays_revert(tmp_path, monkeypatch):
+    src = _manuscript(tmp_path)
+    ids, _doc = _para_ids(src)
+    p0 = ids[0]
+    run = _build(tmp_path, src, [
+        {"para_id": p0, "original_text": "teh", "corrected_text": "thee",
+         "confidence": "high"}])
+    _walk(run, [{"para_id": p0, "quote": "thee", "problem": "wrong word",
+                 "suggestion": "the", "severity": "high"}])
+    prov = _Provider(
+        {"problems": [{"index": 1, "verdict": "voice_damage",
+                       "detail": "deliberate", "fix": "thee"}]},
+        {"findings": []})                 # the second look gets {} -> a loss
+    monkeypatch.setattr(m, "_resolve_engine",
+                        lambda args, cfg, default_model=None:
+                        ("provider", prov, "fake-model"))
+    rc = main(["galley", "settle", str(run), "--source", str(src),
+               "--config", _replay_config(tmp_path), "--engine", "provider"])
+    assert rc == 0
+    recs, _st = _records(run)
+    r = recs[residual_id(p0, "thee")]
+    assert r.action == "query" and r.reason == "verifier_reverted"
+    assert "thee desk" in _accepted(run)[p0]
+
+
+# --- Georgis: house style is not up for settlement ------------------------------
+
+def test_a_settlement_the_sweeps_would_undo_is_dropped(tmp_path):
+    """The walk, prompted Chicago, flagged the house "4:00 AM" and settle
+    wrote "4:00 a.m."; `sweep_time_of_day` fired straight back. Now the
+    candidate paragraph is swept before the settlement lands."""
+    paras = list(PARAGRAPHS) + ["The train left at 4:00 AM and we slept."]
+    src = _manuscript(tmp_path, paras)
+    ids, _doc = _para_ids(src)
+    p5 = ids[5]
+    run = _build(tmp_path, src, [
+        {"para_id": ids[0], "original_text": "teh", "corrected_text": "the",
+         "confidence": "high"}])
+    _walk(run, [{"para_id": p5, "quote": "4:00 AM",
+                 "problem": "Chicago uses lowercase periods for a.m.",
+                 "suggestion": "4:00 a.m.", "severity": "medium"},
+                {"para_id": p5, "quote": "we slept", "problem": "tense",
+                 "suggestion": "we sleep", "severity": "low"}])
+    assert _settle(tmp_path, run, src) == 0
+    recs, st = _records(run)
+    r = recs[residual_id(p5, "4:00 AM")]
+    assert r.action == "drop"
+    assert r.reason == "undoes_house_style:sweep_time_of_day"
+    assert "4:00 AM" in _accepted(run)[p5]
+    # an ordinary settlement in the same paragraph still lands
+    assert recs[residual_id(p5, "we slept")].action == "add"
+    assert "we sleep" in _accepted(run)[p5]
+    assert st.open == []
+
+
+def test_the_judge_prompt_carries_the_house_rules():
+    from galley.house_style import HOUSE_RULES
+    from galley.settle import _judge_system
+    system = _judge_system("Keep the narrator's slang.")
+    for rule in HOUSE_RULES:
+        assert rule in system
+    assert system.index("HOUSE STYLE") < system.index("VOICE NOTES")
+    assert "Keep the narrator's slang." in system
+
+
+# --- Georgis: the mechanical-only guard ------------------------------------------
+
+def test_rewrite_class_names_the_georgis_examples():
+    from galley.settle import rewrite_class
+    # must become queries
+    assert rewrite_class("No job wasn't good enough.",
+                         "No job was too menial for me.")
+    assert rewrite_class("became more resolved with the fact",
+                         "became more resigned to the fact")
+    assert rewrite_class("virulent male", "virile male")
+    assert rewrite_class("fresh grave", "fresh gravesite")
+    assert rewrite_class("and told to join", "and join")
+    assert rewrite_class("Chewing rapidly.", "I chewed rapidly.")
+    # may apply
+    assert rewrite_class("at that moment Emily's age",
+                         "at that moment that Emily's age") is None
+    assert rewrite_class("borne from", "born from") is None
+    assert rewrite_class("Ju-Jitsu", "ju-jitsu") is None
+    assert rewrite_class("dark sunken eyes", "dark, sunken eyes") is None
+    assert rewrite_class("hellbent", "hell-bent") is None
+    assert rewrite_class("recieve the letter", "receive the letter") is None
+    assert rewrite_class("teh desk", "the desk") is None
+    assert rewrite_class("in a moonless night", "on a moonless night") is None
+    assert rewrite_class("ordered I be taken", "ordered that I be taken") is None
+    assert rewrite_class("as a man and wife", "as man and wife") is None
+
+
+def test_mechanical_only_turns_a_rewrite_into_a_query_with_the_suggestion(
+        tmp_path):
+    src = _manuscript(tmp_path)
+    ids, _doc = _para_ids(src)
+    p2, p1 = ids[2], ids[1]
+    run = _build(tmp_path, src, [
+        {"para_id": ids[0], "original_text": "teh", "corrected_text": "the",
+         "confidence": "high"}])
+    _walk(run, [
+        {"para_id": p2, "quote": "sure the total would not change again",
+         "problem": "awkward", "suggestion": "certain the sum was fixed",
+         "severity": "low"},
+        {"para_id": p2, "quote": "sure the total",
+         "problem": "missing that", "suggestion": "sure that the total",
+         "severity": "medium"},
+        {"para_id": p1, "quote": "recieve", "problem": "misspelling",
+         "suggestion": "receive", "severity": "high"},
+    ])
+    assert _settle(tmp_path, run, src, "--mechanical-only") == 0
+    recs, st = _records(run)
+    q = recs[residual_id(p2, "sure the total would not change again")]
+    assert q.action == "query" and q.reason.startswith("rewrite_class:")
+    assert "certain the sum was fixed" in q.question
+    assert recs[residual_id(p2, "sure the total")].action == "add"
+    assert recs[residual_id(p1, "recieve")].action == "add"
+    acc = _accepted(run)
+    assert "sure that the total would not change again" in acc[p2]
+    assert "receive" in acc[p1]
+    env = json.loads((run / "findings.json").read_text("utf-8"))
+    assert any(r.get("queried") and "certain the sum" in r["explanation"]
+               for r in env["findings"])
+    assert st.open == []
+
+
+def test_an_approval_that_says_mechanical_only_implies_the_guard(tmp_path):
+    src = _manuscript(tmp_path)
+    ids, _doc = _para_ids(src)
+    p2 = ids[2]
+    run = _build(tmp_path, src, [
+        {"para_id": ids[0], "original_text": "teh", "corrected_text": "the",
+         "confidence": "high"}])
+    _walk(run, [{"para_id": p2, "quote": "sure the total would not change",
+                 "problem": "awkward", "suggestion": "certain the sum was fixed",
+                 "severity": "low"}])
+    approval = tmp_path / "approval.json"
+    approval.write_text(json.dumps({"mechanical_only": True}), "utf-8")
+    assert _settle(tmp_path, run, src, "--approval", str(approval)) == 0
+    recs, _st = _records(run)
+    r = recs[residual_id(p2, "sure the total would not change")]
+    assert r.action == "query" and r.reason.startswith("rewrite_class:")
+    assert "coins twice, sure the total would not change" in _accepted(run)[p2]
+
+
+# --- Georgis: the composite self-check and duplicated fragments ------------------
+
+def test_duplicated_fragments_finds_the_georgis_splice():
+    from galley.settle import duplicated_fragments, introduced_fragments
+    bad = ("trot, communicating to urge the horse into a trot ,communicating "
+           "his frustration and worry.")
+    assert duplicated_fragments(bad) == []          # only 4 words repeat
+    worse = ("Mr. Nestor jerked the reins to urge the horse into a trot, "
+             "communicating; jerked the reins to urge the horse into a trot "
+             ",communicating his frustration and worry.")
+    frags = duplicated_fragments(worse)
+    assert "jerked the reins to urge" in frags
+    src = "The rain, the rain, the rain, the rain, the rain fell."
+    assert duplicated_fragments(src)               # the author's own refrain
+    assert introduced_fragments(src, src) == []
+    assert introduced_fragments("Plain text here.", worse)
+
+
+def test_self_check_reverts_a_composite_that_did_not_compose_as_planned(
+        tmp_path, monkeypatch):
+    """A composite whose rebuilt paragraph does not read as the decision said
+    it should (the Georgis splice) is reverted to a query with reason
+    `composite_mismatch`; an honest one in another paragraph stands."""
+    import galley.verify as gv
+    src = _manuscript(tmp_path)
+    ids, _doc = _para_ids(src)
+    p0, p1 = ids[0], ids[1]
+    run = _build(tmp_path, src, [
+        {"para_id": p0, "original_text": "teh", "corrected_text": "thee",
+         "confidence": "high"}])
+    _walk(run, [{"para_id": p0, "quote": "thee", "problem": "wrong word",
+                 "suggestion": "the", "severity": "high"},
+                {"para_id": p1, "quote": "recieve", "problem": "misspelling",
+                 "suggestion": "receive", "severity": "high"}])
+    real = gv.paragraph_views
+    state = {"n": 0}
+
+    def views(run_dir):
+        original, accepted = real(run_dir)
+        state["n"] += 1
+        # Corrupt p0 ONCE, at the self-check's read of the rebuilt docx (the
+        # loads before it must see the true text or nothing resolves).
+        if state["n"] == 2 and "the desk" in accepted.get(p0, ""):
+            accepted = dict(accepted)
+            accepted[p0] = accepted[p0].replace(
+                "the desk", "the desk flickered, then the desk")
+        return original, accepted
+    monkeypatch.setattr(gv, "paragraph_views", views)
+    assert _settle(tmp_path, run, src) == 0
+    recs, st = _records(run)
+    r = recs[residual_id(p0, "thee")]
+    assert r.action == "query" and r.reason == "composite_mismatch"
+    assert r.before_replacement == "the"
+    assert recs[residual_id(p1, "recieve")].action == "add"
+    acc = real(run)[1]
+    assert "thee desk" in acc[p0]                  # the owner's edit restored
+    assert "receive" in acc[p1]
+    env = json.loads((run / "findings.json").read_text("utf-8"))
+    assert any(row.get("queried") and row["para_id"] == p0
+               for row in env["findings"])
+    assert st.open == []
+    assert any("failed the self-check" in n for n in st.notes)
+
+
+def test_certify_artifact_scan_fails_an_introduced_duplicate_fragment(tmp_path):
+    src = _manuscript(tmp_path)
+    ids, _doc = _para_ids(src)
+    p3 = ids[3]
+    run = _build(tmp_path, src, [
+        {"para_id": p3, "original_text": "The garden gate creaked open, and",
+         "corrected_text": "The garden gate creaked open, and the garden "
+                           "gate creaked open, and", "confidence": "high"}])
+    scan = next(c for c in certify_run(run).checks if c.name == "artifact scan")
+    assert scan.status == "fail"
+    assert "duplicated fragment" in scan.detail and p3 in scan.detail
+
+
+def test_certify_artifact_scan_forgives_a_repeat_the_source_already_had(
+        tmp_path):
+    paras = list(PARAGRAPHS) + [
+        "Row, row, row your boat; row, row, row your boat, gently."]
+    src = _manuscript(tmp_path, paras)
+    ids, _doc = _para_ids(src)
+    run = _build(tmp_path, src, [
+        {"para_id": ids[0], "original_text": "teh", "corrected_text": "the",
+         "confidence": "high"}])
+    scan = next(c for c in certify_run(run).checks if c.name == "artifact scan")
+    assert scan.status == "pass", scan.detail
+
+
+# --- Georgis final settle/certify: XML-safe text, local repeats only -----------
+
+def test_xml_safe_strips_what_ooxml_cannot_carry_and_nothing_else():
+    """A settle rebuild died with "All strings must be XML compatible" after a
+    judge reply smuggled a control character into a replacement."""
+    from galley.settle import (Decision, Residual, _question, judge_decision,
+                               xml_safe)
+    assert xml_safe("a\x00b\x08c\x0bd\x1fe\x7ff\x85g\ufffeh\uffffi") == \
+        "abcdefghi"
+    assert xml_safe("tab\tnew\nline\r ok — “curly” ’ é") == \
+        "tab\tnew\nline\r ok — “curly” ’ é"
+    assert xml_safe("") == "" and xml_safe(None) == ""
+    # every path a model string reaches the document by is covered
+    res = Residual.from_walk({"para_id": "p", "quote": "teh",
+                              "problem": "typo\x00", "suggestion": "the\x0b"})
+    assert res.suggestion == "the"
+    assert "\x00" not in _question(res) and _question(res).endswith("'the'")
+    fix = Residual.from_problem({"para_id": "p", "original_text": "a",
+                                 "corrected_text": "b", "fix": "c\x1f"})
+    assert fix.suggestion == "c"
+    parsed = {"action": "add", "replacement": "recei\x00ve", "reason": "",
+              "question": "why\x0c?"}
+    dec = judge_decision(res, ProviderResult(parsed=parsed, stop_reason="ok"))
+    assert isinstance(dec, Decision) and dec.replacement == "receive"
+    parsed["action"] = "query"
+    assert judge_decision(res, ProviderResult(parsed=parsed,
+                                              stop_reason="ok")).question == "why?"
+
+
+def test_introduced_fragments_counts_a_local_splice_not_a_far_repeat():
+    from galley.settle import introduced_fragments
+    # Georgis: the same clause fixed the same way twice in one paragraph —
+    # "for Peter and I to" -> "for Peter and me to" — repeats far apart.
+    far = ("It was time for Peter and me to leave the house, and the long "
+           "road to the harbor took us past the market, the church, and the "
+           "school before it was time for Peter and me to say goodbye.")
+    assert introduced_fragments("", far) == []
+    # A splice duplicates locally (the two copies within a clause).
+    local = ("Mr. Nestor jerked the reins to urge the horse into a trot, "
+             "jerked the reins to urge the horse into a trot, communicating "
+             "his frustration.")
+    frags = introduced_fragments("", local)
+    assert "jerked the reins to urge" in frags
+    # ...unless the source paragraph already repeated it.
+    assert introduced_fragments(local, local) == []
+    # the window is measured between the two copies' starts
+    tight = "one two three four five, one two three four five."
+    assert introduced_fragments("", tight) == ["one two three four five"]

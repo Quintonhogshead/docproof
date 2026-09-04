@@ -13,6 +13,10 @@ detection_prompt: |
     form is clearly meant: "The ticket cost twelve dollars." → "$12.00".
 
   Do NOT flag:
+  - Amounts under one dollar, and coins (Chicago 9.20): "5 cents", "90 cents",
+    "a dime", "a nickel", "a penny", "a quarter", "two bits" stay in words in
+    narration AND dialogue. Never produce "$0.05", "$0.10", "$0.90".
+  - A numeral already carrying a dollar sign ("$1.35"): numerals stay numerals.
   - Idiomatic or hyperbolic money, which is language rather than an amount: "a
     million dollars", "not worth two cents", "a dime a dozen", "his two cents",
     "felt like a million bucks".
@@ -57,6 +61,10 @@ examples:
       explanation: "House style uses symbol and numerals for currency in narration."
       confidence: medium
   - text: "He pulled a five-dollar bill from his coat."
+    finding: null
+  - text: "I paid a dime for my coffee and had 90 cents left."
+    finding: null
+  - text: "I needed $1.35 or 90 cents to get a seat."
     finding: null
   - text: "“It's not worth two cents to me,” she said."
     finding: null

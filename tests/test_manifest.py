@@ -767,3 +767,46 @@ def test_certify_passes_a_clean_mechanical_only_run(tmp_path):
     check = next(c for c in certify_run(run, manifest=m, cfg=cfg).checks
                  if c.name == "mechanical only")
     assert check.status == "pass"
+
+
+# --- Georgis final certify: a pre-existing artifact in the row's ORIGINAL ---------
+
+def test_artifact_scan_forgives_an_artifact_the_original_span_already_had(
+        tmp_path):
+    """A whole-paragraph typed-pass row (a compound_sentence_comma quoting the
+    paragraph to add one comma) carried the source's `“lady in red”.` in its
+    corrected text; no edit touched it and the sweeps fixed it in the
+    delivered text, yet certify failed the delivery on it."""
+    para = "She wore the “lady in red”. It fit her and she knew it."
+    check = _scan(tmp_path, [{
+        "para_id": "b1", "error_type": "compound_sentence_comma",
+        "original_text": para,
+        "corrected_text": "She wore the “lady in red”. It fit her, and she knew it.",
+        "status": "validated", "applied": True}])
+    assert check.status == "pass", check.detail
+
+
+def test_artifact_scan_still_fails_an_artifact_the_edit_introduced(tmp_path):
+    check = _scan(tmp_path, [{
+        "para_id": "b1", "original_text": "She wore the “lady in red.”",
+        "corrected_text": "She wore the “lady in red”.",
+        "status": "validated", "applied": True}])
+    assert check.status == "fail" and "”" in check.detail
+
+
+def test_artifact_scan_counts_a_second_copy_beyond_the_preexisting_one(
+        tmp_path):
+    # one pre-existing, a second one introduced: still a fail
+    check = _scan(tmp_path, [{
+        "para_id": "b1",
+        "original_text": "the “lady in red”. and the “man in black.”",
+        "corrected_text": "the “lady in red”. and the “man in black”.",
+        "status": "validated", "applied": True}])
+    assert check.status == "fail"
+
+
+def test_minus_preexisting_blanks_occurrence_for_occurrence():
+    from galley.manifest import _minus_preexisting
+    assert _minus_preexisting("a”. b”. c", "a”. b") == "a b”. c"
+    assert _minus_preexisting("x,, y", "") == "x,, y"
+    assert _minus_preexisting("clean", "a”.") == "clean"

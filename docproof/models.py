@@ -27,6 +27,21 @@ STATUSES = (
     # model argued it — a number_style rewrite of a numbered LABEL ("Mindset
     # Number 23"), which renames a section rather than styling a count.
     "rejected_policy",
+    # The quote anchored, but it cuts a word in half at the edge the edit
+    # touches ("our bond born" against "our bond borne"): applying it would
+    # splice inside the longer word (Georgis, 2026-09-04).
+    "rejected_anchor_midword",
+    # The correction would leave a doubled word the original did not have
+    # ("and and,") — the fix itself is the artifact (Georgis, 2026-09-04).
+    "rejected_doubled_word_in_fix",
+    # The correction's words repeat the word(s) immediately before or after
+    # its span in the paragraph ("Kalamata." inserted before "Kalamata, the
+    # capital", Georgis 2026-09-04).
+    "rejected_duplicates_neighbour",
+    # The configured house sweeps would re-fire inside the changed span of the
+    # paragraph as it would read — the row undoes house style (a typed pass
+    # lowercasing "2:30 AM"). Carries the sweep key after a colon.
+    "rejected_undoes_house_style",
     "skipped_low_confidence",
 )
 

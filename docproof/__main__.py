@@ -537,6 +537,12 @@ def _galley_parser(sub) -> None:
                     help="the manuscript, for per-chapter finding counts in the "
                          "letter (optional; .docx or .idml)")
     gl.add_argument("--config", default="config/default.yaml")
+    gl.add_argument("--workspace", metavar="WS",
+                    help="a Galley workspace: the letter's spend and waves "
+                         "are read from EVERY run under WS/runs/ (findings."
+                         "json cost plus settlement/verify artifacts), not "
+                         "only the run the casefile came from — a $0 replay "
+                         "build otherwise reports \"$0.00 spent, 1 wave\"")
     gl.add_argument("--out", help="directory for letter.md and style-sheet.md "
                                   "(default: beside the case file)")
     gl.add_argument("--json", action="store_true",
@@ -937,6 +943,13 @@ def _galley_parser(sub) -> None:
     gse.add_argument("--no-propagate", action="store_true",
                      help="do not apply a settled fix to identical untouched "
                           "occurrences in the same and neighbouring paragraphs")
+    gse.add_argument("--mechanical-only", action="store_true",
+                     help="proofread scope: a walker suggestion may become an "
+                          "edit only when it changes punctuation/case/spacing "
+                          "or at most one function word or spelling; anything "
+                          "larger ships as a query carrying the suggestion. "
+                          "Implied by an --approval whose manifest says "
+                          "mechanical_only")
     _engine_arg(gse)
     gse.add_argument("--context", help="a file of house-style / voice notes "
                                        "for the judge and the delta verify")
@@ -1188,26 +1201,52 @@ def _engine_arg(p: argparse.ArgumentParser) -> None:
              "= subagent if available, else provider, else none")
 
 
+# The subagent lane's ceiling on calls in flight, whatever api.concurrency
+# says: each turn is a whole Claude Code CLI process, not a socket.
+SUBAGENT_MAX_INFLIGHT = 4
+
+
+def _lane_concurrency(cfg, engine: str, model: str) -> int:
+    """How many verify/settle calls a galley verb keeps in flight: the
+    config's own limiter for the API lane (`Config.concurrency_for`, the one
+    the ladder runs under), a small fixed ceiling for the subagent lane, and
+    1 for the deterministic lane. `api.concurrency: 1` still means serial
+    everywhere."""
+    if engine == "provider":
+        return cfg.concurrency_for(model)
+    if engine == "subagent":
+        return max(1, min(cfg.api.concurrency, SUBAGENT_MAX_INFLIGHT))
+    return 1
+
+
 def _resolve_engine(args, cfg, *, default_model: str | None = None
                     ) -> tuple[str, Any, str]:
     """(engine, provider, model) for --engine. `provider` is None for the
     deterministic lane. A model named with --model picks the lane when
     --engine is auto: a Claude id/alias -> subagent, anything else ->
     provider."""
-    from .providers.subagent import (SubagentProvider, available,
+    from .providers.subagent import (SubagentProvider, availability,
                                      is_subagent_model, resolve_model)
     engine = getattr(args, "engine", None) or "auto"
     model = getattr(args, "model", None) or ""
     if engine == "auto":
+        ok, why = (True, "") if (model and not is_subagent_model(model)) \
+            else availability()
         if model and not is_subagent_model(model):
             engine = "provider"
-        elif available():
+        elif ok:
             engine = "subagent"
         elif model or default_model:
             engine = "provider"
             model = model or default_model or ""
+            print(f"note: the $0 subagent lane is unavailable ({why}); "
+                  f"--engine auto falls back to the API provider "
+                  f"({model}), which bills.", file=sys.stderr)
         else:
             engine = "none"
+            print(f"note: the $0 subagent lane is unavailable ({why}) and "
+                  f"no model is configured; --engine auto falls back to "
+                  f"deterministic-only.", file=sys.stderr)
     if engine == "subagent":
         prov = SubagentProvider(model=model or None)
         return "subagent", prov, f"subagent:{resolve_model(model or None)}"
@@ -1466,7 +1505,14 @@ def cmd_inventory(args) -> int:
     cfg, error_dir = _configure(args)
     setup_logging(cfg.output_dir)
     try:
-        prepared = prepare(cfg, args.input, error_dir)
+        # A costed preview, like `review --dry-run`: the free analyses (the
+        # sweeps, the dictionary scan) still run so the inventory can say
+        # what a run fixes for free, but the two stages prepare() can SPEND
+        # on — the story sheet and the candidate-screening judge — never
+        # build a provider. Inventory printed a Story sheet line and made
+        # one Luna call with keys present (Georgis, 2026-09-04), against
+        # its own "no API" promise.
+        prepared = prepare(cfg, args.input, error_dir, dry_run=True)
     except (IngestError, FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -2397,6 +2443,10 @@ def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
     if result.reanchored:
         print(f"  --after-sweeps: re-anchored {result.reanchored} row(s) from "
               f"post-sweep to pre-sweep text")
+    for hit in result.artifacts:
+        print(f"  artifact scan: {hit.get('pattern')} in {hit.get('para_id')}"
+              + (f" — dropped the later row {hit.get('dropped_id')}"
+                 if hit.get("resolved") else " — UNRESOLVED"))
     findings, rejects, remapped, checked, tally = (
         result.findings, result.rejects, result.remapped, result.checked,
         result.tally)
@@ -2961,6 +3011,17 @@ def _galley_settle(args) -> int:
         if guard is not None:
             return guard
 
+    # The approval's scope carries into settlement: a mechanical-only
+    # manifest means a walker's rewrite ships as a question, not an edit.
+    mechanical_only = bool(getattr(args, "mechanical_only", False))
+    if getattr(args, "approval", None):
+        try:
+            manifest = json.loads(Path(args.approval).read_text("utf-8"))
+            mechanical_only = mechanical_only or bool(
+                manifest.get("mechanical_only"))
+        except (OSError, ValueError, AttributeError) as e:
+            print(f"error: --approval {args.approval}: {e}", file=sys.stderr)
+            return 2
     opts = SettleOptions(rounds=max(0, int(_rounds)), engine=engine,
                          model=model, context=context,
                          verify_delta=not args.no_verify,
@@ -2968,7 +3029,9 @@ def _galley_settle(args) -> int:
                          quiet_floor=int(args.quiet_floor),
                          quiet_share=float(args.quiet_share),
                          max_turns=int(args.max_turns),
-                         propagate=not args.no_propagate)
+                         propagate=not args.no_propagate,
+                         mechanical_only=mechanical_only,
+                         concurrency=_lane_concurrency(cfg, engine, model))
     settler = Settler(run, cfg=cfg, manuscript=args.source,
                       error_dir=error_dir, provider=provider, options=opts)
     from .agent_lane import AgentLaneUnavailable
@@ -2996,7 +3059,8 @@ def _galley_settle(args) -> int:
           f"{len(st.latest())} settled in {st.rounds} round(s) "
           f"({', '.join(f'{k}={v}' for k, v in sorted(counts.items())) or 'none'}), "
           f"{len(st.open)} open; engine={engine} "
-          f"({result.usage.api_calls} model call(s), ${cost:.4f}).")
+          f"({result.usage.api_calls} model call(s), ${cost:.4f})"
+          f"{' — mechanical only' if mechanical_only else ''}.")
     for note in st.notes[-(st.rounds + 1):]:
         print(f"  {note}")
     print(f"  outcome: {outcome.outcome} — {outcome.reason[:200]}")
@@ -3404,6 +3468,7 @@ def _galley_verify(args) -> int:
 
     para_ids = _paragraph_ids(getattr(args, "paragraphs", None))
 
+    concurrency = _lane_concurrency(cfg, engine, model)
     # One verify_run per gate with its own Usage, so each artifact carries
     # ITS OWN bill and `ran`/`reason` verdict, and certify can sum the run's
     # cost-bearing artifacts without double-counting. The deterministic
@@ -3414,16 +3479,20 @@ def _galley_verify(args) -> int:
         if para_ids is not None:
             from galley.verify import verify_delta
             changes = verify_delta(results, para_ids, provider, model,
-                                   usage_changes, context=context,
+                                   usage_changes, concurrency=concurrency,
+                                   context=context,
                                    run_changes=run_changes, run_walk=False)
             walk = verify_delta(results, para_ids, provider, model, usage_walk,
+                                concurrency=concurrency,
                                 context=context, run_changes=False,
                                 run_walk=run_walk)
         else:
             changes = verify_run(results, provider, model, usage_changes,
+                                 concurrency=concurrency,
                                  context=context, run_changes=run_changes,
                                  run_walk=False)
             walk = verify_run(results, provider, model, usage_walk,
+                              concurrency=concurrency,
                               context=context, run_changes=False,
                               run_walk=run_walk)
     except AgentLaneUnavailable as e:
@@ -3572,6 +3641,21 @@ def _galley_letter(args) -> int:
             print(f"error: {e}", file=sys.stderr)
             return 2
 
+    if getattr(args, "workspace", None):
+        from galley.casefile_synth import workspace_waves
+        waves = workspace_waves(args.workspace)
+        if waves:
+            # The workspace ledger replaces the single synthesized wave: every
+            # run's spend, in order, so the letter states what was really
+            # spent and which lanes ran.
+            cf.waves = list(waves)
+            cf.budget.charges = []
+            for w in waves:
+                cf.budget.charge(f"run {w.index}", w.spend_usd, wave=w.index)
+        else:
+            print(f"note: --workspace {args.workspace}: no runs/*/findings."
+                  f"json found; the letter keeps the run's own spend",
+                  file=sys.stderr)
     letter_path, style_path = render_all(cf, out, ms=ms)
     open_queries = sum(1 for v in cf.verdicts if v.ruling == "query")
     print(f"\nEditorial letter for {cf.book or '(untitled)'}: "
@@ -4324,6 +4408,12 @@ def cmd_galley_profile(args) -> int:
     if profile.bespoke_sweep_candidates:
         print(f"{len(profile.bespoke_sweep_candidates)} bespoke-sweep "
              f"candidate(s) — see --json for patterns")
+    if profile.field_errors:
+        print(f"WARNING: {len(profile.field_errors)} unresolved field "
+              f"result(s) (\"Error! Bookmark not defined.\" etc.) — the "
+              f"designer regenerates the TOC; no lane edits them:")
+        for line in profile.field_errors[:6]:
+            print(f"  {line}")
     rl = profile.reading_level
     if rl.ari is not None:
         print(f"reading level: ARI {rl.ari:.1f}"
@@ -4757,7 +4847,8 @@ def _galley_certify(args) -> int:
 
     print(f"Certificate for {args.run}:")
     for c in cert.checks:
-        glyph = {"pass": "PASS", "fail": "FAIL", "skip": "skip"}[c.status]
+        glyph = {"pass": "PASS", "fail": "FAIL", "skip": "skip",
+                 "warn": "WARN"}.get(c.status, c.status)
         print(f"  [{glyph}] {c.name}{f' — {c.detail}' if c.detail else ''}")
     print(f"\n  {'PASSED' if cert.passed else 'FAILED'} "
           f"({len(cert.failed)} failing check(s))")

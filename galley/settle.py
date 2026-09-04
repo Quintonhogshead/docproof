@@ -62,6 +62,7 @@ from typing import Any, Mapping, Sequence
 
 from docproof import editmap as emap
 from docproof.models import Usage
+from docproof.sweepguard import SweepGuard
 
 log = logging.getLogger("galley.settle")
 
@@ -82,8 +83,12 @@ NON_TERMINAL = ("pending", "held", "residual", "flagged", "proposed",
 REASON_PREFIXES = (
     "duplicate", "overlap_loser", "voice", "intent_zone", "style_only", "fact",
     "unanchorable", "walker_wrong", "unresolved_after_", "ambiguous_anchor",
-    "editorial_note", "verifier_reverted", "oversize", "unplaced",
-    "space_deletion", "rejected_", "no_suggestion", "unmapped", "edit_damage")
+    "toc_unreachable",
+    "editorial_note", "verifier_reverted", "verifier_confirmed",
+    "verifier_overruled", "oversize", "unplaced",
+    "space_deletion", "rejected_", "no_suggestion", "unmapped", "edit_damage",
+    "rewrite_class", "undoes_house_style", "composite_mismatch",
+    "duplicated_fragment")
 
 _SPACE_ONLY = re.compile(r"\s+")
 _PUNCT_ONLY = re.compile(r"[^\w\s]")
@@ -140,8 +145,8 @@ class Residual:
         sev = str(row.get("severity") or "medium")
         return cls(id=rid, kind="residual", para_id=pid, quote=quote,
                    problem=str(row.get("problem", "")),
-                   suggestion=str(row.get("suggestion", "")), severity=sev,
-                   round_seen=round_seen, raw=dict(row))
+                   suggestion=xml_safe(str(row.get("suggestion", ""))),
+                   severity=sev, round_seen=round_seen, raw=dict(row))
 
     @classmethod
     def from_problem(cls, row: Mapping[str, Any], round_seen: int = 0
@@ -153,7 +158,7 @@ class Residual:
         rid = str(row.get("problem_id") or problem_id(pid, orig, corr))
         return cls(id=rid, kind="edit_damage", para_id=pid, quote=corr,
                    problem=str(row.get("detail", "")),
-                   suggestion=str(row.get("fix", "")), severity="high",
+                   suggestion=xml_safe(str(row.get("fix", ""))), severity="high",
                    verdict=str(row.get("verdict", "")), owner_original=orig,
                    owner_corrected=corr, round_seen=round_seen, raw=dict(row))
 
@@ -514,6 +519,169 @@ def _norm_words(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+(?:['’][a-z]+)?", text.lower())
 
 
+# ---- the mechanical-only guard (Georgis, 2026-09-04) ---------------------------
+#
+# A mechanical-only run (approval.json `mechanical_only: true`) promises the
+# author a proofread: typos, agreement, punctuation, casing. The finished-text
+# walk does not know that promise — it suggested "No job was too menial for
+# me." for "No job wasn't good enough." and settle applied it as an edit. The
+# guard below is the promise, made executable: a suggestion may become an edit
+# only when its word-level diff against the source span is at most ONE word,
+# and that word is a function word or a same-stem spelling/inflection fix; a
+# punctuation/case/hyphen/space-only change always may. Anything larger ships
+# as a QUERY carrying the suggestion (reason `rewrite_class`), so the author
+# still sees it and nothing is lost — it just is not an edit.
+
+def _function_words() -> frozenset[str]:
+    """The closed-class list, shared with docproof.adjudicate's recurrence
+    seed guard so "function word" means one thing across the pipeline."""
+    from docproof.adjudicate import FUNCTION_WORDS
+    return FUNCTION_WORDS
+
+
+_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:['’][A-Za-z]+)?")
+
+
+def _dl_distance(a: str, b: str) -> int:
+    """Damerau-Levenshtein (optimal string alignment) distance — a
+    transposition ("teh" -> "the", "recieve" -> "receive") counts once, as it
+    should for a spelling slip."""
+    la, lb = len(a), len(b)
+    d = [[0] * (lb + 1) for _ in range(la + 1)]
+    for i in range(la + 1):
+        d[i][0] = i
+    for j in range(lb + 1):
+        d[0][j] = j
+    for i in range(1, la + 1):
+        for j in range(1, lb + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1,
+                          d[i - 1][j - 1] + cost)
+            if (i > 1 and j > 1 and a[i - 1] == b[j - 2]
+                    and a[i - 2] == b[j - 1]):
+                d[i][j] = min(d[i][j], d[i - 2][j - 2] + 1)
+    return d[la][lb]
+
+
+def _same_stem(a: str, b: str) -> bool:
+    """Whether two words are one spelling or inflection apart: within two
+    edits of each other (a transposition is one) AND visibly the same word —
+    a shared three-letter prefix or suffix, or the same letters in another
+    order. "borne"/"born", "recieve"/"receive", "teh"/"the" pass;
+    "resolved"/"resigned" (three edits) and "virulent"/"virile" do not."""
+    a, b = a.lower(), b.lower()
+    if a == b:
+        return True
+    if _dl_distance(a, b) > 2:
+        return False
+    if min(len(a), len(b)) < 4:
+        return _dl_distance(a, b) <= 1
+    if a[:3] == b[:3] or a[-3:] == b[-3:]:
+        return True
+    return sorted(a) == sorted(b)
+
+
+def rewrite_class(before: str, after: str) -> str | None:
+    """Why a change is more than a mechanical proofread would make — or None
+    when a mechanical-only run may apply it as an edit.
+
+    Punctuation, case, hyphen, and spacing differences never count (the words
+    are compared bare). Of the words, at most one may change, and that one
+    must be a function word (inserted, deleted, or swapped for another) or a
+    same-stem spelling/inflection fix. The return value is a short phrase for
+    the settlement record."""
+    if edit_kind(before, after) == "punctuation":
+        return None                  # punctuation/case/hyphen/space only
+    bw = [w.lower() for w in _TOKEN_RE.findall(before)]
+    aw = [w.lower() for w in _TOKEN_RE.findall(after)]
+    if bw == aw:
+        return None
+    import difflib
+    changes: list[tuple[list[str], list[str]]] = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+            a=bw, b=aw, autojunk=False).get_opcodes():
+        if tag != "equal":
+            changes.append((bw[i1:i2], aw[j1:j2]))
+    n = sum(max(len(x), len(y)) for x, y in changes)
+    if n > 1:
+        return f"{n} words changed"
+    old_w, new_w = changes[0]
+    old = old_w[0] if old_w else ""
+    new = new_w[0] if new_w else ""
+    function_words = _function_words()
+    if not old or not new:                   # one word inserted or deleted
+        word = old or new
+        if word in function_words:
+            return None
+        return f"{'deletes' if old else 'inserts'} {word!r}"
+    if old in function_words and new in function_words:
+        return None
+    if _same_stem(old, new):
+        return None
+    return f"word swap {old!r} -> {new!r}"
+
+
+# ---- duplicated fragments (Georgis, 2026-09-04) -------------------------------
+
+_XML_UNSAFE_RE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\ufffe\uffff]")
+
+
+def xml_safe(text: str) -> str:
+    """Strip characters OOXML cannot carry (C0/C1 controls, U+FFFE/FFFF).
+
+    A judge or walker reply that smuggles one in (Georgis 2026-09-04: a
+    settle rebuild died on "All strings must be XML compatible" after a
+    round's work) must not take the whole rebuild down; the text minus the
+    control character is what the author would have read anyway."""
+    return _XML_UNSAFE_RE.sub("", text or "")
+
+
+DUPLICATE_FRAGMENT_WORDS = 5
+_FRAG_WORD_RE = re.compile(r"[a-z0-9]+(?:['’][a-z]+)?")
+
+
+def duplicated_fragments(text: str, n: int = DUPLICATE_FRAGMENT_WORDS
+                         ) -> list[str]:
+    """Every run of `n` consecutive words that occurs twice or more in
+    `text`, case-insensitive and ignoring punctuation, in first-seen order.
+    A composite that spliced its replacement at the wrong offset leaves
+    exactly this trace — "trot, communicating to urge the horse into a trot
+    ,communicating his frustration" — and nothing else in the pipeline reads
+    a paragraph for it. A refrain the author wrote is in the SOURCE paragraph
+    too; callers subtract that."""
+    words = _FRAG_WORD_RE.findall(text.lower())
+    if len(words) < n:
+        return []
+    seen: dict[str, int] = {}
+    out: list[str] = []
+    for i in range(len(words) - n + 1):
+        frag = " ".join(words[i:i + n])
+        seen[frag] = seen.get(frag, 0) + 1
+        if seen[frag] == 2:
+            out.append(frag)
+    return out
+
+
+def introduced_fragments(source: str, accepted: str,
+                         n: int = DUPLICATE_FRAGMENT_WORDS) -> list[str]:
+    """The duplicated fragments of `accepted` that `source` did not already
+    carry — the ones this run put there."""
+    had = set(duplicated_fragments(source, n))
+    out: list[str] = []
+    for frag in duplicated_fragments(accepted, n):
+        if frag in had:
+            continue
+        # A splice duplicates LOCALLY (the two copies sit within a clause of
+        # each other); a clause fixed the same way twice in one paragraph
+        # ("for Peter and I to" -> "and me to", twice) repeats far apart and
+        # is not damage. Only the local repeat counts.
+        pat = r"\W+".join(re.escape(w) for w in frag.split())
+        pos = [mm.start() for mm in re.finditer(pat, accepted, re.I)]
+        if len(pos) >= 2 and min(b - a for a, b in zip(pos, pos[1:])) <= 80:
+            out.append(frag)
+    return out
+
+
 # Words that betray an editor's aside living inside the manuscript text — a
 # parenthetical a copy-edit lane leaked ("(parallel with X; breaks tense
 # agreement as written)"). Deleting such a parenthetical is a repair, never
@@ -640,14 +808,29 @@ def _owner_of_edit(res: Residual, working: Mapping[str, Mapping[str, Any]]
 
 def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
            source: Mapping[str, str], working: Mapping[str, Mapping[str, Any]],
-           zones: Any = None, *, replacement: str | None = None) -> Decision:
+           zones: Any = None, *, replacement: str | None = None,
+           mechanical_only: bool = False,
+           sweeps: "SweepGuard | None" = None,
+           skipped: Mapping[str, str] | None = None) -> Decision:
     """The deterministic half of A3. Returns a Decision whose action is one of
     absorb/add/drop/query/revise/revert, or `judge` when only a model can
     settle it (no usable suggestion, or the composite grew past the guard).
     `replacement` overrides the residual's own suggestion (the judge's
-    answer on a second pass)."""
+    answer on a second pass). `sweeps` is the run's SweepGuard: a settlement
+    the deterministic sweeps would undo is dropped (`undoes_house_style`).
+    `mechanical_only` applies the proofread-scope guard: a change beyond one
+    function word / spelling fix / punctuation ships as a query
+    (`rewrite_class`) carrying the suggestion. `skipped` maps the paragraph
+    ids the build never reviews to the reason ingest gave (`style:TOC1`);
+    a residual in a TOC-styled paragraph can never be settled by the engine
+    (the walk still reads it: nine "Error! Bookmark not defined." entries
+    and a "CLASSESES" on Georgis) and is dropped `toc_unreachable` — certify
+    warns on unresolved fields separately."""
     why = resolve(res, em, accepted, working)
     if why is not None:
+        reason = str((skipped or {}).get(res.para_id, ""))
+        if reason.lower().startswith("style:toc"):
+            return Decision("drop", "toc_unreachable")
         if why in ("ambiguous_anchor", "unmapped"):
             # Real text the engine cannot place by arithmetic: still a
             # residual, so it goes to the author with the suggestion, never
@@ -683,6 +866,25 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
         if len(fix) > MAX_GROWTH * max(len(res.owner_original), 1) \
                 + MAX_GROWTH_SLACK and replacement is None:
             return Decision("judge", "oversize", owner_key=key)
+        if sweeps is not None:
+            segs = em.paragraphs.get(res.para_id) or []
+            acc = emap.accepted_of(segs)
+            owned = [sg for sg in segs if sg.owner == key]
+            if owned:
+                a0 = min(sg.acc_start for sg in owned)
+                a1 = max(sg.acc_end for sg in owned)
+                if acc[a0:a1] == res.owner_corrected:
+                    after = acc[:a0] + fix + acc[a1:]
+                    bad = sweeps.refires(acc, (a0, a1), after,
+                                         (a0, a0 + len(fix)))
+                    if bad:
+                        return Decision("drop", f"undoes_house_style:{bad}",
+                                        owner_key=key)
+        if mechanical_only:
+            why = rewrite_class(res.owner_original, fix)
+            if why:
+                return Decision("query", f"rewrite_class:{why}", owner_key=key,
+                                question=_question(res, fix))
         return Decision("revise", f"edit_damage:{res.verdict or 'flagged'}",
                         replacement=fix, owner_key=key)
 
@@ -748,6 +950,21 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
                 and str(row.get("original_text")) == src_text[comp.src_start:
                                                               comp.src_end]):
             return Decision("drop", "duplicate")
+    # House style is not up for settlement: a replacement the sweeps would
+    # re-fire on ("4:00 a.m." over the house "4:00 AM") is dropped, recorded.
+    if sweeps is not None:
+        after = acc[:comp.acc_start] + comp.text + acc[comp.acc_end:]
+        bad = sweeps.refires(acc, (comp.acc_start, comp.acc_end), after,
+                             (comp.acc_start, comp.acc_start + len(comp.text)))
+        if bad:
+            return Decision("drop", f"undoes_house_style:{bad}")
+    # Proofread scope: the net change on the SOURCE span, not just this
+    # settlement's delta, is what the author's tracked change will show.
+    if mechanical_only:
+        why = rewrite_class(src_text[comp.src_start:comp.src_end], comp.text)
+        if why:
+            return Decision("query", f"rewrite_class:{why}",
+                            question=_question(res, suggestion))
     if comp.absorbed:
         return Decision("absorb", "", replacement=comp.text, composite=comp,
                         owner_key=comp.owners[0])
@@ -758,8 +975,8 @@ def _question(res: Residual, suggestion: str = "") -> str:
     sug = suggestion or res.suggestion
     what = res.problem.strip() or "possible error"
     if sug and sug != res.quote:
-        return f"{what} — suggested: {sug!r}"
-    return what
+        return xml_safe(f"{what} — suggested: {sug!r}")
+    return xml_safe(what)
 
 
 # ---- the narrow judge (A3, second half) ------------------------------------------
@@ -779,9 +996,22 @@ correct settlement:
             plausible repairs); write the one-line question.
 Never rewrite beyond the flagged span. Never change a number, name, title,
 date, or quoted line — that is a query. Never write a note to the editor into
-the replacement. Standard: U.S. English, Chicago 17, Merriam-Webster.
+the replacement. Standard: U.S. English, Chicago 17, Merriam-Webster — and the
+HOUSE STYLE below, which overrides Chicago wherever the two differ: a flag on
+text already in a house form is wrong, and the answer is drop.
 Return JSON {"action": ..., "replacement": ..., "reason": ..., "question": ...}
 with every key present (empty string when unused)."""
+
+
+def _judge_system(context: str = "") -> str:
+    """The judge's system prompt: the doctrine above, the shared house-rule
+    block (galley/house_style.py — the same constant the walk and the
+    verifier render), then the run's voice notes."""
+    from galley.house_style import house_rules_block
+    system = _JUDGE_SYSTEM + "\n\n" + house_rules_block("judge")
+    if context.strip():
+        system += "\n\nVOICE NOTES FOR THIS BOOK:\n" + context
+    return system
 
 
 def _judge_schema() -> tuple[dict[str, Any], str]:
@@ -805,7 +1035,22 @@ def judge(res: Residual, em: emap.EditMap, source: Mapping[str, str],
     """One model call for one residual the deterministic pass could not
     settle. The reply is re-run through `decide` with the judge's replacement
     so every guard (note, fact, growth, intent zone) still applies to what the
-    model proposed."""
+    model proposed. `judge_packet` + `judge_decision` are the two halves, so
+    a round can fan the calls out and fold the answers in order."""
+    system, user = judge_packet(res, em, source, working, context=context)
+    schema, name = _judge_schema()
+    result = provider.complete_structured(model=model, system=system, user=user,
+                                          schema=schema, schema_name=name,
+                                          max_tokens=max_tokens)
+    if result.usage is not None:
+        usage.add(result.usage, model=model)
+    return judge_decision(res, result)
+
+
+def judge_packet(res: Residual, em: emap.EditMap, source: Mapping[str, str],
+                 working: Mapping[str, Mapping[str, Any]], *,
+                 context: str = "") -> tuple[str, str]:
+    """(system, user) for one judge call — everything but the call itself."""
     segs = em.paragraphs.get(res.para_id) or []
     acc = emap.accepted_of(segs)
     src = source.get(res.para_id, "")
@@ -830,20 +1075,18 @@ def judge(res: Residual, em: emap.EditMap, source: Mapping[str, str],
     user = (f"SOURCE: {source_sentence}\nCURRENT: {current_sentence}\n"
             f"{owner_line}FLAGGED SPAN: {flagged!r}\n"
             f"PROBLEM: {res.problem}\nSUGGESTION: {res.suggestion!r}")
-    schema, name = _judge_schema()
-    system = _JUDGE_SYSTEM + ("\n\nHOUSE STYLE AND VOICE NOTES:\n" + context
-                              if context.strip() else "")
-    result = provider.complete_structured(model=model, system=system, user=user,
-                                          schema=schema, schema_name=name,
-                                          max_tokens=max_tokens)
-    if result.usage is not None:
-        usage.add(result.usage, model=model)
+    return _judge_system(context), user
+
+
+def judge_decision(res: Residual, result: Any) -> Decision:
+    """The judge's reply as a Decision (`judge_replacement` carries the text
+    for a second pass through `decide`; anything unusable is a query)."""
     if result.stop_reason != "ok" or not isinstance(result.parsed, dict):
         return Decision("query", "no_suggestion", question=_question(res))
     action = str(result.parsed.get("action", "")).strip().lower()
-    replacement = str(result.parsed.get("replacement", "") or "")
+    replacement = xml_safe(str(result.parsed.get("replacement", "") or ""))
     reason = str(result.parsed.get("reason", "") or "").strip()[:160]
-    question = str(result.parsed.get("question", "") or "").strip()[:300]
+    question = xml_safe(str(result.parsed.get("question", "") or "")).strip()[:300]
     if action == "drop":
         return Decision("drop", f"voice:{reason}" if reason else "voice")
     if action == "query":
@@ -851,6 +1094,74 @@ def judge(res: Residual, em: emap.EditMap, source: Mapping[str, str],
     if action in ("absorb", "add") and replacement.strip():
         return Decision("judge_replacement", reason, replacement=replacement)
     return Decision("query", "no_suggestion", question=_question(res))
+
+
+_SECOND_LOOK_SYSTEM = """\
+You give a SECOND LOOK to one applied edit on a finished book proofread. The
+change verifier flagged it; you decide whether the verifier is right. You are
+shown the paragraph as it now reads, the edit (before -> after), the verifier's
+verdict and detail. Answer `keep` when the edit is objectively correct under
+the house rules below — a house form the verifier mistook for an error, a
+defensible mechanical fix, a matter of taste the verifier relitigated — and
+`revert` only when the edit really broke meaning, grammar, voice, or left an
+artifact. Return JSON {"answer": "keep"|"revert", "reason": "..."}."""
+
+
+# The reason `second_look` returns when it could not get a verdict; the
+# round then reverts exactly as it did before the second look existed.
+SECOND_LOOK_UNAVAILABLE = "second look unavailable"
+
+
+def _second_look_schema() -> tuple[dict[str, Any], str]:
+    from pydantic import BaseModel
+
+    from docproof.providers import strict_json_schema
+
+    class _Answer(BaseModel):
+        answer: str
+        reason: str
+
+    return strict_json_schema(_Answer), "second_look"
+
+
+def second_look(problem: Residual, paragraph: str, provider, model: str,
+                usage: Usage, *, context: str = "", max_tokens: int = 1500
+                ) -> tuple[str, str]:
+    """One judge call on a verifier flag against a settlement this round
+    wrote: ("keep" | "revert", reason). On the Georgis run the verifier
+    flagged the house time form and settle reverted its own correct
+    composites to queries, sixty-seven times; a reader told the house rules
+    catches that. Any reply that is not a clean `keep` is `revert` — the
+    verifier's word stands unless the judge positively overrules it."""
+    from galley.house_style import house_rules_block
+    system = _SECOND_LOOK_SYSTEM + "\n\n" + house_rules_block("second reader")
+    if context.strip():
+        system += "\n\nVOICE NOTES FOR THIS BOOK:\n" + context
+    user = (f"PARAGRAPH NOW READS: {paragraph}\n"
+            f"EDIT: {problem.owner_original!r} -> {problem.owner_corrected!r}\n"
+            f"VERIFIER SAYS ({problem.verdict or 'flagged'}): {problem.problem}\n"
+            f"VERIFIER'S FIX: {problem.suggestion!r}\n"
+            f"Is the edit objectively correct under the house rules? "
+            f"Answer keep or revert.")
+    schema, name = _second_look_schema()
+    try:
+        result = provider.complete_structured(model=model, system=system,
+                                              user=user, schema=schema,
+                                              schema_name=name,
+                                              max_tokens=max_tokens)
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("settle: second look failed (%s: %s); the verifier's "
+                    "flag stands", type(e).__name__, e)
+        return "revert", SECOND_LOOK_UNAVAILABLE
+    if result.usage is not None:
+        usage.add(result.usage, model=model)
+    if result.stop_reason != "ok" or not isinstance(result.parsed, dict):
+        return "revert", SECOND_LOOK_UNAVAILABLE
+    answer = str(result.parsed.get("answer", "")).strip().lower()
+    reason = str(result.parsed.get("reason", "") or "").strip()[:160]
+    if answer not in ("keep", "revert"):
+        return "revert", SECOND_LOOK_UNAVAILABLE
+    return answer, reason
 
 
 # ---- applying decisions (A4) ---------------------------------------------------
@@ -999,10 +1310,13 @@ def _residual_from_row(row: Mapping[str, Any]) -> Residual:
                     raw=dict(row))
 
 
-def _source_paragraphs(cfg, manuscript: str | Path, error_dir: str | Path
-                       ) -> tuple[dict[str, str], Any]:
+def _prepare_source(cfg, manuscript: str | Path, error_dir: str | Path
+                    ) -> tuple[dict[str, str], Any, Any, dict[str, str]]:
     """The canonical (post-normalization) paragraphs the replay anchors
-    against, plus the resolved intent zones when the config names a file."""
+    against, the resolved intent zones when the config names a file, the
+    English variant the run proofs against (what the sweep guard scans
+    with), and the paragraphs ingest SKIPPED (para_id -> reason, e.g.
+    `style:TOC1`) so a residual there can be dropped as unreachable."""
     from docproof.pipeline import prepare
     c = copy.deepcopy(cfg)
     from docproof.replay import zero_paid_passes
@@ -1015,18 +1329,30 @@ def _source_paragraphs(cfg, manuscript: str | Path, error_dir: str | Path
         from docproof.intent_zones import load_intent_zones, resolve as _res
         zones = _res(load_intent_zones(cfg.intent_zones_file),
                      list(prepared.doc.paragraphs))
+    skipped = {str(pid): str(reason)
+               for pid, reason in (getattr(prepared.doc, "skipped", ()) or ())}
+    return paras, zones, getattr(prepared, "variant", None), skipped
+
+
+def _source_paragraphs(cfg, manuscript: str | Path, error_dir: str | Path
+                       ) -> tuple[dict[str, str], Any]:
+    """(paragraphs, zones) — see :func:`_prepare_source`."""
+    paras, zones, _variant, _skipped = _prepare_source(cfg, manuscript,
+                                                       error_dir)
     return paras, zones
 
 
 def fold_accepted_rows(run_dir: Path, rows: Sequence[Mapping[str, Any]], *,
-                       cfg, manuscript: str | Path, error_dir: str | Path
-                       ) -> Folded:
+                       cfg, manuscript: str | Path, error_dir: str | Path,
+                       mechanical_only: bool = False) -> Folded:
     """Rows quoted from a build's ACCEPTED text, folded into that build's kept
     rows through its edit map — the `import-findings --anchor accepted` path.
     Deterministic only (a row the guards cannot settle becomes a query)."""
     env = load_envelope(run_dir)
     working, _owner_of = kept_rows(env.get("findings") or [])
-    source, zones = _source_paragraphs(cfg, manuscript, error_dir)
+    source, zones, variant, skipped = _prepare_source(cfg, manuscript,
+                                                      error_dir)
+    guard = SweepGuard.from_config(cfg, variant)
     em = emap.load_or_build(run_dir, source, env.get("findings") or [])
     from galley.verify import paragraph_views
     _orig, accepted = paragraph_views(run_dir)
@@ -1036,7 +1362,9 @@ def fold_accepted_rows(run_dir: Path, rows: Sequence[Mapping[str, Any]], *,
         if not isinstance(raw, dict):
             continue
         res = _residual_from_row(raw)
-        dec = decide(res, em, accepted, source, working, zones)
+        dec = decide(res, em, accepted, source, working, zones,
+                     mechanical_only=mechanical_only, sweeps=guard,
+                     skipped=skipped)
         if dec.action == "judge":
             dec = Decision("query", dec.reason, question=_question(res))
         rec, added, _removed = apply_decision(res, dec, working, source, 0,
@@ -1090,6 +1418,14 @@ class SettleOptions:
     quiet_share: float = DEFAULT_QUIET_SHARE
     max_turns: int = DEFAULT_MAX_TURNS
     propagate: bool = True
+    # The approval's scope (approval.json `mechanical_only`): a suggestion
+    # beyond a proofread's reach ships as a query, never an edit.
+    mechanical_only: bool = False
+    # Model calls in flight at once — the judge calls of a round and the
+    # delta re-verify's batches/reads — from the config's own limiter
+    # (`Config.concurrency_for`). 1 is the sequential loop this used to be:
+    # 100+ settle calls in 10+ minutes on Georgis (2026-09-04).
+    concurrency: int = 1
 
 
 @dataclass
@@ -1127,6 +1463,9 @@ class Settler:
         self.touched: set[str] = set()
         self._source: dict[str, str] = {}
         self._zones: Any = None
+        self._variant: Any = None
+        self._sweeps: SweepGuard | None = None
+        self._skipped: dict[str, str] = {}
 
     # -- one round ----------------------------------------------------------
 
@@ -1153,8 +1492,10 @@ class Settler:
         rows = env.get("findings") or []
         working, _ = kept_rows(rows)
         if not self._source:
-            self._source, self._zones = _source_paragraphs(
-                self.cfg, self.manuscript, self.error_dir)
+            (self._source, self._zones, self._variant,
+             self._skipped) = _prepare_source(self.cfg, self.manuscript,
+                                              self.error_dir)
+            self._sweeps = SweepGuard.from_config(self.cfg, self._variant)
         em = emap.load_or_build(self.run_dir, self._source, rows)
         from galley.verify import paragraph_views
         _orig, accepted = paragraph_views(self.run_dir)
@@ -1188,26 +1529,39 @@ class Settler:
         removed_by: dict[str, dict[str, dict[str, Any]]] = {}
         added_by: dict[str, list[dict[str, Any]]] = {}
         records: list[SettlementRecord] = []
+        # What each text-changing decision means the paragraph should read
+        # afterwards, in PRE-ROUND accepted offsets: para_id -> [(acc_lo,
+        # acc_hi, text, residual_id)]. The self-check after the rebuild
+        # compares the paragraph that actually came back against these.
+        plans: dict[str, list[tuple[int, int, str, str]]] = {}
+        unplannable: set[str] = set()
         judged = 0
+        guards = {"mechanical_only": self.opt.mechanical_only,
+                  "sweeps": self._sweeps, "skipped": self._skipped}
+        prefetched = self._prefetch_judgments(items, em, accepted, source,
+                                              working, guards)
         for res in items:
-            dec = decide(res, em, accepted, source, working, self._zones)
+            dec = decide(res, em, accepted, source, working, self._zones,
+                         **guards)
             if dec.action == "judge":
                 if self.provider is None:
                     dec = Decision("query", dec.reason,
                                    question=_question(res))
                 else:
                     judged += 1
-                    jd = judge(res, em, source, working, self.provider,
-                               self.opt.model, self.usage,
-                               context=self.opt.context)
+                    jd = prefetched.get(res.id) or judge(
+                        res, em, source, working, self.provider,
+                        self.opt.model, self.usage, context=self.opt.context)
                     if jd.action == "judge_replacement":
                         dec = decide(res, em, accepted, source, working,
-                                     self._zones, replacement=jd.replacement)
+                                     self._zones, replacement=jd.replacement,
+                                     **guards)
                         if dec.action == "judge":
                             dec = Decision("query", dec.reason,
                                            question=_question(res))
                     else:
                         dec = jd
+            self._plan(plans, unplannable, res, dec, em, source, working)
             rec, added, removed = apply_decision(
                 res, dec, working, source, round_no,
                 verified_by=self.verified_by)
@@ -1233,6 +1587,8 @@ class Settler:
                                          new_rows, round_no)
             new_rows.extend(propagated[0])
             records.extend(propagated[1])
+            for pid, lo, hi, text, rid in propagated[2]:
+                plans.setdefault(pid, []).append((lo, hi, text, rid))
 
         rows = list(working.values()) + new_rows
         result = self._rebuild(rows, snapshot=f"round{round_no}")
@@ -1260,12 +1616,37 @@ class Settler:
                     question=_question(res), kind=res.kind))
             rows = list(working.values()) + new_rows
             self._rebuild(rows, snapshot=f"round{round_no}-revert")
+
+        # The composite self-check (Georgis, 2026-09-04): a settlement that
+        # composed the wrong span produced "trot, communicating to urge the
+        # horse into a trot ,communicating his frustration" and nothing
+        # noticed until the walk re-read it. Every paragraph this round wrote
+        # is read back from the rebuilt deliverable and compared with what
+        # the decisions said it should read; a mismatch — or a five-word run
+        # duplicated inside the paragraph that the source did not carry —
+        # reverts this round's settlements there to queries.
+        reverted: dict[str, str] = {}
+        bad_paras = self._self_check(plans, unplannable, failed, records, em)
+        if bad_paras:
+            targets: dict[str, str] = {}
+            for rec in records:
+                if rec.action in ("absorb", "add", "revise") \
+                        and rec.para_id in bad_paras \
+                        and rec.residual_id not in failed:
+                    targets[rec.residual_id] = bad_paras[rec.para_id]
+            if targets:
+                reverted.update(targets)
+                records.extend(self._revert_records(
+                    targets, items, records, removed_by, round_no,
+                    snapshot=f"round{round_no}-composite-revert"))
         self.settlement.records.extend(records)
         for res in items:
             self.settlement.residuals_seen.append(res.to_json())
         self.settlement.notes.append(
             f"round {round_no}: {len(items)} item(s), {judged} judged, "
-            f"{len(failed)} reverted")
+            f"{len(failed)} reverted"
+            + (f", {len(reverted)} composite(s) failed the self-check"
+               if reverted else ""))
 
         # A5 — delta verify over the touched paragraphs
         self.last_reread = 0
@@ -1280,13 +1661,22 @@ class Settler:
             + len(touched))
         vr = verify_delta(self.run_dir, touched, self.provider, self.opt.model,
                           self.usage, context=self.opt.context,
-                          max_tokens=self.opt.max_tokens)
+                          max_tokens=self.opt.max_tokens,
+                          concurrency=self.opt.concurrency)
         have = self.settlement.record_ids()
         fresh: list[Residual] = []
-        # a verifier flag on a composite this round -> revert it, query
+        # A verifier flag on a composite this round: a second look by the
+        # judge (the verifier is Chicago-trained and the house is not — on
+        # the Georgis run it flagged the house time form 67 times); revert
+        # to a query only when the judge agrees, or cannot be asked.
+        latest = self.settlement.latest()
         composites = {rec.residual_id: rec for rec in records
-                      if rec.action in ("absorb", "add", "revise")}
-        revert_ids: list[str] = []
+                      if rec.action in ("absorb", "add", "revise")
+                      and rec.residual_id not in reverted
+                      and latest.get(rec.residual_id, rec).action
+                      in ("absorb", "add", "revise")}
+        revert_ids: dict[str, str] = {}
+        paragraphs: dict[str, str] | None = None
         for p in vr.problems:
             item = Residual.from_problem(p.to_json(), round_no)
             # Is the flagged edit one of this round's settlement rows?
@@ -1298,7 +1688,26 @@ class Settler:
                     hit = rid
                     break
             if hit is not None:
-                revert_ids.append(hit)
+                if paragraphs is None:
+                    from galley.verify import accepted_text
+                    paragraphs = accepted_text(self.run_dir)
+                answer, why = second_look(
+                    item, paragraphs.get(item.para_id, ""), self.provider,
+                    self.opt.model, self.usage, context=self.opt.context)
+                rec = composites[hit]
+                if answer == "keep":
+                    log.info("settle: judge overruled the verifier on %s "
+                             "(%s)", hit, why)
+                    self.settlement.records.append(SettlementRecord(
+                        hit, round_no, rec.action, rec.owner_finding_id,
+                        rec.before_replacement, rec.after_replacement,
+                        "verifier_overruled" + (f":{why}" if why else ""),
+                        self.verified_by, para_id=rec.para_id,
+                        kind=rec.kind))
+                    continue
+                revert_ids[hit] = ("verifier_reverted"
+                                   if why == SECOND_LOOK_UNAVAILABLE
+                                   else "verifier_confirmed")
                 continue
             if item.id not in have:
                 fresh.append(item)
@@ -1307,47 +1716,208 @@ class Settler:
             if item.id not in have:
                 fresh.append(item)
         if revert_ids:
-            working, em, accepted = self._load_state()
-            for rid in revert_ids:
-                res = next(r for r in items if r.id == rid)
-                # remove the settlement row(s) for this residual
-                for key in [k for k, row in working.items()
-                            if settle_residual_of(row) == rid]:
-                    working.pop(key)
-                # Restore what the composite absorbed — under FRESH keys.
-                # `removed_by` is keyed by finding ids from BEFORE the
-                # rebuild, and every rebuild re-mints ids, so writing them
-                # back by their old key overwrote whatever unrelated row now
-                # held that id (Redding lost a number_style row and two
-                # galley_read rows that way).
-                restore_rows(working, rid, removed_by.get(rid, {}).values())
-                q = _query_row(res, source, _question(res))
-                extra_rows = [q] if q is not None else []
-                self.settlement.records.append(SettlementRecord(
-                    rid, round_no, "query", res.owner_finding_id,
-                    composites[rid].after_replacement, "",
-                    "verifier_reverted", self.verified_by,
-                    para_id=res.para_id, question=_question(res),
-                    kind=res.kind))
-                working[f"settle-q-{rid}"] = extra_rows[0] if extra_rows \
-                    else working.get(f"settle-q-{rid}", {})
-                if not extra_rows:
-                    working.pop(f"settle-q-{rid}", None)
-            self._rebuild(list(working.values()),
-                          snapshot=f"round{round_no}-verifier-revert")
+            self.settlement.records.extend(self._revert_records(
+                revert_ids, items, records, removed_by, round_no,
+                snapshot=f"round{round_no}-verifier-revert"))
         self.touched = set()
         return fresh
+
+    def _prefetch_judgments(self, items, em, accepted, source, working,
+                            guards) -> dict[str, Decision]:
+        """The round's judge calls, fanned out ahead of the sequential
+        decide/apply loop when the options allow more than one in flight.
+
+        The loop below must stay sequential — each apply mutates `working`,
+        and the next decide reads it — so the model calls are the part that
+        parallelizes: every item the PRE-ROUND state sends to the judge gets
+        its packet built now, the calls fan out (`docproof.fanout.fan_out`),
+        and the answers are folded in item order and handed to the loop by
+        residual id. An item whose in-loop decision no longer needs the judge
+        simply leaves its answer unused. At concurrency 1 nothing is
+        prefetched and the loop calls the judge itself, exactly as before."""
+        if self.provider is None or self.opt.concurrency <= 1:
+            return {}
+        need = [res for res in items
+                if decide(res, em, accepted, source, working, self._zones,
+                          **guards).action == "judge"]
+        if not need:
+            return {}
+        from docproof.fanout import fan_out
+        packets = {res.id: judge_packet(res, em, source, working,
+                                        context=self.opt.context)
+                   for res in need}
+        schema, name = _judge_schema()
+        model = self.opt.model
+
+        def fetch(res: Residual):
+            system, user = packets[res.id]
+            return self.provider.complete_structured(
+                model=model, system=system, user=user, schema=schema,
+                schema_name=name, max_tokens=2000)
+
+        out: dict[str, Decision] = {}
+        for n, (res, result) in enumerate(
+                fan_out(need, fetch, concurrency=self.opt.concurrency), 1):
+            if result.usage is not None:
+                self.usage.add(result.usage, model=model)
+            out[res.id] = judge_decision(res, result)
+            log.info("settle: judge %d/%d done (%s) — %s", n, len(need),
+                     res.para_id, out[res.id].action)
+        return out
+
+    # -- the composite self-check and the shared revert ------------------------
+
+    @staticmethod
+    def _plan(plans: dict[str, list[tuple[int, int, str, str]]],
+              unplannable: set[str], res: Residual, dec: Decision,
+              em: emap.EditMap, source: Mapping[str, str],
+              working: Mapping[str, Mapping[str, Any]]) -> None:
+        """Record what `dec` should do to the paragraph's accepted text, in
+        pre-round offsets. A decision whose effect cannot be predicted from
+        the map (a revise of an owner split into regions whose row text does
+        not match the map) marks the paragraph unplannable, so the self-check
+        stays silent there rather than guessing."""
+        pid = res.para_id
+        if dec.action in ("absorb", "add") and dec.composite is not None:
+            comp = dec.composite
+            plans.setdefault(pid, []).append(
+                (comp.acc_start, comp.acc_end, comp.text, res.id))
+            return
+        if dec.action not in ("revise", "revert") or not dec.owner_key:
+            return
+        segs = em.paragraphs.get(pid) or []
+        owned = [sg for sg in segs if sg.owner == dec.owner_key]
+        if not owned:
+            unplannable.add(pid)
+            return
+        if dec.action == "revert":
+            src = source.get(pid, "")
+            for sg in owned:
+                plans.setdefault(pid, []).append(
+                    (sg.acc_start, sg.acc_end, src[sg.src_start:sg.src_end],
+                     res.id))
+            return
+        a0 = min(sg.acc_start for sg in owned)
+        a1 = max(sg.acc_end for sg in owned)
+        acc = emap.accepted_of(segs)
+        row = working.get(dec.owner_key, {})
+        if acc[a0:a1] != str(row.get("corrected_text", "")):
+            unplannable.add(pid)
+            return
+        plans.setdefault(pid, []).append((a0, a1, dec.replacement, res.id))
+
+    def _self_check(self, plans: dict[str, list[tuple[int, int, str, str]]],
+                    unplannable: set[str], failed: Mapping[str, str],
+                    records: Sequence[SettlementRecord], em: emap.EditMap
+                    ) -> dict[str, str]:
+        """para_id -> reason for every paragraph the rebuilt deliverable does
+        not read as this round's decisions said it should: `composite_
+        mismatch` when the text differs from the expected composition,
+        `duplicated_fragment` when a five-word run now repeats inside the
+        paragraph and the source did not repeat it. Paragraphs with a failed
+        (validator-refused, already reverted) item or an unplannable decision
+        are skipped — their expected text is not known."""
+        from galley.verify import paragraph_views
+        touched = {rec.para_id for rec in records
+                   if rec.action in ("absorb", "add", "revise")}
+        if not touched:
+            return {}
+        failed_paras = {rec.para_id for rec in records
+                        if rec.residual_id in failed}
+        _orig, actual = paragraph_views(self.run_dir)
+        if not actual:
+            return {}
+        bad: dict[str, str] = {}
+        for pid in sorted(touched):
+            if pid in failed_paras or pid in unplannable:
+                continue
+            got = actual.get(pid)
+            if got is None:
+                continue
+            segs = em.paragraphs.get(pid)
+            planned = sorted(plans.get(pid, []), key=lambda t: t[0])
+            if segs is not None and planned:
+                expected = emap.accepted_of(segs)
+                overlap = any(planned[i][1] > planned[i + 1][0]
+                              for i in range(len(planned) - 1))
+                if not overlap:
+                    for lo, hi, text, _rid in reversed(planned):
+                        expected = expected[:lo] + text + expected[hi:]
+                    if " ".join(got.split()) != " ".join(expected.split()):
+                        log.warning("settle: %s did not compose as planned "
+                                    "— expected %r, got %r", pid,
+                                    expected[:160], got[:160])
+                        bad[pid] = "composite_mismatch"
+                        continue
+            frags = introduced_fragments(self._source.get(pid, ""), got)
+            if frags:
+                log.warning("settle: %s now repeats %r", pid, frags[0])
+                bad[pid] = f"duplicated_fragment:{frags[0][:60]}"
+        return bad
+
+    def _revert_records(self, targets: Mapping[str, str],
+                        items: Sequence[Residual],
+                        records: Sequence[SettlementRecord],
+                        removed_by: Mapping[str, Mapping[str, dict[str, Any]]],
+                        round_no: int, *, snapshot: str
+                        ) -> list[SettlementRecord]:
+        """Undo this round's settlement for each residual in `targets`
+        (residual_id -> reason): its settlement row(s) come out, the owner
+        rows it absorbed go back, and the residual ships as a query. Returns
+        the records; rebuilds the deliverable once.
+
+        The owner rows are restored under FRESH keys. `removed_by` is keyed
+        by finding ids from BEFORE the rebuild, and every rebuild re-mints
+        ids, so writing them back by their old key overwrote whatever
+        unrelated row now held that id (Redding lost a number_style row and
+        two galley_read rows that way)."""
+        working, _em, _accepted = self._load_state()
+        source = self._source
+        by_id = {r.id: r for r in items}
+        this_round = {rec.residual_id: rec for rec in records}
+        out: list[SettlementRecord] = []
+        for rid, reason in targets.items():
+            for key in [k for k, row in working.items()
+                        if settle_residual_of(row) == rid]:
+                working.pop(key)
+            restore_rows(working, rid, removed_by.get(rid, {}).values())
+            prior = this_round.get(rid)
+            before = prior.after_replacement if prior else ""
+            res = by_id.get(rid)
+            if res is None:
+                # A propagated site has no residual of its own; the row goes
+                # and the base residual's question covers it.
+                out.append(SettlementRecord(
+                    rid, round_no, "drop", None, before, "", reason,
+                    self.verified_by, para_id=prior.para_id if prior else "",
+                    kind="residual"))
+                continue
+            q = _query_row(res, source, _question(res))
+            if q is not None:
+                working[f"settle-q-{rid}"] = q
+            else:
+                working.pop(f"settle-q-{rid}", None)
+            out.append(SettlementRecord(
+                rid, round_no, "query" if q is not None else "drop",
+                res.owner_finding_id, before, "", reason, self.verified_by,
+                para_id=res.para_id, question=_question(res), kind=res.kind))
+            self.touched.add(res.para_id)
+        self._rebuild(list(working.values()), snapshot=snapshot)
+        return out
 
     def _propagate(self, items, records, em, source, working, new_rows,
                    round_no):
         """For every `add` this round on a word-shaped quote, find the same
         surface in untouched text of the paragraph and its neighbours and
-        add the same fix there. Returns (rows, records)."""
+        add the same fix there. Returns (rows, records, plans) — the plans
+        being (para_id, acc_lo, acc_hi, text, record_id) for the composite
+        self-check."""
         order = list(source.keys())
         index = {pid: i for i, pid in enumerate(order)}
         by_id = {res.id: res for res in items}
         out_rows: list[dict[str, Any]] = []
         out_recs: list[SettlementRecord] = []
+        out_plans: list[tuple[str, int, int, str, str]] = []
         claimed: set[tuple[str, int]] = set()
         for rec in list(records):
             if rec.action != "add" or rec.kind != "residual":
@@ -1413,11 +1983,13 @@ class Settler:
                         f"{res.id}+{n}", round_no, "add", None, quote, repl,
                         f"propagated:{res.id}", self.verified_by,
                         para_id=pid, kind="residual"))
+                    out_plans.append((pid, comp.acc_start, comp.acc_end,
+                                      comp.text, f"{res.id}+{n}"))
                     self.touched.add(pid)
         if out_rows:
             log.info("settle: propagated %d fix(es) to identical untouched "
                      "sites nearby", len(out_rows))
-        return out_rows, out_recs
+        return out_rows, out_recs, out_plans
 
     # -- the whole loop -----------------------------------------------------
 
@@ -1439,10 +2011,12 @@ class Settler:
         uc, uw = Usage(), Usage()
         changes = verify_run(self.run_dir, self.provider, self.opt.model, uc,
                              context=self.opt.context, run_changes=True,
-                             run_walk=False, max_tokens=self.opt.max_tokens)
+                             run_walk=False, max_tokens=self.opt.max_tokens,
+                             concurrency=self.opt.concurrency)
         walk = verify_run(self.run_dir, self.provider, self.opt.model, uw,
                           context=self.opt.context, run_changes=False,
-                          run_walk=True, max_tokens=self.opt.max_tokens)
+                          run_walk=True, max_tokens=self.opt.max_tokens,
+                          concurrency=self.opt.concurrency)
         for u in (uc, uw):
             for f in ("input_tokens", "output_tokens",
                       "cache_creation_input_tokens", "cache_read_input_tokens",
@@ -1678,7 +2252,10 @@ __all__ = [
     "SettleResult", "Settlement", "SettlementRecord", "Settler",
     "TERMINAL_STATES", "apply_decision", "decide", "fold_accepted_rows",
     "artifact_in", "deletes_an_aside", "judge", "kept_rows",
-    "looks_like_instruction",
+    "looks_like_instruction", "rewrite_class", "duplicated_fragments",
+    "introduced_fragments", "second_look", "SweepGuard", "judge_packet",
+    "judge_decision", "xml_safe",
+    "DUPLICATE_FRAGMENT_WORDS",
     "align_to_sentence",
     "open_items", "resolve", "restore_rows", "rewrite_verify_artifacts",
     "stamp_states", "terminal_state", "unsettled",

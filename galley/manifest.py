@@ -329,7 +329,7 @@ def verify_plan(manifest: dict[str, Any], *, source: str | Path, cfg: Any,
 @dataclass
 class Check:
     name: str
-    status: str          # "pass" | "fail" | "skip"
+    status: str          # "pass" | "fail" | "skip" | "warn" (never blocks)
     detail: str = ""
 
     def to_json(self) -> dict[str, str]:
@@ -510,6 +510,10 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
     # _certify_text_hygiene) — --source is what lets the check tell the two
     # apart.
     cert.checks.append(_certify_text_hygiene(run, source))
+    # 8b. Unresolved field results ("Error! Bookmark not defined.") in ANY
+    # paragraph, the skipped TOC styles included — a warning for the
+    # designer, never a failure (see _certify_field_results).
+    cert.checks.append(_certify_field_results(run))
 
     # 9. Finished-text SENSE gates. certify itself reads no text for meaning;
     # `galley verify` does and records its verdict here. An item without a
@@ -1217,12 +1221,113 @@ def _certify_spellfix_sanity(run: Path) -> Check:
                  "no truncated-stem spelling corrections")
 
 
+def _duplicated_fragment_hits(run: Path) -> list[str]:
+    """Five-word runs that repeat inside one ACCEPTED paragraph of the
+    deliverable and did not repeat in the same paragraph's reject-all view —
+    the trace a composite spliced at the wrong offset leaves ("trot,
+    communicating to urge the horse into a trot ,communicating his
+    frustration", Georgis 2026-09-04). Read from the .docx's two views, so
+    an author's own refrain (present in the source) never counts. Empty when
+    there is no deliverable or the OOXML tooling is unavailable."""
+    try:
+        from galley.settle import introduced_fragments
+        from galley.verify import paragraph_views
+        original, accepted = paragraph_views(run)
+    except Exception:                                    # noqa: BLE001
+        return []
+    hits: list[str] = []
+    for pid, text in accepted.items():
+        for frag in introduced_fragments(original.get(pid, ""), text):
+            hits.append(f"duplicated fragment in {pid}: {frag!r}")
+            if len(hits) >= 12:
+                return hits
+    return hits
+
+
+# What Word leaves in a field result it could not resolve — a TOC entry whose
+# bookmark was deleted, a cross-reference to a heading that went. Visible to a
+# reader, never to a typed pass (TOC styles are skipped from review), and only
+# the designer regenerating the TOC can fix it.
+_UNRESOLVED_FIELD_RE = re.compile(
+    r"Error! (?:Bookmark not defined|Reference source not found)\.?")
+
+
+def unresolved_field_results(docx_path: str | Path) -> list[tuple[str, str]]:
+    """Every paragraph of the .docx — EVERY paragraph, the skipped styles
+    included — whose accept-view text carries an unresolved field result, as
+    (para_id, text). Georgis (2026-09-04): nine "Error! Bookmark not
+    defined." TOC entries were visible only to the paid finished-text walk,
+    which then raised residuals nothing could settle. Empty when the file
+    cannot be read."""
+    try:
+        from docproof.reassembler import paragraph_view_text
+        from docproof.utils.xml_helpers import DocxPackage, walk_package
+        pkg = DocxPackage(str(docx_path))
+    except Exception:                                    # noqa: BLE001
+        return []
+    out: list[tuple[str, str]] = []
+    for wp in walk_package(pkg):
+        text = paragraph_view_text(wp.element, "accept")
+        if _UNRESOLVED_FIELD_RE.search(text):
+            out.append((wp.para_id, " ".join(text.split())[:120]))
+    return out
+
+
+def _certify_field_results(run: Path) -> Check:
+    """A WARNING, never a failure: an unresolved field is the designer's to
+    fix by regenerating the TOC, and a certificate must not block delivery
+    on text no lane can edit — but it must not stay silent either."""
+    docs = sorted(p for p in run.glob("*.docx")
+                  if not p.name.startswith("~$")
+                  and "change log" not in p.name.lower())
+    if not docs:
+        return Check("unresolved fields", "skip",
+                     "no manuscript .docx in the run directory")
+    hits = unresolved_field_results(docs[0])
+    if hits:
+        sample = "; ".join(f"{pid}: {text[:60]}" for pid, text in hits[:4])
+        return Check("unresolved fields", "warn",
+                     f"{len(hits)} paragraph(s) carry an unresolved field "
+                     f"result (\"Error! Bookmark not defined.\" / \"Reference "
+                     f"source not found.\") — the designer regenerates the "
+                     f"TOC/fields; no lane can edit them: {sample}"
+                     + ("…" if len(hits) > 4 else ""))
+    return Check("unresolved fields", "pass",
+                 "no unresolved field results in the delivered text")
+
+
+def _minus_preexisting(corrected: str, original: str) -> str:
+    """`corrected` with every artifact the ORIGINAL span already carried
+    blanked out, occurrence for occurrence.
+
+    A whole-paragraph row (a typed pass quoting the paragraph to add one
+    comma) carries the author's own pre-existing faults in its corrected
+    text — Georgis 2026-09-04: a source `“lady in red”.` inside a
+    compound_sentence_comma row failed certify although no edit touched it
+    and the sweeps had fixed it in the delivered text. Only an artifact the
+    edit INTRODUCED is a merge artifact."""
+    if not original:
+        return corrected
+    out = corrected
+    for pat in _ARTIFACTS:
+        had = len(pat.findall(original))
+        if not had:
+            continue
+        for _ in range(had):
+            out, n = pat.subn("", out, count=1)
+            if not n:
+                break
+    return out
+
+
 def _artifact_scan(run: Path) -> Check:
     """Scan what the author will actually READ after accepting the changes:
     every finding's corrected_text. Raw change-log / findings-file text is NOT
     scanned — those files faithfully quote the ORIGINAL, pre-fix text, whose
     artifacts are precisely what the findings fix, so a raw-text scan fails a
-    clean deliverable for honestly reporting what it repaired."""
+    clean deliverable for honestly reporting what it repaired. The delivered
+    .docx's accepted paragraphs are read for one thing only: a duplicated
+    five-word fragment the source did not carry (`_duplicated_fragment_hits`)."""
     texts: list[str] = []
     for name in ("findings.json", "flights_findings.json"):
         data = _load_json(run / name)
@@ -1236,14 +1341,17 @@ def _artifact_scan(run: Path) -> Check:
                 continue           # a question or a rejected row changes nothing
             corr = row.get("corrected_text")
             if isinstance(corr, str) and corr:
-                texts.append(corr)
-    if not texts:
+                texts.append(_minus_preexisting(
+                    corr, str(row.get("original_text") or "")))
+    repeats = _duplicated_fragment_hits(run)
+    if not texts and not repeats:
         return Check("artifact scan", "skip",
                      "no corrected text in the run directory to scan")
     blob = "\n".join(texts)
     hits = [pat.pattern for pat in _ARTIFACTS if pat.search(blob)]
     if _POST_TEXT_DOUBLE.search(blob):
         hits.append("  ")
+    hits.extend(repeats)
     if hits:
         return Check("artifact scan", "fail",
                      f"found merge artifact(s) in corrected text: "
@@ -1256,4 +1364,5 @@ __all__ = [
     "MANIFEST_SCHEMA_VERSION", "COPYEDIT_LANES", "ModelRoute", "Deviation",
     "Check", "Certificate", "sha256_file", "config_hash", "model_routes",
     "providers_in_use", "build_manifest", "verify_plan", "certify_run",
+    "unresolved_field_results",
 ]

@@ -113,7 +113,8 @@ def _locate(text: str, quote: str) -> tuple[int, int] | None:
 def propose(paragraphs: Sequence[ParagraphRef], provider, *, model: str,
             max_output_tokens: int, usage: Usage, window_chars: int,
             context: str = "", coverage=None, progress=None,
-            stats: dict | None = None) -> list[RewriteCandidate]:
+            stats: dict | None = None,
+            concurrency: int = 1) -> list[RewriteCandidate]:
     """Sweep the manuscript window by window and return anchored candidates.
 
     ``context`` carries the same whole-book prompt sections the typed
@@ -126,6 +127,13 @@ def propose(paragraphs: Sequence[ParagraphRef], provider, *, model: str,
     sweep is additive and must never take the review down with it. Findings
     whose quote cannot be located verbatim in their paragraph are dropped for
     cause and counted, never guessed onto the page.
+
+    ``concurrency`` windows are in flight at once (`docproof.fanout.fan_out`,
+    the ladder's pattern): the calls fan out, the replies are folded back in
+    WINDOW ORDER on this thread, so candidates come out in document order
+    and the usage ledger is touched by one thread. 1 is the plain sequential
+    loop this used to be — on Georgis (2026-09-04) seven windows took over
+    fifty minutes one at a time, with no line logged per window.
     """
     system = SWEEP_SYSTEM
     if context.strip():
@@ -134,12 +142,19 @@ def propose(paragraphs: Sequence[ParagraphRef], provider, *, model: str,
     by_number: dict[int, ParagraphRef] = {
         n: p for rows in packed for n, p in rows}
     out: list[RewriteCandidate] = []
-    dropped = {"window_failed": 0, "unlocated": 0, "noop": 0, "unknown_para": 0}
-    for index, rows in enumerate(packed):
-        result = provider.complete_structured(
+    dropped = {"window_failed": 0, "unlocated": 0, "noop": 0, "unknown_para": 0,
+               "doubled_word": 0}
+    from .fanout import fan_out
+
+    def fetch(indexed):
+        _index, rows = indexed
+        return provider.complete_structured(
             model=model, system=system, user=_payload(rows),
             schema=SWEEP_SCHEMA, schema_name="chapter_sweep_findings",
             max_tokens=max_output_tokens)
+
+    for (index, rows), result in fan_out(list(enumerate(packed)), fetch,
+                                         concurrency=concurrency):
         if result.usage is not None:
             usage.add(result.usage, model=model)
         if result.parsed is None:
@@ -154,6 +169,7 @@ def propose(paragraphs: Sequence[ParagraphRef], provider, *, model: str,
                     f"({result.error or result.stop_reason}) — the paragraphs "
                     f"in it were not swept", "failed")
             continue
+        found_before = len(out)
         for row in result.parsed.get("findings", []):
             para = by_number.get(row.get("para"))
             if para is None:
@@ -164,6 +180,14 @@ def propose(paragraphs: Sequence[ParagraphRef], provider, *, model: str,
             if not quote or correction == quote:
                 dropped["noop"] += 1
                 continue
+            # A proposal that itself carries a doubled word ("and and,",
+            # Georgis 2026-09-04) is the artifact; the validator would
+            # refuse it later, but a sweep should not spend a confirm call
+            # on it either.
+            from .validator import introduces_doubled_word
+            if introduces_doubled_word(quote, correction):
+                dropped["doubled_word"] += 1
+                continue
             span = _locate(para.text, quote)
             if span is None:
                 dropped["unlocated"] += 1
@@ -173,6 +197,8 @@ def propose(paragraphs: Sequence[ParagraphRef], provider, *, model: str,
                 para_id=para.para_id, start=start, end=end,
                 original=para.text[start:end], replacement=correction,
                 note=(row.get("note") or "").strip()[:200] or None))
+        log.info("Chapter sweep window %d/%d: %d candidate(s)", index + 1,
+                 len(packed), len(out) - found_before)
         if progress:
             progress(index + 1, len(packed))
     if stats is not None:

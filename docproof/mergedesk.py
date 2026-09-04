@@ -271,11 +271,11 @@ def _as_rejected(p: _Placed, paras: dict[str, ParagraphRef]) -> Finding:
 def _overlaps(s1: int, e1: int, s2: int, e2: int) -> bool:
     """Mirrors `validator._overlaps` exactly — kept as a local copy rather than
     imported, since that name is private to its module. See its docstring
-    there for the composition reasoning (same-point insertions conflict only
-    with each other, an insertion into a span conflicts, abutting a span's end
-    does not)."""
+    there for the composition reasoning (two insertions conflict at the same
+    point or one character apart — the Georgis ",," / "7:00 :00 AM" seam —
+    an insertion into a span conflicts, abutting a span's end does not)."""
     if s1 == e1 and s2 == e2:
-        return s1 == s2
+        return abs(s1 - s2) <= 1
     if s1 == e1:
         return s2 <= s1 < e2
     if s2 == e2:
@@ -592,7 +592,9 @@ def iterate_until_clean(merge: MergeResult, doc: DocumentModel, *,
                         query_types: frozenset[str] = frozenset(),
                         format_types: dict[str, str] | None = None,
                         edit_guard=None,
-                        max_iterations: int = 25
+                        max_iterations: int = 25,
+                        later_loses: bool = False,
+                        sweep_guard=None
                         ) -> tuple[MergeResult, list[ArtifactHit]]:
     """Re-run `merge`'s ordered findings through `validate_findings`, scan the
     result for artifacts, and — bounded — drop the losing FINDING and recheck
@@ -627,7 +629,14 @@ def iterate_until_clean(merge: MergeResult, doc: DocumentModel, *,
     empty when the merge started clean, non-empty and every `resolved=True`
     when the loop fixed it, and containing an unresolved hit only when the
     bound was exhausted or no droppable finding could clear it. An unresolved
-    hit names the contributing findings in `finding_ids`."""
+    hit names the contributing findings in `finding_ids`.
+
+    `later_loses` reverses the tie-break within a lane: the row listed LATER
+    in `merge.findings` is tried first as the one to drop. That is the
+    import-findings contract (rows arrive in lane precedence order —
+    mechanics first — so the later row is the lower-priority lane's), where
+    the merge desk's own default of trying earliest first would drop the
+    winner (Georgis, 2026-09-04)."""
     from .validator import validate_findings
 
     findings = list(merge.findings)
@@ -638,7 +647,7 @@ def iterate_until_clean(merge: MergeResult, doc: DocumentModel, *,
         validated = validate_findings(
             findings, doc, min_confidence, query_types=query_types,
             format_types=format_types or {}, edit_guard=edit_guard,
-            guard_exempt=frozenset({"repair"}))
+            guard_exempt=frozenset({"repair"}), sweep_guard=sweep_guard)
         hits = scan_artifacts(validated, doc)
         if not hits:
             return MergeResult(findings, validated + merge.rejected,
@@ -663,8 +672,11 @@ def iterate_until_clean(merge: MergeResult, doc: DocumentModel, *,
             if working[pid].cluster_id:
                 continue     # rule (a): a cluster is claimed whole or not at all
             candidates.append(pid)
+        order = {f.finding_id: i for i, f in enumerate(findings)}
         candidates.sort(
-            key=lambda pid: 0 if (working[pid].lane or "") == COPYEDIT else 1)
+            key=lambda pid: (0 if (working[pid].lane or "") == COPYEDIT else 1,
+                             -order.get(pid, 0) if later_loses
+                             else order.get(pid, 0)))
 
         dropped_id = None
         for pid in candidates:

@@ -179,6 +179,111 @@ def _is_number_label(para, start: int, end: int) -> bool:
     return _looks_like_heading(getattr(para, "style", ""), line)
 
 
+_DOUBLED_WORD_RE = re.compile(r"\b([A-Za-z]+)[ \u00a0]+\1\b", re.IGNORECASE)
+
+
+def doubled_words(text: str) -> dict[str, int]:
+    """Each word that appears twice in a row (case-insensitive), with how
+    many times it does."""
+    out: dict[str, int] = {}
+    for m in _DOUBLED_WORD_RE.finditer(text):
+        w = m.group(1).lower()
+        out[w] = out.get(w, 0) + 1
+    return out
+
+
+def introduces_doubled_word(before: str, after: str) -> str | None:
+    """The doubled word `after` carries more of than `before` does, or None.
+    A Luna chapter-sweep proposal itself contained "and and," (Georgis,
+    2026-09-04); a fix that ships a doubled word the author did not write is
+    the artifact, whatever else it repairs. Compared as counts so a
+    deliberate doubling the original already had ("that that") passes."""
+    had = doubled_words(before)
+    for w, n in doubled_words(after).items():
+        if n > had.get(w, 0):
+            return w
+    return None
+
+
+def _word_continues(text: str, pos: int) -> bool:
+    """Whether the character at `pos` continues a word begun just before it:
+    a letter/digit, or an apostrophe that a letter follows ("apple’s")."""
+    if pos < 0 or pos >= len(text):
+        return False
+    c = text[pos]
+    if c.isalnum():
+        return True
+    return c in "’'" and pos + 1 < len(text) and text[pos + 1].isalnum()
+
+
+def anchors_midword(para_text: str, s: int, original: str,
+                    pre: int, deleted: str) -> bool:
+    """Whether a quote that anchored at `s` cuts a word in half at an edge the
+    minimal diff (`pre`, `deleted`) touches.
+
+    `import-findings` anchors by plain substring, so "our bond born" anchors
+    inside "our bond borne" and an edit to its last word splices INSIDE
+    "borne" (Georgis, 2026-09-04: it composed "was was born"). A quote may
+    still start or end mid-word when the edit sits elsewhere in it — only
+    the cut word the edit reaches is unsafe."""
+    if not original:
+        return False
+    end = s + len(original)
+    hi = pre + len(deleted)
+    # the cut word at the END of the quote
+    if original[-1].isalnum() and _word_continues(para_text, end):
+        wstart = len(original)
+        while wstart > 0 and original[wstart - 1].isalnum():
+            wstart -= 1
+        if hi > wstart or (not deleted and pre >= wstart):
+            return True
+    # the cut word at the START of the quote
+    if original[0].isalnum() and s > 0 and (
+            para_text[s - 1].isalnum()
+            or (para_text[s - 1] in "’'" and s > 1
+                and para_text[s - 2].isalnum())):
+        wend = 0
+        while wend < len(original) and original[wend].isalnum():
+            wend += 1
+        if pre < wend or (not deleted and pre <= wend):
+            return True
+    return False
+
+
+_NEIGHBOUR_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:['’][A-Za-z]+)?")
+
+
+def duplicates_neighbour(para_text: str, start: int, end: int,
+                         inserted: str) -> str | None:
+    """The word the inserted/replacement text repeats from IMMEDIATELY before
+    or after its span in the paragraph, or None. A `missing_word` row inserted
+    "Kalamata." before a sentence beginning "Kalamata, the capital…" (source
+    "arrived in. Kalamata,", Georgis 2026-09-04) — read inside the edit it
+    looked fine; read in the paragraph it doubled the name. Case-insensitive,
+    punctuation ignored; a word the deleted span itself carried is not a
+    repeat (re-typing "Kalamata" as "Kalamata." is not a doubling)."""
+    words = [w.lower() for w in _NEIGHBOUR_WORD_RE.findall(inserted)]
+    if not words:
+        return None
+    deleted = {w.lower() for w in _NEIGHBOUR_WORD_RE.findall(para_text[start:end])}
+    before = _NEIGHBOUR_WORD_RE.findall(para_text[max(0, start - 60):start])
+    after = _NEIGHBOUR_WORD_RE.findall(para_text[end:end + 60])
+    if before and words[0] == before[-1].lower() and words[0] not in deleted:
+        return before[-1]
+    if after and words[-1] == after[0].lower() and words[-1] not in deleted:
+        return after[0]
+    return None
+
+
+# A currency_style / number_style "correction" that produces a sub-dollar
+# amount in numerals: "a dime" -> "$0.10", "5 cents" -> "$0.05", "90 cents"
+# -> "$0.90" all shipped from the Georgis ladder. Chicago 9.20 keeps amounts
+# under a dollar in words; the prompt now says so, and this is the
+# deterministic backstop for a model that ignores it.
+_SUB_DOLLAR_RE = re.compile(r"\$0\.\d{2}\b")
+_MONEY_STYLE_TYPES = ("currency_style", "number_style")
+
+
 def _is_imported(f: Finding) -> bool:
     return (f.finding_id.split("-", 1)[0] in _IMPORT_ID_PREFIXES
             or f.error_type in ("imported_edit", "galley_settle"))
@@ -189,8 +294,16 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
                       query_types: frozenset[str] = frozenset(),
                       format_types: dict[str, str] | None = None,
                       edit_guard=None,
-                      guard_exempt: frozenset[str] = frozenset()) -> list[Finding]:
+                      guard_exempt: frozenset[str] = frozenset(),
+                      sweep_guard=None) -> list[Finding]:
     """Anchor every finding, and decide which channel it goes down.
+
+    `sweep_guard` (a docproof.sweepguard.SweepGuard built from the run's
+    configured sweeps) refuses any edit the house sweeps would re-fire on
+    inside its changed span — the typed `capitalization` pass lowercasing
+    "2:30 AM" to "2:30 am" (Georgis, 2026-09-04) — with status
+    `rejected_undoes_house_style:<sweep key>`. None (the default) skips the
+    check, so a bare call behaves as before.
 
     `query_types` are error types that ask rather than correct. They skip the
     edit machinery entirely: there is no minimal diff to compute, no confidence
@@ -333,6 +446,51 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
         anchor = Anchor(start=start, end=end,
                         delete_text=para.text[start:end], insert_text=inserted)
 
+        # 2.4 — a quote that cuts a word in half at the edge the edit
+        # touches anchored INSIDE a longer word; applied, it would splice
+        # that word ("our bond born" over "our bond borne" -> "was was born",
+        # Georgis 2026-09-04). Refused with its own status so the report
+        # names the cause rather than filing it as a landed edit.
+        if anchors_midword(para.text, s, f.original_text, pre, deleted):
+            out.append(_status(f, "rejected_anchor_midword", anchor))
+            log.info("%s (%s): refused — the quote cuts a word at the edge "
+                     "the edit touches: %r in %r", f.finding_id, f.error_type,
+                     f.original_text[-40:], para.text[max(0, s - 10):end + 12])
+            continue
+
+        # 2.42 — a fix that ships a doubled word the paragraph did not have
+        # ("and and,") is itself the artifact, whatever else it repairs.
+        composed = para.text[:start] + inserted + para.text[end:]
+        dup = introduces_doubled_word(para.text, composed)
+        if dup is not None:
+            out.append(_status(f, "rejected_doubled_word_in_fix", anchor))
+            log.info("%s (%s): refused — the correction doubles %r: %r",
+                     f.finding_id, f.error_type, dup, inserted[:60])
+            continue
+
+        # 2.43 — a fix whose words repeat the word immediately before or after
+        # its span ("Kalamata." inserted before "Kalamata, the capital").
+        nb = duplicates_neighbour(para.text, start, end, inserted)
+        if nb is not None:
+            out.append(_status(f, "rejected_duplicates_neighbour", anchor))
+            log.info("%s (%s): refused — the correction repeats its neighbour "
+                     "%r: %r", f.finding_id, f.error_type, nb, inserted[:60])
+            continue
+
+        # 2.44 — house style is not a lane's to undo. The configured sweeps
+        # are run over the paragraph AS IT WOULD READ; a sweep that fires
+        # inside the changed span and did not fire there before is the row
+        # writing a form the house removes ("2:30 AM" -> "2:30 am").
+        if sweep_guard is not None and getattr(sweep_guard, "sweeps", None):
+            key = sweep_guard.refires(para.text, (start, end), composed,
+                                      (start, start + len(inserted)))
+            if key:
+                out.append(_status(f, f"rejected_undoes_house_style:{key}",
+                                   anchor))
+                log.info("%s (%s): refused — %s would re-fire on %r",
+                         f.finding_id, f.error_type, key, inserted[:60])
+                continue
+
         # 2.45 — number labels. A number_style edit that lands on a LABEL — a
         # "Mindset Number 23", a "1)" list marker, a heading — is refused
         # outright: the numeral is part of a name, not a count in a sentence,
@@ -343,6 +501,14 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
             log.info("%s (number_style): refused — %r is a label, not a "
                      "number in a sentence", f.finding_id,
                      para.text[max(0, start - 20):end + 10])
+            continue
+        # 2.46 — sub-dollar amounts stay in words (Chicago 9.20): "a dime",
+        # "5 cents", "90 cents" are never restyled to "$0.NN".
+        if f.error_type in _MONEY_STYLE_TYPES and _SUB_DOLLAR_RE.search(inserted) \
+                and not _SUB_DOLLAR_RE.search(deleted):
+            out.append(_status(f, "rejected_policy", anchor))
+            log.info("%s (%s): refused — a sub-dollar amount stays in words, "
+                     "not %r", f.finding_id, f.error_type, inserted[:40])
             continue
 
         # 2.5 — overreach guard. A proofreading fix is minimal; an edit that
@@ -503,7 +669,12 @@ def _oversteps(deleted: str, inserted: str, guard) -> bool:
 def _overlaps(s1: int, e1: int, s2: int, e2: int) -> bool:
     """True if two edits conflict and cannot both apply to one paragraph.
 
-    Two insertions conflict only at the same point. An insertion conflicts with
+    Two insertions conflict at the same point OR one character apart: two
+    rows inserting at the same seam — a comma after "luck" from the ladder
+    and from the fleet, ":00" from the time sweep and from the number audit —
+    compose into ",," and "7:00 :00 AM" whether their points coincide or sit
+    either side of the one space between them (Georgis, 2026-09-04). An
+    insertion conflicts with
     a replacement or deletion when its point is the span's START or lies inside
     it — the half-open range [start, end) — because both then act at the same
     offset and compose order-dependently into duplicated or garbled text:
@@ -514,8 +685,8 @@ def _overlaps(s1: int, e1: int, s2: int, e2: int) -> bool:
     the close gives "color,"), so it does not conflict. Two non-empty spans
     conflict when their intervals intersect; spans that only touch end-to-start
     (a [3, 5] beside a [5, 8]) do not."""
-    if s1 == e1 and s2 == e2:          # two insertions: only at the same point
-        return s1 == s2
+    if s1 == e1 and s2 == e2:          # two insertions: same point or adjacent
+        return abs(s1 - s2) <= 1
     if s1 == e1:                        # s1 an insertion into the s2..e2 span
         return s2 <= s1 < e2
     if s2 == e2:                        # s2 an insertion into the s1..e1 span

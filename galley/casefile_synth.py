@@ -37,6 +37,68 @@ def _ruling_for(row: dict[str, Any]) -> str:
     return "reject"
 
 
+# The cost-bearing artifacts a run directory can hold besides findings.json:
+# settle's ledger and the two verify gates, each with the same
+# `cost: {total_usd}` field the findings envelope carries.
+_COST_ARTIFACTS = ("settlement.json", "change_verify.json",
+                   "finished_walk.json")
+
+
+def _cost_of(path: Path) -> float:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0.0
+    if not isinstance(payload, dict):
+        return 0.0
+    cost = payload.get("cost") or {}
+    try:
+        return float(cost.get("total_usd") or 0.0)
+    except (TypeError, ValueError, AttributeError):
+        return 0.0
+
+
+def workspace_waves(workspace: str | Path) -> list[WaveRecord]:
+    """One wave per run directory under `<workspace>/runs/` that holds a
+    findings.json, in the order the runs were made, each charged with that
+    run's findings.json cost PLUS its settle/verify artifacts' costs, and
+    naming the lanes (error types) that ran. `galley letter` on a $0 replay
+    build reported "$0.00 spent, 1 wave" (Georgis, 2026-09-04) because the
+    final build's own envelope is $0 by design — the money was spent in the
+    ladder and verify runs beside it."""
+    runs = Path(workspace) / "runs"
+    if not runs.is_dir():
+        return []
+    dirs = sorted((d for d in runs.iterdir()
+                   if d.is_dir() and (d / "findings.json").is_file()),
+                  key=lambda d: (d / "findings.json").stat().st_mtime)
+    waves: list[WaveRecord] = []
+    for i, d in enumerate(dirs, 1):
+        try:
+            payload = json.loads((d / "findings.json").read_text("utf-8"))
+        except (OSError, ValueError):
+            continue
+        rows = payload.get("findings", []) if isinstance(payload, dict) else []
+        rows = [r for r in rows if isinstance(r, dict)]
+        cost = _cost_of(d / "findings.json")
+        extras = {name: _cost_of(d / name) for name in _COST_ARTIFACTS
+                  if (d / name).is_file()}
+        lanes = sorted({str(r.get("error_type") or "") for r in rows} - {""})
+        actions = [{"adapter": "review", "run": d.name, "lanes": lanes,
+                    "scope": {"chapters": [], "para_ids": [],
+                              "error_groups": [],
+                              "model": str(payload.get("model") or ""),
+                              "passes": 1},
+                    "findings_added": len(rows), "cost_usd": cost}]
+        for name, c in extras.items():
+            actions.append({"adapter": name.split(".")[0], "run": d.name,
+                            "cost_usd": c, "findings_added": 0})
+        waves.append(WaveRecord(index=i, actions=tuple(actions),
+                                spend_usd=cost + sum(extras.values()),
+                                findings_added=len(rows)))
+    return waves
+
+
 def casefile_from_run(run_dir: str | Path, *, book: str = "") -> CaseFile:
     """A CaseFile projected from a finished run directory. Raises FileNotFoundError
     when there is no findings.json to build from."""

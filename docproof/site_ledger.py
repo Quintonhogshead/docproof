@@ -54,8 +54,14 @@ _ALLOWED: dict[LedgerState, frozenset[LedgerState]] = {
         LedgerState.QUERY,
         LedgerState.REJECTED,
     }),
+    # An uncertain site is not a dead end: the low-confidence confirm valve,
+    # a judge, or a later detector can promote the same span to an edit —
+    # the finish() shadow reporter raised "invalid ledger transition
+    # uncertain -> edit" on exactly that path (Georgis, 2026-09-04). A
+    # promotion is a legitimate forward move, recorded with its actor.
     LedgerState.UNCERTAIN: frozenset({
-        LedgerState.ESCALATED, LedgerState.QUERY, LedgerState.REJECTED,
+        LedgerState.ESCALATED, LedgerState.MODEL_CONFIRMED, LedgerState.EDIT,
+        LedgerState.QUERY, LedgerState.REJECTED,
     }),
     LedgerState.ESCALATED: frozenset({
         LedgerState.MODEL_PASSED, LedgerState.MODEL_CONFIRMED,

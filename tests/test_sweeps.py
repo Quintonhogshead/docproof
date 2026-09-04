@@ -418,7 +418,9 @@ def test_overlaps_treats_a_boundary_touching_insertion_as_a_conflict():
     assert not _overlaps(8, 8, 3, 8)      # insertion abutting the span's end
     assert not _overlaps(3, 8, 8, 8)      # ...symmetric
     assert _overlaps(4, 4, 4, 4)          # two insertions at the same point
-    assert not _overlaps(4, 4, 5, 5)      # two insertions at different points
+    assert _overlaps(4, 4, 5, 5)          # ...or one char apart: the Georgis
+    assert _overlaps(5, 5, 4, 4)          #    ",," / "7:00 :00 AM" seam
+    assert not _overlaps(4, 4, 6, 6)      # two insertions genuinely apart
     assert _overlaps(3, 6, 5, 8)          # two spans that intersect
     assert not _overlaps(3, 5, 5, 8)      # two spans that only touch end-to-start
 
@@ -673,28 +675,31 @@ def test_trailing_space_sweep_deletes_paragraph_tails():
 # Purpura run; the sweep used to require a space on BOTH sides and missed all
 # of them.
 
-@pytest.mark.parametrize("before,after", [
-    ("called Garbage- I mean, Garage.", "called Garbage—I mean, Garage."),
-    ("that is now on us- well, me- to chase down.",
-     "that is now on us—well, me—to chase down."),
-    ("the explosions- none of this is their fault.",
-     "the explosions—none of this is their fault."),
-    ("it was late -too late.", "it was late—too late."),
+@pytest.mark.parametrize("text", [
+    # A hyphen with a space on only ONE side is never a sentence dash
+    # (Georgis, 2026-09-04: "fast- flowing" was set as "fast—flowing"). Beside
+    # a function word the sweep cannot tell a typed dash from a broken
+    # compound, so it leaves the mark for a reader.
+    "that is now on us- well, me- to chase down.",
+    "the explosions- none of this is their fault.",
+    "it was late -too late.",                 # space BEFORE the hyphen: alone
+    "the 5- and 10-mile options",             # suspended pair
+    "a well-known author",                    # unspaced: a correct compound
 ])
-def test_one_sided_hyphen_reads_as_a_dash(before, after):
+def test_one_sided_hyphen_is_never_read_as_a_dash(text):
+    assert unchanged("sweep_dash", text)
+
+
+@pytest.mark.parametrize("before,after", [
+    ("the fast- flowing river", "the fast-flowing river"),
+    ("a co- worker of mine", "a co-worker of mine"),
+    ("a well- known author", "a well-known author"),
+    ("a T- shirt cannon", "a T-shirt cannon"),
+    ("twenty- five dollars", "twenty-five dollars"),
+])
+def test_a_broken_compound_is_closed_up(before, after):
     assert swept("sweep_dash", before) == after
 
-
-@pytest.mark.parametrize("text", [
-    "a co- worker of mine",            # broken compound: prefix stays attached
-    "a well- known author",            # compound-modifier lead
-    "a T- shirt cannon",               # single-letter compounds (T-shirt, X-ray)
-    "the 5- and 10-mile options",      # suspended pair
-    "twenty- five dollars",            # broken compound number
-    "a well-known author",             # unspaced: a correct compound
-])
-def test_one_sided_hyphen_leaves_broken_compounds_alone(text):
-    assert unchanged("sweep_dash", text)
 
 
 # --- two-digit decades --------------------------------------------------------
