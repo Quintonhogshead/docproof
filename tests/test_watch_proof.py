@@ -55,7 +55,13 @@ HAND_OFF = {DELIVERABLE, LETTER, STYLE_SHEET, OUTCOME}
 def proof_ws(**over) -> WatchSettings:
     """A watcher with the HubSpot gate on and proofing switched on, flat-folder.
     The filename stem is the author key, so "Johnson - Book 1.docx" has to be
-    matched by a pattern that pulls the surname out of it."""
+    matched by a pattern that pulls the surname out of it.
+
+    `proof_runner` is pinned to "app" here rather than left at the shipped
+    default ("external"), because most of what this file tests is the runner
+    that actually reads a book. The tests that care about waiting on a
+    practitioner say `proof_runner="external"` out loud, and the shipped default
+    is asserted on a bare `WatchSettings()` below."""
     fields = dict(folder_id=FOLDER, model="claude-haiku-4-5",
                   client_id="client-1", client_secret="secret-1",
                   hubspot_enabled=True, hubspot_object="0-970",
@@ -63,7 +69,7 @@ def proof_ws(**over) -> WatchSettings:
                   hubspot_status_property="docproof",
                   hubspot_format_ready_value="Ready for Formatting",
                   hubspot_format_done_value="Formatting Complete",
-                  proofing_enabled=True,
+                  proofing_enabled=True, proof_runner="app",
                   hubspot_key_pattern=r"^([^-]+?)\s*-")
     fields.update(over)
     return WatchSettings(**fields)
@@ -742,7 +748,7 @@ def test_the_defaults_are_no_new_behaviour():
     until the switch is on."""
     ws = WatchSettings()
     assert ws.proofing_enabled is False
-    assert ws.proof_runner == "app"
+    assert ws.proof_runner == "external"
     assert ws.hubspot_proof_ready_value == "Ready for Proofing"
     assert ws.hubspot_proof_done_value == "Proofing Complete"
     assert ws.hubspot_proof_needs_human_value == "Needs Human PR"
@@ -784,15 +790,28 @@ def test_a_blank_proof_done_value_is_refused_before_the_pass(tmp_path, galley):
         run(tmp_path, ws, opener)
 
 
-def test_a_blank_needs_human_value_is_refused_before_the_pass(tmp_path, galley):
-    """The needs-a-human value is as load-bearing as the done one — a verdict
-    with nowhere to write it would leave the book at ready, which is the state
-    nobody notices — so it is refused up front the same way."""
-    ws = proof_ws(hubspot_proof_needs_human_value="")
-    opener = fake_drive(folder(f_1=drive_entry(BOOK)), docx=MANUSCRIPT)
+def test_a_blank_needs_human_value_writes_nothing_rather_than_refusing(
+        tmp_path, galley, needs_human):
+    """Blank is a real choice on the needs-a-human value, and the panel says so:
+    a press whose dropdown has no such option clears the box, and that verdict
+    then writes nothing — the book stays at the ready value for a person, and
+    the reason still reaches the owner by email. Refusing the whole pass over it
+    would make that helper text a lie; blanking the status property would be
+    worse still."""
+    ws = proof_ws(hubspot_proof_needs_human_value="",
+                  notify_email="quinton@atmospherepress.com")
+    opener = fake_drive(folder(f_1=drive_entry(BOOK)), docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_to_proof()})
 
-    with pytest.raises(ticklib.NotConfigured, match="needs_human_value"):
-        run(tmp_path, ws, opener)
+    report = run(tmp_path, ws, opener)
+
+    assert report.proofed == [BOOK]                # it was read
+    assert patches(opener) == []                   # and nothing was written
+    assert hs_props(opener)["docproof"] == "Ready for Proofing"
+    assert [n for n, _ in report.needs_human] == [BOOK]
+    assert "left at 'Ready for Proofing'" in report.needs_human[0][1]
+    assert len(opener.emails) == 1
+    assert opener.files["f-1"]["appProperties"][PROOF_PROP] == PROOF_HUMAN
 
 
 def test_an_unknown_runner_is_refused(tmp_path, galley):

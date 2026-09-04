@@ -251,6 +251,13 @@ mode — unlike promo, which stands aside in subfolder mode.
 docproof-watch init --enable-proofing
 ```
 
+Or in the app: **Automations → Workflows → Proofread**. That drawer has the
+switch, who reads the book, and all three HubSpot values — plus two read-only
+lists the CLI has no equivalent for: which books are out with the practitioner
+and how long they have been, and the last few verdicts with the reason behind
+each. It is the only place a `needs_human` reason is visible outside the alert
+email.
+
 **The book it reads.** The house stage series has four names, and each stage
 reads the file the one before it left:
 
@@ -306,6 +313,13 @@ Either way the book leaves `Ready for Proofing`, because a book left sitting at
 ready is one nobody would notice. Exactly one PATCH per book, whichever verdict
 it was.
 
+The one exception is a press whose dropdown has no "needs a human" option:
+**clear the needs-a-human value** (in the panel, or with
+`--hubspot-proof-needs-human-value ''`) and that verdict writes nothing at all.
+The book stays at `Ready for Proofing` for a person to pick up, and the reason
+still reaches you by email. A blank value is never *written* — that would blank
+the status property rather than move it.
+
 `outcome.json` also carries a `hubspot` block naming the property and value. It
 is there for a person reading the file; DocProof does not obey it. The property
 and the value it writes always come from this watcher's own settings, because in
@@ -315,8 +329,8 @@ file in a folder does not get to name a CRM field.
 ### Who reads the book: `--proof-runner`
 
 ```bash
-docproof-watch init --enable-proofing --proof-runner app        # the default
-docproof-watch init --enable-proofing --proof-runner external
+docproof-watch init --enable-proofing --proof-runner external   # the default
+docproof-watch init --enable-proofing --proof-runner app
 ```
 
 **`app`** — DocWatch reads the book itself, through the same galley job the

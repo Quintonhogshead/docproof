@@ -245,7 +245,14 @@ class WatchSettings:
     #               the hand-off files appear in that folder. This is how the
     #               Mac-side practitioner loop delivers — it runs on a Claude
     #               Max subscription, which cannot run on Fly.
-    proof_runner: str = "app"
+    #
+    # "external" is the default because it is the one that delivers a settled,
+    # certified build with a decision log: the app runner's galley job stops at
+    # the wave loop, so its outcome.json reads `"settled": false` and it writes
+    # no decision log. Turning the stage on in the panel and saving without
+    # thinking about this question should not silently start paying a model per
+    # book for the lesser of the two products.
+    proof_runner: str = "external"
     # What the app runner asks the governor for, when it is the runner. The
     # budget is what one book may cost across all its waves; 0 means "the
     # tier's own default" (see app/routes/jobs.py GALLEY_DEFAULT_BUDGET), which

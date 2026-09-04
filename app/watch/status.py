@@ -77,13 +77,16 @@ def status(home: str | Path, *, get_key=None,
         # mode is on to decide whether to show it.
         "subfolders_enabled": ws.subfolders_enabled,
         "require_source_label": ws.require_source_label,
-        # The proofing stage, for the panel's switch. The HubSpot values behind
-        # it are CLI-only (as the formatting pair is), so only the two knobs a
-        # person changes book to book are surfaced.
+        # Whether the CRM gate is on at all. The panel needs it to say why a
+        # HubSpot-triggered workflow cannot run yet, and it is a fact about this
+        # watcher rather than about promo — which is where the panel used to
+        # have to go and borrow it from.
+        "hubspot_enabled": ws.hubspot_enabled,
+        "hubspot_write_back": ws.hubspot_write_back,
+        # The proofing stage, whole: the Automations panel's Proofread drawer
+        # both draws from and writes back every one of these.
         "proofing_enabled": ws.proofing_enabled,
         "proof_runner": ws.proof_runner,
-        # Read-only here, and only so a panel can show what a verdict will do to
-        # the CRM. Setting them stays CLI-only, like the formatting pair.
         "hubspot_proof_ready_value": ws.hubspot_proof_ready_value,
         "hubspot_proof_done_value": ws.hubspot_proof_done_value,
         "hubspot_proof_needs_human_value": ws.hubspot_proof_needs_human_value,
@@ -157,12 +160,20 @@ def _files(root: Path) -> list[dict]:
             "total": job.total if job else 0,
             "error": job.error if job else None,
             "uploaded": list(rec.uploaded),
+            # Which author's folder this book is in, when the watcher is running
+            # in subfolder mode. Blank on a flat install, and blank on a record
+            # written before subfolders existed — the panel falls back to the
+            # watched folder rather than showing an empty cell.
+            "folder": rec.subfolder_name,
             # Proofing's own lifecycle, beside formatting's rather than mixed
             # into it: a book can be formatted and still out with a
             # proofreader, and "" here simply means proofing never touched it.
+            # `proof_marked` is the live state ("awaiting" while a practitioner
+            # has the book); `proof_outcome` is the verdict once one landed.
             "proof_marked": rec.proof_marked,
             "proof_outcome": rec.proof_outcome,
             "proof_reason": rec.proof_outcome_reason,
+            "proof_uploaded": list(rec.proof_uploaded),
             "attempts": rec.attempts,
             "updated_at": rec.updated_at,
         })

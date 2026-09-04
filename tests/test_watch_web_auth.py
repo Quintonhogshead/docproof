@@ -201,6 +201,12 @@ def test_docwatch_is_admin_only_on_the_web(tmp_path):
     assert ed.get("/api/watch").status_code == 403
     assert ed.post("/api/watch/auth", json={}).status_code == 403
     assert ed.post("/api/watch/run").status_code == 403
+    # The write too, which is what the Automations panel's workflow drawers
+    # save through — the proofing switch and its HubSpot values included. An
+    # editor can neither read the settings nor change what DocProof writes into
+    # the CRM.
+    assert ed.put("/api/watch", json={"proofing_enabled": True}).status_code \
+        == 403
 
 
 def test_the_desktop_sign_in_is_untouched(tmp_path):

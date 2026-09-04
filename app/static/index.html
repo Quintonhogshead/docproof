@@ -1096,6 +1096,77 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                 <p id="wf-prep-note" class="action-note" hidden></p>
               </div>
 
+              <!-- Proofread (Galley) -->
+              <div class="wf-config" id="wf-config-proof" hidden>
+                <div class="wf-setup" id="wf-proof-setup" hidden></div>
+                <p class="wf-hint">Reads
+                  <code>&lt;surname&gt; - Book 1.docx</code> in each author's
+                  folder at <em>Ready for Proofing</em>; puts back
+                  <code>&lt;surname&gt; - Book 2.docx</code> with its letter,
+                  style sheet, outcome and decision log beside it; then flips the
+                  HubSpot status to <em>Proofing Complete</em> or
+                  <em>Needs Human PR</em>.</p>
+
+                <label class="checkbox">
+                  <input type="checkbox" id="proof-enabled">
+                  Proofread automatically
+                  <small class="muted">Off by default. Nothing is read, and no
+                    CRM record moves, until this is on.</small>
+                </label>
+
+                <label class="field">
+                  <span>Who reads the book</span>
+                  <select id="proof-runner">
+                    <option value="external">Mac practitioner — settled +
+                      certified + decision log (recommended)</option>
+                    <option value="app">In the app — unsettled, no decision
+                      log</option>
+                  </select>
+                  <small class="muted" id="proof-runner-hint"></small>
+                </label>
+
+                <label class="field">
+                  <span>HubSpot status value that means "proofread this now"</span>
+                  <input type="text" id="proof-ready"
+                         placeholder="Ready for Proofing">
+                </label>
+                <label class="field">
+                  <span>Status value to set when the proofread comes back
+                    clean</span>
+                  <input type="text" id="proof-done"
+                         placeholder="Proofing Complete">
+                </label>
+                <label class="field">
+                  <span>Status value to set when the book needs a human
+                    proofreader</span>
+                  <input type="text" id="proof-needs-human"
+                         placeholder="Needs Human PR">
+                  <small class="muted">Leave this blank and DocProof writes
+                    nothing for that verdict: the book stays at the ready value
+                    for a person to pick up, and the reason still reaches you by
+                    email.</small>
+                </label>
+
+                <div class="job-actions">
+                  <button id="wf-proof-save" class="primary">Save</button>
+                </div>
+                <p id="wf-proof-note" class="action-note" hidden></p>
+
+                <div class="wf-readout" id="proof-awaiting-block" hidden>
+                  <h4>Out with the practitioner</h4>
+                  <p id="proof-awaiting-empty" class="muted small" hidden>
+                    Nothing is waiting on a practitioner right now.</p>
+                  <table class="table" id="proof-awaiting"></table>
+                </div>
+
+                <div class="wf-readout">
+                  <h4>Recent verdicts</h4>
+                  <p id="proof-verdicts-empty" class="muted small">No proofread
+                    has finished yet.</p>
+                  <table class="table" id="proof-verdicts"></table>
+                </div>
+              </div>
+
               <!-- Promo copy -->
               <div class="wf-config" id="wf-config-promo" hidden>
                 <p class="wf-hint">When a book's HubSpot status reaches the ready
