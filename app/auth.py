@@ -38,7 +38,12 @@ SESSION_ENV = "DOCPROOF_SESSION_SECRET"
 # its records all carry this and the ownership checks pass trivially.
 LOCAL_OWNER = "local"
 # The only /api paths reachable without a session. Everything else is private.
-_OPEN_PATHS = {"/api/login"}
+# Paths the session gate does not guard. `/api/login` is how a session starts;
+# `/api/watch/awaiting` is read by a headless machine that has no browser and
+# no cookie, so it carries its own bearer-token gate instead (see
+# app/routes/watch.py::agent_gate) and is refused outright when no agent token
+# is configured. Nothing writable belongs in this set.
+_OPEN_PATHS = {"/api/login", "/api/watch/awaiting"}
 
 
 class Credentials(BaseModel):

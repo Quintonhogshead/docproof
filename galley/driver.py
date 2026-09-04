@@ -887,8 +887,47 @@ class Driver:
         # workspace up needs most is the record of what was decided before it
         # stopped, and why it stopped.
         self.write_decision_log()
+        # …and it still HANDS OFF. A book that stops has an answer —
+        # needs_human, with the reason — and DocWatch's contract makes
+        # outcome.json the one required file precisely so that answer can come
+        # back from a run that produced nothing else. Without this the stopped
+        # book sits silent in the author's folder until a person notices.
+        self._stopped_handoff(result)
         self.log(f"STOPPED at {phase or 'the plan gate'}: {reason}")
         return result
+
+    def _stopped_handoff(self, result: DriveResult) -> None:
+        """Best-effort partial hand-off for a run that stopped.
+
+        Everything here is defensive: this runs on the failure path, and an
+        exception raised while reporting a failure would replace a legible
+        `needs_human` with a traceback. A hand-off that cannot be built or
+        uploaded is logged and left on disk for a person."""
+        try:
+            out = Path(self.handoff_dir) if self.handoff_dir \
+                else self.workspace / "handoff"
+            # The driver's OWN verdict leads the list. A run that stopped at
+            # certify may have a settle-written `done` beside its findings, and
+            # handing that back would tell DocWatch the book is finished when
+            # the run says it is not.
+            result.handoff = build_handoff(
+                self.workspace, self.book.name, out,
+                outcome_sources=[self.workspace / "runs" / "outcome.json",
+                                 *self._outcome_sources()],
+                partial=True)
+        except Exception as e:                              # noqa: BLE001
+            self.log(f"no hand-off for the stopped run ({e})")
+            return
+        if not self.drive_folder_id:
+            return
+        uploader = self.upload or _default_upload
+        try:
+            result.uploaded = uploader(result.handoff, self.drive_folder_id)
+        except Exception as e:                              # noqa: BLE001
+            self.log(f"the stopped run's hand-off is in {out} but the Drive "
+                     f"upload failed ({e}) — put those files in folder "
+                     f"{self.drive_folder_id} by hand, or re-run the deliver "
+                     f"phase once Google sign-in is working")
 
     def write_decision_log(self) -> Path | None:
         """Render `deliverable/DECISION_LOG.md` from whatever artifacts exist.
@@ -1159,14 +1198,22 @@ _JOURNAL_NAMES = (DECISION_LOG_NAME, "decision-log.md")
 
 def build_handoff(workspace: str | Path, source_name: str,
                   handoff_dir: str | Path, *,
-                  outcome_sources: Iterable[Path] = ()) -> list[Path]:
-    """Copy the four hand-off files into ``handoff_dir`` under house names.
+                  outcome_sources: Iterable[Path] = (),
+                  partial: bool = False) -> list[Path]:
+    """Copy the five hand-off files into ``handoff_dir`` under house names.
 
     ``<surname> - Book 2.docx`` (the tracked-changes proofread manuscript),
     ``… - letter.md``, ``… - style-sheet.md``, ``… - decision-log.md``,
-    ``… - outcome.json``. Every one is required: a hand-off missing a piece is
-    not a hand-off, so a missing file raises rather than shipping a partial
-    folder."""
+    ``… - outcome.json``. On a FINISHED run every one is required: a hand-off
+    missing a piece is not a hand-off, so a missing file raises rather than
+    shipping a partial folder.
+
+    ``partial=True`` is the STOPPED run's hand-off. A run that died at the
+    ladder has no deliverable and no letter, but it does have a verdict and a
+    decision log — and DocWatch's contract makes only ``outcome.json``
+    required, precisely so a stopped book still comes back with its answer
+    instead of sitting silent in the folder. So a partial hand-off ships
+    whatever exists, and raises only when there is no outcome at all."""
     ws = Path(workspace)
     out = Path(handoff_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -1175,25 +1222,25 @@ def build_handoff(workspace: str | Path, source_name: str,
 
     from galley.verify import deliverable_docx
     docx = deliverable_docx(deliverable)
-    if docx is None:
+    if docx is None and not partial:
         raise DriverError(
             f"no tracked-changes .docx in {deliverable} — the deliver phase "
             f"must copy the certified build there before hand-off")
 
     letter = _first_existing(deliverable, _LETTER_NAMES)
-    if letter is None:
+    if letter is None and not partial:
         raise DriverError(
             f"no editor's letter in {deliverable} (looked for "
             f"{', '.join(_LETTER_NAMES)}) — render it with `docproof galley "
             f"letter`")
     style = _first_existing(deliverable, _STYLE_NAMES)
-    if style is None:
+    if style is None and not partial:
         raise DriverError(
             f"no style sheet in {deliverable} (looked for "
             f"{', '.join(_STYLE_NAMES)}) — render it with `docproof galley "
             f"letter`")
     journal = _first_existing(deliverable, _JOURNAL_NAMES)
-    if journal is None:
+    if journal is None and not partial:
         raise DriverError(
             f"no decision log in {deliverable} (looked for "
             f"{', '.join(_JOURNAL_NAMES)}) — render it with `docproof galley "
@@ -1211,6 +1258,8 @@ def build_handoff(workspace: str | Path, source_name: str,
              (Path(outcome), f"{base} - outcome.json"))
     written: list[Path] = []
     for src, name in pairs:
+        if src is None:
+            continue
         dest = out / name
         shutil.copy2(src, dest)
         written.append(dest)
@@ -1231,13 +1280,14 @@ _MIME = {".docx": ("application/vnd.openxmlformats-officedocument"
          ".json": "application/json"}
 
 
-def _default_upload(files: list[Path], folder_id: str) -> list[str]:
-    """Put the hand-off in a Drive folder with the watcher's own sign-in.
+def drive_token(*, get_key=None) -> str:
+    """A Drive access token from the CLI's own Google sign-in.
 
-    Reuses app/watch/drive.py and the CLI's stored Google refresh token — the
-    same credentials `docproof-watch` runs on, no server needed. A setup gap
-    raises with the command that fixes it; the caller reports the manual
-    fallback (drag the files in the hand-off folder into the Drive folder)."""
+    The same credentials `docproof-watch` runs on — the keystore's refresh
+    token and the watcher's client id/secret — so a Mac-side process reaches
+    Drive without a server and without a second sign-in. A setup gap raises
+    with the command that fixes it, because the two answers ("no client" and
+    "not signed in") have two different fixes."""
     from app.settings import get_api_key
     from app.watch import drive
     from app.watch.settings import GOOGLE_KEY, WatchSettings, default_watch_home
@@ -1246,11 +1296,23 @@ def _default_upload(files: list[Path], folder_id: str) -> list[str]:
     if not (ws.client_id and ws.client_secret):
         raise DriverError("Google sign-in is not set up — run "
                           "`docproof-watch init` then `docproof-watch auth`")
-    refresh = get_api_key(GOOGLE_KEY)
+    refresh = (get_key or get_api_key)(GOOGLE_KEY)
     if not refresh:
         raise DriverError("DocProof is not signed in to Google — run "
                           "`docproof-watch auth`")
-    token = drive.refresh_access_token(ws.client_id, ws.client_secret, refresh)
+    return drive.refresh_access_token(ws.client_id, ws.client_secret, refresh)
+
+
+def _default_upload(files: list[Path], folder_id: str) -> list[str]:
+    """Put the hand-off in a Drive folder with the watcher's own sign-in.
+
+    Reuses app/watch/drive.py and the CLI's stored Google refresh token — the
+    same credentials `docproof-watch` runs on, no server needed. A setup gap
+    raises with the command that fixes it; the caller reports the manual
+    fallback (drag the files in the hand-off folder into the Drive folder)."""
+    from app.watch import drive
+
+    token = drive_token()
     ids: list[str] = []
     for path in files:
         mime = _MIME.get(path.suffix.lower(), "application/octet-stream")
@@ -1267,7 +1329,8 @@ __all__ = [
     "REQUIRED_STATE", "SETTLE_QUIET_FLOOR", "SETTLE_QUIET_SHARE",
     "SETTLE_ROUNDS", "TIMEOUT_RC", "DriveResult", "Driver", "DriverError",
     "PhaseResult", "PhaseSpec", "PlanSummary", "build_env", "build_handoff",
-    "detect_turn_cap", "gate_decision", "gate_question", "handoff_base",
+    "detect_turn_cap", "drive_token", "gate_decision", "gate_question",
+    "handoff_base",
     "phase_prompt", "phases_for", "read_plan", "record_approval",
     "reply_after", "seed_workspace", "select_phases", "settle_flags",
     "spawn_claude", "tail_of",

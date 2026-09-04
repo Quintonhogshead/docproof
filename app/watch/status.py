@@ -138,6 +138,45 @@ def status(home: str | Path, *, get_key=None,
     }
 
 
+#: What `proof_marked` says while a book is out with a practitioner.
+AWAITING = "awaiting"
+
+
+def awaiting(home: str | Path) -> list[dict]:
+    """The books out with an external practitioner, and where to find them.
+
+    The Mac-side agent's whole view of the server: which manuscripts DocWatch
+    has marked `awaiting`, the Drive id of each Book 1 to download, and the
+    author folder the Book 2 set goes back to. Deliberately NOT the status
+    payload — that carries the watcher's settings and every file it has ever
+    seen, and the poller needs neither. Nothing here is writable, and nothing
+    here names a HubSpot property or value.
+
+    A record whose `proof_marked` has moved on (done, human, failed) is not
+    listed: the book is finished, whatever the folder still holds. Reads
+    `state.json` only — no Drive call, so a poll every five minutes costs
+    the server nothing."""
+    root = Path(home)
+    ws = WatchSettings.load(root)
+    state = WatchState.load(root / STATE_FILE)
+    out = []
+    for rec in sorted(state.files.values(), key=lambda r: r.updated_at):
+        if rec.proof_marked != AWAITING:
+            continue
+        out.append({
+            "file_id": rec.file_id,
+            "name": rec.name,
+            # Where the hand-off goes back. Subfolder mode routes each author
+            # to their own folder; a flat install has one folder for everyone.
+            "folder_id": rec.subfolder_id or ws.folder_id,
+            "subfolder_id": rec.subfolder_id,
+            "author_last": rec.author_last,
+            "modified_time": rec.modified_time,
+            "updated_at": rec.updated_at,
+        })
+    return out
+
+
 def _next_tick(ws: WatchSettings) -> str | None:
     """When the in-app clock will next look, as ISO UTC, for the panel to show.
 
@@ -194,6 +233,11 @@ def _files(root: Path) -> list[dict]:
             # written before subfolders existed — the panel falls back to the
             # watched folder rather than showing an empty cell.
             "folder": rec.subfolder_name,
+            # The ids behind that name. The proofing agent needs them to put a
+            # hand-off back in the right author's folder, and a panel showing
+            # "which folder" should be able to link to it.
+            "subfolder_id": rec.subfolder_id,
+            "author_last": rec.author_last,
             # Proofing's own lifecycle, beside formatting's rather than mixed
             # into it: a book can be formatted and still out with a
             # proofreader, and "" here simply means proofing never touched it.

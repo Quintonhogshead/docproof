@@ -1015,6 +1015,45 @@ def _galley_parser(sub) -> None:
                                               "clock, so the render is "
                                               "reproducible)")
 
+    gag = gsub.add_parser(
+        "agent",
+        help="the long-running proofing agent: poll the DocProof app for books "
+             "awaiting a practitioner, download each Book 1, run the driver "
+             "over it, and let the hand-off put the Book 2 set back in the "
+             "author's folder. Runs on the machine that holds the Claude "
+             "subscription; --install keeps it running at boot.")
+    gag.add_argument("--env-file", default=None, metavar="PATH",
+                     help="the credentials file (default: ~/.galley/agent.env; "
+                          "mode 600 or the agent refuses to start). Holds "
+                          "CLAUDE_CODE_OAUTH_TOKEN, GALLEY_APP_URL and "
+                          "GALLEY_AGENT_TOKEN — never the shell")
+    gag.add_argument("--workspace-root", default=None, metavar="DIR",
+                     help="where per-book workspaces, the ledger and the log "
+                          "live (default: ~/galley-workspaces)")
+    gag.add_argument("--poll-interval", type=float, default=None,
+                     metavar="SECONDS",
+                     help="how often to ask the app for awaiting books "
+                          "(default: 300)")
+    gag.add_argument("--budget", type=float, default=None, metavar="USD",
+                     help="the API ceiling per book (default: the driver's $10)")
+    gag.add_argument("--drive-folder-id", default="",
+                     help="deliver every hand-off HERE instead of the author "
+                          "folder the app names — for a rehearsal")
+    gag.add_argument("--once", action="store_true",
+                     help="poll once and exit, instead of running forever")
+    gag.add_argument("--status", action="store_true",
+                     help="print what this machine has claimed, finished and "
+                          "failed, and exit")
+    gag.add_argument("--install", action="store_true",
+                     help="write and start the service that keeps the agent "
+                          "running (a launchd LaunchAgent on macOS, a systemd "
+                          "user unit on Linux); also refreshes "
+                          "~/galley-bin/galley-run.sh from the repo's copy")
+    gag.add_argument("--uninstall", action="store_true",
+                     help="stop and remove that service")
+    gag.add_argument("--json", action="store_true",
+                     help="print the machine-readable result to stdout")
+
     gdr = gsub.add_parser(
         "drive",
         help="the UNATTENDED driver: seed the per-book workspace and run the "
@@ -1030,8 +1069,9 @@ def _galley_parser(sub) -> None:
                      help="where per-book workspaces live "
                           "(default: ~/galley-workspaces)")
     gdr.add_argument("--budget", type=float, default=None, metavar="USD",
-                     help="the plan-gate ceiling in USD (default: $20, the "
-                          "manual's per-book default)")
+                     help="the API ceiling in USD for the whole book "
+                          "(default: $10). Frozen into approval.json as "
+                          "max_spend_usd, so every paid verb refuses past it")
     gdr.add_argument("--approve", choices=["auto", "email", "manual"],
                      default="auto",
                      help="the plan gate: `auto` approves a priced, "
@@ -2583,6 +2623,7 @@ def cmd_galley(args) -> int:
             "settle": _galley_settle,
             "residuals": _galley_residuals,
             "drive": _galley_drive,
+            "agent": _galley_agent,
             "journal": _galley_journal,
             "outcome": _galley_outcome}[args.galley_cmd](args)
 
@@ -2613,6 +2654,112 @@ def _galley_journal(args) -> int:
     else:
         print(text)
     return 0
+
+
+def _galley_agent(args) -> int:
+    """`docproof galley agent`: the long-running proofing agent (galley/agent.py).
+
+    Exit 0 for a poll that ran (whatever it found), 2 for a setup problem the
+    message names — a credentials file that is missing, readable by other
+    accounts, or short of a key."""
+    from galley import agent as ga
+
+    root = Path(args.workspace_root).expanduser() if args.workspace_root \
+        else Path("~/galley-workspaces").expanduser()
+    env_file = Path(args.env_file).expanduser() if args.env_file \
+        else Path(ga.DEFAULT_ENV_FILE).expanduser()
+
+    if args.uninstall:
+        removed = ga.uninstall()
+        where = ga.service_path()
+        print(f"Removed {where}." if removed
+              else f"There was no agent service at {where}.")
+        return 0
+
+    if args.install:
+        try:
+            where = ga.install(workspace_root=root, env_file=env_file,
+                               poll_interval_s=args.poll_interval
+                               or ga.DEFAULT_POLL_INTERVAL_S)
+        except ga.AgentError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        print(f"Installed and started the proofing agent.\n"
+              f"  service  {where}\n"
+              f"  polls    {env_file} for credentials\n"
+              f"  log      {root / ga.LOG_NAME}\n"
+              f"  ledger   {root / ga.LEDGER_NAME}")
+        return 0
+
+    try:
+        env = ga.read_env(env_file)
+    except ga.AgentError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    # The credentials belong to THIS process too, not only the driver's
+    # children: `get_api_key` reads the environment before it reaches for a
+    # keyring, which is how the Google sign-in works on a headless Linux box.
+    ga.apply_env(env)
+
+    agent = ga.Agent(env=env, workspace_root=root,
+                     budget_usd=args.budget,
+                     drive_folder_override=args.drive_folder_id,
+                     poll_interval_s=args.poll_interval
+                     or ga.DEFAULT_POLL_INTERVAL_S)
+
+    if args.status:
+        state = agent.status()
+        print(f"Galley agent — {state['app']}")
+        print(f"  workspaces {state['workspace_root']}")
+        print(f"  ledger     {state['ledger']}")
+        if not state["books"]:
+            print("  nothing claimed yet.")
+        for file_id, entry in sorted(state["books"].items(),
+                                     key=lambda kv: kv[1].get("updated_at", "")):
+            print(f"  [{entry.get('state', '?'):8}] "
+                  f"{entry.get('name', file_id)}"
+                  f"{'  ' + entry.get('outcome', '') if entry.get('outcome') else ''}")
+            if entry.get("reason"):
+                print(f"             {entry['reason'][:160]}")
+        if state["pending"]:
+            print(f"  {len(state['pending'])} book(s) claimed but unfinished; "
+                  f"the next poll resumes them.")
+        if args.json:
+            print(json.dumps(state, ensure_ascii=False))
+        return 0
+
+    _logging_to(root / ga.LOG_NAME)
+    if args.once:
+        report = agent.poll_once()
+        print(f"Looked at {report.looked_at} awaiting book(s)."
+              + (f" Ran {report.claimed}: {report.outcome}."
+                 if report.claimed else ""))
+        for skipped in report.skipped:
+            print(f"  skipped {skipped}")
+        if args.json:
+            print(json.dumps(report.to_json(), ensure_ascii=False))
+        return 0
+
+    agent.run_forever()
+    return 0
+
+
+def _logging_to(path: Path) -> None:
+    """Say what the agent is doing, on stdout and in the log file.
+
+    A service manager captures stdout to that same file, so this is belt and
+    braces for a run started by hand — and it is the only way `--once` from a
+    terminal says anything at all."""
+    import logging as _logging
+    path.parent.mkdir(parents=True, exist_ok=True)
+    root = _logging.getLogger("docproof")
+    if root.level == _logging.NOTSET or root.level > _logging.INFO:
+        root.setLevel(_logging.INFO)
+    if not any(isinstance(h, _logging.StreamHandler) for h in root.handlers):
+        handler = _logging.StreamHandler()
+        handler.setFormatter(_logging.Formatter(
+            "%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
+        root.addHandler(handler)
 
 
 def _galley_drive(args) -> int:

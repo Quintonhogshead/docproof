@@ -93,6 +93,45 @@ class WatchSchedule(BaseModel):
     times: str = ",".join(schedulelib.DEFAULT_TIMES)
 
 
+# The env var holding the shared secret the Mac-side proofing agent presents.
+# Absent means the read-only agent route is OFF — a server nobody configured
+# for an agent does not answer one.
+AGENT_TOKEN_ENV = "DOCPROOF_AGENT_TOKEN"
+#: Short secrets are guessable, and a secret set to "test" would be worse than
+#: none because it reads as configured. Refused with the fix named.
+MIN_AGENT_TOKEN = 24
+
+
+def agent_gate(request: Request) -> None:
+    """Let the proofing agent's poller through, and nothing else.
+
+    A bearer token compared in constant time against `DOCPROOF_AGENT_TOKEN`.
+    Three refusals, each saying which of the three things is wrong, because
+    they have three different fixes and the person debugging is the owner:
+    the server has no token, the server's token is too short to be a secret,
+    or the caller's token does not match."""
+    import hmac
+
+    expected = (os.environ.get(AGENT_TOKEN_ENV) or "").strip()
+    if not expected:
+        raise HTTPException(
+            403, f"This server has no proofing-agent token, so it does not "
+                 f"answer agent requests. Set {AGENT_TOKEN_ENV} on the server "
+                 f"to a long random string and give the same value to the "
+                 f"Mac's ~/.galley/agent.env.")
+    if len(expected) < MIN_AGENT_TOKEN:
+        raise HTTPException(
+            403, f"The server's {AGENT_TOKEN_ENV} is shorter than "
+                 f"{MIN_AGENT_TOKEN} characters, which is not a secret. "
+                 f"Replace it with `python -c \"import secrets; "
+                 f"print(secrets.token_urlsafe(32))\"`.")
+    header = request.headers.get("authorization") or ""
+    scheme, _, presented = header.partition(" ")
+    if scheme.lower() != "bearer" or not hmac.compare_digest(
+            presented.strip(), expected):
+        raise HTTPException(401, "Not the proofing agent.")
+
+
 def register(app: FastAPI) -> None:
 
     # One shared Drive watcher for the whole server, so on the web build only an
@@ -314,6 +353,24 @@ def register(app: FastAPI) -> None:
         else:
             settingslib.delete_api_key("google")
         return watch_payload()
+
+    @app.get("/api/watch/awaiting")
+    def awaiting_books(request: Request) -> dict:
+        """The books out with the external practitioner, for the Mac-side agent.
+
+        The one route on this server a machine may read without a browser
+        session, because the machine that needs it — `docproof galley agent`,
+        polling from the Mac that holds the Claude Max subscription — has no
+        way to hold one. It is read-only, it lists nothing but the manuscripts
+        DocWatch itself marked `awaiting`, and it is refused entirely unless
+        the server was given an agent token to check against.
+
+        Everything else stays behind `may_manage`. This is the smallest hole
+        that makes the loop run with nobody at the keyboard: what to fetch, and
+        which folder to put the answer back in."""
+        agent_gate(request)
+        watch: WatchRunner = app.state.watch
+        return {"books": watchlib.awaiting(watch.home)}
 
     @app.post("/api/watch/run", dependencies=[Depends(may_manage)])
     def run_watch() -> dict:
