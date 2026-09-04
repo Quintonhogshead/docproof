@@ -631,16 +631,19 @@ class Job:
         # best-effort (see JobRunner._run_galley), so the card offers only the
         # ones that actually landed on disk.
         d["has_galley_document"] = bool(
-            d["format"] and self.kind == "galley" and self.state == "done"
+            d["format"] and self.kind == "galley"
+            and self.state in ("done", "needs_human")
             and self.results_dir
             and (Path(self.results_dir)
                  / get_format(self.filename).reviewed_name(self.filename)
                  ).is_file())
         d["has_galley_letter"] = bool(
-            self.kind == "galley" and self.state == "done" and self.results_dir
+            self.kind == "galley" and self.state in ("done", "needs_human")
+            and self.results_dir
             and (Path(self.results_dir) / "letter.md").is_file())
         d["has_galley_style_sheet"] = bool(
-            self.kind == "galley" and self.state == "done" and self.results_dir
+            self.kind == "galley" and self.state in ("done", "needs_human")
+            and self.results_dir
             and (Path(self.results_dir) / "style-sheet.md").is_file())
         # A click-through to this job's folder in the Drive archive, once it has
         # one. The card shows "In Drive" when archived, so the deliverable is one
@@ -2210,17 +2213,19 @@ class JobRunner:
         # itself with assert_deliverable first — never ship a seeded
         # (planted-error) copy — though ms here is always the job's own
         # manuscript, never a seeded one.
+        built = True
         try:
             deliverable = build_manuscript_deliverable(
                 adjudication, ms, source_path=job.source_path, cfg=cfg,
                 out_dir=out)
             warnings.extend(deliverable.dropped)
-        except Exception:                     # noqa: BLE001 - a warning, not a failure
+        except Exception:                     # noqa: BLE001 - reported below, never a done job
             log.exception("Galley deliverable build failed for job %s", job_id)
             # Belt and braces: the word-count guard may have fired AFTER
             # finish() wrote the docx, and a manuscript short a sentence must
             # not sit in the results folder looking like a deliverable.
             self._discard_galley_docx(job, out)
+            built = False
             warnings.append(
                 "The reviewed manuscript could not be built from this run's "
                 "findings; the case file and letter are still available.")
@@ -2248,13 +2253,58 @@ class JobRunner:
             log.warning("Galley memory ingest failed for job %s", job_id,
                        exc_info=True)
 
+        # The same delivery gate the practitioner path certifies with
+        # (GALLEY-004): the app never marks a Galley job done on its own
+        # word. A manuscript that could not be built is `needs_human`
+        # outright; a built one is `done` only if certify_run PASSES — the
+        # mandatory evidence (verify, walk, settlement, outcome, run state)
+        # present and bound to this build — and otherwise `needs_human`
+        # with the certificate beside the intermediate artifacts, which
+        # stay where they are for a person.
+        state, gate_notes = self._galley_gate(out, built=built)
+        warnings.extend(gate_notes)
         self.store.update(
-            job_id, state="done", results_dir=str(out), error=None, stage="",
+            job_id, state=state, results_dir=str(out), error=None, stage="",
             cost=cf.budget.spent_usd, applied=len(adjudication.kept),
             galley_wave=(cf.waves[-1].index if cf.waves else 0),
             galley_waves_total=len(cf.waves),
             budget_usd=budget, warnings=warnings)
         self._finish(job_id)
+
+    @staticmethod
+    def _galley_gate(out: Path, *, built: bool) -> tuple[str, list[str]]:
+        """(job state, notes) from the shared certify gate over `out`.
+        `certificate.json` is written beside the results either way."""
+        import json as _json
+
+        from galley.manifest import certify_run
+        notes: list[str] = []
+        try:
+            cert = certify_run(out)
+            (out / "certificate.json").write_text(
+                _json.dumps(cert.to_json(), indent=2, ensure_ascii=False),
+                encoding="utf-8")
+        except Exception as e:                # noqa: BLE001 - a gate that cannot run cannot pass
+            log.exception("Galley certify gate failed to run for %s", out)
+            notes.append(f"The delivery certificate could not be produced "
+                         f"({e}); the run is not certified.")
+            return "needs_human", notes
+        if not built:
+            notes.append("Not certified: the reviewed manuscript was not "
+                         "built, so there is nothing to deliver.")
+            return "needs_human", notes
+        if cert.passed:
+            return "done", notes
+        failed = [f"{c.name}: {c.detail[:100]}" for c in cert.failed]
+        missing = [c.name for c in cert.missing if c.status != "fail"]
+        if failed:
+            notes.append("Not certified — failing check(s): "
+                         + "; ".join(failed[:4]))
+        if missing:
+            notes.append("Not certified — required evidence missing: "
+                         + ", ".join(missing) + " (run `galley verify`, "
+                         "`galley settle`, then `galley certify`)")
+        return "needs_human", notes
 
     @staticmethod
     def _discard_galley_docx(job: Job, out: Path) -> None:

@@ -10,6 +10,8 @@ a model").
 
 from __future__ import annotations
 
+import json
+
 from pathlib import Path
 
 import pytest
@@ -85,8 +87,14 @@ def test_run_galley_produces_every_deliverable(runner, monkeypatch):
     r.run_one("j1")
 
     done = store.get("j1")
-    assert done.state == "done", done.error
+    # GALLEY-004: the app path runs the practitioner's certify gate. This run
+    # has no verify/settle evidence, so it is NOT done — needs_human, with the
+    # certificate beside every intermediate artifact, which stays available.
+    assert done.state == "needs_human", done.error
     out = Path(done.results_dir)
+    cert = json.loads((out / "certificate.json").read_text("utf-8"))
+    assert cert["passed"] is False and "change verifier" in cert["missing"]
+    assert any("required evidence missing" in w for w in done.warnings)
 
     # 1 — adjudication: verdicts written back into the case file.
     cf = CaseFile.load(out / "casefile.json")
@@ -144,7 +152,7 @@ def test_run_galley_memory_ingest_is_idempotent_across_runs(runner, monkeypatch)
     assert second == first, "the identical verdict must dedupe, not double up"
 
 
-def test_a_deliverable_build_failure_is_a_warning_not_a_failed_job(
+def test_a_deliverable_build_failure_is_needs_human_with_artifacts_kept(
         runner, monkeypatch):
     """The wave loop is the money already spent; a broken deliverable build
     must not throw that away by failing the job."""
@@ -165,8 +173,11 @@ def test_a_deliverable_build_failure_is_a_warning_not_a_failed_job(
     r.run_one("j1")
 
     done = store.get("j1")
-    assert done.state == "done"
+    # GALLEY-004: a manuscript that could not be built is never a done job —
+    # needs_human, with the intermediate artifacts kept for a person.
+    assert done.state == "needs_human"
     assert any("reviewed manuscript" in w.lower() for w in done.warnings)
+    assert any("not built" in w for w in done.warnings)
     # The case file and letter are still there.
     assert (Path(done.results_dir) / "casefile.json").is_file()
     assert (Path(done.results_dir) / "letter.md").is_file()
@@ -181,7 +192,8 @@ def test_applied_counts_the_adjudicated_kept_findings(runner, monkeypatch):
     _job(store)
     r.run_one("j1")
     done = store.get("j1")
-    assert done.state == "done", done.error
+    # the certify gate (GALLEY-004): no verify/settle evidence -> needs_human
+    assert done.state == "needs_human", done.error
     from galley.adjudicate import adjudicate
 
     cf = CaseFile.load(Path(done.results_dir) / "casefile.json")
@@ -220,7 +232,7 @@ def test_alarms_ride_the_warnings_and_never_zero_the_cost(runner, monkeypatch):
     r.run_one("j1")
 
     done = store.get("j1")
-    assert done.state == "done", done.error
+    assert done.state == "needs_human"  # gated: no verify evidence
     assert seen_cost == [pytest.approx(0.5)]      # the alarm left cost alone
     assert done.cost == pytest.approx(0.5)
     assert any("budget_overrun" in w and "overran the cap" in w
@@ -249,7 +261,7 @@ def test_a_failed_deliverable_build_leaves_no_partial_docx(runner, monkeypatch):
     _job(store)
     r.run_one("j1")
     done = store.get("j1")
-    assert done.state == "done"
+    assert done.state == "needs_human"  # gated: no verify evidence
     out = Path(done.results_dir)
     assert not (out / reviewed_name).exists()
     assert not list(out.glob("*.docx"))

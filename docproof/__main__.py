@@ -636,6 +636,11 @@ def _galley_parser(sub) -> None:
                         "reading-level metrics, and a genre guess")
     glp.add_argument("input", help="a .docx or .idml file")
     glp.add_argument("--config", default="config/default.yaml")
+    glp.add_argument("--chapter-rows", metavar="ROWS_JSON",
+                     help="write the chapter/part label renumbering rows "
+                          "(import-findings shape) to this path — labels out "
+                          "of sequence or style are mechanics, fixed as "
+                          "tracked heading edits, never queried")
     glp.add_argument("--json", action="store_true",
                      help="print the profile as JSON instead of a summary")
     glp.add_argument("--out", help="write the profile JSON to this path "
@@ -3507,47 +3512,27 @@ def _galley_verify(args) -> int:
     cost = cost_of_usage(usage, fallback_model=model) or 0.0
     _galley_over_budget(args, cost)
 
-    payload_changes = {
-        # Stamped so certify can tell a verdict on THIS build from a previous
-        # build's (see galley.manifest._is_stale).
-        "generated_at": _now_iso(),
-        "results_dir": str(results), "model": model, "engine": engine,
-        "paragraphs_verified": para_ids,
-        "ran": changes.ran_changes, "reason": changes.reason,
-        "applied_edits": len(edits),
-        "problems": [p.to_json() for p in problems],
-        "cost": _cost_field(usage_changes, model),
-    }
-    payload_walk = {
-        "generated_at": _now_iso(),
-        "results_dir": str(results), "model": model, "engine": engine,
-        "paragraphs_verified": para_ids,
-        "ran": walk.ran_walk, "reason": walk.reason,
-        "paragraphs": sum(1 for t in accepted.values() if t.strip()),
-        "residuals": [r.to_json() for r in residuals],
-        # Paragraphs no read covered (a reply lost twice, or reads past the
-        # ceiling). Empty on a complete walk; a re-read with --paragraphs on
-        # these closes the hole.
-        "unread_paragraphs": list(__import__("galley.verify",
-                                             fromlist=["UNREAD"]).UNREAD),
-        "cost": _cost_field(usage_walk, model),
-    }
-    out.mkdir(parents=True, exist_ok=True)
-    cv_path = out / "change_verify.json"
-    fw_path = out / "finished_walk.json"
-    # A gate that did not actually read anything (every reply lost) must not
-    # replace an earlier verdict with an empty one; it is written only when
-    # there is nothing there to lose, so certify still sees `ran: false`.
-    for path, payload, ran in ((cv_path, payload_changes, changes.ran_changes),
-                               (fw_path, payload_walk, walk.ran_walk)):
-        if not ran and path.exists() and not (
-                (path is cv_path and args.walk_only)
-                or (path is fw_path and args.changes_only)):
-            print(f"  kept the previous {path.name}: this gate read nothing",
-                  file=sys.stderr)
-            continue
-        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
-                        encoding="utf-8")
+    from galley.verify import write_artifacts
+    # One writer for every verify artifact (settle uses the same one): the
+    # build binding (build_sha256 / accepted_sha256 / paragraph_sha256), the
+    # coverage record (unread paragraphs and batches), and — for a
+    # --paragraphs re-read — a MERGE into the existing artifact that keeps
+    # every verdict for paragraphs outside the re-read and never upgrades a
+    # `ran: false` by a read that read nothing (GALLEY-002).
+    walk_paras = sum(1 for t in accepted.values() if t.strip())
+    if not changes.ran_changes and not args.walk_only and (
+            out / "change_verify.json").exists() and not para_ids:
+        print("  kept the previous change_verify.json's verdicts: this gate "
+              "read nothing", file=sys.stderr)
+    if not walk.ran_walk and not args.changes_only and (
+            out / "finished_walk.json").exists() and not para_ids:
+        print("  kept the previous finished_walk.json's verdicts: this gate "
+              "read nothing", file=sys.stderr)
+    cv_path, fw_path = write_artifacts(
+        out, changes, walk, model=model, engine=engine,
+        usage_changes=usage_changes, usage_walk=usage_walk,
+        applied=len(edits), paragraphs=walk_paras, para_ids=para_ids,
+        merge=bool(para_ids) or (out / "change_verify.json").exists())
 
     # Four decimals: a re-read on a cheap model is sub-cent, and "$0.00" reads
     # exactly like the silently-didn't-run anomaly.
@@ -4408,6 +4393,20 @@ def cmd_galley_profile(args) -> int:
     if profile.bespoke_sweep_candidates:
         print(f"{len(profile.bespoke_sweep_candidates)} bespoke-sweep "
              f"candidate(s) — see --json for patterns")
+    if profile.chapter_label_rows:
+        print(f"{len(profile.chapter_label_rows)} chapter/part label(s) out of "
+              f"sequence or style of {len(profile.chapter_labels)} — "
+              f"renumber rows ready (--chapter-rows FILE, then "
+              f"import-findings):")
+        for row in profile.chapter_label_rows[:8]:
+            print(f"  {row['para_id']}: {row['original_text']!r} -> "
+                  f"{row['corrected_text']!r}")
+    if getattr(args, "chapter_rows", None):
+        Path(args.chapter_rows).write_text(
+            json.dumps(profile.chapter_label_rows, indent=2,
+                       ensure_ascii=False) + "\n", encoding="utf-8")
+        print(f"wrote {len(profile.chapter_label_rows)} renumber row(s) to "
+              f"{args.chapter_rows}")
     if profile.field_errors:
         print(f"WARNING: {len(profile.field_errors)} unresolved field "
               f"result(s) (\"Error! Bookmark not defined.\" etc.) — the "
@@ -4849,9 +4848,14 @@ def _galley_certify(args) -> int:
     for c in cert.checks:
         glyph = {"pass": "PASS", "fail": "FAIL", "skip": "skip",
                  "warn": "WARN"}.get(c.status, c.status)
+        if c.required and c.status != "pass":
+            glyph = "MISSING" if c.status != "fail" else "FAIL"
         print(f"  [{glyph}] {c.name}{f' — {c.detail}' if c.detail else ''}")
+    missing = [c.name for c in cert.missing if c.status != "fail"]
     print(f"\n  {'PASSED' if cert.passed else 'FAILED'} "
-          f"({len(cert.failed)} failing check(s))")
+          f"({len(cert.failed)} failing check(s)"
+          + (f", {len(missing)} required check(s) without evidence: "
+             + ", ".join(missing) if missing else "") + ")")
     if args.json:
         print(json.dumps(cert.to_json(), ensure_ascii=False))
     return 0 if cert.passed else 4

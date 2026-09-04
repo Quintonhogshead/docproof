@@ -37,6 +37,7 @@ is testable with a fake spawner against a temp workspace.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -151,6 +152,8 @@ TAIL_LINES = 20
 # API dollars.
 STRIPPED_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
 
+
+log = logging.getLogger("galley.driver")
 
 class DriverError(RuntimeError):
     """A setup problem the driver refuses to start on. The message is the fix."""
@@ -416,19 +419,86 @@ def practitioner_dir() -> Path:
     return here
 
 
+class SourceChanged(DriverError):
+    """The workspace was seeded with a different manuscript than the one
+    offered now, and the caller did not ask for a revision transition."""
+
+
+def _record_source(ws: Path, src: Path, source_id: str, sha: str,
+                   revision: int) -> None:
+    """Write the source identity into state.json — creating an empty state
+    machine when the workspace has none yet — so every later stage sees it."""
+    from galley.state_machine import RunStateMachine
+    path = ws / "state.json"
+    machine = RunStateMachine.load(path) if path.is_file() else RunStateMachine()
+    machine.source_sha256 = sha
+    machine.source_id = source_id or machine.source_id
+    machine.source_name = src.name
+    machine.revision = revision
+    machine.save(path)
+
+
 def seed_workspace(book: str | Path, slug: str, *,
                    workspace_root: str | Path = DEFAULT_WORKSPACE_ROOT,
-                   source_dir: Path | None = None) -> Path:
+                   source_dir: Path | None = None, source_id: str = "",
+                   on_source_change: str = "refuse") -> Path:
     """Build (or refresh) the per-book workspace, exactly as launch.sh does.
 
     Idempotent: the manual, KNOBS and skills are re-copied so a workspace never
     runs a stale manual, while ``runs/``, ``settings.local.json`` and anything
-    the session wrote are preserved — a workspace's own edits win."""
+    the session wrote are preserved — a workspace's own edits win.
+
+    The source's content hash (and Drive id, when given) is recorded in
+    ``state.json`` (GALLEY-006). Re-seeding with the SAME content preserves
+    every bit of progress. Re-seeding with DIFFERENT content is a new
+    revision of the book and cannot silently reuse the previous run's
+    verification, settlement or delivery state: with ``on_source_change=
+    "refuse"`` (the default) it raises `SourceChanged` naming the fix; with
+    ``"revise"`` the previous ``runs/``, ``deliverable/`` and ``handoff/``
+    are set aside as ``*.rev<N>`` and the state machine starts over at
+    revision N+1 with the new hash recorded."""
+    from galley.manifest import sha256_file
     src = Path(book).expanduser()
     if not src.is_file():
         raise DriverError(f"no manuscript at {src}")
     root = Path(str(workspace_root)).expanduser()
     ws = root / slug
+    sha = sha256_file(src)
+    state_path = ws / "state.json"
+    revision = 1
+    if state_path.is_file():
+        from galley.state_machine import RunStateMachine
+        try:
+            machine = RunStateMachine.load(state_path)
+        except (OSError, ValueError) as e:
+            raise DriverError(f"{state_path} is unreadable ({e})") from e
+        recorded = machine.source_sha256
+        revision = max(1, int(machine.revision or 1))
+        if recorded and recorded != sha:
+            if on_source_change != "revise":
+                raise SourceChanged(
+                    f"workspace {ws} was seeded with a different manuscript "
+                    f"(recorded {recorded[:12]}…, offered {sha[:12]}…, "
+                    f"revision {revision}); its runs and state belong to "
+                    f"that revision. Re-run with the revision transition "
+                    f"(`--revise`, or on_source_change='revise') to set the "
+                    f"previous results aside and start revision "
+                    f"{revision + 1}.")
+            stamp = f"rev{revision}"
+            for sub in ("runs", "deliverable", "handoff"):
+                d = ws / sub
+                if d.exists() and any(d.iterdir()):
+                    target = ws / f"{sub}.{stamp}"
+                    n = 1
+                    while target.exists():
+                        n += 1
+                        target = ws / f"{sub}.{stamp}-{n}"
+                    d.rename(target)
+            state_path.rename(ws / f"state.{stamp}.json")
+            revision += 1
+            log.warning("workspace %s: the source changed; revision %d "
+                        "starts fresh, the previous results are in *.%s",
+                        ws, revision, stamp)
     for sub in ("source", "runs", "deliverable", ".claude"):
         (ws / sub).mkdir(parents=True, exist_ok=True)
     manual = source_dir or practitioner_dir()
@@ -445,7 +515,21 @@ def seed_workspace(book: str | Path, slug: str, *,
     if not settings.exists():
         settings.write_text(json.dumps(_SETTINGS_SEED, indent=2) + "\n",
                             encoding="utf-8")
+    _record_source(ws, src, source_id, sha, revision)
     return ws
+
+
+def workspace_slug(name: str, author_last: str = "", file_id: str = "") -> str:
+    """The workspace name for a book: the author's surname plus a suffix of
+    the Drive file id (GALLEY-006), so two different manuscripts that share
+    a filename — a re-upload, a second author's "Book 1" — never share a
+    workspace. `"Redding"`, `"1AbCdEfGhIjKlMnOp"` -> `redding-ijklmnop`;
+    with no id the file's own stem names it (the pre-agent shape)."""
+    strip = re.compile(r"[^a-z0-9]+")
+    base = strip.sub("-", (author_last or "").lower()).strip("-") or \
+        strip.sub("-", Path(name).stem.lower()).strip("-") or "untitled"
+    suffix = strip.sub("-", (file_id or "").lower()).strip("-")[-8:]
+    return f"{base}-{suffix}" if suffix else base
 
 
 def build_env(base: dict[str, str] | None = None, *,
@@ -499,40 +583,161 @@ class PhaseResult:
     tail: str = ""
     #: Which runaway cap ended this session, if either: "timeout" | "max_turns".
     limit: str | None = None
+    #: The CLI's structured completion, when the log carried one:
+    #: subtype ("success", "error_max_turns", ...) and the turn count.
+    subtype: str = ""
+    num_turns: int | None = None
 
     @property
     def ok(self) -> bool:
         return self.returncode == 0 and not self.limit
 
 
+#: Lines the driver itself writes into a phase log. Excluded from failure
+#: detection: the header names the configured `max-turns`, and matching it
+#: classified a successful short phase as turn-exhausted (GALLEY-003).
+DRIVER_LINE_PREFIX = "# galley driver"
+
+
+def transcript_tail(text: str) -> str:
+    """The session's own last lines — the driver's metadata lines removed."""
+    return "\n".join(ln for ln in (text or "").splitlines()
+                     if not ln.startswith(DRIVER_LINE_PREFIX)
+                     and not ln.startswith("# TIMEOUT")
+                     and not ln.startswith("# result:"))
+
+
 def detect_turn_cap(text: str) -> bool:
-    """Whether a phase log says the session stopped at its turn cap."""
-    return bool(_TURN_CAP_RE.search(text or ""))
+    """Whether a phase log's TRANSCRIPT says the session stopped at its turn
+    cap. The driver's own header ("(max-turns 120, timeout 2.0h)") is never
+    evidence — only the session's words are."""
+    return bool(_TURN_CAP_RE.search(transcript_tail(text)))
+
+
+#: The CLI's structured completion (`--output-format stream-json`): the final
+#: `{"type": "result", "subtype": ...}` event. `error_max_turns` is the one
+#: exhaustion signal that needs no text matching.
+RESULT_SUBTYPE_MAX_TURNS = "error_max_turns"
+
+
+def parse_session_result(text: str) -> dict[str, Any] | None:
+    """The last structured `result` event in a phase log, or None when the
+    log carries none (an older CLI, or a session killed before it finished).
+    Each stream-json line is one JSON object; anything else is transcript."""
+    found = None
+    for ln in (text or "").splitlines():
+        ln = ln.strip()
+        if not ln.startswith("{"):
+            continue
+        try:
+            obj = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and obj.get("type") == "result":
+            found = obj
+    return found
+
+
+def session_limit(result: dict[str, Any] | None, tail: str) -> str | None:
+    """"max_turns" when the session hit its cap, else None — from the
+    structured result when there is one, from the transcript's own tail
+    (never the driver's header) otherwise."""
+    if result is not None:
+        subtype = str(result.get("subtype") or "")
+        if subtype == RESULT_SUBTYPE_MAX_TURNS:
+            return "max_turns"
+        if subtype.startswith("success") or subtype == "":
+            return None
+        # Any other structured error: the return code carries it; a turn cap
+        # is only ever claimed on the CLI's own word above.
+        return None
+    return "max_turns" if detect_turn_cap(tail) else None
+
+
+def _render_stream_line(raw: str) -> str:
+    """One stream-json event as a readable transcript line, or "" for events
+    with nothing a person would read."""
+    try:
+        obj = json.loads(raw)
+    except ValueError:
+        return raw
+    if not isinstance(obj, dict):
+        return raw
+    kind = obj.get("type")
+    if kind == "assistant":
+        msg = obj.get("message") or {}
+        parts = []
+        for block in msg.get("content") or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and block.get("text"):
+                parts.append(str(block["text"]).rstrip())
+            elif block.get("type") == "tool_use":
+                parts.append(f"[tool: {block.get('name', '?')}]")
+        return "\n".join(parts)
+    if kind == "result":
+        return (f"# result: subtype={obj.get('subtype')} "
+                f"turns={obj.get('num_turns')} "
+                f"is_error={obj.get('is_error')}")
+    return ""
 
 
 def spawn_claude(spec: PhaseSpec) -> PhaseResult:
     """Run one phase as its own headless `claude -p` session, teeing its output
     to the phase log, under the phase's turn and wall-clock caps. The default
-    spawner; injected over in tests."""
+    spawner; injected over in tests.
+
+    The session streams JSON events (`--output-format stream-json`); the raw
+    stream lands in `<phase>.stream.jsonl` and a readable transcript in the
+    phase log. How the session ENDED comes from the structured `result`
+    event — `error_max_turns` is the turn cap — and only when there is no
+    such event does the transcript's own tail (never the driver's header)
+    decide (GALLEY-003)."""
     spec.log_path.parent.mkdir(parents=True, exist_ok=True)
+    stream_path = spec.log_path.with_suffix(".stream.jsonl")
     with open(spec.log_path, "w", encoding="utf-8") as fh:
-        fh.write(f"# galley driver: phase {spec.phase} at {_now()} "
+        fh.write(f"{DRIVER_LINE_PREFIX}: phase {spec.phase} at {_now()} "
                  f"(max-turns {spec.max_turns}, timeout "
                  f"{spec.timeout_s / 3600:.1f}h)\n")
         fh.flush()
-        try:
-            proc = subprocess.run(spec.argv, cwd=str(spec.workspace),
-                                  env=spec.env, stdout=fh,
-                                  stderr=subprocess.STDOUT, text=True,
-                                  timeout=spec.timeout_s)
-        except subprocess.TimeoutExpired:
+        timed_out = False
+        with open(stream_path, "w", encoding="utf-8") as raw:
+            try:
+                proc = subprocess.run(spec.argv, cwd=str(spec.workspace),
+                                      env=spec.env, stdout=raw,
+                                      stderr=subprocess.STDOUT, text=True,
+                                      timeout=spec.timeout_s)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+        # the raw stream is closed now; render it into the readable log
+        _render_stream(stream_path, fh)
+        if timed_out:
             fh.write(f"\n# TIMEOUT: killed after {spec.timeout_s / 3600:.1f}h\n")
+            fh.flush()
             return PhaseResult(spec.phase, TIMEOUT_RC, spec.log_path,
-                               tail_of(spec.log_path), limit="timeout")
-    tail = tail_of(spec.log_path)
-    limit = "max_turns" if detect_turn_cap(tail) else None
+                               transcript_tail(tail_of(spec.log_path)),
+                               limit="timeout")
+    result = parse_session_result(stream_path.read_text(encoding="utf-8",
+                                                        errors="replace"))
+    tail = transcript_tail(tail_of(spec.log_path))
+    limit = session_limit(result, tail)
     return PhaseResult(spec.phase, proc.returncode, spec.log_path, tail,
-                       limit=limit)
+                       limit=limit,
+                       subtype=str((result or {}).get("subtype") or ""),
+                       num_turns=(result or {}).get("num_turns"))
+
+
+def _render_stream(stream_path: Path, fh) -> None:
+    """Append the readable transcript of a stream-json file to the log."""
+    try:
+        raw = stream_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    for ln in raw.splitlines():
+        rendered = _render_stream_line(ln)
+        if rendered:
+            fh.write(rendered + "\n")
+    fh.flush()
 
 
 def _read_json(path: Path) -> Any | None:
@@ -754,6 +959,11 @@ class Driver:
     max_turns_by_phase: dict[str, int] = field(default_factory=dict)
     timeout_s: float | None = None
     timeout_by_phase: dict[str, float] = field(default_factory=dict)
+    #: The source's Drive file id (recorded in state.json) and what to do
+    #: when the workspace was seeded with a DIFFERENT manuscript: "refuse"
+    #: (raise) or "revise" (set the previous results aside, next revision).
+    source_id: str = ""
+    on_source_change: str = "refuse"
     #: The settle policy: at most `settle_rounds` until-clean rounds, a round
     #: raising `settle_quiet_floor` new items or fewer is quiet.
     settle_rounds: int = SETTLE_ROUNDS
@@ -808,7 +1018,11 @@ class Driver:
         turns = self.turns_for(phase)
         argv = ["claude", "-p", prompt, "--model", self.model,
                 "--permission-mode", self.permission_mode,
-                "--max-turns", str(turns)]
+                "--max-turns", str(turns),
+                # The structured completion event is how the driver learns
+                # HOW a session ended (GALLEY-003); the raw stream is kept
+                # beside the readable log.
+                "--output-format", "stream-json", "--verbose"]
         return PhaseSpec(phase=phase, prompt=prompt, workspace=self.workspace,
                          log_path=self._driver_dir() / f"{phase}.log",
                          argv=argv, env=env, max_turns=turns,
@@ -1062,7 +1276,9 @@ class Driver:
         phases = select_phases(mechanical_only=self.mechanical_only,
                                start=self.start_phase, only=self.only_phases)
         ws = seed_workspace(self.book, self.slug,
-                            workspace_root=self.workspace_root)
+                            workspace_root=self.workspace_root,
+                            source_id=self.source_id,
+                            on_source_change=self.on_source_change)
         env = build_env(self.env, wrapbin=self.wrapbin)
         result = DriveResult(workspace=ws)
 
@@ -1341,5 +1557,7 @@ __all__ = [
     "handoff_base",
     "phase_prompt", "phases_for", "read_plan", "record_approval",
     "reply_after", "seed_workspace", "select_phases", "settle_flags",
-    "spawn_claude", "tail_of",
+    "spawn_claude", "tail_of", "SourceChanged", "workspace_slug",
+    "transcript_tail", "parse_session_result", "session_limit",
+    "DRIVER_LINE_PREFIX", "RESULT_SUBTYPE_MAX_TURNS",
 ]

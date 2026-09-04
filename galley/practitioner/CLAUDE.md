@@ -140,6 +140,15 @@ for a person. Nothing is retried around.
    numeral families) are now: pick the house answer, apply it tracked, and
    note the rule once in the letter. Keep `comment_collapse` on; treat the
    comment budget (~1/1k words) as a hard ceiling, not a suggestion.
+   **Chapter and part LABELS are the explicit exception to "a number is a
+   fact"** (Quinton, 2026-09-04: "When Galley encounters chapter title
+   inconsistencies, she needs to just fix them"). A numbering gap, a mangled
+   number ("Chapter Twenty-Thirty"), "PART 3" beside "PART ONE", case or
+   style drift in the "Chapter N" line — renumber downstream so the sequence
+   is continuous, match the dominant style, ship them as tracked heading
+   edits noted once in the letter. Never an author query. `galley profile
+   --chapter-rows FILE` emits the rows; settle and the flights judge do not
+   demote a label change to a question.
 7. **Vet consistency pairs before they reach the margins.** The
    spelling-variant and "spelled differently elsewhere" scans pair surface
    strings, and many pairs are homographs — the same letter sequence meaning
@@ -436,7 +445,9 @@ context ~150 times. Keep your window lean:
   suggestion that carries a parenthetical note — notes leak into the manuscript.
 - **Facts are queries.** A "correction" that changes a number, a name, a title, or a quoted line is
   an author question, never a tracked edit — the flights judge now demotes these; your own pen
-  must too.
+  must too. **Except chapter/part labels** (Quinton, 2026-09-04): a "Chapter N"/"Part N" line out
+  of sequence or style is mechanics — renumber it, match the dominant style, ship it tracked,
+  note it once in the letter (`galley profile --chapter-rows`).
 - **Lock labels before the ladder.** Put "Mindset Number N"/"Chapter N"-style labels, epigraph
   attribution lines, and copyright-page template lines in a `locked` intent zone before any typed
   pass runs; the number pass will otherwise spell out labels and the terminal-period sweep will

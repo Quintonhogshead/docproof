@@ -120,7 +120,14 @@ def test_certify_passes_a_clean_run(tmp_path):
                               "cost": {"total_usd": 4.2},
                               "checkpoint": {"x": 1}})
     cert = certify_run(run, manifest=m, cfg=cfg, source=src)
-    assert cert.passed
+    # Every integrity check passes — and the certificate still does NOT: the
+    # delivery evidence (verify, walk, settlement, outcome, run state) is
+    # required, and this run has none of it (GALLEY-001).
+    assert not cert.failed
+    assert not cert.passed
+    assert {c.name for c in cert.missing} == {
+        "change verifier", "finished-text walk", "residual settlement",
+        "outcome", "run state"}
     assert {c.name for c in cert.checks} >= {
         "source hash", "config hash", "approved model routes",
         "budget within approval", "artifact scan"}
@@ -328,12 +335,12 @@ def test_certify_change_verify_honors_ran_false(tmp_path):
     (tmp_path / "change_verify.json").write_text(json.dumps(
         {"ran": False, "applied_edits": 12, "problems": []}))
     check = _certify_change_verify(tmp_path)
-    assert check.status == "skip"
+    assert check.status == "fail"               # a gate that did not run (GALLEY-001)
     assert "--walk-only" in check.detail and "did not run" in check.detail
     (tmp_path / "finished_walk.json").write_text(json.dumps(
         {"ran": False, "residuals": []}))
     walk = _certify_finished_walk(tmp_path)
-    assert walk.status == "skip"
+    assert walk.status == "fail"                # a gate that did not run (GALLEY-001)
     assert "--changes-only" in walk.detail and "did not run" in walk.detail
 
 
@@ -355,6 +362,23 @@ def test_certify_verify_gates_surface_a_recorded_reason(tmp_path):
 # ran, and certify reported the PREVIOUS build's clean read over the new build's
 # edits. A stale artifact is a skip, never a verdict.
 
+def _bind(run, *names):
+    """A tiny deliverable beside the artifacts, and each named artifact
+    stamped with its fingerprint — the binding certify now requires
+    (GALLEY-002) before a verify record counts as evidence."""
+    import docx as _docx
+    from galley.verify import build_fingerprints
+    d = _docx.Document()
+    d.add_paragraph("Bound text.")
+    d.save(run / "book - Atmosphere Press Proofreader.docx")
+    fp = build_fingerprints(run)
+    for name in names:
+        payload = json.loads((run / name).read_text("utf-8"))
+        payload.update(accepted_sha256=fp["accepted_sha256"],
+                       build_sha256=fp["build_sha256"])
+        (run / name).write_text(json.dumps(payload), "utf-8")
+
+
 def _clean_verify_records(run: Path) -> None:
     (run / "change_verify.json").write_text(json.dumps(
         {"ran": True, "applied_edits": 3, "problems": []}))
@@ -374,7 +398,8 @@ def test_certify_skips_verify_artifacts_older_than_the_findings(tmp_path):
     os.utime(tmp_path / "findings.json", (old + 3600, old + 3600))
     for check in (_certify_change_verify(tmp_path),
                   _certify_finished_walk(tmp_path)):
-        assert check.status == "skip"
+        # a stale record is not evidence: a FAIL, never a free skip (GALLEY-001)
+        assert check.status == "fail"
         assert "stale" in check.detail and "galley verify" in check.detail
 
 
@@ -390,8 +415,8 @@ def test_certify_reads_generated_at_over_mtimes(tmp_path):
          "residuals": []}))
     (tmp_path / "findings.json").write_text(json.dumps(
         {"generated_at": "2026-09-01T12:00:00+00:00", "findings": []}))
-    assert _certify_change_verify(tmp_path).status == "skip"
-    assert _certify_finished_walk(tmp_path).status == "skip"
+    assert _certify_change_verify(tmp_path).status == "fail"
+    assert _certify_finished_walk(tmp_path).status == "fail"
 
 
 def test_certify_keeps_a_verify_record_written_after_the_findings(tmp_path):
@@ -404,6 +429,7 @@ def test_certify_keeps_a_verify_record_written_after_the_findings(tmp_path):
     (tmp_path / "finished_walk.json").write_text(json.dumps(
         {"generated_at": "2026-09-01T12:00:00+00:00", "ran": True,
          "residuals": []}))
+    _bind(tmp_path, "change_verify.json", "finished_walk.json")
     assert _certify_change_verify(tmp_path).status == "pass"
     assert _certify_finished_walk(tmp_path).status == "pass"
 
@@ -414,6 +440,7 @@ def test_certify_verify_gates_without_ran_field_still_pass_a_clean_record(tmp_pa
         {"ran": True, "applied_edits": 3, "problems": []}))
     (tmp_path / "finished_walk.json").write_text(json.dumps(
         {"ran": True, "residuals": []}))
+    _bind(tmp_path, "change_verify.json", "finished_walk.json")
     assert _certify_change_verify(tmp_path).status == "pass"
     assert _certify_finished_walk(tmp_path).status == "pass"
 

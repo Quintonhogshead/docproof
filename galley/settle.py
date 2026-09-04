@@ -718,15 +718,21 @@ def deletes_an_aside(before: str, after: str) -> bool:
     return False
 
 
-def _fact(before: str, after: str) -> str | None:
+def _fact(before: str, after: str, paragraph: str = "") -> str | None:
     """flights.fact_change, minus two false alarms a settlement raises: a
     case/punctuation-only change inside quoted speech reads to that check as
     a rewritten title, and a re-cased word ("just" -> "Just") as a new proper
     noun. Only a change in the WORDS of a quoted passage, a number, or a
     genuinely new capitalized word counts here. Removing an editor's aside
     that leaked into the text is never a fact change."""
+    from docproof.chapter_labels import is_chapter_label
     from docproof.flights import _titles, fact_change
     if deletes_an_aside(before, after):
+        return None
+    if is_chapter_label(paragraph):
+        # A chapter/part label's number is mechanics, not a fact (Quinton,
+        # 2026-09-04): renumbering a heading is a tracked edit, never a
+        # question to the author.
         return None
     try:
         why = fact_change(before, after)
@@ -853,7 +859,7 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
                             owner_key=key)
         if had_note and fix == res.owner_corrected:
             return Decision("revert", "editorial_note", owner_key=key)
-        fact = _fact(res.owner_corrected, fix)
+        fact = _fact(res.owner_corrected, fix, source.get(res.para_id, ""))
         if fact:
             return Decision("query", f"fact:{fact}", owner_key=key,
                             question=_question(res, fix))
@@ -925,7 +931,7 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
                 label = getattr(zone, "label", "") or getattr(zone, "category",
                                                               "")
                 return Decision("drop", f"intent_zone:{label}")
-    fact = _fact(comp.before, comp.text)
+    fact = _fact(comp.before, comp.text, src_text)
     if fact:
         return Decision("query", f"fact:{fact}", question=_question(res,
                                                                     suggestion))
@@ -1466,6 +1472,12 @@ class Settler:
         self._variant: Any = None
         self._sweeps: SweepGuard | None = None
         self._skipped: dict[str, str] = {}
+        # Paragraphs changed since their last successful read (GALLEY-002):
+        # a round's edits make them dirty, a delta read that covered them
+        # makes them clean, a revert after the read makes them dirty again.
+        # Whatever is still dirty at the end is recorded as unverified and
+        # certify refuses to pass it — settle never restamps a read.
+        self._dirty: set[str] = set()
 
     # -- one round ----------------------------------------------------------
 
@@ -1579,6 +1591,7 @@ class Settler:
         for res in items:
             if removed_by.get(res.id):
                 self.touched.add(res.para_id)
+        self._dirty |= set(self.touched)
 
         # Propagate: the same surface, untouched, in the paragraph and its
         # neighbours gets the same fix — recorded, never silent.
@@ -1663,6 +1676,7 @@ class Settler:
                           self.usage, context=self.opt.context,
                           max_tokens=self.opt.max_tokens,
                           concurrency=self.opt.concurrency)
+        self._merge_coverage(vr, touched)
         have = self.settlement.record_ids()
         fresh: list[Residual] = []
         # A verifier flag on a composite this round: a second look by the
@@ -1695,6 +1709,10 @@ class Settler:
                     item, paragraphs.get(item.para_id, ""), self.provider,
                     self.opt.model, self.usage, context=self.opt.context)
                 rec = composites[hit]
+                # The flag itself is now in change_verify.json (the delta's
+                # coverage is merged, not discarded — GALLEY-002), so it
+                # needs a record of its own beside the residual's.
+                self.settlement.residuals_seen.append(item.to_json())
                 if answer == "keep":
                     log.info("settle: judge overruled the verifier on %s "
                              "(%s)", hit, why)
@@ -1704,10 +1722,20 @@ class Settler:
                         "verifier_overruled" + (f":{why}" if why else ""),
                         self.verified_by, para_id=rec.para_id,
                         kind=rec.kind))
+                    self.settlement.records.append(SettlementRecord(
+                        item.id, round_no, "drop", rec.owner_finding_id,
+                        item.owner_corrected, "",
+                        "verifier_overruled" + (f":{why}" if why else ""),
+                        self.verified_by, para_id=item.para_id,
+                        kind="edit_damage"))
                     continue
-                revert_ids[hit] = ("verifier_reverted"
-                                   if why == SECOND_LOOK_UNAVAILABLE
-                                   else "verifier_confirmed")
+                reason = ("verifier_reverted" if why == SECOND_LOOK_UNAVAILABLE
+                          else "verifier_confirmed")
+                revert_ids[hit] = reason
+                self.settlement.records.append(SettlementRecord(
+                    item.id, round_no, "drop", rec.owner_finding_id,
+                    item.owner_corrected, "", reason, self.verified_by,
+                    para_id=item.para_id, kind="edit_damage"))
                 continue
             if item.id not in have:
                 fresh.append(item)
@@ -1719,8 +1747,44 @@ class Settler:
             self.settlement.records.extend(self._revert_records(
                 revert_ids, items, records, removed_by, round_no,
                 snapshot=f"round{round_no}-verifier-revert"))
+            # The reverted paragraphs changed AFTER the read above: one more
+            # small delta over them, so the artifacts describe the text as
+            # it now stands (GALLEY-002) rather than a text that no longer
+            # exists.
+            again = sorted({rec.para_id for rec in self.settlement.records
+                            if rec.residual_id in revert_ids and rec.para_id})
+            if again:
+                vr2 = verify_delta(self.run_dir, again, self.provider,
+                                   self.opt.model, self.usage,
+                                   context=self.opt.context,
+                                   max_tokens=self.opt.max_tokens,
+                                   concurrency=self.opt.concurrency)
+                self._merge_coverage(vr2, again)
+                have = self.settlement.record_ids()
+                for p in vr2.problems:
+                    item = Residual.from_problem(p.to_json(), round_no)
+                    if item.id not in have:
+                        fresh.append(item)
+                for r in vr2.residuals:
+                    item = Residual.from_walk(r.to_json(), round_no)
+                    if item.id not in have:
+                        fresh.append(item)
         self.touched = set()
         return fresh
+
+    def _merge_coverage(self, vr, para_ids) -> None:
+        """Fold a delta read into the run's verify artifacts: rows for the
+        re-read paragraphs replaced, coverage merged, the build binding
+        advanced only when nothing is left unread or dirty."""
+        from galley.verify import UNREAD, applied_edits, write_artifacts
+        ids = {str(p) for p in para_ids}
+        self._dirty -= (ids - set(UNREAD)) if vr.ran_walk else set()
+        write_artifacts(self.run_dir, vr, vr, model=self.opt.model,
+                        engine=self.opt.engine, usage_changes=Usage(),
+                        usage_walk=Usage(),
+                        applied=len(applied_edits(self.run_dir)),
+                        paragraphs=len(self._source), para_ids=sorted(ids),
+                        merge=True)
 
     def _prefetch_judgments(self, items, em, accepted, source, working,
                             guards) -> dict[str, Decision]:
@@ -1902,6 +1966,7 @@ class Settler:
                 res.owner_finding_id, before, "", reason, self.verified_by,
                 para_id=res.para_id, question=_question(res), kind=res.kind))
             self.touched.add(res.para_id)
+            self._dirty.add(res.para_id)
         self._rebuild(list(working.values()), snapshot=snapshot)
         return out
 
@@ -2137,7 +2202,8 @@ class Settler:
                                 "engine": self.opt.engine,
                                 "model": self.opt.model}
         stamp_states(self.run_dir, self.settlement)
-        rewrite_verify_artifacts(self.run_dir, self.settlement)
+        rewrite_verify_artifacts(self.run_dir, self.settlement,
+                                 unverified=sorted(self._dirty))
         self.settlement.save(self.run_dir)
 
 
@@ -2175,13 +2241,22 @@ def stamp_states(run_dir: str | Path, settlement: Settlement) -> int:
     return non_terminal
 
 
-def rewrite_verify_artifacts(run_dir: str | Path, settlement: Settlement
-                             ) -> None:
-    """Re-stamp finished_walk.json and change_verify.json for the FINAL build:
-    every residual/problem the loop ever saw, each with its settlement action,
-    so certify's completeness check reads one file per gate and the record
-    beside it. `generated_at` is fresh so the stale check passes for this
-    build."""
+def rewrite_verify_artifacts(run_dir: str | Path, settlement: Settlement, *,
+                             unverified: Sequence[str] = ()) -> None:
+    """MERGE the settlement into finished_walk.json and change_verify.json:
+    every residual/problem the loop ever saw, each with its settlement
+    action, so certify's completeness check reads one file per gate and the
+    record beside it.
+
+    What this never does (GALLEY-002): change `ran`, `reason`,
+    `unread_paragraphs`, `unread_batches`, or the build binding. A read that
+    failed stays a failed read; a paragraph nobody re-read stays unread. It
+    ADDS `unverified_paragraphs` — the paragraphs this loop changed after
+    their last read and never read again (a deterministic settle changes
+    text with no engine to re-verify) — so certify names exactly what a
+    `galley verify --paragraphs` must cover before delivery. `generated_at`
+    is refreshed only so the stale check does not mistake the merge for an
+    older build's verdict; the binding decides whether it is evidence."""
     run = Path(run_dir)
     latest = settlement.latest()
     seen_res: dict[str, dict[str, Any]] = {}
@@ -2209,12 +2284,33 @@ def rewrite_verify_artifacts(run_dir: str | Path, settlement: Settlement
         if not isinstance(payload, dict):
             payload = {}
         payload["generated_at"] = _now()
-        payload["ran"] = True
+        # `ran` is the READ's word, not the settlement's: absent (an older
+        # artifact) it is left absent; false stays false.
         payload["settled"] = True
         payload["settlement_rounds"] = settlement.rounds
-        payload[key] = list(rows.values())
-        payload["unsettled"] = [r.get("residual_id") or r.get("problem_id")
-                                for r in rows.values() if not r.get("settled")]
+        # Every row the read produced is preserved; the settlement records
+        # ride beside them (a settled row keeps its verdict, plus `settled`).
+        # Prior rows are keyed by their COMPUTED id — a row `galley verify`
+        # (or a hand) wrote without one still merges with its record instead
+        # of sitting beside a settled twin.
+        prior: dict[str, dict[str, Any]] = {}
+        for r in (payload.get(key) or []):
+            if not isinstance(r, dict):
+                continue
+            item = (Residual.from_problem(r) if key == "problems"
+                    else Residual.from_walk(r))
+            prior[item.id] = r
+        merged = dict(prior)
+        for rid, row in rows.items():
+            merged[rid] = {**prior.get(rid, {}), **row}
+        payload[key] = list(merged.values())
+        have = set(payload.get("unverified_paragraphs") or [])
+        payload["unverified_paragraphs"] = sorted(
+            have | {str(p) for p in unverified if p})
+        payload["unsettled"] = [
+            r.get("residual_id") or r.get("problem_id")
+            for r in payload[key]
+            if isinstance(r, dict) and not r.get("settled")]
         p.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
                      encoding="utf-8")
 

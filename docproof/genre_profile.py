@@ -143,6 +143,11 @@ class Profile(BaseModel):
     # The designer regenerates the TOC; the plan notes them; no lane edits
     # them (Georgis, 2026-09-04).
     field_errors: list[str] = Field(default_factory=list)
+    # Chapter/part labels as written, and the import-findings rows that make
+    # each sequence continuous in the dominant style (Quinton, 2026-09-04:
+    # label inconsistencies are mechanics — fix them, never query them).
+    chapter_labels: list[dict] = Field(default_factory=list)
+    chapter_label_rows: list[dict] = Field(default_factory=list)
 
 
 # --- deterministic extraction -------------------------------------------------
@@ -335,6 +340,9 @@ def build_profile(input_path: str | Path, cfg: Config | None = None) -> Profile:
     paragraphs = doc.paragraphs
 
     dialogue_density = _dialogue_density(paragraphs, variant)
+    from .chapter_labels import label_map, renumber_rows
+    labels = label_map(paragraphs)
+    label_rows = renumber_rows(labels)
     tics = _author_tics(paragraphs, variant)
     reading_level = _reading_level(paragraphs)
     genre_guesses = _guess_genres(paragraphs, dialogue_density)
@@ -353,7 +361,15 @@ def build_profile(input_path: str | Path, cfg: Config | None = None) -> Profile:
         genre_guesses=genre_guesses,
         recommended_preset=recommended,
         bespoke_sweep_candidates=_bespoke_candidates(tics),
-        field_errors=_field_errors(path))
+        field_errors=_field_errors(path),
+        chapter_labels=[_label_json(lb) for lb in labels],
+        chapter_label_rows=label_rows)
+
+
+def _label_json(lb) -> dict:
+    return {"para_id": lb.para_id, "kind": lb.kind, "label": lb.label_text,
+            "number": lb.number, "form": lb.form, "case": lb.case,
+            "title": lb.rest.strip()}
 
 
 def _field_errors(path: Path) -> list[str]:

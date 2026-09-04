@@ -69,6 +69,15 @@ class StateError(RuntimeError):
 class RunStateMachine(BaseModel):
     state_schema_version: int = STATE_SCHEMA_VERSION
     history: list[RunStateRecord] = Field(default_factory=list)
+    # The manuscript this workspace was seeded with (GALLEY-006): its content
+    # hash, its Drive file id when known, and the revision counter. A source
+    # whose hash differs from the recorded one is a NEW revision and may not
+    # silently reuse this history — the driver requires an explicit
+    # revision transition (see driver.seed_workspace).
+    source_sha256: str = ""
+    source_id: str = ""
+    source_name: str = ""
+    revision: int = 1
 
     @property
     def current(self) -> str:

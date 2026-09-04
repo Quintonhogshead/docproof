@@ -214,7 +214,8 @@ def test_discovery_claim_run_handoff_and_ledger(env, tmp_path):
     # folder to deliver into.
     assert len(ran) == 1
     call = ran[0]
-    assert call["slug"] == "test-book-1"
+    assert call["slug"] == "test-drive-1"          # surname + Drive id suffix
+    assert call["source_id"] == "drive-1"
     assert call["drive_folder_id"] == "folder-A"
     assert Path(call["book"]).name == "Test - Book 1.docx"
     assert Path(call["book"]).read_bytes() == b"a manuscript"
@@ -225,7 +226,7 @@ def test_discovery_claim_run_handoff_and_ledger(env, tmp_path):
     entry = ga.Ledger.load(agent.ledger_path).books["drive-1"]
     assert entry["state"] == ga.FINISHED
     assert entry["outcome"] == "done"
-    assert entry["slug"] == "test-book-1"
+    assert entry["slug"] == "test-drive-1"
     assert entry["uploaded"] == ["up-1", "up-2"]
 
 
@@ -241,7 +242,7 @@ def test_one_book_at_a_time(env, tmp_path):
     report = agent.poll_once()
     assert len(ran) == 2
     assert report.claimed == "Other - Book One.docx"
-    assert ran[1]["slug"] == "other-book-one"
+    assert ran[1]["slug"] == "other-drive-2"
 
 
 def test_a_finished_book_is_never_run_twice(env, tmp_path):
@@ -310,7 +311,7 @@ def test_a_crashed_driver_uploads_a_needs_human_outcome(env, tmp_path):
     assert "Test - Book 2 - outcome.json" in names
     assert {f for _n, f in uploaded} == {"folder-A"}
     written = json.loads(
-        (tmp_path / "ws" / "test-book-1" / "runs" / "outcome.json"
+        (tmp_path / "ws" / "test-drive-1" / "runs" / "outcome.json"
          ).read_text("utf-8"))
     assert written["outcome"] == "needs_human"
     assert written["set_by"] == "galley agent"
@@ -335,9 +336,11 @@ def test_a_failed_download_also_comes_back_with_a_verdict(env, tmp_path):
     assert entry["state"] == ga.FAILED
 
 
-def test_an_undeliverable_verdict_still_ends_the_book(env, tmp_path):
-    """Drive refusing the upload must not leave the agent looping on a book it
-    cannot finish — it is recorded failed and a person is told in the log."""
+def test_an_undeliverable_verdict_is_owed_not_lost(env, tmp_path):
+    """Drive refusing the upload must not leave the agent looping on the
+    BOOK — the proofread is over — but the verdict is owed: a durable pending
+    delivery, retried on later polls without rerunning anything
+    (GALLEY-005), and a person is told in the log."""
     said: list[str] = []
 
     def upload(_files, _folder):
@@ -350,8 +353,11 @@ def test_an_undeliverable_verdict_still_ends_the_book(env, tmp_path):
                    upload=upload, log=said.append)
     agent.poll_once()
     entry = ga.Ledger.load(agent.ledger_path).books["drive-1"]
-    assert entry["state"] == ga.FAILED
-    assert any("could not be delivered" in line for line in said)
+    assert entry["state"] == ga.PENDING_DELIVERY
+    assert any("could not be uploaded" in line for line in said)
+    # the next poll retries delivery, never the (crashed) proofread
+    report = agent.poll_once()
+    assert report.skipped == ["Test - Book 1.docx (pending_delivery)"]
 
 
 def test_the_claim_is_written_before_the_work(env, tmp_path):
@@ -396,8 +402,8 @@ def test_a_claimed_book_resumes_from_the_phase_after_the_ledger(env, tmp_path):
                    run_driver=lambda **kw: ran.append(kw) or FakeResult())
     # A previous run claimed it and got as far as the mechanical wave.
     ledger = agent.ledger()
-    ledger.record("drive-1", ga.CLAIMED, name=BOOK["name"], slug="test-book-1")
-    _state(agent.root, "test-book-1", "mechanical_complete")
+    ledger.record("drive-1", ga.CLAIMED, name=BOOK["name"], slug="test-drive-1")
+    _state(agent.root, "test-drive-1", "mechanical_complete")
 
     agent.poll_once()
     assert len(ran) == 1
@@ -411,7 +417,7 @@ def test_a_claimed_book_with_no_state_starts_from_the_beginning(env, tmp_path):
                    download=_downloader(tmp_path),
                    run_driver=lambda **kw: ran.append(kw) or FakeResult())
     agent.ledger().record("drive-1", ga.CLAIMED, name=BOOK["name"],
-                          slug="test-book-1")
+                          slug="test-drive-1")
     agent.poll_once()
     assert "start_phase" not in ran[0]
 
