@@ -38,7 +38,13 @@ otherwise on that run. In practice:
   certify` FAILS the delivery if a copy-edit finding, a copy-edit lane, or a
   `flights_findings.json` appears;
 - one tracked-change author ships (the proofreader), so the two-author check
-  stays a skip.
+  stays a skip;
+- two lanes are MECHANICAL and always in scope (Quinton, 2026-09-04): the
+  **six-window chapter sweep** (Luna, paid, plus a six-window Sonnet $0
+  subagent sweep) — the first lane on every book — and the **number audit**
+  (every numeral and spelled number extracted with context and checked for
+  house style, consistency, and arithmetic; contradictions become queries).
+  Neither is a copy-edit lane; both run under `--stage mechanical-wave`.
 
 Everything else in this manual — the ladder, the $0 subagent lanes, verify,
 settle, certify — is unchanged.
@@ -347,8 +353,24 @@ context ~150 times. Keep your window lean:
    command with `--approval approval.json`, so a run that drifts from the
    approved manuscript/config/routes refuses itself rather than spending. Do
    not spend a paid dollar past wave 1 defaults without the gate's approval.
-5. **Execute.** Mechanical lane first (the ladder). Wave 1 now runs these lanes
-   by default, on top of the ensemble/sweeps/typed passes:
+5. **Execute.** Wave 1, line 1 — before the typed-pass ladder — is the
+   **six-window chapter sweep** (Quinton, 2026-09-04: "best bang for the
+   buck, by far"): `chapter_sweep` on Luna (`chapter_sweep.model:
+   gpt-5.6-luna`, paid; the mechanical-wave stage enables it) PLUS a
+   six-window **Sonnet $0 session-subagent** sweep of the same shape (one
+   subagent per window, rows written to files, imported on the `galley_read`
+   edit channel). Then the mechanical ladder. Wave 1 also runs these lanes by
+   default, on top of the ensemble/sweeps/typed passes:
+   - **The number audit — every number in the text, always.** A deterministic
+     extraction (grep the canonical text) of every numeral and spelled number
+     — ages, dates, years, sums, counts, distances, times — each with its
+     paragraph and a line of context, to a file. Review the file (not the
+     book) for house style (spell out to one hundred; `4:00 AM`; `40
+     percent`), internal consistency (an age that does not advance with the
+     years, a sum that does not add, a date that contradicts a weekday), and
+     arithmetic against the rest of the book. A contradiction is an AUTHOR
+     QUERY, never an edit (facts are queries). The extraction happens at
+     profile time (`skills/profile`); the review rides wave 1.
    - **Whole-book continuity + chapter continuity** — as **$0 Opus session
      subagents** (an Opus whole-book read for timeline/age/date/attribute drift
      plus the deterministic calendar check; an Opus per-chapter read for physical

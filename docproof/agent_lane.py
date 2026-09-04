@@ -22,7 +22,10 @@ thing that failed was a cover job running on a server.
 from __future__ import annotations
 
 import importlib
+import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +93,64 @@ def require_login(hint: str) -> None:
     raise AgentLaneUnavailable(hint)
 
 
+# The cached answer of `probe_login` for this process: (logged_in, detail).
+# `logged_in` is None when the probe could not be made (no CLI, a timeout, an
+# unparseable reply) — "unknown", which the file check above then decides.
+_LOGIN_PROBE: tuple[bool | None, str] | None = None
+PROBE_TIMEOUT = 20.0
+
+
+def reset_login_probe() -> None:
+    """Forget the cached probe (tests; a `claude setup-token` mid-process)."""
+    global _LOGIN_PROBE
+    _LOGIN_PROBE = None
+
+
+def probe_login(*, timeout: float = PROBE_TIMEOUT) -> tuple[bool | None, str]:
+    """Ask the CLI itself whether this machine is signed in — `claude auth
+    status --json`, the same binary the SDK drives, in the same fenced
+    environment (`child_env`, so an API key in this process can neither
+    satisfy nor confuse the check). Cached per process: it is a subprocess.
+
+    The file check in `require_login` is deliberately generous, and on the
+    Georgis run (2026-09-04) generous was wrong: ~/.claude.json existed, so
+    `available()` said yes, `--engine auto` chose the subagent lane, and the
+    first turn died with "Not logged in · Please run /login". Returns
+    (True|False|None, detail); None means the probe could not be made and the
+    caller falls back to the file check."""
+    global _LOGIN_PROBE
+    if _LOGIN_PROBE is not None:
+        return _LOGIN_PROBE
+    cli = shutil.which("claude")
+    if not cli:
+        _LOGIN_PROBE = (None, "the Claude Code CLI is not on PATH")
+        return _LOGIN_PROBE
+    env = {**os.environ, **child_env()}
+    try:
+        proc = subprocess.run([cli, "auth", "status", "--json"],
+                              capture_output=True, text=True, timeout=timeout,
+                              env=env)
+    except (OSError, subprocess.SubprocessError) as e:
+        _LOGIN_PROBE = (None, f"`claude auth status` could not run ({e})")
+        return _LOGIN_PROBE
+    text = (proc.stdout or "").strip()
+    try:
+        start = text.index("{")
+        payload = json.loads(text[start:])
+    except (ValueError, TypeError):
+        _LOGIN_PROBE = (None, "`claude auth status` gave no JSON "
+                        f"(exit {proc.returncode})")
+        return _LOGIN_PROBE
+    logged_in = payload.get("loggedIn")
+    if not isinstance(logged_in, bool):
+        _LOGIN_PROBE = (None, "`claude auth status` did not say loggedIn")
+        return _LOGIN_PROBE
+    method = str(payload.get("authMethod") or "none")
+    _LOGIN_PROBE = (logged_in, f"`claude auth status`: loggedIn={logged_in} "
+                               f"(authMethod {method})")
+    return _LOGIN_PROBE
+
+
 def child_env() -> dict[str, str]:
     """The billing guard: the spawned CLI must run on the subscription.
 
@@ -114,4 +175,5 @@ def sdk_tools(sdk_module: Any, specs: Any) -> list[Any]:
 
 
 __all__ = ["AgentLaneUnavailable", "child_env", "cli_hint", "install_hint",
-           "login_hint", "require_login", "sdk", "sdk_tools"]
+           "login_hint", "probe_login", "require_login", "reset_login_probe",
+           "sdk", "sdk_tools"]

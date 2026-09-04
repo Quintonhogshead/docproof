@@ -139,3 +139,81 @@ def test_extract_json_salvages_a_truncated_array():
     assert obj is not None
     assert [r["para_id"] for r in obj["findings"]] == ["p1", "p2"]
     assert subagent.extract_json('{"findings": [{"para_id"') is None
+
+
+# --- Georgis (2026-09-04): availability asks the CLI, not just the disk --------
+
+def _probe_returning(monkeypatch, stdout, *, which="/usr/local/bin/claude",
+                     raise_exc=None):
+    import subprocess
+    agent_lane.reset_login_probe()
+    monkeypatch.setattr(agent_lane.shutil, "which", lambda name: which)
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append((cmd, kw))
+        if raise_exc:
+            raise raise_exc
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+    monkeypatch.setattr(agent_lane.subprocess, "run", run)
+    return calls
+
+
+def test_availability_is_false_when_the_cli_says_not_logged_in(monkeypatch,
+                                                                tmp_path):
+    """~/.claude.json existed, the file check said yes, --engine auto chose
+    the lane, and the first turn died "Not logged in". The CLI's own word
+    decides now, and the refusal names `claude setup-token`."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    monkeypatch.setattr(agent_lane, "sdk", lambda hint: object())
+    calls = _probe_returning(monkeypatch,
+                             '{"loggedIn": false, "authMethod": "none"}')
+    ok, why = subagent.availability()
+    assert ok is False
+    assert "claude setup-token" in why and "loggedIn=False" in why
+    cmd, kw = calls[0]
+    assert cmd[1:] == ["auth", "status", "--json"]
+    assert kw["env"]["ANTHROPIC_API_KEY"] == ""          # the billing fence
+    # cached: a second ask does not spawn again
+    subagent.availability()
+    assert len(calls) == 1
+    agent_lane.reset_login_probe()
+
+
+def test_availability_is_true_when_the_cli_is_signed_in(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    monkeypatch.setattr(agent_lane, "sdk", lambda hint: object())
+    _probe_returning(monkeypatch,
+                     '{"loggedIn": true, "authMethod": "oauth_token"}')
+    ok, why = subagent.availability()
+    assert ok is True and "oauth_token" in why
+    assert subagent.available() is True
+    agent_lane.reset_login_probe()
+
+
+def test_an_inconclusive_probe_defers_to_the_file_check(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    monkeypatch.setattr(agent_lane, "sdk", lambda hint: object())
+    _probe_returning(monkeypatch, "", which=None)          # no CLI on PATH
+    ok, why = subagent.availability()
+    assert ok is True and "not on PATH" in why
+    agent_lane.reset_login_probe()
+    _probe_returning(monkeypatch, "garbage")               # unparseable
+    ok, _why = subagent.availability()
+    assert ok is True
+    agent_lane.reset_login_probe()
+
+
+def test_a_not_logged_in_turn_names_setup_token(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+
+    class _ErrResult(_Result):
+        is_error = True
+        subtype = "error_during_execution"
+    sdk = _fake_sdk([_ErrResult("Not logged in · Please run /login")], [])
+    prov = subagent.SubagentProvider(sdk=sdk, cwd=tmp_path)
+    import pytest
+    with pytest.raises(agent_lane.AgentLaneUnavailable) as ei:
+        prov.complete_structured(model="opus", system="s", user="u",
+                                 schema={}, schema_name="x", max_tokens=1)
+    assert "claude setup-token" in str(ei.value)

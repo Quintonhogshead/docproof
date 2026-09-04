@@ -1217,12 +1217,37 @@ def _certify_spellfix_sanity(run: Path) -> Check:
                  "no truncated-stem spelling corrections")
 
 
+def _duplicated_fragment_hits(run: Path) -> list[str]:
+    """Five-word runs that repeat inside one ACCEPTED paragraph of the
+    deliverable and did not repeat in the same paragraph's reject-all view —
+    the trace a composite spliced at the wrong offset leaves ("trot,
+    communicating to urge the horse into a trot ,communicating his
+    frustration", Georgis 2026-09-04). Read from the .docx's two views, so
+    an author's own refrain (present in the source) never counts. Empty when
+    there is no deliverable or the OOXML tooling is unavailable."""
+    try:
+        from galley.settle import introduced_fragments
+        from galley.verify import paragraph_views
+        original, accepted = paragraph_views(run)
+    except Exception:                                    # noqa: BLE001
+        return []
+    hits: list[str] = []
+    for pid, text in accepted.items():
+        for frag in introduced_fragments(original.get(pid, ""), text):
+            hits.append(f"duplicated fragment in {pid}: {frag!r}")
+            if len(hits) >= 12:
+                return hits
+    return hits
+
+
 def _artifact_scan(run: Path) -> Check:
     """Scan what the author will actually READ after accepting the changes:
     every finding's corrected_text. Raw change-log / findings-file text is NOT
     scanned — those files faithfully quote the ORIGINAL, pre-fix text, whose
     artifacts are precisely what the findings fix, so a raw-text scan fails a
-    clean deliverable for honestly reporting what it repaired."""
+    clean deliverable for honestly reporting what it repaired. The delivered
+    .docx's accepted paragraphs are read for one thing only: a duplicated
+    five-word fragment the source did not carry (`_duplicated_fragment_hits`)."""
     texts: list[str] = []
     for name in ("findings.json", "flights_findings.json"):
         data = _load_json(run / name)
@@ -1237,13 +1262,15 @@ def _artifact_scan(run: Path) -> Check:
             corr = row.get("corrected_text")
             if isinstance(corr, str) and corr:
                 texts.append(corr)
-    if not texts:
+    repeats = _duplicated_fragment_hits(run)
+    if not texts and not repeats:
         return Check("artifact scan", "skip",
                      "no corrected text in the run directory to scan")
     blob = "\n".join(texts)
     hits = [pat.pattern for pat in _ARTIFACTS if pat.search(blob)]
     if _POST_TEXT_DOUBLE.search(blob):
         hits.append("  ")
+    hits.extend(repeats)
     if hits:
         return Check("artifact scan", "fail",
                      f"found merge artifact(s) in corrected text: "

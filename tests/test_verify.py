@@ -46,11 +46,43 @@ def test_applied_edits_keeps_only_landed_tracked_changes(tmp_path):
     assert [e["para_id"] for e in edits] == ["p1", "p4"]
 
 
-def test_sentence_around_isolates_the_finished_context():
-    para = "I paid. I ate quest here. She left."
-    assert verify._sentence_around(para, "quest") == "I ate quest here."
-    # A span the accepted text no longer contains falls back to the paragraph.
-    assert verify._sentence_around(para, "nowhere") == para
+def test_change_packet_carries_whole_paragraphs_never_a_sentence_slice():
+    """Georgis (2026-09-04): an edit containing a period or a quote mark —
+    "$0.05", "Slow down!”" — reached the verifier as a fragment cut at the
+    nearest `.`/`!`, and was reported as "truncated" / "stray closing
+    quotation mark". The packet is the whole paragraph, both views."""
+    original = {"p1": "It cost $0.5 a piece. “Slow down!“ she said. Fine."}
+    accepted = {"p1": "It cost $0.05 a piece. “Slow down!” she said. Fine."}
+    edits = [
+        {"para_id": "p1", "original_text": "$0.5", "corrected_text": "$0.05",
+         "error_type": "number_style"},
+        {"para_id": "p1", "original_text": "down!“", "corrected_text": "down!”",
+         "error_type": "sweep_quote_punctuation"},
+    ]
+    user = verify._change_user(edits, accepted, original)
+    assert "[p1] BEFORE: " + original["p1"] in user
+    assert "[p1] NOW READS: " + accepted["p1"] in user
+    assert user.count("NOW READS") == 1          # the paragraph once, not per edit
+    assert "1. in [p1] rule: number_style" in user
+    assert "edit: '$0.5' -> '$0.05'" in user
+    assert "edit: 'down!“' -> 'down!”'" in user
+
+
+def test_change_packet_recomposes_the_before_view_without_an_original():
+    accepted = {"p1": "I paid. I ate quest here."}
+    edit = {"para_id": "p1", "original_text": "queso", "corrected_text": "quest"}
+    user = verify._change_user([edit], accepted)
+    assert "[p1] BEFORE: I paid. I ate queso here." in user
+    assert "[p1] NOW READS: I paid. I ate quest here." in user
+
+
+def test_both_gate_prompts_carry_the_shared_house_rules():
+    from galley.house_style import HOUSE_RULES
+    block = verify._context_block("", "verifier")
+    for rule in HOUSE_RULES:
+        assert rule in block
+    assert "never flag it" in block
+    assert "4:00 AM" in verify._WALK_SYSTEM or "HOUSE STYLE" in verify._WALK_SYSTEM
 
 
 # --- change verifier ----------------------------------------------------------
@@ -166,65 +198,6 @@ def test_applied_edits_keeps_a_pure_deletion(tmp_path):
     assert [e["para_id"] for e in verify.applied_edits(tmp_path)] == ["p1", "p2"]
 
 
-def test_finished_context_locates_the_sentence_by_anchor_not_by_text():
-    """A minimal-diff row whose corrected_text is ',' must land on ITS
-    sentence — text.find(',') finds the first sentence with a comma."""
-    original = {"p1": "First, we sat. Then we ate quest here. Last, we left."}
-    accepted = {"p1": "First, we sat. Then, we ate quest here. Last, we left."}
-    edit = {"para_id": "p1", "original_text": "", "corrected_text": ",",
-            "anchor": {"start": 19, "end": 19, "delete_text": "",
-                       "insert_text": ","}}
-    before, after = verify._finished_context(edit, 19, original, accepted)
-    assert before == "Then we ate quest here."
-    assert after == "Then, we ate quest here."
-
-
-def test_finished_context_shifts_later_edits_by_earlier_ones_in_the_paragraph():
-    original = {"p1": "aa bb cc. dd ee ff."}
-    accepted = {"p1": "aaaa bb cc. dd ee."}
-    edits = [
-        {"para_id": "p1", "original_text": "aa", "corrected_text": "aaaa",
-         "anchor": {"start": 0, "end": 2, "delete_text": "aa",
-                    "insert_text": "aaaa"}},
-        {"para_id": "p1", "original_text": "dd ee ff", "corrected_text": "dd ee",
-         "anchor": {"start": 15, "end": 18, "delete_text": " ff",
-                    "insert_text": ""}},
-    ]
-    starts = verify._accepted_starts(edits)
-    assert starts == [0, 17]
-    before, after = verify._finished_context(edits[1], starts[1], original, accepted)
-    assert (before, after) == ("dd ee ff.", "dd ee.")
-
-
-def test_finished_context_hunts_nearby_when_the_paragraph_drifted():
-    """An untracked change shifted the paragraph: the arithmetic offset misses,
-    the inserted text is found at the nearest occurrence instead."""
-    original = {"p1": "One thing. Two thing here. Three."}
-    accepted = {"p1": "One BIG thing. Two things here. Three."}
-    edit = {"para_id": "p1", "original_text": "thing here",
-            "corrected_text": "things here",
-            "anchor": {"start": 15, "end": 20, "delete_text": "thing",
-                       "insert_text": "things"}}
-    before, after = verify._finished_context(edit, 15, original, accepted)
-    assert (before, after) == ("Two thing here.", "Two things here.")
-
-
-def test_finished_context_falls_back_to_text_search_without_an_anchor():
-    accepted = {"p1": "I paid. I ate quest here."}
-    edit = {"para_id": "p1", "original_text": "queso", "corrected_text": "quest"}
-    before, after = verify._finished_context(edit, None, {}, accepted)
-    assert (before, after) == ("queso", "I ate quest here.")
-
-
-def test_finished_context_composes_the_after_sentence_without_an_accepted_view():
-    original = {"p1": "One. Two thing here. Three."}
-    edit = {"para_id": "p1", "original_text": "thing", "corrected_text": "things",
-            "anchor": {"start": 9, "end": 14, "delete_text": "thing",
-                       "insert_text": "things"}}
-    before, after = verify._finished_context(edit, None, original, {})
-    assert (before, after) == ("Two thing here.", "Two things here.")
-
-
 def test_verify_changes_presents_the_before_after_pair_and_reads_deletions():
     original = {"p1": "She was very, very tired. Then she slept."}
     accepted = {"p1": "She was very tired. Then she slept."}
@@ -235,8 +208,8 @@ def test_verify_changes_presents_the_before_after_pair_and_reads_deletions():
     prov = _Provider({"problems": []})
     verify.verify_changes(edits, accepted, prov, "m", Usage(), original=original)
     user = prov.calls[0]["user"]
-    assert "before: She was very, very tired." in user
-    assert "now reads: She was very tired." in user
+    assert "[p1] BEFORE: She was very, very tired. Then she slept." in user
+    assert "[p1] NOW READS: She was very tired. Then she slept." in user
     assert "edit: ', very' -> ''" in user
 
 

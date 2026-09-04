@@ -937,6 +937,13 @@ def _galley_parser(sub) -> None:
     gse.add_argument("--no-propagate", action="store_true",
                      help="do not apply a settled fix to identical untouched "
                           "occurrences in the same and neighbouring paragraphs")
+    gse.add_argument("--mechanical-only", action="store_true",
+                     help="proofread scope: a walker suggestion may become an "
+                          "edit only when it changes punctuation/case/spacing "
+                          "or at most one function word or spelling; anything "
+                          "larger ships as a query carrying the suggestion. "
+                          "Implied by an --approval whose manifest says "
+                          "mechanical_only")
     _engine_arg(gse)
     gse.add_argument("--context", help="a file of house-style / voice notes "
                                        "for the judge and the delta verify")
@@ -1194,20 +1201,28 @@ def _resolve_engine(args, cfg, *, default_model: str | None = None
     deterministic lane. A model named with --model picks the lane when
     --engine is auto: a Claude id/alias -> subagent, anything else ->
     provider."""
-    from .providers.subagent import (SubagentProvider, available,
+    from .providers.subagent import (SubagentProvider, availability,
                                      is_subagent_model, resolve_model)
     engine = getattr(args, "engine", None) or "auto"
     model = getattr(args, "model", None) or ""
     if engine == "auto":
+        ok, why = (True, "") if (model and not is_subagent_model(model)) \
+            else availability()
         if model and not is_subagent_model(model):
             engine = "provider"
-        elif available():
+        elif ok:
             engine = "subagent"
         elif model or default_model:
             engine = "provider"
             model = model or default_model or ""
+            print(f"note: the $0 subagent lane is unavailable ({why}); "
+                  f"--engine auto falls back to the API provider "
+                  f"({model}), which bills.", file=sys.stderr)
         else:
             engine = "none"
+            print(f"note: the $0 subagent lane is unavailable ({why}) and "
+                  f"no model is configured; --engine auto falls back to "
+                  f"deterministic-only.", file=sys.stderr)
     if engine == "subagent":
         prov = SubagentProvider(model=model or None)
         return "subagent", prov, f"subagent:{resolve_model(model or None)}"
@@ -2961,6 +2976,17 @@ def _galley_settle(args) -> int:
         if guard is not None:
             return guard
 
+    # The approval's scope carries into settlement: a mechanical-only
+    # manifest means a walker's rewrite ships as a question, not an edit.
+    mechanical_only = bool(getattr(args, "mechanical_only", False))
+    if getattr(args, "approval", None):
+        try:
+            manifest = json.loads(Path(args.approval).read_text("utf-8"))
+            mechanical_only = mechanical_only or bool(
+                manifest.get("mechanical_only"))
+        except (OSError, ValueError, AttributeError) as e:
+            print(f"error: --approval {args.approval}: {e}", file=sys.stderr)
+            return 2
     opts = SettleOptions(rounds=max(0, int(_rounds)), engine=engine,
                          model=model, context=context,
                          verify_delta=not args.no_verify,
@@ -2968,7 +2994,8 @@ def _galley_settle(args) -> int:
                          quiet_floor=int(args.quiet_floor),
                          quiet_share=float(args.quiet_share),
                          max_turns=int(args.max_turns),
-                         propagate=not args.no_propagate)
+                         propagate=not args.no_propagate,
+                         mechanical_only=mechanical_only)
     settler = Settler(run, cfg=cfg, manuscript=args.source,
                       error_dir=error_dir, provider=provider, options=opts)
     from .agent_lane import AgentLaneUnavailable
@@ -2996,7 +3023,8 @@ def _galley_settle(args) -> int:
           f"{len(st.latest())} settled in {st.rounds} round(s) "
           f"({', '.join(f'{k}={v}' for k, v in sorted(counts.items())) or 'none'}), "
           f"{len(st.open)} open; engine={engine} "
-          f"({result.usage.api_calls} model call(s), ${cost:.4f}).")
+          f"({result.usage.api_calls} model call(s), ${cost:.4f})"
+          f"{' — mechanical only' if mechanical_only else ''}.")
     for note in st.notes[-(st.rounds + 1):]:
         print(f"  {note}")
     print(f"  outcome: {outcome.outcome} — {outcome.reason[:200]}")

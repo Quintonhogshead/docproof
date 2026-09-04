@@ -143,15 +143,41 @@ def extract_json(text: str) -> dict[str, Any] | None:
     return None
 
 
-def available() -> bool:
-    """Whether this machine can run the lane at all: SDK importable and a
-    login present. Never raises."""
+def availability() -> tuple[bool, str]:
+    """(can this machine run the lane, why not) — SDK importable, a login
+    on disk, AND the CLI's own word that it is signed in. Never raises.
+
+    The third check is the one the Georgis run was missing: the file check
+    is generous by design, and on a machine whose ~/.claude.json existed but
+    whose session had lapsed, `--engine auto` chose this lane and the first
+    turn failed "Not logged in". `agent_lane.probe_login` asks `claude auth
+    status` once per process; an inconclusive probe (no CLI on PATH, a
+    timeout) defers to the file check rather than refusing."""
     try:
         agent_lane.sdk(_INSTALL_HINT)
         agent_lane.require_login(_LOGIN_HINT)
-    except agent_lane.AgentLaneUnavailable:
-        return False
-    return True
+    except agent_lane.AgentLaneUnavailable as e:
+        return False, str(e)
+    logged_in, detail = agent_lane.probe_login()
+    if logged_in is False:
+        return False, (f"{detail} — sign this machine in with `claude "
+                       f"setup-token` (and set CLAUDE_CODE_OAUTH_TOKEN) or "
+                       f"`claude auth login`")
+    return True, detail
+
+
+def available() -> bool:
+    """Whether this machine can run the lane at all. Never raises."""
+    return availability()[0]
+
+
+_NOT_LOGGED_IN_RE = re.compile(r"not logged in|please run /login|"
+                               r"run /login", re.IGNORECASE)
+
+
+def _not_logged_in(text: str) -> bool:
+    """Whether a CLI result is its login refusal rather than an answer."""
+    return bool(text) and bool(_NOT_LOGGED_IN_RE.search(text[:400]))
 
 
 def _usage_of(msg: Any) -> NormalizedUsage:
@@ -273,6 +299,16 @@ class SubagentProvider:
                                     "is_error=%s turns=%s", model, subtype,
                                     getattr(msg, "is_error", None),
                                     getattr(msg, "num_turns", None))
+                        if _not_logged_in(reply):
+                            # The CLI's own "Not logged in · Please run
+                            # /login": /login is a slash command nobody
+                            # headless can type. Say the command that works.
+                            raise agent_lane.AgentLaneUnavailable(
+                                f"{_SUBJECT} started a Claude session but the "
+                                f"CLI is not logged in ({reply[:80]!r}). Sign "
+                                f"this machine in with `claude setup-token` "
+                                f"and set CLAUDE_CODE_OAUTH_TOKEN (or run "
+                                f"`claude auth login`), then {_REMEDY}.")
         except agent_lane.AgentLaneUnavailable:
             raise
         except sdk.CLINotFoundError as e:
@@ -308,5 +344,5 @@ class SubagentProvider:
 
 
 __all__ = ["DEFAULT_MODEL", "MODEL_ENV", "SubagentProvider",
-           "SubagentUnavailable", "available", "extract_json",
+           "SubagentUnavailable", "availability", "available", "extract_json",
            "is_subagent_model", "resolve_model"]

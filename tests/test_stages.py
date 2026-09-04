@@ -104,6 +104,10 @@ def test_mechanical_wave_locks_the_copyedit_lane_against_any_genre():
         "gpt-5.6-luna", "claude-haiku-4-5"]
     assert cfg.ensemble.verifier_model == "gpt-5.6-luna"
     assert cfg.repair.enabled is True
+    # The chapter sweep is wave 1 line 1 on Luna (2026-09-04); the base
+    # config keeps it off.
+    assert cfg.chapter_sweep.enabled is True
+    assert cfg.chapter_sweep.model == "gpt-5.6-luna"
 
 
 def test_copyedit_wave_leaves_smoothing_unlocked_so_a_protective_genre_wins():

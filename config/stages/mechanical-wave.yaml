@@ -21,6 +21,16 @@ description: >
   reopen it. The portable Wave 1 recall recipe.
 
 patch:
+  # The chapter sweep is the FIRST lane Galley reaches for on every book
+  # (Quinton, 2026-09-04: "best bang for the buck, by far") — wave 1, line 1,
+  # before the typed-pass ladder: six chapter-sized windows on Luna here,
+  # paid, PLUS a six-window Sonnet sweep the practitioner runs as $0 session
+  # subagents and imports. The base config keeps it off (a bare `review` is
+  # not a Galley run); the stage turns it on.
+  chapter_sweep:
+    enabled: true
+    model: gpt-5.6-luna
+    effort: high
   ensemble:
     detectors:
       - {model: gpt-5.6-luna, effort: low}
