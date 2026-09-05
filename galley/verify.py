@@ -1,26 +1,9 @@
-"""Finished-text delivery gates: read the ACCEPTED manuscript for SENSE (P0-3).
+"""Verify applied edits and proofread accepted text for delivery.
 
-`certify` proves integrity — source/config hashes, approved model routes, the
-deterministic artifact regexes, the reject-all round-trip, spellfix sanity.
-Nothing in it, or anywhere else in the pipeline, reads the finished manuscript
-for MEANING. On the Purpura beta a LanguageTool lane spelled 35 coinages, brands,
-and loanwords into unrelated real words (boop->book, crudité->erudite), applied
-them as tracked edits, and passed every certify check; the corruption surfaced
-only when an external model re-read the changes. These two gates are that
-re-read, made a standard delivery stage:
+``verify_changes`` re-reads applied edits in finished context; ``walk_finished_text``
+proofreads the accepted view for residual errors. Both are read-only over a run
+directory; failed structured replies are recorded as losses.
 
-  * ``verify_changes`` — the change verifier. Re-reads every APPLIED edit in its
-    finished context and reports the ones that break meaning or grammar, damage
-    voice, leave an artifact, or misapply a rule. (OPUS_VERIFY.md)
-  * ``walk_finished_text`` — the finished-text walk. A residual-error proofread
-    over the ACCEPTED text — the text the author ends up reading — not the source
-    chunks the auditor samples, so it can see damage an applied edit did.
-    (FABLE_QA.md)
-
-Read-only over a finished run directory. The paid steps are the
-``complete_structured`` calls; everything else — locating the deliverable, taking
-its accept-all view, pairing each edit to its finished context, chunking,
-parsing — is deterministic and unit-tested with a fake provider.
 """
 from __future__ import annotations
 
@@ -42,11 +25,8 @@ DEFAULT_MAX_TOKENS = 12000
 # finished-text-walk read. Kept modest so one truncation loses little.
 DEFAULT_CHANGE_BATCH = 30
 DEFAULT_WALK_CHARS = 6000
-# Hard caps so a runaway reply can never blow a downstream budget. The
-# residual caps are PER READ (a 6k-char window with more than 80 findings is a
-# hallucinating reply) plus a book-wide ceiling far above any real count —
-# the Redding walk hit an earlier global cap of 200 at read 36 of 42 and
-# silently left six windows unread.
+# Hard caps keep runaway replies within downstream budgets. Residual caps apply
+# per read and across the book; excess reads are recorded as unread.
 MAX_PROBLEMS = 200
 MAX_RESIDUALS_PER_READ = 80
 MAX_RESIDUALS = 5000
@@ -336,13 +316,8 @@ def _change_user(batch: list[dict[str, Any]], accepted: dict[str, str],
     both views — as ingested and as it now reads — then the edits, each naming
     its paragraph and its own before -> after span.
 
-    WHOLE paragraphs, never a sentence slice. An earlier packet cut the
-    accepted text at the nearest `.`, `!`, or `?` around the edit, so an edit
-    containing a period or a quote mark — "$0.05", "Slow down!”" — reached the
-    verifier as a fragment ending mid-amount or opening on a closing quote,
-    and was reported as "truncated" / "stray closing quotation mark" (Georgis,
-    2026-09-04). The paragraph is the unit the author reads; it is the unit
-    the verifier judges."""
+    Always includes whole paragraphs: the paragraph is the verifier's context
+    unit and the author's reading unit."""
     original = original or {}
     order: list[str] = []
     by_para: dict[str, list[dict[str, Any]]] = {}
@@ -387,23 +362,16 @@ def _context_block(context: str, role: str = "reader") -> str:
 
 # ---- the gates ---------------------------------------------------------------
 
-# Every reply a gate could not use, in order: (gate, stop_reason, error).
-# verify_run reads it to tell a gate that read NOTHING (every reply lost — a
-# lane that cannot answer at all) from a gate that lost one batch: the first
-# must never write a clean-looking artifact, which is exactly what a run of
-# failed subagent turns would otherwise produce (0 residuals, ran: true).
+# Unusable replies in order: (gate, stop_reason, error). Distinguish partial
+# coverage from a gate that read nothing, which must not report a clean result.
 _LOSSES: list[tuple[str, str, str]] = []
 
 
-# Paragraph ids the last walk could not read (a lost reply after its retry,
-# or the reads past the book-wide ceiling). The CLI writes them into
-# finished_walk.json as `unread_paragraphs` so the next verb (a --paragraphs
-# re-read, or settle) can see the hole instead of taking silence for clean.
+# Unread paragraph ids, persisted as unread_paragraphs in finished_walk.json
+# for targeted rereads or settlement.
 UNREAD: list[str] = []
-# The change-verifier batches the last run could not read after their retry:
-# [{"index": n, "para_ids": [...], "edits": k}]. Written into
-# change_verify.json as `unread_batches`; certify refuses to pass a record
-# with any (GALLEY-002: an unread batch is not a clean read).
+# Unread change-verifier batches: [{"index": n, "para_ids": [...], "edits": k}].
+# Persisted as unread_batches in change_verify.json; any entries block certify.
 UNREAD_BATCHES: list[dict[str, Any]] = []
 
 
@@ -450,11 +418,8 @@ def verify_changes(edits: Sequence[dict[str, Any]], accepted: dict[str, str],
     :func:`paragraph_views`); with it, each paragraph's BEFORE view is the
     text as ingested rather than one recomposed from the accepted view.
 
-    `concurrency` batches are in flight at once (`docproof.fanout.fan_out`);
-    replies are folded in BATCH ORDER on this thread, so the problems list,
-    the usage ledger, and the loss record read exactly as the sequential
-    loop's did. On Georgis (2026-09-04) ~95 verify calls took ~5 minutes one
-    at a time under an `api.concurrency` of 8."""
+    `concurrency` batches may be in flight; replies are folded in batch order
+    so problems, usage, and loss records remain deterministic."""
     from docproof.fanout import fan_out, fold_usage
     schema, schema_name = _change_schema()
     system = _CHANGE_SYSTEM + _context_block(context, "verifier")
@@ -701,11 +666,11 @@ def verify_delta(run_dir: str | Path, para_ids: Sequence[str], provider,
 
 
 def accepted_fingerprint(accepted: Mapping[str, str]) -> str:
-    """One hash over the ACCEPTED text, paragraph by paragraph — the identity
-    of "the document version that was verified". Comments and margin queries
-    do not change it; any tracked edit does. Certify compares a verify
-    artifact's recorded fingerprint with the deliverable's current one
-    (GALLEY-002: document changes invalidate verification evidence)."""
+    """Hash accepted paragraph text to tie verification to a document version.
+
+    Comments and margin queries do not affect the hash; text edits do.
+    Certify requires the recorded hash to match the current deliverable.
+    """
     h = hashlib.sha256()
     for pid in sorted(accepted):
         h.update(pid.encode("utf-8"))
@@ -763,16 +728,9 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
     the BUILD BINDING: `build_sha256` / `accepted_sha256` /
     `paragraph_sha256` of the deliverable the read was made against).
 
-    `merge=True` is a partial re-read (`--paragraphs`, or settle's delta): the
-    existing artifact's rows for paragraphs outside `para_ids` are kept, the
-    re-read paragraphs' rows are replaced, `unread_*` shrink by what was read
-    successfully and grow by what was lost, and `ran`/`reason` are NEVER
-    upgraded by a read that read nothing (GALLEY-002: settlement cannot turn
-    a failed read into a successful one). The binding is stamped to the
-    current build only when nothing is left unread or unverified; otherwise
-    the previous binding stands and certify says what is missing.
-
-    Shared by the `galley verify` verb and the settle loop."""
+    `merge=True` replaces rows for re-read paragraphs, preserves other rows, and
+    updates unread coverage. It never upgrades a failed read or build binding
+    until nothing remains unread or unverified."""
     from datetime import datetime, timezone
 
     from docproof.contract import build_envelope

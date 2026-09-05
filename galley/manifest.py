@@ -1,29 +1,5 @@
-"""The approval manifest, model-route visibility, and delivery certificate.
-
-Three related things a reproducible, model-agnostic Galley run needs, all built
-on two primitives — a content hash and a route map:
-
-* **model_routes(cfg)** walks a loaded Config and reports every model it would
-  call, each with the provider that serves it and whether its lane is active.
-  This is the single effective-config report the flight deck lacked: a plan
-  could look Fable-free while the eventual command routed to Fable through a
-  section's default. Nothing about routing is implicit once this is printed.
-
-* **build_manifest / verify_plan** turn a human-approved plan into an immutable
-  ``approval.json`` — source hash, config hash, the allowed model/provider set,
-  the stage, the max spend, the enabled lanes — and check a proposed paid
-  command against it. A deviation (a changed manuscript, a model not in the
-  allowed set, a budget over the ceiling) is a refusal, not a warning.
-
-* **certify_run** is the delivery gate: it re-checks a finished run against the
-  manifest and against a set of structural invariants (checkpoint present, no
-  zero-cost anomaly, budget reconciled, artifact scan clean) and returns a
-  certificate. Delivery should require a passing certificate.
-
-Model IDs are never hard-coded here. A role (reviewer, verifier, copyedit
-judge, auditor) resolves to whatever model the config routes it to, so
-substituting one model for another is a config change this module simply
-reports — never an edit to code.
+"""Build approval manifests, report configured model routes, and certify
+delivery evidence.
 """
 from __future__ import annotations
 
@@ -38,42 +14,22 @@ from typing import Any
 
 MANIFEST_SCHEMA_VERSION = 1
 
-# The lanes that make a run a COPY-EDIT run rather than a proofread. Go-live
-# Galley (owner, 2026-09-03) does mechanical proofreading only, so an approval
-# may declare `mechanical_only` and certify fails the delivery if one of these
-# turns up — in the config, in the findings, or as a flight-deck artifact.
+# Lanes forbidden by a mechanical-only approval.
 COPYEDIT_LANES = ("smoothing", "smoothing_edits", "rewrite")
 
-# A config field whose NAME ends in one of these carries a model id we route on.
+# Model-id fields end in "model".
 _MODEL_FIELD = re.compile(r"(^|_)(model)$")
 
-# The deterministic artifact patterns a clean deliverable must not contain —
-# the merge desk's own scan list (doubled comma/space, orphaned punctuation).
-# Compiled regexes, so the ones that end in a period mean a LITERAL period
-# (a closing quote followed by one) rather than any character; the pattern
-# text is what a failing check names.
-#
-# An ellipsis directly followed by exactly ONE period is NOT itself an
-# artifact: it is precisely the shape the shipped `sweep_ellipsis`
-# (docproof/sweeps.py) leaves behind when a sentence ends on an ellipsis —
-# house style is a non-breaking space before the glyph and a period straight
-# after it at a genuine sentence end, and the sweep only ever normalizes the
-# glyph and its leading space, never the sentence-final period that follows
-# it (that period was never part of the ellipsis match). Flagging that shape
-# made a correctly swept book fail its own certificate. A DOUBLED period —
-# what a composed edit can produce by appending its own period onto text
-# that already ended in one — is still a real artifact.
+# Artifact patterns, with literal periods escaped. An ellipsis plus one
+# sentence-ending period is valid house style; two periods indicate an
+# artifact.
 _ARTIFACTS = tuple(re.compile(p) for p in
                    (",,", '" "', r"…\.{2,}", r"”\.", "”,"))
-# The zero-cost markers: an envelope whose findings legitimately cost $0 to
-# produce because the paid work is recorded elsewhere — an import of external
-# judgments, or a Galley rebuild of a case file's adjudicated findings (see
-# galley.deliverable.REBUILD_MARKER; its paid spend lives in casefile.json).
+# Rebuild/import findings may cost zero because paid work is recorded
+# elsewhere.
 _ZERO_COST_JUDGES = ("external:import-judgments", "galley:rebuild")
-# Double spaces are an artifact only AFTER visible text: leading indentation
-# is spacing normalization deliberately preserves (normalize._SPACE_RUN uses
-# the same lookbehind), so a bare "  " substring test fails hand-centered
-# subtitle/TOC lines that are perfectly clean. NBSP included, as in normalize.
+# Preserve leading indentation. Flag repeated spaces or NBSP only after
+# visible text, matching normalization.
 _POST_TEXT_DOUBLE = re.compile(r"(?<=\S)[  ]{2,}")
 
 
@@ -85,19 +41,15 @@ def sha256_file(path: str | Path) -> str:
     return h.hexdigest()
 
 
-# Fields that say WHERE a run writes, not WHAT it does — excluded from the
-# hash so `approve` (no --out) and `review --out runs/...` agree on the same
-# material config. Leaving output_dir in is what made every gated run refuse
-# itself: _configure stamps args.out onto the config before verify_plan runs.
+# Exclude output locations so approve and review --out share the same config
+# hash.
 _VOLATILE_CONFIG_FIELDS = ("output_dir",)
 
 
 def config_hash(cfg: Any) -> str:
-    """A stable hash of a loaded Config's effective content — the model_dump
-    serialized with sorted keys, so two configs that differ only in key order
-    or comments hash the same, and any material change hashes differently.
-    Volatile run-location fields (see _VOLATILE_CONFIG_FIELDS) are excluded:
-    where a run writes its output is not part of what a human approved."""
+    """Hash the effective configuration with sorted keys, excluding volatile
+    output-location fields.
+    """
     data = cfg.model_dump(mode="json")
     for name in _VOLATILE_CONFIG_FIELDS:
         data.pop(name, None)
@@ -120,12 +72,9 @@ class ModelRoute:
 
 
 def model_routes(cfg: Any) -> list[ModelRoute]:
-    """Every model-bearing field in the config, resolved to its provider and
-    tagged active/inactive by whether its owning section is enabled. Walks the
-    Config recursively so a new model-bearing section is covered without a code
-    change here. The reviewer (``api.model``) and the ensemble detectors/verifier
-    are handled explicitly because their activity is not a plain ``enabled``
-    flag."""
+    """List configured models, providers, and lane activity. Traverse sections
+    recursively; handle reviewer and ensemble activity explicitly.
+    """
     from docproof.providers.catalog import provider_for
 
     routes: list[ModelRoute] = []
@@ -141,9 +90,7 @@ def model_routes(cfg: Any) -> list[ModelRoute]:
         routes.append(ModelRoute(role, model, provider_for(model, "unknown"),
                                  active))
 
-    # The reviewer / single detector: live only when there are typed passes to
-    # run it through — with `error_types: []` (final-replay, a deterministic
-    # floor config) it is never called, and showing it active reads as spend.
+    # The reviewer is inactive when no typed passes are configured.
     add("api.model", getattr(getattr(cfg, "api", None), "model", None),
         bool(getattr(cfg, "error_type_keys", True)))
 
@@ -170,9 +117,8 @@ def model_routes(cfg: Any) -> list[ModelRoute]:
             child_path = f"{path}.{name}" if path else name
             if isinstance(value, BaseModel):
                 child_active = active and bool(getattr(value, "enabled", True))
-                # Sections gated by something other than `enabled`:
-                # candidate_screening runs only when mode != 'off'; the rounds
-                # judge fires only between rounds, so count 1 never calls it.
+                # Candidate screening uses mode; the rounds judge runs only
+                # between multiple rounds.
                 mode = getattr(value, "mode", None)
                 if isinstance(mode, str):
                     child_active = child_active and mode != "off"
@@ -200,15 +146,10 @@ def build_manifest(*, source: str | Path, config_path: str | Path, cfg: Any,
                    mechanical_only: bool = False,
                    comment_budget: int | None = None,
                    note: str = "") -> dict[str, Any]:
-    """Assemble the immutable approval manifest. ``allowed_providers`` defaults
-    to exactly the providers the approved config actively uses — an approval is
-    a promise that the run reaches no OTHER vendor.
-
-    ``mechanical_only`` records the go-live scope decision (2026-09-03:
-    mechanical proofreading only) on the manifest itself, so ``certify`` can
-    fail a run that grew a copy-edit lane. It REFUSES to write an approval that
-    contradicts its own config: a mechanical-only approval over a config with
-    smoothing or rewrite on would be a promise the run cannot keep."""
+    """Build an approval manifest. Default allowed_providers to active
+    configured providers; reject mechanical_only when copyediting lanes are
+    enabled.
+    """
     if mechanical_only:
         live = [lane for lane in _enabled_lanes(cfg) if lane in COPYEDIT_LANES]
         if live:
@@ -284,9 +225,9 @@ class Deviation:
 def verify_plan(manifest: dict[str, Any], *, source: str | Path, cfg: Any,
                 config_path: str | Path | None = None,
                 budget_usd: float | None = None) -> list[Deviation]:
-    """Check a proposed paid command against an approval manifest. Returns the
-    list of deviations; an empty list means the command is within approval. A
-    paid command should refuse (exit non-zero) on any deviation."""
+    """Return deviations from the approved source, config, model routes, and
+    budget. Paid commands must reject a nonempty result.
+    """
     devs: list[Deviation] = []
 
     try:
@@ -339,11 +280,8 @@ class Check:
     name: str
     status: str          # "pass" | "fail" | "skip" | "warn" (never blocks)
     detail: str = ""
-    # A REQUIRED check must PASS for the certificate to pass: a skip is
-    # missing evidence, not a free pass (GALLEY-001 — certify printed eight
-    # [skip] lines and PASSED a build nothing had verified). Optional checks
-    # (two-author attribution on a one-lane run, intent zones when none are
-    # declared) keep their honest skip.
+    # Required checks must pass. Skipped mandatory checks mean missing
+    # evidence.
     required: bool = False
 
     def to_json(self) -> dict[str, Any]:
@@ -351,8 +289,7 @@ class Check:
                 "detail": self.detail, "required": self.required}
 
 
-# The delivery evidence a certificate cannot pass without: the two verify
-# gates, the settlement, the recorded outcome, and the run's state machine.
+# Required delivery evidence.
 MANDATORY_CHECKS = ("change verifier", "finished-text walk",
                     "residual settlement", "outcome", "run state")
 
@@ -393,12 +330,8 @@ def _load_json(path: Path) -> Any | None:
         return None
 
 
-# A verify artifact that predates the findings it claims to have read is a
-# PREVIOUS build's verdict. Redding Book 1 rebuilt its deliverable after
-# `galley verify` had run, and certify reported the old run's clean read over
-# the new run's edits — the one way this gate can lie. Both comparisons are
-# made when they can be: the recorded `generated_at` timestamps (authoritative,
-# and survive a copy) and, failing that, the files' own mtimes.
+# Reject verification older than its findings. Prefer generated_at
+# timestamps; fall back to file mtimes.
 _STALE = "stale — regenerate with `galley verify`"
 
 
@@ -435,26 +368,22 @@ def _is_stale(run: Path, artifact: str, payload: Any) -> str:
 def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
                 cfg: Any | None = None, source: str | Path | None = None
                 ) -> Certificate:
-    """Re-check a finished run for delivery. Runs every check whose inputs are
-    present; a check whose artifact is absent is recorded as ``skip`` (honest),
-    never silently passed. Delivery should require zero ``fail`` checks."""
+    """Check delivery evidence. Record absent artifacts as skipped;
+    certification requires every mandatory check to pass and no failures.
+    """
     run = Path(run_dir)
     cert = Certificate()
 
-    # The envelope is read early because two checks below need to know whether
-    # this run actually spent money: a $0 replay rebuild legitimately runs a
-    # different (final-replay) config than the approved paid wave, so its
-    # config-hash mismatch is informational, not a failure.
+    # Zero-cost replay may use a different config from the approved paid
+    # wave.
     early_envelope = _load_json(run / "findings.json")
     if early_envelope is None:
         early_envelope = _load_json(run / "flights_findings.json")
     _cost = ((early_envelope or {}).get("cost") or {}).get("total_usd")
     run_paid = bool(_cost) and float(_cost) > 0
 
-    # 1. Source + config hashes match the approval. A comparison that cannot
-    # be made — no approval, no --source, no --config — is recorded as a skip
-    # that names what was not compared, never silently omitted: a certificate
-    # that lists no "source hash" line reads as if the source were checked.
+    # 1. Check source and config hashes; record missing comparison inputs as
+    # skips.
     if manifest is None:
         cert.checks.append(Check("source hash", "skip",
                                  "no approval manifest given — the manuscript "
@@ -485,8 +414,7 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
                 f"still checked below)")
         cert.checks.append(hash_check)
 
-    # 2. Model routes stay within the approved set (route check only —
-    # source/config hashes are checked separately above).
+    # 2. Check model routes against the approved set.
     if manifest is None or cfg is None:
         cert.checks.append(Check("approved model routes", "skip",
                                  "no approval manifest and --config to compare "
@@ -530,43 +458,28 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
     # 6. Intent-zone collisions, if the run recorded them.
     cert.checks.append(_certify_intent_zone_collisions(run))
 
-    # 7. Run state machine, if present — a delivery certificate expects the run
-    # to have reached at least the audited state.
+    # 7. Require the run to have reached audited.
     cert.checks.append(_required(_certify_run_state(run)))
 
-    # 8. Text hygiene over the delivered .docx itself: no double spaces, no
-    # paragraph-trailing whitespace. The Johnson run shipped 84 double spaces
-    # the head proofreader's own check caught — whatever path produced the
-    # deliverable, this fails loud instead. A hit that was already there in
-    # the SOURCE manuscript's same paragraph is not this run's fault (see
-    # _certify_text_hygiene) — --source is what lets the check tell the two
-    # apart.
+    # 8. Scan accepted manuscript whitespace, exempting faults proven to
+    # predate the run.
     cert.checks.append(_certify_text_hygiene(run, source))
-    # 8b. Unresolved field results ("Error! Bookmark not defined.") in ANY
-    # paragraph, the skipped TOC styles included — a warning for the
-    # designer, never a failure (see _certify_field_results).
+    # 8b. Report unresolved fields, including skipped TOC paragraphs,
+    # without failing.
     cert.checks.append(_certify_field_results(run))
 
-    # 9. Finished-text SENSE gates. certify itself reads no text for meaning;
-    # `galley verify` does and records its verdict here. An item without a
-    # settlement record fails delivery (run `galley settle`); a settled record
-    # passes; no record skips loudly (run `galley verify`) so an unread
-    # deliverable never reads as a certified-clean one.
+    # 9. Require verification evidence and settlement records for raised
+    # items.
     cert.checks.append(_required(_certify_change_verify(run)))
     cert.checks.append(_required(_certify_finished_walk(run)))
 
-    # 10. Residual settlement (I1/I7): every finding in a terminal state, and
-    # every residual/problem the verify gates raised carrying a settlement
-    # record. Certify is the only definition of done.
+    # 10. Require terminal finding states and resolved verification items.
     if envelope is not None:
         cert.checks.append(_certify_terminal_states(envelope))
     cert.checks.append(_required(_certify_settlement(run)))
     cert.checks.append(_required(_certify_outcome(run)))
 
-    # 11. Scope. An approval that declares mechanical-only is a promise about
-    # WHAT was done, not only what it cost; certify is where that promise is
-    # kept. Only added when the approval makes the claim — a copy-edit run
-    # certifies exactly as it did before.
+    # 11. Enforce mechanical-only scope when declared in the approval.
     if manifest is not None and manifest.get("mechanical_only"):
         cert.checks.append(_certify_mechanical_only(manifest, cfg, envelope,
                                                     run))
@@ -700,8 +613,8 @@ def _certify_terminal_states(envelope: dict[str, Any]) -> Check:
     for r in rows:
         state, _reason = terminal_state(r)
         counts[state] = counts.get(state, 0) + 1
-        # "unknown" (no status at all) is a row the validator never saw, not
-        # a lifecycle state; only a genuinely non-terminal state fails.
+        # Rows with no status are legacy/unknown; reject only explicit
+        # nonterminal states.
         if state not in TERMINAL_STATES and state != "unknown":
             bad.append(f"{r.get('finding_id', '?')}:{state}")
     summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
@@ -715,10 +628,9 @@ def _certify_terminal_states(envelope: dict[str, Any]) -> Check:
 
 
 def _certify_settlement(run: Path) -> Check:
-    """settlement.json present, nothing left open, and every residual/problem
-    the verify artifacts hold carrying a record. Skips (loudly) when the run
-    never verified — there is nothing to settle yet; fails when verify raised
-    items and settle never ran."""
+    """Check that settlement records resolve every verification item. Skip when
+    verification evidence is absent.
+    """
     from galley.settle import Settlement, unsettled
     have_walk = (run / "finished_walk.json").is_file()
     have_cv = (run / "change_verify.json").is_file()
@@ -771,14 +683,10 @@ def _certify_outcome(run: Path) -> Check:
 
 def _binding_problem(run: Path, artifact: str, payload: dict[str, Any]
                      ) -> str:
-    """Why a verify artifact does not describe THIS deliverable, or "".
-
-    GALLEY-002: a record whose read failed, that left paragraphs or edit
-    batches unread, that names paragraphs changed after their last read, or
-    that was made against a different accepted text is not evidence for the
-    build in the run directory. A record with no binding at all is an older
-    artifact (or a hand-planted one) and is refused too — re-run `galley
-    verify`, which stamps one."""
+    """Return why verification does not cover the current build, or an empty
+    string. Reject failed or incomplete reads, changed paragraphs, and
+    missing or mismatched build hashes.
+    """
     unread = [p for p in (payload.get("unread_paragraphs") or []) if p]
     if unread:
         return (f"{len(unread)} paragraph(s) stayed unread ({', '.join(unread[:5])}"
@@ -817,10 +725,9 @@ def _binding_problem(run: Path, artifact: str, payload: dict[str, Any]
 
 def _pass_if_bound(run: Path, artifact: str, name: str,
                    payload: dict[str, Any], detail: str) -> Check:
-    """The verdict is clean (or fully settled): it PASSES only if the record
-    is complete and bound to this build (see _binding_problem); an unsettled
-    problem is reported ahead of a binding gap, because it is the more useful
-    thing to fix first."""
+    """Pass only complete verification bound to the current build. Call after
+    checking for unresolved findings.
+    """
     bound = _binding_problem(run, artifact, payload)
     if bound:
         return Check(name, "fail", bound)
@@ -838,9 +745,8 @@ def _certify_change_verify(run: Path) -> Check:
     stale = _is_stale(run, "change_verify.json", payload)
     if stale:
         return Check("change verifier", "fail", f"{stale}: {_STALE}")
-    # `galley verify` records whether this gate actually ran (`--walk-only`
-    # writes the file with ran: false and no problems, which is NOT a clean
-    # read). Absent `ran` is an older record that always ran both gates.
+    # ran:false is incomplete verification. Missing ran is a legacy record
+    # that ran both gates.
     if payload.get("ran") is False:
         why = payload.get("reason") or "verify ran with --walk-only"
         return Check("change verifier", "fail",
@@ -867,9 +773,9 @@ def _certify_change_verify(run: Path) -> Check:
 
 
 def _certify_finished_walk(run: Path) -> Check:
-    """Read finished_walk.json (from `galley verify`): a residual-error read over
-    the ACCEPTED text. A high-severity residual fails; lower ones warn but do not
-    block (they are candidates for a next wave, not proof the build is broken)."""
+    """Require a completed, bound finished-text read with every residual
+    settled, regardless of severity.
+    """
     payload = _load_json(run / "finished_walk.json")
     if payload is None:
         return Check("finished-text walk", "skip",
@@ -900,25 +806,15 @@ def _certify_finished_walk(run: Path) -> Check:
                           payload, "accepted text read, no residual errors")
 
 
-# How much of a hygiene hit's surrounding text must match the source
-# paragraph, byte for byte, to call it pre-existing rather than introduced.
-# Wide enough to be specific about which double-space/trailing-space run it
-# is (not just that the paragraph has one somewhere), narrow enough that an
-# edit elsewhere in a long paragraph does not spuriously mask a genuinely new
-# hit right next to it.
+# Context length used to match a whitespace hit against its source
+# occurrence.
 _HYGIENE_CTX = 15
 
 
 def _hygiene_pre_existing(text: str, m: re.Match, src_text: str | None) -> bool:
-    """Whether the hygiene hit `m` (a double-space or trailing-space match in
-    the delivered paragraph `text`) is byte-for-byte present in the SOURCE
-    manuscript's same paragraph — a fault the run did not introduce and
-    cannot even express as a finding (canonical text strips paragraph-
-    trailing whitespace, so no finding row can target it; Redding body-0734:
-    a pre-existing space before a paragraph-internal line break, "gone.
-    \n\n"). No source paragraph to compare against (no --source, an
-    unreadable source, or a paragraph the source doesn't have) means this
-    cannot be proven, so it counts as introduced — the conservative default."""
+    """Check whether the source paragraph contains the same whitespace hit and
+    surrounding text. Missing source evidence counts as an introduced fault.
+    """
     if src_text is None:
         return False
     window = text[max(0, m.start() - _HYGIENE_CTX):
@@ -928,10 +824,9 @@ def _hygiene_pre_existing(text: str, m: re.Match, src_text: str | None) -> bool:
 
 def _source_paragraph_texts(source: str | Path, walk_package, DocxPackage,
                             paragraph_view_text) -> dict[str, str] | None:
-    """{para_id: text} for every paragraph in the source manuscript (the same
-    accept-view read the delivered .docx gets), or None if the source can't be
-    read — a missing/corrupt --source is a reason to skip the pre-existing
-    comparison, not to crash certify."""
+    """Read accepted source paragraphs by id, or return None if the manuscript
+    cannot be read.
+    """
     try:
         pkg = DocxPackage(str(source))
     except Exception:
@@ -944,21 +839,12 @@ def _source_paragraph_texts(source: str | Path, walk_package, DocxPackage,
 
 
 def _certify_text_hygiene(run: Path, source: str | Path | None = None) -> Check:
-    """Scan every delivered .docx in the run directory (accept-all view) for
-    double spaces and paragraph-trailing whitespace — the two things
-    normalization promises are gone. Skips honestly when there is no .docx or
-    the OOXML tooling is unavailable.
-
-    A hit that is byte-for-byte pre-existing in the SOURCE manuscript's same
-    paragraph (see `_hygiene_pre_existing`) does not fail the check — it is
-    named in a passing note instead, since the run did not introduce it and
-    has no finding row that could have fixed it. A hit absent from the source
-    paragraph — introduced by this run — still fails. Without --source (or
-    with an unreadable one), every hit fails: today's behaviour, since
-    pre-existing cannot be proven."""
-    # The change-log docx quotes ORIGINAL, pre-fix text (its trailing spaces
-    # are what the run fixed), so hygiene applies only to the manuscript
-    # deliverable — and to its ACCEPT view, the text the author ends up with.
+    """Scan accepted deliverables for double and trailing spaces. Exempt hits
+    matching the source paragraph; without readable source evidence, all
+    hits fail. Skip if no deliverable or OOXML tooling is available.
+    """
+    # Scan the accepted manuscript; the change log quotes pre-fix source
+    # text.
     docs = sorted(p for p in run.glob("*.docx")
                   if not p.name.startswith("~$")
                   and "change log" not in p.name.lower())
@@ -1027,16 +913,13 @@ def _certify_text_hygiene(run: Path, source: str | Path | None = None) -> Check:
 
 
 def _certify_no_merged_duplicates(envelope: dict[str, Any]) -> Check:
-    """Two findings that share a content key AND both merged would double-apply
-    the same edit. A duplicate where one side dropped is expected (that is dedup
-    working); only a duplicate that survived on both sides fails."""
+    """Fail when multiple applied findings share a content key; ignore
+    duplicates that were dropped.
+    """
     from galley.lifecycle import reconstruct_from_findings
     led = reconstruct_from_findings(envelope)
-    # Anchor spans distinguish two same-content findings that landed at
-    # DIFFERENT places — a paragraph-sized row split into per-touch tracked
-    # changes shares (para, original, type) across its siblings, and that is
-    # composition, not a double-apply. Only two merged findings at the SAME
-    # anchor (or with no anchor to tell them apart) fail.
+    # Distinct anchors distinguish separate edits sharing the same quoted
+    # text.
     anchors: dict[str, tuple] = {}
     for row in envelope.get("findings", []) or []:
         if not isinstance(row, dict):
@@ -1062,13 +945,9 @@ def _certify_no_merged_duplicates(envelope: dict[str, Any]) -> Check:
 
 
 def _row_applied(row: dict[str, Any]) -> bool:
-    """Whether a findings row reached the deliverable as a tracked change — the
-    rows the artifact and collision scans must read, since what a REJECTED or
-    SKIPPED row would have written never reaches the author. A row that
-    carries the reporter's ``applied`` flag is believed; one without it (a
-    flights envelope, a hand-built row) is judged by its ``status`` —
-    ``rejected_*`` / ``skipped_*`` / ``query`` never applied — and a row with
-    neither is scanned conservatively."""
+    """Use the explicit applied flag, then status, to identify delivered edits.
+    Treat rows lacking both fields as applied for conservative scanning.
+    """
     if row.get("force_query") or row.get("queried"):
         return False
     status = str(row.get("status") or "")
@@ -1081,27 +960,20 @@ def _row_applied(row: dict[str, Any]) -> bool:
 
 
 def _certify_no_insertion_collisions(envelope: dict[str, Any]) -> Check:
-    """Two edits at the same anchor (same para_id + original window + occurrence)
-    with different corrections would compose into an artifact (,, or " "). The
-    merge desk dedupes by insertion point; this is the certificate that it did."""
+    """Reject different corrections sharing a paragraph, original window, and
+    occurrence.
+    """
     seen: dict[tuple, str] = {}
     collisions: list[str] = []
     for row in envelope.get("findings", []) or []:
         if not isinstance(row, dict):
             continue
-        # Only edits that actually change text and landed (not queries, not
-        # the rejected side of an arbitration — that loser is the dedup
-        # working, not a collision).
+        # Check only applied text changes.
         corr = row.get("corrected_text", "")
         if not _row_applied(row) or not corr:
             continue
-        # Key on the real anchor when the run recorded one: two rows may quote
-        # the SAME sentence while editing different characters of it (a repair
-        # cluster's members, a paragraph row split into per-touch changes) —
-        # that is composition the validator already arbitrated, not a
-        # collision. Only two edits at the same anchored span that disagree on
-        # what to write there conflict. Rows with no anchor fall back to the
-        # quote-level key, conservatively.
+        # Use exact anchors when recorded; otherwise compare quoted windows
+        # conservatively.
         a = row.get("anchor") or {}
         if isinstance(a, dict) and "start" in a:
             key = (row.get("para_id", ""), a.get("start"), a.get("end"))
@@ -1122,16 +994,16 @@ def _certify_no_insertion_collisions(envelope: dict[str, Any]) -> Check:
                  "no two edits claim the same anchor")
 
 
-# The tracked-change author stamps a .docx carries: insertions, deletions,
-# and formatting revisions (comments are the query channel, not an edit lane).
+# Revision authors from insertions, deletions, and formatting changes;
+# exclude query comments.
 _REVISION_AUTHOR = re.compile(
     r'<w:(?:ins|del|rPrChange|pPrChange)\b[^>]*?\bw:author="([^"]*)"')
 
 
 def _revision_authors(run: Path) -> set[str] | None:
-    """The distinct tracked-change authors in the manuscript deliverable, or
-    None when there is no deliverable to read. Read straight off the OOXML —
-    the author is a plain attribute, so no lxml round trip is needed."""
+    """Read distinct tracked-change authors from the deliverable OOXML, or
+    return None if no deliverable exists.
+    """
     import zipfile
     from xml.sax.saxutils import unescape
     docs = sorted(p for p in run.glob("*.docx")
@@ -1154,13 +1026,9 @@ def _revision_authors(run: Path) -> set[str] | None:
 
 def _certify_two_author_attribution(envelope: dict[str, Any], run: Path
                                     ) -> Check:
-    """When both lanes ran (a copyedit finding applied beside a mechanical
-    one), the deliverable must carry two tracked-change authors so the author
-    can filter a proofread change from a copy-edit one (Config.lane_authors,
-    reassembler.py). The findings rows carry the lane; the author name each
-    lane was written under is in the .docx alone, so that is what is read: two
-    applied lanes and fewer than two distinct revision authors is a failure. A
-    single-lane run needs no second author."""
+    """Require distinct revision authors when both mechanical and copyediting
+    findings were applied. Single-lane runs need only one author.
+    """
     lanes = set()
     for row in envelope.get("findings", []) or []:
         if not isinstance(row, dict) or not _row_applied(row):
@@ -1190,12 +1058,9 @@ def _certify_two_author_attribution(envelope: dict[str, Any], run: Path
 
 
 def _certify_reject_all(envelope: dict[str, Any]) -> Check:
-    """The reject-all round trip: finish() rejects every tracked change it wrote
-    and compares the result to the ingested text (docproof.audit), and records
-    the verdict in the envelope as ``audit: {ran, passed, ...}``. A recorded
-    failure means rejecting the changes does NOT return the author's text —
-    delivery fails. A record that says it did not run (audit: off) skips loudly:
-    the round trip is unproven, not proven."""
+    """Check the recorded reject-all round trip. A mismatch fails; an absent or
+    unrun audit skips.
+    """
     audit = envelope.get("audit")
     if not isinstance(audit, dict):
         return Check("reject-all round trip", "skip",
@@ -1219,10 +1084,9 @@ def _certify_reject_all(envelope: dict[str, Any]) -> Check:
 
 
 def _certify_intent_zone_collisions(run: Path) -> Check:
-    """If the run recorded intent-zone collisions (edits downgraded to queries
-    inside protected spans), surface the count — informational, since the
-    downgrade already protected the zone; a high count may mean a mis-drawn
-    zone."""
+    """Report edits downgraded to queries inside protected spans without
+    failing certification.
+    """
     data = _load_json(run / "intent_collisions.json")
     if data is None:
         return Check("intent-zone collisions", "skip",
@@ -1237,8 +1101,7 @@ def _certify_run_state(run: Path) -> Check:
     """If a run state machine is present, a delivery certificate expects the run
     to have reached at least the audited state."""
     from galley.state_machine import RunStateMachine
-    # `galley state` writes state.json at the WORKSPACE root; a run's results
-    # directory usually sits one level below it, so look in both places.
+    # Look for state.json in both the results directory and workspace root.
     path = run / "state.json"
     if not path.is_file():
         path = run.parent / "state.json"
@@ -1267,11 +1130,9 @@ def _check_hash(name: str, actual: str, expected: Any) -> Check:
 
 def _rebuild_spend(envelope: dict[str, Any], run: Path
                    ) -> tuple[float | None, str]:
-    """For a Galley rebuild envelope (galley.deliverable.REBUILD_MARKER), the
-    paid spend the sibling case file recorded — ``budget.spent_usd`` when it
-    is serialized, else the sum of ``budget.charges[].cost_usd`` — and a note
-    saying where it came from. ``(None, why)`` when the case file is not there
-    to reconcile against."""
+    """Read paid spend from the rebuild's sibling case file, using spent_usd or
+    summed charges. Return (None, reason) when unavailable.
+    """
     marker = envelope.get("rebuild")
     name = (marker.get("paid_spend_recorded_in") if isinstance(marker, dict)
             else None) or "casefile.json"
@@ -1294,20 +1155,17 @@ def _certify_envelope(envelope: dict[str, Any], run: Path,
     checks: list[Check] = []
     cost = (envelope.get("cost") or {}).get("total_usd")
 
-    # A Galley rebuild (galley.deliverable) legitimately produces its findings
-    # at $0: the paid waves are in the case file beside it, so that ledger —
-    # not the envelope's own $0 — is what checkpoint and budget reconcile to.
+    # Rebuild spend comes from the case file, not the zero-cost output
+    # envelope.
     rebuild = (envelope.get("judge_model") == "galley:rebuild"
                or isinstance(envelope.get("rebuild"), dict))
     spend_note = ""
     if rebuild:
-        # The envelope's own $0 is never the number to reconcile: with no
-        # case file to read, the spend is unknown (None), not zero.
+        # Without the case file, rebuild spend is unknown.
         cost, spend_note = _rebuild_spend(envelope, run)
 
-    # Checkpoint completeness — a finished paid run should have left one. For
-    # a rebuild the case file IS the checkpoint (it holds every finding and
-    # verdict a resumed run rebuilds from).
+    # Paid runs require a checkpoint; a rebuild uses its case file as the
+    # checkpoint.
     has_ckpt = (run / "findings.checkpoint.json").is_file() \
         or envelope.get("checkpoint") is not None
     paid = bool(cost) and float(cost) > 0
@@ -1326,9 +1184,8 @@ def _certify_envelope(envelope: dict[str, Any], run: Path,
         checks.append(Check("checkpoint present", "skip",
                             "no paid spend recorded"))
 
-    # Zero-cost anomaly: findings exist and detectors ran, but cost is $0.
-    # Not for an envelope that names itself a $0 rebuild/import (the paid
-    # work is recorded elsewhere).
+    # Flag zero-cost detector findings unless identified as a rebuild or
+    # import.
     n_findings = len(envelope.get("findings") or [])
     if cost is not None and float(cost) == 0.0 and n_findings > 0 \
             and not rebuild \
@@ -1347,8 +1204,7 @@ def _certify_envelope(envelope: dict[str, Any], run: Path,
                             f"finding(s)" if cost is not None
                             else "no cost field to reconcile"))
 
-    # Budget reconciliation against the approval ceiling — for a rebuild,
-    # against the case file's paid spend, never the envelope's own $0.
+    # Compare the paid spend with the approval ceiling.
     if manifest is not None and cost is not None:
         cap = float(manifest.get("max_spend_usd", 0.0))
         checks.append(Check("budget within approval",
@@ -1364,12 +1220,10 @@ _SPELLFIX_EXPL = re.compile(r'"(\w+)" appears to be a misspelling of "(.+?)"')
 
 
 def _certify_spellfix_sanity(run: Path) -> Check:
-    """Catch the truncated-stem spelling signature: the flagged token is a
-    PREFIX of the suggested word and the suggestion already appears in the
-    original text — which means the tokenizer split a word (an accent, once)
-    and the 'fix' re-inserts characters that were never missing. Six such
-    wrong edits ('clichéé', 'cruditéé', 'voilàà', 'entréée') shipped on the
-    Purpura beta and passed every other gate."""
+    """Reject spelling edits whose flagged token is a prefix of a suggested
+    word already present in the original. These can arise from incorrectly
+    split accented words.
+    """
     data = _load_json(run / "findings.json")
     if data is None:
         return Check("spellfix sanity", "skip", "no findings.json to scan")
@@ -1394,13 +1248,10 @@ def _certify_spellfix_sanity(run: Path) -> Check:
 
 
 def _duplicated_fragment_hits(run: Path) -> list[str]:
-    """Five-word runs that repeat inside one ACCEPTED paragraph of the
-    deliverable and did not repeat in the same paragraph's reject-all view —
-    the trace a composite spliced at the wrong offset leaves ("trot,
-    communicating to urge the horse into a trot ,communicating his
-    frustration", Georgis 2026-09-04). Read from the .docx's two views, so
-    an author's own refrain (present in the source) never counts. Empty when
-    there is no deliverable or the OOXML tooling is unavailable."""
+    """Find repeated five-word fragments introduced within an accepted
+    paragraph, comparing against its reject-all view. Return no hits when
+    the deliverable cannot be read.
+    """
     try:
         from galley.settle import introduced_fragments
         from galley.verify import paragraph_views
@@ -1416,21 +1267,16 @@ def _duplicated_fragment_hits(run: Path) -> list[str]:
     return hits
 
 
-# What Word leaves in a field result it could not resolve — a TOC entry whose
-# bookmark was deleted, a cross-reference to a heading that went. Visible to a
-# reader, never to a typed pass (TOC styles are skipped from review), and only
-# the designer regenerating the TOC can fix it.
+# Unresolved Word field results require regenerating fields or the TOC.
 _UNRESOLVED_FIELD_RE = re.compile(
     r"Error! (?:Bookmark not defined|Reference source not found)\.?")
 
 
 def unresolved_field_results(docx_path: str | Path) -> list[tuple[str, str]]:
-    """Every paragraph of the .docx — EVERY paragraph, the skipped styles
-    included — whose accept-view text carries an unresolved field result, as
-    (para_id, text). Georgis (2026-09-04): nine "Error! Bookmark not
-    defined." TOC entries were visible only to the paid finished-text walk,
-    which then raised residuals nothing could settle. Empty when the file
-    cannot be read."""
+    """Return (para_id, text) for unresolved field results in all accepted
+    paragraphs, including skipped styles. Return an empty list when
+    unreadable.
+    """
     try:
         from docproof.reassembler import paragraph_view_text
         from docproof.utils.xml_helpers import DocxPackage, walk_package
@@ -1446,9 +1292,9 @@ def unresolved_field_results(docx_path: str | Path) -> list[tuple[str, str]]:
 
 
 def _certify_field_results(run: Path) -> Check:
-    """A WARNING, never a failure: an unresolved field is the designer's to
-    fix by regenerating the TOC, and a certificate must not block delivery
-    on text no lane can edit — but it must not stay silent either."""
+    """Report unresolved fields without blocking delivery; they require
+    regenerating the TOC or other fields.
+    """
     docs = sorted(p for p in run.glob("*.docx")
                   if not p.name.startswith("~$")
                   and "change log" not in p.name.lower())
@@ -1469,15 +1315,9 @@ def _certify_field_results(run: Path) -> Check:
 
 
 def _minus_preexisting(corrected: str, original: str) -> str:
-    """`corrected` with every artifact the ORIGINAL span already carried
-    blanked out, occurrence for occurrence.
-
-    A whole-paragraph row (a typed pass quoting the paragraph to add one
-    comma) carries the author's own pre-existing faults in its corrected
-    text — Georgis 2026-09-04: a source `“lady in red”.` inside a
-    compound_sentence_comma row failed certify although no edit touched it
-    and the sweeps had fixed it in the delivered text. Only an artifact the
-    edit INTRODUCED is a merge artifact."""
+    """Blank artifact matches already present in the original span, occurrence
+    for occurrence, so only introduced artifacts remain.
+    """
     if not original:
         return corrected
     out = corrected
@@ -1493,13 +1333,10 @@ def _minus_preexisting(corrected: str, original: str) -> str:
 
 
 def _artifact_scan(run: Path) -> Check:
-    """Scan what the author will actually READ after accepting the changes:
-    every finding's corrected_text. Raw change-log / findings-file text is NOT
-    scanned — those files faithfully quote the ORIGINAL, pre-fix text, whose
-    artifacts are precisely what the findings fix, so a raw-text scan fails a
-    clean deliverable for honestly reporting what it repaired. The delivered
-    .docx's accepted paragraphs are read for one thing only: a duplicated
-    five-word fragment the source did not carry (`_duplicated_fragment_hits`)."""
+    """Scan applied corrections for introduced artifacts and accepted
+    deliverable paragraphs for duplicated fragments. Exclude pre-existing
+    faults quoted from the source.
+    """
     texts: list[str] = []
     for name in ("findings.json", "flights_findings.json"):
         data = _load_json(run / name)

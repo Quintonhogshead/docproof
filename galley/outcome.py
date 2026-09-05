@@ -1,24 +1,9 @@
-"""The terminal verdict: a Galley run ends at exactly one of two stopping
-points, and says which in a file DocWatch can read to flip the HubSpot
-toggle.
+"""Compute and persist the terminal verdict for a Galley run.
 
-  done         — this book has no more errors in it that the loop can find or
-                 decide; every finding is applied, dropped, or an author
-                 question; the deliverable certified.
-  needs_human  — this book needs a human proofreader, and here is why. Reserved
-                 for the case where the book itself has major grammatical
-                 problems and most of its sentences must be rewritten — a job
-                 no mechanical proofread should pretend to have finished. The
-                 evidence is the run's own numbers, and the reason names them.
+The result is ``done`` or ``needs_human``. ``assess`` applies fixed thresholds;
+the CLI can override either value with a reason, and ``outcome.json`` carries
+the HubSpot property/value for downstream watchers.
 
-`assess` reads a finished (ideally settled) run and applies fixed thresholds;
-`galley outcome --set` lets a practitioner or a human overrule with a stated
-reason. Either way outcome.json is written beside findings.json carrying the
-HubSpot property and value for the verdict — both verdicts have one, and both
-move the book off "Ready for Proofing": `done` to "Proofing Complete", and
-`needs_human` to "Needs Human PR", the option that puts the book in front of a
-human proofreader. `app/watch/proof.py` reads this file and `app/watch/tick.py`
-owns the write; this module never calls HubSpot.
 """
 from __future__ import annotations
 
@@ -57,12 +42,8 @@ class Thresholds:
     # repair cluster, three or more WORDING edits, or two or more real
     # residuals after every lane. "Most sentences must be rewritten."
     rewrite_share: float = 0.50
-    # WORDING edits per 1,000 words — edits that change words, not the
-    # punctuation/spacing/case mechanics house style generates by the
-    # thousand on a sound book. Redding Book 1 carried 61 edits per 1,000
-    # words of which 46% were mechanics; counting those as "rewriting"
-    # flagged a proofread-shaped book as needing a human. 60 wording edits
-    # per 1,000 is roughly one reworded phrase every 17 words.
+    # Wording edits per 1,000 words, excluding punctuation, spacing, and case.
+    # The default allows roughly one reworded phrase every 17 words.
     edit_density_per_kword: float = 60.0
     # Questions the settle loop had to leave for the author because it could
     # not decide, as a share of reviewable paragraphs.

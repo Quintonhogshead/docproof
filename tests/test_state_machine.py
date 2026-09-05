@@ -75,6 +75,39 @@ def test_verify_resume_fails_when_no_hash_was_stamped():
     assert len(both) == 2 and any("no config hash" in x for x in both)
 
 
+@pytest.mark.parametrize("missing", [False, True])
+def test_verify_resume_checks_artifacts_from_earlier_stages(tmp_path, missing):
+    from galley.state_machine import hash_artifact
+
+    artifact = tmp_path / "profile.json"
+    artifact.write_text('{"genre": "fiction"}')
+    m = RunStateMachine()
+    m.advance("profiled", artifacts=[
+        ArtifactHash(path=str(artifact), sha256=hash_artifact(artifact))])
+    m.advance("plan_approved")
+    if missing:
+        artifact.unlink()
+    else:
+        artifact.write_text('{"genre": "nonfiction"}')
+    assert m.verify_resume(artifact_hasher=hash_artifact) == [
+        f"artifact {'missing' if missing else 'changed'}: {artifact}"]
+
+
+def test_verify_resume_uses_the_latest_hash_for_replaced_artifacts():
+    m = RunStateMachine()
+    m.advance("profiled", artifacts=[ArtifactHash(path="p.json", sha256="old")])
+    m.advance("plan_approved", artifacts=[ArtifactHash(path="p.json", sha256="new")])
+    m.advance("audited")
+    checked = []
+
+    def hasher(path):
+        checked.append(path)
+        return "new"
+
+    assert m.verify_resume(artifact_hasher=hasher) == []
+    assert checked == ["p.json"]
+
+
 def test_verify_resume_fails_when_resume_supplies_no_hash_against_a_stamp():
     m = RunStateMachine()
     m.advance("profiled", source_sha256="abc", config_sha256="cfg")

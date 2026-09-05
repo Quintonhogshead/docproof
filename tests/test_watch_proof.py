@@ -194,6 +194,29 @@ def needs_human(monkeypatch):
     monkeypatch.setattr("galley.outcome.assess", fake_assess)
 
 
+@pytest.fixture
+def app_needs_human_job(monkeypatch):
+    """A paid app run that stopped at the delivery certificate."""
+    ran = []
+
+    def fake_run_job(runner, store, job):
+        out = Path(runner.results_dir(job))
+        out.mkdir(parents=True, exist_ok=True)
+        stem = Path(job.filename).stem
+        (out / f"{stem} - Atmosphere Press Proofreader.docx").write_bytes(b"dx")
+        (out / "letter.md").write_text("# Editorial letter\n", encoding="utf-8")
+        (out / "style-sheet.md").write_text("# Style sheet\n", encoding="utf-8")
+        store.save(job)
+        store.update(
+            job.id, state="needs_human", results_dir=str(out), cost=1.25,
+            warnings=["Not certified — required evidence missing: change verifier"])
+        ran.append(job)
+        return store.get(job.id)
+
+    monkeypatch.setattr(prooflib, "run_job", fake_run_job)
+    return ran
+
+
 # --- what proofing writes is never a manuscript -------------------------------
 
 def test_the_book_2_files_are_recognised_as_output():
@@ -589,6 +612,41 @@ def test_a_book_left_for_a_human_is_not_read_again(tmp_path, galley,
 
     assert second.proofed == [] and len(galley) == 1
     assert second.needs_human == []                # said once, not every morning
+
+
+def test_app_needs_human_run_reuses_results_when_delivery_retries(
+        tmp_path, app_needs_human_job, monkeypatch):
+    """A failed upload retries delivery of a needs_human run without paying
+    for the manuscript again, and keeps the certificate reason in the verdict."""
+    ws = proof_ws(max_attempts=1)
+    opener = fake_drive(folder(f_1=drive_entry(BOOK)), docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_to_proof()})
+    real_upload = prooflib.upload_outputs
+    calls = []
+
+    def flaky_upload(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("temporary Drive outage")
+        return real_upload(*args, **kwargs)
+
+    monkeypatch.setattr(prooflib, "upload_outputs", flaky_upload)
+
+    first = run(tmp_path, ws, opener)
+    assert first.proofed == [BOOK] and first.failed
+    assert len(app_needs_human_job) == 1
+    assert hs_props(opener)["docproof"] == "Ready for Proofing"
+
+    second = run(tmp_path, ws, opener)
+    assert second.proofed == [BOOK]
+    assert len(app_needs_human_job) == 1
+    assert hs_props(opener)["docproof"] == "Needs Human PR"
+    assert "required evidence missing" in json.loads(
+        opener.content[[fid for fid, e in opener.files.items()
+                        if e["name"] == OUTCOME][0]].decode())["reason"]
+    third = run(tmp_path, ws, opener)
+    assert third.proofed == []
+    assert len(app_needs_human_job) == 1
 
 
 # --- the external runner ------------------------------------------------------

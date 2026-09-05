@@ -131,6 +131,27 @@ def test_run_galley_produces_every_deliverable(runner, monkeypatch):
     assert api["has_galley_style_sheet"] is True
 
 
+@pytest.mark.parametrize("tier", ["T0", "T1"])
+def test_one_wave_tier_does_not_build_the_paid_brain(runner, monkeypatch, tier):
+    """T0/T1 stop after the ladder and must not construct unused providers."""
+    store, r = runner
+    monkeypatch.setattr(r, "_galley_adapters",
+                        lambda job, cfg: _fake_adapters())
+
+    def unexpected_provider(*args, **kwargs):
+        raise AssertionError("one-wave Galley must not build the brain provider")
+
+    monkeypatch.setattr(r, "_provider", unexpected_provider)
+    import galley.brain as brain
+    monkeypatch.setattr(brain, "make_auditor", unexpected_provider)
+    monkeypatch.setattr(brain, "make_planner", unexpected_provider)
+
+    _job(store, tier=tier)
+    r.run_one("j1")
+
+    assert store.get("j1").state == "needs_human"
+
+
 def test_run_galley_memory_ingest_is_idempotent_across_runs(runner, monkeypatch):
     """Two galley runs over the same book, same verdicts, add no duplicate
     precedent rows — the dedup in galley.memory.ingest carries across jobs

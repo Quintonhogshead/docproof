@@ -1,17 +1,7 @@
-"""Build a CaseFile from a bare `docproof review`/`replay` run (P1-6).
+"""Synthesize a CaseFile from artifacts produced by a bare review or replay.
 
-`galley letter` and `galley calibrate` want a `casefile.json`, but only the
-multi-wave orchestrator and the hosted-app job path write one — a plain CLI
-`review`/`replay` writes `findings.json` and the deliverable, never a case file,
-so the letter and style sheet could not be produced on their output without
-hand-authoring the file (Purpura beta). This synthesizes the case file the
-letter needs from the artifacts a bare run DOES leave: `findings.json` (the
-findings + the cost envelope) and, when present, `summary.md` for the book name.
-
-It is a faithful projection, not a fabrication: one wave summarizing the run, the
-run's own findings and their channel verdicts, and the run's recorded spend. No
-new editorial decisions are invented — the style sheet stays empty (a plain run
-records no bound rulings), exactly as the letter renders when none exist.
+It projects ``findings.json`` and optional ``summary.md`` into the one-wave
+shape consumed by the letter and calibration commands; it invents no rulings.
 """
 from __future__ import annotations
 

@@ -1,47 +1,5 @@
-"""One manuscript, proofread, and the proofread back to the folder.
-
-The Galley analog of `prep.py`, and the same idempotent shape: fetch the book,
-read it, put the hand-off files beside it, mark it done — with the marker that
-hides the file from the next tick written last, so it means "everything before
-me finished".
-
-Three things differ from prep, and they are the whole reason this module exists.
-
-**The book it reads is the dev-edited one.** The house stage series runs
-`Book Original` (what the author sends) -> `book 0` (formatting) -> `Book 1`
-(the developmental edit, done by people) -> `Book 2` (this). So proofing's input
-is `<surname> - Book 1.docx` and its output is `<surname> - Book 2.*`, exactly
-the way formatting takes a `Book Original` and puts a `book 0` back in the same
-folder. Either spelling of the number is read — `Book One` is the same file as
-`Book 1` — and what goes back mirrors what came in. `app/watch/naming.py` owns
-both tokens and both spellings.
-
-**There are two runners.** In `app` mode DocWatch runs the read itself, through
-the app's galley job (`app/jobs.py::_run_galley`): the practitioner wave loop,
-adjudication, a $0 tracked-changes deliverable, the editorial letter and the
-style sheet. In `external` mode DocWatch runs nothing — the Mac-side
-practitioner loop does (`galley/driver.py`), on a Claude Max subscription that
-cannot live on Fly — and this module only reads the verdict it left in the
-folder. Both end at the same names, which is the contract:
-
-    <surname> - Book 2.docx               the tracked-changes proofread
-    <surname> - Book 2 - letter.md        the editorial letter       (optional)
-    <surname> - Book 2 - style-sheet.md   the style sheet            (optional)
-    <surname> - Book 2 - decision-log.md  every action, and why      (optional)
-    <surname> - Book 2 - verification.md  the verification report    (optional)
-    <surname> - Book 2 - outcome.json     the verdict                (required)
-
-**The verdict decides the CRM write, and both verdicts write.** `done` moves the
-status dropdown to its proofing-done value ("Proofing Complete"); `needs_human`
-moves it to "Needs Human PR", the option that puts the book in front of a human
-proofreader, and *also* sends the reason to the watcher's needs-a-person email —
-the CRM value says what, the email says why. Either way the book leaves "Ready
-for Proofing", because a book left sitting at ready is one nobody would notice.
-
-What is read out of outcome.json is the verdict and its reason, never the
-property or the value to write. The file may have been placed in Drive by
-something outside DocProof, and a file in a folder does not get to name a CRM
-field: both come from the watcher's own settings. See `tick`.
+"""Run app proofreading or read external outcomes, then deliver artifacts under
+shared house names.
 """
 from __future__ import annotations
 
@@ -54,6 +12,7 @@ from pathlib import Path
 from docproof.formats.base import DocumentFormat
 
 from app.jobs import Job, JobRunner, JobStore
+from galley.tiers import GALLEY_DEFAULT_BUDGET
 
 from . import drive, naming
 from .drive import DOCX_MIME, DriveFile
@@ -70,12 +29,8 @@ JSON_MIME = "application/json"
 
 REASON_LIMIT = 90
 
-# What the tiers cost when the config leaves `proof_budget_usd` at zero. The
-# same table the panel uses when a Galley request arrives without a budget,
-# copied here rather than imported so a launchd process never drags FastAPI in.
-# Kept in step with app/routes/jobs.py::GALLEY_DEFAULT_BUDGET; its keys are the
-# tiers `proof_tier` may name.
-DEFAULT_BUDGET = {"T0": 15.0, "T1": 30.0, "T2": 60.0, "T3": 150.0, "T4": 300.0}
+# Compatibility name retained for watcher callers.
+DEFAULT_BUDGET = GALLEY_DEFAULT_BUDGET
 
 __all__ = ["Verdict", "artifacts", "assess", "budget_for", "fetch",
            "hand_off_names", "make_job", "mark_source", "outcome_in_folder",
@@ -91,11 +46,7 @@ class Artifact:
 
 @dataclass(frozen=True)
 class Verdict:
-    """A run's terminal answer, as the watcher acts on it.
-
-    Deliberately smaller than `galley.outcome.Outcome`: the watcher needs the
-    word and the sentence behind it, and nothing else. The evidence stays in
-    outcome.json, which goes to the folder whole."""
+    """Terminal outcome, reason, and optional local artifact path."""
 
     outcome: str                 # "done" | "needs_human"
     reason: str = ""
@@ -116,11 +67,9 @@ def budget_for(ws: WatchSettings) -> float:
 
 
 def make_job(local: Path, ws: WatchSettings) -> Job:
-    """A galley job for this manuscript.
-
-    `model` is left blank on purpose — the tier and its adapters pick the
-    models, exactly as the panel's own Galley job does — and `mode` is "now"
-    because the orchestrator owns its own wave batching."""
+    """Create a synchronous Galley job; adapters choose models and the tier
+    supplies default limits.
+    """
     from docproof.batch import new_job_id
 
     return Job(id=new_job_id(local.name), filename=local.name,
@@ -131,17 +80,9 @@ def make_job(local: Path, ws: WatchSettings) -> Job:
 
 
 def run_job(runner: JobRunner, store: JobStore, job: Job) -> Job:
-    """Run it here and now, and hand back what the record says afterwards.
-
-    Straight into `run_one` rather than the worker thread, for prep's reason: a
-    tick with nothing else to do gains nothing from being asynchronous. The
-    blanket catch mirrors `JobRunner._work` — an unpredicted exception must
-    leave a failed job, not one stuck at `running`.
-
-    There is no mock twin here. A rehearsal (`--mock-tags`) stands proofing
-    aside entirely in `tick.run_proof`: a galley run is a wave loop over a whole
-    novel, and there is no version of it that both exercises the round trip and
-    costs nothing."""
+    """Run a job synchronously and return its stored state. Record unexpected
+    exceptions as failures.
+    """
     store.save(job)
     try:
         runner.run_one(job.id)
@@ -153,26 +94,36 @@ def run_job(runner: JobRunner, store: JobStore, job: Job) -> Job:
 
 def assess(job: Job, *, done_value: str,
            needs_human_value: str = "") -> Verdict:
-    """The verdict for a finished galley job, written to outcome.json in the
-    job's own results folder so the file that goes to Drive is the file the
-    numbers were read from.
-
-    `galley.outcome.assess` reads the run dir — findings.json, the deliverable,
-    and (when the run was settled) settlement.json and the verify reports — and
-    applies its thresholds. The app's galley job does not settle today, so the
-    reason it writes says so; that is honest rather than certified, and it is
-    what the reason field is for.
-
-    A run whose numbers cannot be read at all is `needs_human`: an unreadable
-    run is not a finished one, and the one thing that must never happen is a
-    book moved on in the CRM because a file could not be parsed."""
-    from galley.outcome import Outcome, assess as galley_assess
+    """Assess a finished Galley job and save its verdict beside the artifacts."""
+    from galley.outcome import (Outcome, assess as galley_assess,
+                                hubspot_fields)
 
     out = Path(job.results_dir or "")
     if not out.is_dir():
         return Verdict("needs_human",
                        "The proofread produced no results folder, so there is "
                        "nothing to judge it by.")
+    # A failed certificate remains needs_human when delivery resumes.
+    if job.state == "needs_human":
+        existing = Outcome.load(out)
+        certificate_reasons = [
+            warning for warning in (job.warnings or [])
+            if "Not certified" in warning or "certificate" in warning.lower()
+        ]
+        reason = "; ".join(certificate_reasons)
+        if not reason and existing is not None and existing.outcome == "needs_human":
+            reason = existing.reason
+        reason = reason or (
+            "The proofread needs human review because its delivery certificate "
+            "did not pass.")
+        outcome = Outcome(
+            outcome="needs_human", reason=reason,
+            evidence=(existing.evidence if existing is not None else {}),
+            hubspot=hubspot_fields("needs_human", done_value=done_value,
+                                   needs_human_value=needs_human_value),
+            set_by="watch")
+        path = outcome.save(out)
+        return Verdict("needs_human", outcome.reason, path)
     try:
         outcome = galley_assess(out, done_value=done_value,
                                 needs_human_value=needs_human_value)
@@ -190,15 +141,9 @@ def assess(job: Job, *, done_value: str,
 # --- the hand-off names -------------------------------------------------------
 
 def hand_off_names(source_name: str) -> dict[str, str]:
-    """The names this book's proofread is delivered under, keyed by role.
-
-    `"Johnson - Book 1.docx"` -> `"Johnson - Book 2.docx"` and its companions;
-    a `"Johnson - Book One.docx"` hands back `"Johnson - Book Two.*"`, because
-    the number's spelling is mirrored rather than normalised.
-    One place, because two sides have to agree: DocWatch writes them here in
-    `app` mode and looks for them here in `external` mode, and
-    `galley/driver.py` builds the practitioner's hand-off from the same
-    `naming.proof_base`."""
+    """Return artifact names by role, preserving Book 1/Book One spelling in
+    Book 2/Book Two output.
+    """
     base = naming.proof_base(Path(source_name).stem or "manuscript")
     return {
         "manuscript": f"{base}.docx",
@@ -211,20 +156,9 @@ def hand_off_names(source_name: str) -> dict[str, str]:
 
 
 def artifacts(job: Job, source_name: str) -> list[Artifact]:
-    """What of this run belongs in the author's folder, and what to call it
-    there.
-
-    Galley writes internal names — the tracked-changes manuscript under
-    DocProof's own "- Atmosphere Press Proofreader" suffix, `letter.md`,
-    `style-sheet.md`, `DECISION_LOG.md`, `outcome.json`. The folder belongs to
-    people, so each is renamed onto the "<surname> - Book 2" base on the way out.
-
-    The change log, the case file, findings.json and the rest of the run stay
-    local: they are DocProof's record, and the archive is where that belongs.
-    Everything but the manuscript and the verdict is optional — the galley
-    runner renders the letter and the style sheet best-effort, and the decision
-    log is the external driver's (`galley/journal.py`) rather than the app
-    runner's — so a run that produced none of them still delivers."""
+    """List available manuscript, letter, style sheet, decision log,
+    verification report, and outcome files under house names. Exclude internal run artifacts.
+    """
     out = Path(job.results_dir or "")
     if not out.is_dir():
         return []
@@ -248,10 +182,9 @@ def artifacts(job: Job, source_name: str) -> list[Artifact]:
 
 
 def _reviewed_docx(out: Path) -> Path | None:
-    """The tracked-changes manuscript in a finished run, never the change log.
-
-    Matched on DocProof's own suffixes rather than on the job's filename, so a
-    source that was converted (a .doc, a Google Doc) still resolves."""
+    """Find the reviewed manuscript by output suffix, excluding change logs and
+    supporting converted sources.
+    """
     changelog = DocumentFormat.CHANGE_LOG_SUFFIX.lower()
     for path in sorted(out.glob(f"*{DocumentFormat.REVIEWED_SUFFIX}*.docx")):
         if path.stem.lower().endswith(changelog):
@@ -264,11 +197,9 @@ def _reviewed_docx(out: Path) -> Path | None:
 
 def outcome_in_folder(listing: list[DriveFile], source_name: str
                       ) -> DriveFile | None:
-    """This book's outcome.json in the folder, if it is there yet.
-
-    By name, not by marker: in `external` mode the file was placed by the
-    practitioner's own tooling and carries no appProperties at all. Matched with
-    the same dash/case forgiveness every other name comparison here uses."""
+    """Find an external outcome by house filename, allowing dash and case
+    variants without requiring app markers.
+    """
     stem = Path(source_name).stem or "manuscript"
     for candidate in listing:
         if candidate.is_folder:
@@ -280,13 +211,9 @@ def outcome_in_folder(listing: list[DriveFile], source_name: str
 
 def read_outcome(token: str, file: DriveFile, *, opener=drive._open_url
                  ) -> Verdict | None:
-    """The verdict inside an outcome.json sitting in Drive.
-
-    Only two fields are read — the word and the reason — and the word must be
-    one DocProof recognises. Anything else (unreadable JSON, an outcome nobody
-    has heard of) reads as "not there yet" rather than as a verdict: the book
-    waits, which is the posture that cannot do damage. Nothing in this file
-    names the property to write; that comes from the watcher's settings."""
+    """Read a recognized outcome and reason from Drive; return None for invalid
+    data. CRM fields come from watcher settings.
+    """
     from galley.outcome import OUTCOMES
 
     try:
@@ -314,13 +241,9 @@ def upload_outputs(token: str, file: DriveFile, job: Job, ws: WatchSettings,
                    rec: FileRecord, state: WatchState,
                    listing: list[DriveFile], *, dest_folder_id: str | None = None,
                    opener=drive._open_url) -> list[str]:
-    """Put the proofread's files in the folder, once each.
-
-    The same record-as-you-go discipline prep and promo keep, on proofing's own
-    `proof_uploaded` map: an upload that landed but was not written down would
-    be uploaded again next tick. An output an interrupted earlier tick left
-    behind — recognised by the source id it carries — is adopted rather than
-    duplicated."""
+    """Upload unrecorded artifacts and save each resulting id. Adopt matching
+    files from interrupted uploads by source id and name.
+    """
     from .prep import _already_there
 
     dest = dest_folder_id or ws.folder_id
@@ -350,16 +273,9 @@ def upload_outputs(token: str, file: DriveFile, job: Job, ws: WatchSettings,
 def mark_source(token: str, file: DriveFile, rec: FileRecord,
                 state: WatchState, *, status: str, reason: str | None = None,
                 opener=drive._open_url) -> None:
-    """Write proofing's marker on the manuscript.
-
-    Its own property, never formatting's, so the two passes over one book never
-    overwrite each other's "done". Written after everything it summarises, so
-    `done` means the files are in the folder and HubSpot has moved on.
-
-    `awaiting` is the odd one: it is written *before* the work, because the work
-    is somebody else's, and it exists so a person reading the folder can see
-    that a book is out with a practitioner. `is_proof_candidate` deliberately
-    does not treat it as terminal, so the next tick still looks."""
+    """Write the proofing marker after delivery and CRM updates. The awaiting
+    marker is nonterminal and is written before external work starts.
+    """
     props = {PROOF_PROP: status,
              AT_PROP: datetime.now(timezone.utc).isoformat(timespec="seconds")}
     if reason:

@@ -1,34 +1,6 @@
-"""Editorial letter, style sheet and verification report — pure templating.
-
-Three human-facing Markdown documents fall out of a finished Galley run, and
-all three are *reports*, not decisions: they read the durable
-:class:`~galley.casefile.CaseFile` plus the run's own artifacts and lay them
-out. Nothing here calls a model, touches the network, or mutates anything —
-the run already happened; this narrates it.
-
-* :func:`render_letter` writes ``letter.md``, the letter a proofreader sends:
-  what the proof contains, what ran and what it cost, the choices made and
-  why, every decision still open for the author, and an honest statement of
-  what was verified and what was not.
-* :func:`render_style_sheet` writes ``style-sheet.md``: the conventions the
-  book was proofed to, the names preserved, and the spellings still pending
-  the author. Never empty on a finished run — when no rulings were recorded
-  by hand, the sheet is derived from what the run applied.
-* :func:`render_verification_report` writes ``verification.md``: the
-  certificate as a table with its skipped checks named in prose, the reading
-  and settlement counts, the delivered file's fingerprint, media and comment
-  anchors, the untracked preparation, and the limits.
-* :func:`render_all` writes the first two (the report needs run evidence).
-
-The three grew out of the Georgis head-to-head (2026-09-04): the Fable run's
-letter was a wave ledger that reported $0 for a book whose ladder billed, its
-style sheet was empty, and it shipped no verification report; the Astra run's
-three documents were what an author could actually read. Shape borrowed,
-numbers ours.
-
-The letter's cardinal rule stands: **no unresolved query is ever hidden.**
-Every ``query`` verdict, and any finding routed to the query channel, appears
-by name.
+"""Render editorial letters, style sheets, and verification reports from case
+files and run evidence. No model or network calls; expose every unresolved
+query. render_all writes the letter and style sheet.
 """
 
 from __future__ import annotations

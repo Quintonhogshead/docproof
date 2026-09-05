@@ -1,16 +1,8 @@
-"""The wave loop — Galley's stateless orchestrator over a durable case file.
+"""Run a full-book detector wave followed by planned rereads within budget.
+Persist findings, charges, and wave history in a case file.
 
-Each cycle is a *wave*. Wave one is the full DocProof ladder; every later wave is
-a targeted re-read the auditor asked for and the planner turned into dispatches.
-The case file is saved after every wave, so the orchestrator holds no state
-between waves: a crash, a kill, or a redeploy resumes by reloading the case file
-and continuing at the last closed wave.
-
-The auditor and planner are injected. Until Track D3 lands (gated on the P0
-experiment), the defaults are a stub auditor that finds no hypotheses and a stub
-planner that dispatches nothing — so ``run_galley`` runs the ladder and stops,
-which is exactly the T0/T1 product. Tests inject scripted auditors/planners to
-exercise multi-wave budget honoring and resume.
+Auditor and planner hooks default to no-ops; the app supplies
+implementations from galley.brain.
 """
 
 from __future__ import annotations
@@ -30,49 +22,36 @@ from galley.governor import Caps, Governor, WaveLimitError
 
 LADDER_ADAPTER = "docproof_ladder"
 
-# Alarm classes the loop raises the moment they happen — the failure modes a
-# person needs to hear about mid-run, not at the end (see E4). A digest is the
-# routine per-wave summary; an alarm is an interruption.
+# Alarm categories emitted with a completed wave.
 ALARM_DEGRADED = "degraded_pass"
 ALARM_ZERO_COST = "zero_cost_detector"
 ALARM_TRUNCATION = "truncation_streak"
 ALARM_BUDGET_CAP = "budget_cap_hit"
-# A detector billed more than the cap had left: the money is gone, the ledger
-# records it, and a person hears about it now.
+# Record actual spending even when it exceeds the budget.
 ALARM_BUDGET_OVERRUN = "budget_overrun"
 TRUNCATION_STREAK_LIMIT = 3
-# Detectors that legitimately bill nothing, so a $0 charge from them is not the
-# silent-no-run failure the zero-cost alarm exists to catch.
+# Adapters allowed to report zero cost.
 FREE_ADAPTERS = frozenset({"spellscan", "languagetool"})
 
-# When marginal $/validated-finding reaches this, the governor stops. A wave that
-# adds nothing has infinite marginal cost, so it always trips the stop.
+# Stop at this marginal cost per added finding; no additions give infinite
+# cost.
 DEFAULT_STOP_THRESHOLD = 1_000_000.0
 
-# Coarse per-tier caps. max_waves is what makes T0/T1 ladder-only and T2+ agentic.
-# The real dollar calibration is E1's job; these are structural, not priced.
+# T0/T1 allow only the initial wave.
 _TIER_MAX_WAVES = {"T0": 1, "T1": 1, "T2": 2, "T3": 3, "T4": 6}
 _TIER_MAX_PANEL = {"T0": 0, "T1": 1, "T2": 4, "T3": 12, "T4": 32}
 
 
 @dataclass(frozen=True)
 class Dispatch:
-    """One unit of wave work: run adapter ``adapter`` over ``scope``.
-
-    The planner (Track D3) produces these from its action union; the orchestrator
-    only needs to know which adapter to call over which scope, so this stays the
-    stable seam between the two tickets.
-    """
+    """Run one adapter over a manuscript scope."""
 
     adapter: str
     scope: Scope
 
 
-# Injected-hook types. The auditor reads the case file + manuscript and proposes
-# hypotheses; the planner turns hypotheses (and the budget) into dispatches. An
-# auditor that spends money may also accept a ``governor`` keyword — the loop
-# passes its governor to one that declares it (see ``_call_audit``) so the
-# audit read's cost lands in the same ledger as the detectors'.
+# Auditors propose hypotheses; planners produce dispatches. Paid auditors
+# may accept governor to record their spend.
 Auditor = Callable[[CaseFile, Manuscript], list[Hypothesis]]
 Planner = Callable[[list[Hypothesis], Governor, CaseFile], list[Dispatch]]
 Clock = Callable[[], str]
@@ -94,12 +73,7 @@ def _utc_now() -> str:
 
 
 def caps_for_tier(tier: str, budget_usd: float) -> Caps:
-    """Build the governor caps for a tier and a total budget.
-
-    ``per_wave_usd`` is the whole budget: a single wave may use all of it, and the
-    total cap is what actually bounds the run. ``max_waves`` is the structural
-    difference between tiers.
-    """
+    """Build tier limits; a single wave may use the entire remaining budget."""
 
     return Caps(
         total_usd=budget_usd,
@@ -122,12 +96,7 @@ def _scope_json(scope: Scope) -> dict[str, Any]:
 def _call_audit(
     audit: Auditor, cf: CaseFile, ms: Manuscript, gov: Governor
 ) -> list[Hypothesis]:
-    """Call the auditor, handing it the governor when it can take one.
-
-    A scripted two-argument auditor (tests, the ``_no_audit`` stub) is called
-    as before; ``galley.brain.make_auditor``'s closure declares ``governor`` and
-    charges its own read through it.
-    """
+    """Call the auditor, passing the governor if its signature accepts one."""
 
     try:
         params = inspect.signature(audit).parameters
@@ -139,11 +108,8 @@ def _call_audit(
 
 
 def _estimate(adapter: DetectorAdapter, ms: Manuscript, scope: Scope) -> float | None:
-    """Ask an adapter what a dispatch would cost, if it can say.
-
-    ``estimate_usd(ms, scope) -> float | None`` is optional on the adapter
-    protocol: a detector with a calibrated rate answers, one without returns
-    ``None`` (or lacks the method) and the dispatch runs on trust.
+    """Return the adapter's optional cost estimate, or None if unavailable or
+    unsuccessful.
     """
 
     estimate = getattr(adapter, "estimate_usd", None)
@@ -169,22 +135,11 @@ def _run_wave(
     persist: Callable[[], None] | None = None,
     workspace: Path | None = None,
 ) -> WaveRecord:
-    """Run one wave's dispatches, folding findings and spend into the case file.
+    """Run dispatches and append new finding ids and actual charges.
 
-    New findings union into ``cf.findings`` by id (wave one is never destabilized:
-    a later wave can add an id but never overwrite one). Spend is charged through
-    the governor, the single choke point, in two steps: a pre-flight estimate
-    (when the adapter can give one) skips a dispatch the budget cannot cover
-    before any money moves; and whatever a dispatch then ACTUALLY billed is
-    always charged and its findings always kept — a detector that overran the
-    cap has already spent the money, so the ledger records it and the wave
-    flags it rather than pretending it never happened.
-
-    ``persist`` is called after every charged dispatch so a crash mid-wave
-    leaves the ledger (and the findings bought so far) on disk; an adapter
-    exception persists the partial wave before re-raising. ``workspace`` is
-    the case file's directory, handed to adapters that keep a run dir (the
-    ladder's checkpoint lives there so a resumed wave replays paid reads).
+    Skip unaffordable estimates but record actual overruns. Persist after
+    dispatches and before reraising adapter errors. Pass workspace to
+    adapters that retain checkpoints.
     """
 
     started = clock()
@@ -203,8 +158,7 @@ def _run_wave(
             actions.append({"adapter": d.adapter, "skipped": "unknown adapter"})
             continue
 
-        # Pre-flight: skip what the estimate says we cannot afford. A later,
-        # cheaper dispatch in the same wave may still fit, so continue.
+        # Skip unaffordable work; a later cheaper dispatch may still fit.
         estimate = _estimate(adapter, ms, d.scope)
         if estimate is not None and estimate > budget:
             actions.append(
@@ -214,8 +168,8 @@ def _run_wave(
             )
             continue
 
-        # Stamp the wave (provenance) and the run dir (checkpoint) on adapters
-        # that carry them; the fakes and the free adapters may not.
+        # Set provenance and checkpoint location when supported by the
+        # adapter.
         if hasattr(adapter, "wave"):
             adapter.wave = wave_index
         if (workspace is not None and hasattr(adapter, "workspace")
@@ -225,9 +179,7 @@ def _run_wave(
         try:
             result = adapter.run(ms, d.scope, budget, usage)
         except Exception:
-            # The charges and findings of every dispatch before this one are
-            # already on disk (see below); record the interruption so the
-            # partial wave is legible, then let the failure surface.
+            # Persist earlier dispatches before surfacing the interruption.
             actions.append(
                 {"adapter": d.adapter, "scope": _scope_json(d.scope),
                  "error": "adapter raised; wave interrupted"}
@@ -272,8 +224,7 @@ def _run_wave(
             action["over_cap"] = True
         actions.append(action)
 
-        # The ledger is the truth: what this dispatch cost, and what it found,
-        # reach disk before the next one runs.
+        # Persist findings and charges before the next dispatch.
         if persist is not None:
             persist()
 
@@ -312,16 +263,12 @@ def run_galley(
     casefile_path: str | Path | None = None,
     free_adapters: frozenset[str] = FREE_ADAPTERS,
 ) -> CaseFile:
-    """Run the wave loop to convergence or budget, returning the case file.
+    """Run detector waves until the planner stops or a budget limit is reached.
 
-    Wave one is the ``ladder`` adapter over the whole book. Then, while the
-    governor permits and the planner still asks for work: audit -> record
-    hypotheses -> plan -> dispatch -> record the wave -> stop check. The case file
-    is saved after wave one and after every subsequent wave (and after every
-    charged dispatch within a wave); a rerun over an existing case file
-    resumes at the last closed wave (the ladder is never re-run). A wave that
-    was charged but never closed — a crash mid-wave — is continued under its
-    own index, so the ladder's checkpoint replays what it already bought.
+    Resume completed waves from the case file. Continue an interrupted
+    charged wave under its existing index so adapter checkpoints can replay
+    paid reads. The providers argument is retained for compatibility; supply
+    detectors through adapters.
     """
 
     adapters = adapters or {}
@@ -337,17 +284,15 @@ def run_galley(
 
     caps = caps_for_tier(tier, budget_usd)
     gov = Governor(cf.budget, caps)
-    # A completed wave may have cost nothing, leaving no ledger charge to
-    # reconstruct its number from — so align the governor's wave counter to the
-    # authoritative wave history before opening any new wave.
+    # Zero-cost waves leave no charge; align the counter with recorded wave
+    # history.
     while gov.waves_opened < len(cf.waves):
         try:
             gov.open_wave()
         except WaveLimitError:
             break
-    # A wave the ledger charged but the history never closed was interrupted
-    # mid-flight. Continue it under its own index rather than opening the
-    # next: its charges stand, and a wave-keyed checkpoint can replay.
+    # Reuse the index of a charged but unclosed wave so checkpoints can
+    # replay it.
     interrupted = gov.current_wave if gov.waves_opened > len(cf.waves) else None
 
     usage = Usage()
@@ -394,12 +339,10 @@ def run_galley(
     else:
         last = cf.waves[-1]
 
-    # Subsequent waves: audit -> plan -> dispatch, until the governor stops or the
-    # planner runs dry.
+    # Audit, plan, and dispatch until a stop condition is reached.
     while not gov.should_stop(_marginal(last), stop_threshold):
         hyps = _call_audit(audit, cf, ms, gov)
-        # The audit may have charged its own read; save either way so the
-        # ledger on disk never lags the one in memory.
+        # Persist audit charges even when no hypotheses are returned.
         if hyps:
             cf.hypotheses.extend(hyps)
         _save()
@@ -456,19 +399,8 @@ def _wave_alarms(
     streak: dict[str, int],
     free_adapters: frozenset[str],
 ) -> list[dict[str, Any]]:
-    """The alarms one wave's outcome raises, if any.
-
-    * degraded pass — a coverage note reports a whole pass fell open;
-    * zero-cost detector — a paid adapter ran but billed nothing (the silent
-      no-run, Sapling's classic failure);
-    * truncation streak — ``TRUNCATION_STREAK_LIMIT`` consecutive waves lost
-      windows to a token ceiling;
-    * budget cap hit — a dispatch was skipped for budget, or the total floor is
-      reached;
-    * budget overrun — a dispatch billed past the cap; the charge stands in
-      the ledger and the findings were kept.
-
-    ``streak`` is carried across waves by the caller so the truncation run counts.
+    """Report degraded reads, unexpected zero cost, truncation streaks, budget
+    skips, and overruns. The caller preserves streak across waves.
     """
 
     notes: list[str] = []
@@ -521,23 +453,13 @@ def _wave_alarms(
 
 
 class Transport(Protocol):
-    """A pluggable delivery channel for digests and alarms.
-
-    One method, so email today and Twilio/Pushover later add a transport without
-    touching the orchestrator or the notifier. ``kind`` is ``"wave"`` or
-    ``"alarm"``.
-    """
+    """Deliver a wave digest or alarm through send(kind, subject, body)."""
 
     def send(self, kind: str, subject: str, body: str) -> None: ...
 
 
 def make_notifier(transport: Transport, *, book: str = "") -> Notify:
-    """Turn a :class:`Transport` into the orchestrator's ``notify`` callable.
-
-    Formats a per-wave digest and each alarm into a subject/body and hands them to
-    the transport. Call sites stay transport-agnostic: swapping the transport
-    changes where the message goes, not how the loop emits it.
-    """
+    """Format wave digests and alarms for the supplied transport."""
 
     tag = f"[{book}] " if book else ""
 

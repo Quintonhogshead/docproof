@@ -1,40 +1,12 @@
-"""The canonical judgment packet — one schema for external judgment.
+"""Export and import the canonical packet for external judgment.
 
-A judgment packet is the hand-off between DocProof (which PROPOSES) and a judge
-that is not the built-in model — a session agent (Sol/Claude) or a human. It
-carries everything a judge needs to rule on a proposal and nothing it must call
-a model to obtain: a stable cluster id, the located span, the exact original and
-each proposed replacement, the sentence and paragraph context, the lane and
-provenance of every option, and an intent-zone flag. The judge fills in one
-``decision`` per cluster; :func:`import_decisions` turns those decisions into the
-same findings envelope the built-in judge would have written — with NO model
-call.
+Packets contain the exact span, context, options, provenance, and intent-zone
+flag needed for a human or external judge. Import validates each decision and
+produces the same findings shape without a model call.
 
-This is the model-free route the flight deck's ``--judge-only`` is not:
-``--judge-only`` still invokes a model (and defaults to Fable), so a plan that
-looked model-free ends up spending. ``export-judgments`` / ``import-judgments``
-never touch a provider.
-
-The packet is deliberately lane-agnostic. Its producer today is the copy-edit
-flight deck's clusters, but the same shape serves repair clusters, audit
-hypotheses promoted to proposals, and adjudication — every place an external
-judge should be able to stand in for the built-in one.
-
-Four things :func:`import_decisions` validates before it writes anything, each a
-hard refusal (the packet is rejected, not silently degraded):
-
-* **Anchoring.** ``para_text[span] == original`` must still hold. A decision on a
-  cluster whose original no longer anchors is refused — the judge ruled on text
-  that is not there.
-* **Atomicity.** Exactly one decision per cluster, and a cluster is the atomic
-  unit: a judge accepts an option, replaces the whole span, queries it, or
-  rejects it — never a partial edit inside the span.
-* **Allowed channel.** ``action`` is one of accept | replace | query | reject.
-  accept/replace ride the EDIT channel, query rides the QUERY channel, reject
-  drops. Anything else is refused.
-* **Intent-zone compliance.** A cluster flagged ``intent_zone`` may only be
-  queried or rejected — never edited. Nothing in an author-declared intent zone
-  is "corrected" (Galley prime directive 4).
+``import_decisions`` refuses stale anchors, duplicate or partial cluster
+decisions, unknown actions, and edits inside an ``intent_zone``. Accepted and
+replaced decisions produce edits; queries produce margin findings.
 """
 from __future__ import annotations
 

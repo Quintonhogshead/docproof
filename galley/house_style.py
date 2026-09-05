@@ -1,20 +1,7 @@
-"""The house rules every finished-text reader is told, from ONE constant.
+"""Shared house-style rules for finished-text prompts and settlement guards.
 
-On the Georgis run (2026-09-04) the finished-text walk, the change verifier,
-and the settle judge were each prompted "Chicago 17" and nothing else, so all
-three read the house time form "4:00 AM" as an error ("Chicago style uses
-lowercase, punctuated forms for ante meridiem and post meridiem"), settle
-rewrote it to "4:00 a.m.", and the deterministic `sweep_time_of_day` — which
-exists to install "4:00 AM" — would have fired straight back on the result.
-Sixty-seven rounds of the verifier reverting its own suggestions followed.
-
-The fix is not three more paragraphs of prompt kept in sync by hand: the rules
-live here once, as data, and every prompt that reads the ACCEPTED manuscript
-renders the same block through :func:`house_rules_block`. Where Chicago and the
-house differ, the house wins; a reader is told so explicitly, and told never
-to flag or "correct" a house form. The deterministic sweeps in
-docproof/sweeps.py are the executable half of the same rules — settle's
-`SweepGuard` refuses any settlement they would immediately undo.
+``HOUSE_RULES`` is the single source rendered by :func:`house_rules_block`;
+forms listed there are correct and must not be flagged or changed.
 """
 from __future__ import annotations
 

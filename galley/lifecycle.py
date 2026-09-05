@@ -1,23 +1,12 @@
-"""The finding lifecycle ledger — every finding's stable id and full history.
+"""Append-only lifecycle history for findings.
 
-Audits, duplicate detection, and author decisions are hard to explain when a
-finding is just a row that appears in one artifact and vanishes from the next.
-This ledger gives every finding a STABLE key (content-derived, so the same
-finding raised in two waves is one entry) and an append-only HISTORY of the
-states it passed through:
+Each finding gets a content-derived stable key and append-only history of states:
 
     detected → verified → held → promoted / rejected → queried → merged →
     delivered  (or dropped)
 
-Each transition records which wave, which lane/detector/judge moved it, and a
-short note. Nothing is rewritten — a state is only ever appended — so the ledger
-answers "why is this edit in the book?" and "what happened to the one the
-detector raised in chapter 3?" from the record alone.
-
-Deterministic and I/O-light: timestamps are passed in (never read from a
-clock), so a reconstructed ledger is byte-stable and testable. It composes with
-the case file (galley/casefile.py) rather than replacing it — the case file is
-the control plane; this is the per-finding audit trail over it.
+Each transition records its wave, actor, and note. Timestamps are caller-supplied
+for deterministic reconstruction; the ledger complements the case file.
 """
 from __future__ import annotations
 

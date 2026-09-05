@@ -1992,11 +1992,8 @@ class JobRunner:
         return manuscript_from_source(job.source_path, cfg)
 
     def _galley_adapters(self, job: Job, cfg: Config) -> dict:
-        """Build the detector adapters for a galley run.
-
-        A seam: tests patch this to inject FakeDetectors and never touch a model.
-        Wave one is the full ladder; the single-pass adapter is the targeted
-        re-read primitive later waves use. Both hold one shared provider.
+        """Build the full-ladder and targeted-pass adapters with a shared
+        provider. Tests may inject replacement adapters here.
         """
         from galley.adapters.docproof_ladder import DocproofLadderAdapter
         from galley.adapters.single_pass import SinglePassAdapter
@@ -2024,15 +2021,9 @@ class JobRunner:
                 / "galley_calibration.json")
 
     def _galley_screen_provider(self, cfg: Config, cf):
-        """A provider for the panel dispute screen, or ``None``.
-
-        The paid screen (``galley.adjudicate.screen_disputes``) only makes
-        sense once a later wave exists to dispute wave one — a T0/T1 run never
-        opens a second wave, so building a provider for it would be a key
-        requirement (and a cost) a plain ladder run never needed. Any failure
-        to build one (no key, a bad model) degrades to arbitration-only rather
-        than failing the whole run — the panel is a precision refinement, not
-        a requirement for a deliverable to exist."""
+        """Build a dispute-screen provider for multi-wave runs, or return None
+        when unavailable. One-wave tiers use arbitration alone.
+        """
         if not any(w.index > 1 for w in cf.waves):
             return None
         try:
@@ -2047,16 +2038,10 @@ class JobRunner:
             return None
 
     def _ingest_galley_memory(self, cf) -> None:
-        """Fold this run's case file into the durable memory store as
-        precedents — how each mark was ruled on this book, and why.
-
-        ``ingest_casefile`` records every adjudicated finding by its verdict
-        and every uncontested kept finding (delivered to the author, never
-        disputed) as an ``accept``; arbitration bookkeeping — an overlap loser,
-        a duplicate re-find — is never a precedent. Best-effort: memory is a
-        compounding convenience the practitioner leans on for the NEXT book,
-        not this job's product, so any failure here is a warning, never a
-        reason to fail an otherwise-finished job."""
+        """Store adjudicated and uncontested findings as precedents, excluding
+        arbitration bookkeeping. Log memory failures without failing the
+        job.
+        """
         if not cf.findings:
             return
         from galley.memory.ingest import ingest_casefile
@@ -2072,31 +2057,9 @@ class JobRunner:
             store.close()
 
     def _run_galley(self, job_id: str) -> None:
-        """Run a galley job: the practitioner wave loop, then the deliverables.
-
-        Follows the corrections runner's shape — CAS to running, honour a pending
-        cancel, claim a results folder — then hands off to the orchestrator, which
-        owns the wave loop, the governor's budget, and the durable case file. The
-        run's spend rides the shared `cost` field (shown against `budget_usd`), and
-        each wave's coverage notes land in `warnings` so a 'done' galley job that
-        left a hole does not read as a clean one.
-
-        Once the wave loop finishes, the case file alone is not a deliverable:
-        the findings are adjudicated (verdicts written back into the case file),
-        the adjudicated kept findings drive a real $0 tracked-changes manuscript
-        (galley.deliverable), the editorial letter and style sheet are rendered
-        alongside it, and the run's verdicts are folded into the durable memory
-        store. Each of those four steps is independently best-effort AFTER the
-        wave loop itself succeeds — a failure in any one is a warning on the
-        job, not a reason to discard a wave loop that already spent real money
-        and found real errors.
-        """
+        """Run Galley's wave loop, adjudicate findings, and write deliverables."""
         from galley.adjudicate import adjudicate
-        from galley.brain import (
-            DEFAULT_MARGINAL_STOP_USD,
-            make_auditor,
-            make_planner,
-        )
+        from galley.brain import DEFAULT_MARGINAL_STOP_USD
         from galley.calibration import (
             latest_recall,
             read_calibration,
@@ -2106,7 +2069,7 @@ class JobRunner:
         from galley.deliverable import build_manuscript_deliverable
         from galley.governor import Governor
         from galley.letter import render_all
-        from galley.orchestrator import run_galley
+        from galley.orchestrator import caps_for_tier, run_galley
 
         job = self.store.get(job_id)
         if job is None or job.state not in ("queued", "running"):
@@ -2156,25 +2119,25 @@ class JobRunner:
             except Exception:                 # noqa: BLE001 - progress is not the job
                 log.debug("Could not record galley wave progress", exc_info=True)
 
-        # The practitioner brain: an audit read proposes missed-error
-        # hypotheses after each wave, and the planner turns the fresh ones into
-        # budgeted single_pass dispatches. T0/T1 tiers cap max_waves at 1, so
-        # the hooks only ever fire on T2 and up.
         brain_usage = Usage()
-        audit_model = cfg.continuity.model or cfg.api.model
-        auditor = make_auditor(self._provider(cfg), audit_model, brain_usage)
-        # Live cost calibration: observed $/kword from prior runs, kept beside
-        # the memory db. read_calibration is tolerant — a missing or corrupt
-        # store reads back empty and the planner falls back to its default.
+        # T0/T1 are one-wave runs, so do not build the unused paid brain.
+        caps = caps_for_tier(tier, budget)
+        run_kwargs = {}
         cal_path = self._galley_calibration_path()
-        planner = make_planner(ms, min_confidence="medium",
-                               calibration=read_calibration(cal_path))
+        audit_model = cfg.continuity.model or cfg.api.model
+        if caps.max_waves > 1:
+            from galley.brain import make_auditor, make_planner
+
+            auditor = make_auditor(self._provider(cfg), audit_model, brain_usage)
+            planner = make_planner(ms, min_confidence="medium",
+                                   calibration=read_calibration(cal_path))
+            run_kwargs.update(audit=auditor, plan_wave=planner)
 
         try:
             cf = run_galley(ms, tier, budget, out, adapters=adapters,
                             notify=notify, book=job.filename,
-                            audit=auditor, plan_wave=planner,
-                            stop_threshold=DEFAULT_MARGINAL_STOP_USD)
+                            stop_threshold=DEFAULT_MARGINAL_STOP_USD,
+                            **run_kwargs)
         except Exception:                     # noqa: BLE001 - re-raised below
             self._release_results_dir(job_id)
             raise

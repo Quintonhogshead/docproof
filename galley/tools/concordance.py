@@ -1,20 +1,8 @@
-"""Concordance / KWIC (keyword-in-context) search over a :class:`Manuscript`.
+"""Concordance and KWIC search over a :class:`Manuscript`.
 
-The auditor and the prompts it feeds a model both want to *see* a term where it
-lives — every occurrence with a little context on each side — rather than a bare
-count. :func:`kwic` returns one :class:`Hit` per occurrence in reading order,
-each carrying its paragraph id, char offsets, the matched text, and a clipped
-left/right window.
-
-Fuzzy mode exists for proper-name drift (``Kathryn`` vs ``Katherine``): with
-``fuzzy=True`` a capitalized token within Levenshtein distance 2 of the term is
-surfaced alongside the exact/substring matches. The Levenshtein is implemented
-locally — standard library only, no external dependency.
-
-Rendering mirrors a KWIC line: ``…left «match» right…``. No existing
-corrections search-hit helper wraps matches this way (checked
-``docproof/corrections/*``), so this guillemet form is the local choice; the
-ellipses mark that the window was clipped from a longer paragraph.
+``kwic`` returns each occurrence in reading order with paragraph id, offsets,
+matched text, and clipped context. Fuzzy mode also surfaces capitalized tokens
+within Levenshtein distance 2, useful for proper-name drift.
 """
 
 from __future__ import annotations

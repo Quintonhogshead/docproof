@@ -1,40 +1,6 @@
-"""The decision log — every action Galley took on a book, and why.
-
-`DECISION_LOG.md` ships beside the manuscript and the editor's letter. The
-letter is a report to the author about the BOOK; this is a record of the RUN:
-one entry per decision, in order, saying WHAT was done and WHY — the why in the
-words the tool itself recorded, never a summary invented here.
-
-Everything is read back off the run's own artifacts, so the log can be
-regenerated at any time (``docproof galley journal``) and always says the same
-thing:
-
-===========================  =================================================
-`runs/driver/driver.json`    phases run, their exit codes and caps, the plan
-                             gate's decision and reason
-`PLAN.md`                    the gate items (G-lines) and the approval line
-`approval.json`              the frozen cap, stage, lanes, allowed models
-`findings.json`              the sweeps that fired (`scripted_checks`), every
-                             applied edit with its detector's `explanation`,
-                             every withheld/rejected row with its `status`,
-                             every author query with its question
-`change_verify.json`         each flagged edit and the verifier's reason
-`finished_walk.json`         each residual the finished-text walk raised
-`settlement.json`            what settle did with each item, per round
-`runs/certify.txt`           the delivery gate's checks and their status
-`outcome.json`               the terminal verdict and the numbers behind it
-===========================  =================================================
-
-Three rules the format keeps:
-
-* **Deterministic.** No clock is read (the caller supplies ``generated_at``),
-  every collection is sorted, and the same artifacts always render byte for
-  byte the same document.
-* **Partial runs are first-class.** A phase with no artifact renders as a
-  one-line "not run" section rather than being omitted — a log that silently
-  skips the verify section reads like a run that had nothing to verify.
-* **Grouped by phase, then by paragraph.** A person auditing one paragraph
-  finds every decision made about it under the phase that made it.
+"""Render DECISION_LOG.md from run artifacts, grouped by phase and paragraph.
+Use recorded reasons and caller-supplied timestamps for deterministic
+output; label missing phase evidence explicitly.
 """
 from __future__ import annotations
 
@@ -44,18 +10,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from galley.phases import ALL_PHASES as PHASE_ORDER, COPYEDIT_PHASES as _SCOPED_OUT
+
 JOURNAL_NAME = "DECISION_LOG.md"
 #: The hand-off suffix, beside " - letter.md" and " - style-sheet.md".
 HANDOFF_SUFFIX = " - decision-log.md"
 
-#: Section order: the phases, in the order the driver runs them. `flights` and
-#: `reread` are copy-edit scope — rendered only when the run has evidence of
-#: them, so a mechanical run's log does not carry two empty sections.
-PHASE_ORDER: tuple[str, ...] = (
-    "profile", "approve", "sweeps", "ladder", "flights", "audit", "reread",
-    "verify", "settle", "certify", "deliver",
-)
-_SCOPED_OUT = ("flights", "reread")
 PHASE_TITLES: dict[str, str] = {
     "profile": "Profile — reading the book before touching it",
     "approve": "Plan gate — what was approved, and why",
@@ -70,13 +30,9 @@ PHASE_TITLES: dict[str, str] = {
     "deliver": "Deliver — the verdict and what shipped",
 }
 
-#: A PLAN.md gate item: "G1 reflection_heading sweep (25 sites) — apply?".
-#: The negative lookahead keeps a RANGE ("G1-G8 approved by …") out of the
-#: item table — that line is an approval, and it is matched as one below.
+# Match individual G-items, excluding approval ranges such as G1-G8.
 _GATE_ITEM_RE = re.compile(r"^\s*(G\d+)(?![\d\-–—])[.:)]?\s+(.*)$")
-#: How the gate was resolved: the line the driver appends to PLAN.md
-#: ("Approved by galley drive (auto): …"), or a human's own ("G1-G8 approved
-#: by Quinton 2026-09-01 (chat): …").
+# Match both driver-written and human-written approval/decline lines.
 _APPROVAL_RE = re.compile(r"^\s*(?:approved|declined)\b|\b(?:approved|declined)"
                           r"\s+by\b", re.IGNORECASE)
 #: A certify.txt check line: "  [PASS] source hash — 2ba8bdd0cff8…"
@@ -115,9 +71,9 @@ def _rows(envelope: Any) -> list[dict[str, Any]]:
 
 def _by_para(rows: Iterable[Mapping[str, Any]]
              ) -> list[tuple[str, list[Mapping[str, Any]]]]:
-    """Group rows by paragraph id, both the groups and the rows within them in
-    a stable order — paragraph ids sort into reading order, and a finding id
-    breaks the tie inside one."""
+    """Group rows by paragraph id, sorting groups and their findings
+    deterministically.
+    """
     groups: dict[str, list[Mapping[str, Any]]] = {}
     for row in rows:
         groups.setdefault(str(row.get("para_id") or "(unplaced)"),
@@ -591,8 +547,7 @@ def _section_audit(doc: _Doc, src: JournalSources) -> None:
 
 
 def _section_reread(doc: _Doc, src: JournalSources) -> None:
-    # This section renders only when the workspace has a wave-2 directory
-    # (see `_has_copyedit_evidence`), so there is always something to say.
+    # Copyediting evidence is required before rendering this section.
     wave2 = src.workspace / "runs" / "wave2" if src.workspace else None
     if wave2 is None or not wave2.exists():
         _not_run(doc, "the gated wave-2 re-read is copy-edit scope and out of "

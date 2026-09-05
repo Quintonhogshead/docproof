@@ -1,40 +1,14 @@
-"""G2 — Precedent ingest from archived jobs.
+"""Ingest precedent rulings from archived jobs and case files.
 
-Runs are disposable; memory compounds. This module is the bridge from Galley's
-*archived jobs* (finished corrections and review records left on disk) into the
-durable :class:`~galley.memory.store.MemoryStore` ``precedents`` table, so that
-how a mark was ruled on one book becomes a precedent the next book can lean on.
+Archived corrections, reviews, and case files are projected into the durable
+:class:`~galley.memory.store.MemoryStore` ``precedents`` table.
 
-Two archive shapes matter, and the reader is deliberately *tolerant* — the exact
-on-disk schema is broad and has drifted across job kinds, so we detect the shape
-and pull what we can rather than demanding one rigid layout:
+The reader accepts corrections resolutions, review dispositions, and case files;
+case-file arbitration bookkeeping is excluded.
 
-* **corrections resolutions** — a finished corrections job where a human
-  accepted / dismissed / swapped each flagged mark. Each resolved flag is a
-  precedent.
-* **review dispositions** — a finished review job whose findings each carry an
-  applied / queried / rejected disposition, or DocProof's own ``findings.json``
-  rows (``status`` = validated / query / rejected_by_verifier …, with
-  ``original_text`` for the find text). Each finding is a precedent.
-* **case files** — :func:`ingest_casefile` reads a Galley
-  :class:`~galley.casefile.CaseFile` directly: every adjudicated finding by
-  its verdict, and every uncontested finding (kept, never disputed) as an
-  ``accept``. Arbitration bookkeeping — an overlap loser or a duplicate
-  re-find — is never a precedent: it says which finding claimed a span, not
-  whether the edit was right.
-
-Contract
---------
-
-* **Never fatal.** An unparseable file, a record of an unknown shape, or a single
-  malformed finding is *logged and skipped* (:mod:`logging`); the good records in
-  the same batch still ingest.
-* **Idempotent.** Re-running ingest over the same archives creates no duplicate
-  rows. The store's ``add_precedent`` is not itself idempotent, so dedup lives
-  here: before inserting we compute a stable key over
-  ``(error_type, find_text, ruling, book, ruled_by)`` and skip it if an equal row
-  already exists (queried from the store) or was already inserted this batch.
-* **stdlib only.** :mod:`json`, :mod:`logging`, :mod:`hashlib`, :mod:`pathlib`.
+Malformed records are logged and skipped; valid records in the batch continue.
+Inserts are idempotent using a stable key over
+``(error_type, find_text, ruling, book, ruled_by)``.
 """
 
 from __future__ import annotations

@@ -1,22 +1,7 @@
-"""The practitioner brain: real ``audit`` and ``plan_wave`` hooks for the loop.
+"""Build auditor and planner hooks for the Galley loop.
 
-``run_galley`` ships with ``_no_audit``/``_no_plan`` stubs, so production only
-ever runs wave one. This module supplies the working pair:
-
-- :func:`make_auditor` wraps the paid audit read (``galley.audit``) to the
-  orchestrator's ``Auditor`` signature — it projects the case file's own
-  findings into the density table (no ``results_dir`` needed), drops
-  hypotheses the case file has already recorded (keyed on chapter and error
-  class, so a re-worded locator is not a new suspicion), and charges its own
-  read to the governor the orchestrator hands it, labelled ``audit:wave<N>``.
-- :func:`make_planner` turns fresh hypotheses into ``single_pass`` dispatches:
-  one targeted re-read per suspect chapter — or, in a book with no chapters,
-  per suspect paragraph set, located from the hypothesis's ``span_hint`` or
-  the audit's own sample — error classes mapped onto the shipped error-type
-  keys, budgeted against the governor before any money moves, and never
-  re-dispatching a (target, error type) a prior wave already re-read.
-
-Keep ``n_samples`` small; the audit is one structured call per loop iteration.
+The auditor charges its structured read; the planner maps fresh hypotheses to
+budgeted, non-duplicate targeted passes.
 """
 
 from __future__ import annotations
@@ -117,17 +102,9 @@ def make_auditor(
 ) -> Callable[[CaseFile, Manuscript], list[Hypothesis]]:
     """Build an ``Auditor`` closure over a provider, model, and shared usage.
 
-    Densities come from ``cf.findings`` directly (``chapter_densities`` reads
-    only ``para_id``), so no run directory is needed. Hypotheses already in
-    ``cf.hypotheses`` — the orchestrator accumulates them forever — are
-    filtered out, which is what keeps the loop from replanning old suspicions.
-
-    The closure declares a ``governor`` keyword: the orchestrator passes its
-    governor to it, and each audit call's cost (``cost_of_usage`` over the
-    call's own metered usage) is charged as ``audit:wave<N>`` — always, past
-    the cap included, because the read has already happened by the time its
-    price is known. The shared ``usage`` accretes the same tokens for the job
-    record.
+    Densities use ``cf.findings`` directly. Previously recorded hypotheses are
+    filtered out. The closure accepts the orchestrator's ``governor`` keyword;
+    each call is charged as ``audit:wave<N>`` and added to shared usage.
     """
 
     def _audit(
@@ -220,29 +197,10 @@ def make_planner(
 ) -> Callable[[list[Hypothesis], Governor, CaseFile], list[Dispatch]]:
     """Build a ``Planner``: fresh hypotheses -> budgeted single_pass dispatches.
 
-    Hypotheses are grouped per chapter (one dispatch re-reads a chapter once
-    with every suspected error type in a single combined pass). Each dispatch
-    is priced by word count at a per-kword rate and admitted only while the
-    estimate fits inside ``governor.remaining_usd * budget_headroom``.
-    Planning only ever consumes the ``hyps`` argument — the fresh batch from
-    this iteration's audit — so an empty audit converges the loop.
-
-    A book with no chapters is not a book with nothing to re-read: there the
-    scope is a paragraph set — the paragraph ``span_hint`` names (an id, or a
-    phrase found in at most ``max_hint_hits`` paragraphs), else the pages the
-    audit itself sampled (``n_samples`` must match the auditor's; the sample
-    is deterministic, so the planner can replay it from ``cf.findings``).
-
-    A (target, error type) pair a prior wave's single_pass already re-read is
-    dropped before budgeting: the audit may keep suspecting it, but a second
-    read of the same scope for the same type is churn, not coverage.
-
-    ``calibration``, if given (a ``galley.calibration.Calibration``, from
-    :func:`galley.calibration.read_calibration`), makes the per-kword rate
-    live: :func:`galley.calibration.est_usd_per_kword` looks up
-    ``("single_pass", model)``'s observed rate, falling back to
-    ``est_usd_per_kword`` when nothing has been calibrated yet. ``None`` (the
-    default) keeps the frozen constant exactly as before.
+    Groups hypotheses by chapter (or paragraph set for chapterless books),
+    prices each dispatch by word count, and admits it within
+    ``governor.remaining_usd * budget_headroom``. Prior (target, error-type)
+    reads are skipped. Optional calibration supplies the per-kword rate.
     """
 
     rate = est_usd_per_kword

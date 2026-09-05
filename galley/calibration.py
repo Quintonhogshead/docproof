@@ -1,41 +1,8 @@
-"""The self-measurement store — recurring recall/cost calibration (ticket P3).
+"""Persist observed detector costs and seeded-recall calibration.
 
-``galley/brain.py``'s planner prices a re-read at a single frozen constant
-(``est_usd_per_kword=0.10``) and the seeded-recall gauge (``galley/seeding.py``)
-is only ever run by hand. Neither compounds: every plan estimate and every
-recall figure starts from zero the next time someone asks. This module is the
-small durable store that lets both stay live.
-
-Two kinds of record live in one JSON file:
-
-* **Cost** — observed ``usd_per_kword`` per ``(adapter, model)``, accumulated
-  across every :func:`record_run` call as cumulative cost and cumulative
-  kilo-words (a running weighted average, not an average of per-run rates, so
-  a tiny sample never outweighs a big one).
-* **Recall** — a timestamped history of seeded-recall summaries from
-  :func:`record_recall`, so ``galley calibrate`` runs accumulate a trend rather
-  than overwriting the last figure.
-
-:func:`calibrate_free` is the ``$0`` closed loop itself: seed a copy, run the
-free detector floor (spellscan + LanguageTool — no API, no network) over it,
-score the catches. It returns a :class:`FreeLoopResult` whose ``casefile`` and
-``seeded`` manuscript are exactly what :func:`record_run` wants, and whose
-``estimate`` is exactly what :func:`record_recall` wants — the CLI verb (and
-the tests) are both thin callers over this one function.
-
-Design notes, matching ``galley/memory/store.py``:
-
-* **Deterministic timestamps.** Every function that writes takes an optional
-  ``now`` string; when omitted it reaches for the wall clock itself (unlike the
-  memory store, which refuses to — a calibration record is only ever useful
-  dated for real, and nothing here needs a pinned-time invariant to test), but
-  every test in this package passes its own ``now`` so nothing is wall-clock
-  dependent.
-* **Atomic on disk.** Writes go through :func:`docproof.utils.files.write_atomic`,
-  the same temp-file-plus-``os.replace`` pattern the case file uses.
-* **Forward-tolerant.** A missing or unreadable calibration file reads back as
-  an empty :class:`Calibration` rather than raising — the store is allowed to
-  not exist yet.
+The JSON store keeps cumulative weighted rates by ``(adapter, model)`` and a
+timestamped history of seeded-recall summaries. Writes are atomic; missing or
+unreadable files read as an empty :class:`Calibration`.
 """
 
 from __future__ import annotations
@@ -237,20 +204,9 @@ def record_run(
 ) -> Calibration:
     """Fold one case file's real spend into the cost table at ``path``.
 
-    Walks ``cf.waves`` -> ``actions`` (the shape :func:`galley.orchestrator._run_wave`
-    writes: ``adapter``, ``scope`` (a JSON dict), ``cost_usd``). Each action's
-    scope is resolved against ``ms`` to a word count, so a ``$0`` action from a
-    free adapter (spellscan, LanguageTool — ``free_adapters``) still counts its
-    words — recording, correctly, that the pair is free — while a skipped
-    action (no ``scope`` or no ``cost_usd`` recorded) contributes nothing. A
-    ``$0`` action from a PAID adapter is not free, it is a pass that never
-    billed (subagent mode, a failed call); folding its words in would drag the
-    pair's rate toward zero, so it is excluded too.
-
-    Accumulates into the existing entry rather than replacing it: cost and
-    kwords both sum across every call this function has ever made for a given
-    ``(adapter, model)``, so the derived rate is a running weighted average, not
-    last-run noise.
+    Walks case-file actions, resolves each scope to words, and accumulates cost
+    and kilo-words by ``(adapter, model)``. Free adapters record zero-cost words;
+    skipped actions and unpaid runs from paid adapters are excluded.
     """
 
     from galley.adapters import Scope
@@ -379,18 +335,8 @@ def est_usd_per_kword(
 def latest_recall(path: str | Path, book: str | None = None) -> Any:
     """The most recently recorded recall estimate, or ``None`` if there is none.
 
-    With ``book`` given, only records for that book count and ``None`` means
-    the book has never been gauged — a figure measured on another manuscript
-    is not this one's recall. Without it (the backward-compatible form) the
-    last record of any book is returned; either way the result is a
-    :class:`BookRecall`, a ``RecallEstimate`` that also carries its ``book``,
-    so a renderer can tell a same-book gauge from a cross-book one.
-
-    A thin helper so a caller that only has the calibration path (the
-    ``galley calibrate`` verb's own output, or ``app/jobs.py`` rendering the
-    editorial letter) can hand a live estimate to
-    :func:`galley.letter.render_letter`'s ``recall=`` parameter without
-    re-deriving one.
+    With ``book`` given, filters to that book; without it, returns the latest
+    record across books. Returns ``None`` when no matching record exists.
     """
 
     calibration = read_calibration(path)
