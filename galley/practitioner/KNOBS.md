@@ -7,6 +7,50 @@ cache-read cost we've measured. Everything you need to write a run config is
 here. If a knob you need genuinely isn't documented here, that is an
 ESCALATION (the knob may not exist), not a reason to go read the source.
 
+## What changed in v0.187.0 (the Georgis head-to-head — Astra borrowings)
+
+- **`docproof galley approve … --comment-budget N`** freezes the margin-
+  comment ceiling (about 1 per 1,000 words; read it off `profile.json`)
+  into `approval.json`, and **`certify` now has a `comment budget` check
+  that FAILS** when the delivered .docx carries more comments than that
+  (counted on the document's own `comments.xml`; falls back to the query
+  rows when there is no document; reads `profile.json`'s `comment_budget`
+  or word count when the approval carries none; skips loudly when nothing
+  states a budget). Over budget = collapse families and decide what the
+  book answers — never raise the number to pass.
+- **Settle decides three more classes itself instead of asking** (all
+  recorded as reasons in `settlement.json`): `closed_compound` — a
+  space-only deletion whose result the en_US dictionary knows (wash cloth →
+  washcloth) is now an edit, not the `space_deletion` query (no dictionary
+  on the machine = still a query); `duplicate_passage` — a deletion of a
+  ≥5-word run that still reads verbatim elsewhere in the paragraph or a
+  neighbouring one bypasses the fact and rewrite-class guards and applies;
+  `duplicate_query` — a second question on a span (or sentence) that
+  already carries a kept query row is DROPPED, so the author never reads
+  two comments on one spot (the paired "over stoked fire" comments).
+- **`docproof galley letter RUN --workspace WS --source BOOK --out DIR`**
+  now renders THREE documents: `letter.md` (summary, what ran and cost,
+  choices and reasons with a corrections-by-kind table, decisions still
+  needed grouped one bullet per distinct question, the query ledger by
+  finding id, verification and limits with the certificate's skipped checks
+  named in prose, the preparation disclosure, the outcome), `style-sheet.md`
+  (voice and scope, a conventions table with site counts, names preserved
+  from the profile, spellings pending the author, protected passages, review
+  conventions — derived from the run, never empty), and **`verification.md`**
+  (the certificate table, reading/settlement counts, the delivered file's
+  SHA-256, media count vs the original, comment-anchor pairing, untracked
+  preparation, production notes, limits). Pass the RUN dir (its
+  findings.json is the evidence) and `--workspace` (profile, approval,
+  `runs/certify.txt`, the real spend across every run).
+- **The hand-off is six files**: `… - verification.md` joins the set;
+  `build_handoff` refuses a finished run without it; DocWatch treats it as
+  optional (`app/watch/proof.py`).
+- Driver prompts: `approve` passes `--comment-budget`; `verify` rotates
+  readers off their own windows and reads each window twice; `settle`
+  states the edit-or-drop-first rule and the ceiling; `certify` names the
+  comment-budget check; `deliver` renders with `--workspace` and reads all
+  three documents back.
+
 ## What changed (the unattended driver + mechanical-only scope)
 
 - **`docproof galley drive --book B --slug S`** — runs the whole loop with

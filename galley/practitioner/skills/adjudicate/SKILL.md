@@ -32,9 +32,18 @@ write rules; the engine writes the document.
    identical re-find is a duplicate, not new coverage.
 6. **Clusters are atomic** — adjudicate the cluster, not the member.
 7. **Queries are budgeted.** Comment budget ≈ 1 per 1k words unless the plan
-   says otherwise. Every query must be answerable by the author in one read;
-   consistency batteries that verified CORRECT usage are not queries at all.
-   Author questions ride as O==C rows.
+   says otherwise — frozen in `approval.json`, and `certify` FAILS a
+   deliverable over it. Every query must be answerable by the author in one
+   read; consistency batteries that verified CORRECT usage are not queries
+   at all. Author questions ride as O==C rows.
+8. **Whole-book concordance happens HERE, once, before import.** Collapse
+   every same-rule family to one comment; drop the second question on any
+   span; sort what the book itself answers (a verbatim repeat → delete it, a
+   dictionary compound → close it, a pronoun the sentence disambiguates →
+   fix it, a comma splice → semicolon) into EDITS; leave only author
+   knowledge as questions. The output of this screen is the ONE build the
+   run ships. A rebuild after verify/settle is the engine's; a second
+   adjudication pass means this one was skipped.
 
 ## The $0 rebuild
 

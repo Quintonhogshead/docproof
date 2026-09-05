@@ -536,7 +536,8 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
         if (not inserted and deleted in (" ", " ")
                 and start > 0 and end < len(para.text)
                 and para.text[start - 1].isalpha()
-                and para.text[end].isalpha()):
+                and para.text[end].isalpha()
+                and not _dictionary_closes(para.text, start, end)):
             key = (f.para_id, s, "query", f.error_type, f.corrected_text)
             if key in seen:
                 out.append(_status(f, "rejected_duplicate", anchor))
@@ -600,6 +601,26 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
     log.info("Validated %d/%d findings (%s)", n_ok, len(out),
              _tally(out))
     return out
+
+
+def _dictionary_closes(text: str, start: int, end: int) -> bool:
+    """Whether deleting text[start:end] (one space) joins two words into a
+    word the dictionary already carries ("wash cloth" -> "washcloth"). A
+    closed compound Merriam-Webster lists is a spelling correction, applied;
+    only a join the dictionary does not know is the author's compound-
+    styling call (Georgis head-to-head, 2026-09-04). No dictionary = False,
+    the conservative answer."""
+    from .spellscan import dictionary_knows
+    a = start
+    while a > 0 and text[a - 1].isalpha():
+        a -= 1
+    b = end
+    while b < len(text) and text[b].isalpha():
+        b += 1
+    joined = text[a:start] + text[end:b]
+    if len(joined) < 5:
+        return False
+    return bool(dictionary_knows(joined))
 
 
 def to_query(f: Finding, doc: DocumentModel) -> Finding:

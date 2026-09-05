@@ -24,7 +24,7 @@ workspace/<book-slug>/
   runs/              (each docproof run's --out dir; *.log slices)
   runs/driver/       (the driver's per-phase logs + driver.json ledger)
   runs/outcome.json  (written by the driver when a run stops: needs_human + why)
-  deliverable/       (final docx + letter.md + style-sheet.md + outcome.json)
+  deliverable/       (final docx + letter.md + style-sheet.md + verification.md + outcome.json)
   handoff/           (the four files DocWatch picks up; see below)
 ```
 
@@ -220,7 +220,7 @@ session asked something nobody is there to answer). Exit codes: **0** finished,
 **7** stopped needing a human (read `runs/outcome.json`), **2** a setup error.
 Per-phase logs and the driver's own ledger are in `runs/driver/`.
 
-**The DocWatch hand-off.** After `deliver`, five files land in the hand-off
+**The DocWatch hand-off.** After `deliver`, six files land in the hand-off
 directory under the house series. That series is `Book Original` (what the
 author sends) -> `book 0` (formatting) -> `Book 1` (the developmental edit) ->
 `Book 2` (this), so a proofread reads `<surname> - Book 1.docx` and hands back
@@ -232,6 +232,7 @@ transform DocWatch looks for them with.
 <surname> - Book 2 - letter.md         the editor's letter
 <surname> - Book 2 - style-sheet.md    the style sheet
 <surname> - Book 2 - decision-log.md   every action taken, and why
+<surname> - Book 2 - verification.md   the certificate table, fingerprint, media/anchor counts, limits
 <surname> - Book 2 - outcome.json      done | needs_human, with the reason
 ```
 

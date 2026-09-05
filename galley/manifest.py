@@ -29,7 +29,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -196,6 +198,7 @@ def build_manifest(*, source: str | Path, config_path: str | Path, cfg: Any,
                    genre: str | None = None,
                    allowed_providers: list[str] | None = None,
                    mechanical_only: bool = False,
+                   comment_budget: int | None = None,
                    note: str = "") -> dict[str, Any]:
     """Assemble the immutable approval manifest. ``allowed_providers`` defaults
     to exactly the providers the approved config actively uses — an approval is
@@ -232,6 +235,11 @@ def build_manifest(*, source: str | Path, config_path: str | Path, cfg: Any,
         "allowed_providers": providers,
         "enabled_lanes": lanes,
         "mechanical_only": bool(mechanical_only),
+        # The margin-comment ceiling the run promised (about one per thousand
+        # words unless the plan says otherwise); certify fails a deliverable
+        # that carries more. None = not frozen here; certify then reads the
+        # workspace profile's figure.
+        "comment_budget": int(comment_budget) if comment_budget else None,
         "routes": [r.to_json() for r in routes],
         "note": note,
     }
@@ -562,7 +570,89 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
     if manifest is not None and manifest.get("mechanical_only"):
         cert.checks.append(_certify_mechanical_only(manifest, cfg, envelope,
                                                     run))
+
+    # 12. The comment budget is a ceiling, not a suggestion (Georgis
+    # head-to-head, 2026-09-04: a 61-comment plan delivered 153). Counted on
+    # the delivered document itself when there is one.
+    cert.checks.append(_certify_comment_budget(run, manifest, envelope))
     return cert
+
+
+def comment_budget_for(run: Path, manifest: dict[str, Any] | None
+                       ) -> tuple[int | None, str]:
+    """The comment ceiling this run promised and where it came from: the
+    approval's ``comment_budget``, else the workspace profile's
+    ``comment_budget``, else one per thousand words of the profile's word
+    count. ``(None, why)`` when nothing states it."""
+    if manifest and manifest.get("comment_budget"):
+        return int(manifest["comment_budget"]), "approval.json"
+    ws = run.parent.parent if run.parent.name == "runs" else run.parent
+    prof = _load_json(ws / "profile.json")
+    if isinstance(prof, dict):
+        if prof.get("comment_budget"):
+            try:
+                return int(prof["comment_budget"]), "profile.json"
+            except (TypeError, ValueError):
+                pass
+        words = prof.get("word_count") or prof.get("words")
+        try:
+            if words and float(words) > 0:
+                return max(1, math.ceil(float(words) / 1000.0)), \
+                    "profile.json word count (1 per 1,000 words)"
+        except (TypeError, ValueError):
+            pass
+    return None, ("no comment_budget in the approval or the workspace profile, "
+                  "and no word count to derive one from")
+
+
+def delivered_comment_count(run: Path) -> int | None:
+    """How many margin comments the delivered .docx carries, or None when
+    there is no deliverable (or no OOXML tooling) to count on."""
+    from galley.verify import deliverable_docx
+    path = deliverable_docx(run)
+    if path is None:
+        return None
+    try:
+        with zipfile.ZipFile(path) as z:
+            if "word/comments.xml" not in z.namelist():
+                return 0
+            xml = z.read("word/comments.xml")
+    except (OSError, zipfile.BadZipFile, KeyError):
+        return None
+    return len(re.findall(rb"<w:comment\b", xml))
+
+
+def _certify_comment_budget(run: Path, manifest: dict[str, Any] | None,
+                            envelope: dict[str, Any] | None) -> Check:
+    budget, origin = comment_budget_for(run, manifest)
+    if budget is None:
+        return Check("comment budget", "skip", origin)
+    count = delivered_comment_count(run)
+    where = "on the delivered document"
+    if count is None:
+        if envelope is None:
+            return Check("comment budget", "skip",
+                         f"budget {budget} ({origin}) but no deliverable or "
+                         f"findings.json to count comments on")
+        from galley.settle import terminal_state
+        count = 0
+        for r in (envelope.get("findings") or []):
+            if not isinstance(r, dict):
+                continue
+            state, reason = terminal_state(r)
+            if state == "query" and reason != "withheld":
+                count += 1
+        where = "query rows in findings.json (no deliverable to count on)"
+    if count > budget:
+        return Check("comment budget", "fail",
+                     f"{count} comment(s) {where} over the ceiling of {budget} "
+                     f"({origin}) — collapse same-rule families to one "
+                     f"comment, decide what the book itself answers (a "
+                     f"verbatim repeat, a dictionary compound, a pronoun the "
+                     f"sentence disambiguates), or record a raised budget in "
+                     f"the approval with the reason")
+    return Check("comment budget", "pass",
+                 f"{count} comment(s) {where}, ceiling {budget} ({origin})")
 
 
 def _certify_mechanical_only(manifest: dict[str, Any], cfg: Any | None,

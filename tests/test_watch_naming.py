@@ -175,7 +175,8 @@ def test_the_hand_off_names_all_hang_off_one_base():
     assert naming.proof_outcome_name("Johnson - Book 1.docx") == \
         f"{base}{naming.OUTCOME_SUFFIX}.json"
     for suffix in (naming.LETTER_SUFFIX, naming.STYLE_SHEET_SUFFIX,
-                   naming.DECISION_LOG_SUFFIX, naming.OUTCOME_SUFFIX):
+                   naming.DECISION_LOG_SUFFIX, naming.VERIFICATION_SUFFIX,
+                   naming.OUTCOME_SUFFIX):
         assert naming.is_output_name(f"{base}{suffix}.md")
 
 
@@ -278,7 +279,8 @@ def test_the_hand_off_names_mirror_the_source_spelling():
     assert handoff_base("Johnson - Book One.docx") == "Johnson - Book Two"
     assert handoff_base("Johnson - Book 1.docx") == "Johnson - Book 2"
     for suffix in (naming.LETTER_SUFFIX, naming.STYLE_SHEET_SUFFIX,
-                   naming.DECISION_LOG_SUFFIX, naming.OUTCOME_SUFFIX):
+                   naming.DECISION_LOG_SUFFIX, naming.VERIFICATION_SUFFIX,
+                   naming.OUTCOME_SUFFIX):
         assert naming.is_output_name(f"Johnson - Book Two{suffix}.md")
 
 

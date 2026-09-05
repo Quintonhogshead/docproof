@@ -28,6 +28,7 @@ folder. Both end at the same names, which is the contract:
     <surname> - Book 2 - letter.md        the editorial letter       (optional)
     <surname> - Book 2 - style-sheet.md   the style sheet            (optional)
     <surname> - Book 2 - decision-log.md  every action, and why      (optional)
+    <surname> - Book 2 - verification.md  the verification report    (optional)
     <surname> - Book 2 - outcome.json     the verdict                (required)
 
 **The verdict decides the CRM write, and both verdicts write.** `done` moves the
@@ -204,6 +205,7 @@ def hand_off_names(source_name: str) -> dict[str, str]:
         "letter": f"{base}{naming.LETTER_SUFFIX}.md",
         "style_sheet": f"{base}{naming.STYLE_SHEET_SUFFIX}.md",
         "decision_log": f"{base}{naming.DECISION_LOG_SUFFIX}.md",
+        "verification": f"{base}{naming.VERIFICATION_SUFFIX}.md",
         "outcome": f"{base}{naming.OUTCOME_SUFFIX}.json",
     }
 
@@ -234,7 +236,8 @@ def artifacts(job: Job, source_name: str) -> list[Artifact]:
         found.append(Artifact(reviewed, names["manuscript"], DOCX_MIME))
     for role, filename in (("letter", "letter.md"),
                            ("style_sheet", "style-sheet.md"),
-                           ("decision_log", "DECISION_LOG.md")):
+                           ("decision_log", "DECISION_LOG.md"),
+                           ("verification", "verification.md")):
         path = out / filename
         if path.is_file():
             found.append(Artifact(path, names[role], MARKDOWN_MIME))

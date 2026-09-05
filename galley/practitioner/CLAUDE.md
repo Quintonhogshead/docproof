@@ -139,7 +139,33 @@ for a person. Nothing is retried around.
    Policy classes that were queried wholesale (ordinals, measurements,
    numeral families) are now: pick the house answer, apply it tracked, and
    note the rule once in the letter. Keep `comment_collapse` on; treat the
-   comment budget (~1/1k words) as a hard ceiling, not a suggestion.
+   comment budget (~1/1k words) as a hard ceiling, not a suggestion — it is
+   now frozen into `approval.json` (`--comment-budget`) and **`certify`
+   FAILS a delivered document that carries more comments than the budget.**
+   **The book itself answers these — EDIT, never query** (Georgis
+   head-to-head, 2026-09-04: the Fable run queried every one of these; the
+   Astra run fixed them, and was right to):
+   - a **verbatim repeated passage** (a sentence or a five-word-plus run
+     pasted twice, in the paragraph or the one beside it) → delete the
+     second copy as a tracked edit (settle now does: `duplicate_passage`);
+   - an **open compound Merriam-Webster closes** (wash cloth, coffee house,
+     court house, chicken pox, drug store, hay stack, pin cushion) → close
+     it (settle: `closed_compound`; the dictionary is the authority, not the
+     author's attention);
+   - a **pronoun the sentence itself disambiguates** ("Hello, little Pete!"
+     she greeted *me* → *him*), a **wrong-direction word the next sentence
+     contradicts** (glances were *deceiving* → *revealing*) → edit it; the
+     evidence is on the page, so it is mechanics;
+   - a **comma splice** → semicolon (or a period), never "delete the comma"
+     and never a question.
+   **One question per span.** A second comment on a span that already
+   carries one is a duplicate, not a second question (settle now drops it:
+   `duplicate_query`). **Phrase every question as one question plus one
+   sentence of evidence** — "Is the surname Rodewall or Rodewell? Both
+   spellings appear, five and four times." — never a grammar diagnosis
+   ("sentence fragment with no governing verb or complete grammatical
+   construction"), never a `suggested: 'Query the author'` row, never the
+   same family twice.
    **Chapter and part LABELS are the explicit exception to "a number is a
    fact"** (Quinton, 2026-09-04: "When Galley encounters chapter title
    inconsistencies, she needs to just fix them"). A numbering gap, a mangled
@@ -167,6 +193,12 @@ for a person. Nothing is retried around.
    Certify is the only definition of done: a run with any unsettled item, a
    non-terminal finding, or a stale verify artifact cannot certify. Never
    hand-patch an owning row's replacement to fit a residual in.
+   **Settle closes a residual as an edit or a drop whenever the book itself
+   answers it; "query" is for author knowledge only.** A settle round that
+   closes most of its items as questions is not settling, it is forwarding —
+   the Fable Georgis run closed 108 of 242 that way and blew a 61-comment
+   ceiling to 153. Read `settlement.json`'s `query` count against the
+   budget before certify, not after.
 9. **Two stopping points, and a verdict.** A run ends `done` (no more errors
    the loop can find or decide) or `needs_human` (the book has major
    grammatical problems and most sentences must be rewritten — ideally a
@@ -403,8 +435,14 @@ context ~150 times. Keep your window lean:
    risk.
 6. **Audit** (`skills/audit`) after each wave. Hypotheses → targeted re-reads
    while marginal cost per finding stays sane. A quiet audit converges the loop.
-7. **Adjudicate** (`skills/adjudicate`) with the screening rulebook, then
-   rebuild the deliverable at $0 via replay/merge.
+7. **Adjudicate** (`skills/adjudicate`) with the screening rulebook — the
+   whole-book concordance happens HERE, before import: duplicates across
+   lanes, families collapsed, evidence checked, facts sorted from
+   mechanics. Then rebuild the deliverable at $0 via replay/merge — **ONE
+   reviewed build.** The Fable Georgis run rebuilt six times (import →
+   verify → settle → rebuild, round after round, plus a post-delivery
+   renumbering); the Astra run adjudicated once and rebuilt once. A second
+   rebuild means adjudication was skipped; a fourth is a defect to report.
 8. **Verify the finished text, settle, certify, then deliver.** Run `docproof
    galley verify RESULTS --context BRIEF` FIRST — it re-reads every applied edit and
    proofreads the accepted text for sense, the one thing `certify` cannot do
@@ -415,7 +453,13 @@ context ~150 times. Keep your window lean:
    These are standard delivery stages, not an optional extra: certify's checks
    are integrity (hashes, routes, artifact regexes, reject-all round trip) and a
    corrupted build passes all of them — the Purpura beta's 35 real-word LT
-   corruptions were caught ONLY by this re-read. Then **settle** (`skills/
+   corruptions were caught ONLY by this re-read. **Rotate the readers**: a
+   subagent that wrote or imported edits for a window never verifies that
+   window — assign the walk windows offset from the ladder/fleet split, so
+   every correction is checked by a reader who did not make it (the Astra
+   run's rotated reread found 84 more corrections and two follow-ups). Each
+   walk window is read TWICE: mechanics first, then a slow type-and-compare
+   pass for omissions, duplicated passages, and sense. Then **settle** (`skills/
    settle`): `docproof galley settle RESULTS --source BOOK --config CONFIG`
    closes every item verify raised — absorb / add / drop / query — rebuilding
    at $0 and re-verifying the touched paragraphs until nothing is open, then
@@ -427,10 +471,27 @@ context ~150 times. Keep your window lean:
    verify item settled, AND the recorded outcome. A failing
    certificate blocks delivery; fix the failing check, don't ship around it. Then
    deliver: tracked-changes docx (two authors when both lanes ran), margin-comment
-   queries within the comment budget, editor's letter with the honest residual
-   estimate, style sheet. The letter/style sheet render from `casefile.json` when
-   one exists, else straight from the run's `findings.json` (`galley letter`
-   builds it either way).
+   queries within the comment budget, and the THREE documents an author can
+   read — rendered together by `docproof galley letter RUN --workspace .
+   --source BOOK --out deliverable/`:
+   - **the letter** (`letter.md`): what the proof contains, what ran and what
+     it REALLY cost (`--workspace` sums every run; without it a $0 replay
+     build reports "$0.00" for a book whose ladder billed — the Fable Georgis
+     letter did exactly that), choices and reasons, decisions still needed,
+     verification and limits, the preparation disclosure, the outcome;
+   - **the style sheet** (`style-sheet.md`): voice and scope, the mechanical
+     conventions with site counts, names preserved, spellings pending the
+     author, protected passages, review conventions — derived from the run,
+     so it is NEVER the 247-byte "no rulings were recorded" stub the Fable
+     run shipped;
+   - **the verification report** (`verification.md`): the certificate as a
+     table with its skipped checks named in prose, the reading and
+     settlement counts, the delivered file's SHA-256, media and comment
+     anchors checked against the original, the untracked preparation, the
+     production notes, and the honest limit that dependent reads give no
+     statistical residual estimate.
+   Read all three back before hand-off. The hand-off is SIX files
+   (`… - verification.md` joins the set); `build_handoff` refuses without it.
 
 ## Lessons from the Redding run (2026-09-01) — doctrine, not suggestions
 
@@ -462,6 +523,53 @@ context ~150 times. Keep your window lean:
   other tracked edits owned; the fix is `galley settle` (v0.183.0): the engine's edit map translates
   each one to the source, the owner is REVISED as a composite, and a verifier flag on the composite
   reverts it to a query. Your pen never edits an owning row's replacement.
+
+## Lessons from the Georgis head-to-head (2026-09-04) — two brains, one book
+
+Fable 5.1 and Astra (Codex) each drove Galley over the same 60.8k-word
+memoir. `docproof compare` scored them against each other: agree 757,
+different fix 63, only-Fable 326, only-Astra 358 — 72% located recall / 70%
+precision floor either way round. Fable's proof was the better one; Astra's
+RUN was the better one. Borrow the run, keep the proof.
+
+- **Fable took ~6 hours, 8 bespoke sweeps + a 10-pass ladder + two fleets +
+  a chapter sweep + a number lane, 5 settle rounds, 6 rebuilds, 153 comments
+  against its own 61 ceiling, a boilerplate letter reporting $0, an empty
+  style sheet, no verification report.** Astra took ~75 minutes: profile →
+  sweeps into a disposable candidate build → 3 subagents × 14 windows × 2
+  passes (mechanics, then type-and-compare) → ONE lead adjudication with
+  whole-book concordance → rotated independent reread → one rebuild → a
+  letter, a style sheet, and a verification report an author can read, 25
+  comments under a budget of 60. Those six differences are now doctrine
+  (directives 6 and 8, loop steps 7–8, the deliverable set above).
+- **What only Fable's recipe caught — KEEP IT:** towards/amongst/-wards →
+  American forms (44 sites, Astra caught none), comma splices → semicolons
+  (22), generic university/pharmacy school/stadium lowercased (19),
+  numbers under one hundred spelled out (100% / 25 / 45 / $25 / 20 / 12
+  noon), the number audit, intent zones, the terminal-period sweep turned
+  OFF on a split-paragraph book, chapter labels renumbered as tracked edits.
+  These are the wave-0 bespoke sweeps and the ladder; Astra's run had no
+  equivalent.
+- **What only Astra caught — the edit-not-query classes in directive 6:**
+  three duplicated passages deleted, eighteen closed compounds, ten
+  Merriam-Webster hyphen drops (handcrafted, secondhand, nonnegotiable,
+  posthaste, checkups), "John's and Voula's" → "John and Voula's", "lady's
+  man" → "ladies' man", a past-perfect "If I had only known", "were sent",
+  stray leading spaces, IL → Illinois, $3.00 → $3. Fable queried the ones it
+  saw and missed the rest.
+- **What Astra did that is WRONG — never borrow:** 107 commas inserted
+  before "and" (a compound predicate takes none; Fable added zero and was
+  right); ~22 dangling-modifier and gerund→clause rewrites ("Hearing that"
+  → "When I heard that") — line editing under a mechanical brief, a query at
+  most when the modifier misattributes the actor; `a.m.`/`p.m.` against the
+  house `11:00 AM`; "five-hundred-pound" against the house numerals above
+  one hundred; a few meaning changes with no evidence on the page ("at my
+  most anguished" → "their").
+- **Fleet shape: fixed windows × two passes beats another lane.** The
+  second, slow type-and-compare pass per window is what found the dropped
+  words and the duplicated passages. Fable ran three more lanes and still
+  only queried them. When recall feels thin, add the second pass, not a
+  fourth fleet.
 
 ## The traps ledger (all paid for in blood)
 

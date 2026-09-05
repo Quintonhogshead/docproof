@@ -837,3 +837,66 @@ def test_minus_preexisting_blanks_occurrence_for_occurrence():
     assert _minus_preexisting("a”. b”. c", "a”. b") == "a b”. c"
     assert _minus_preexisting("x,, y", "") == "x,, y"
     assert _minus_preexisting("clean", "a”.") == "clean"
+
+
+# --- the comment budget (Georgis head-to-head, 2026-09-04) ------------------
+
+def _query_rows(n: int) -> list[dict]:
+    return [{"finding_id": f"q-{i}", "para_id": "body-0001", "status": "query",
+             "queried": True, "applied": False,
+             "original_text": "x", "corrected_text": "x"} for i in range(n)]
+
+
+def test_certify_fails_a_run_over_its_comment_budget(tmp_path):
+    cfg = _mech_cfg()
+    src = _source(tmp_path)
+    m = build_manifest(source=src, config_path=str(CONFIG), cfg=cfg,
+                       max_spend_usd=20.0, comment_budget=2)
+    assert m["comment_budget"] == 2
+    run = _run_dir(tmp_path, {"findings": _query_rows(3),
+                              "cost": {"total_usd": 0.0}})
+    cert = certify_run(run, manifest=m, cfg=cfg, source=src)
+    check = next(c for c in cert.checks if c.name == "comment budget")
+    assert check.status == "fail"
+    assert "3 comment(s)" in check.detail and "ceiling of 2" in check.detail
+
+
+def test_certify_passes_a_run_within_its_comment_budget(tmp_path):
+    cfg = _mech_cfg()
+    src = _source(tmp_path)
+    m = build_manifest(source=src, config_path=str(CONFIG), cfg=cfg,
+                       max_spend_usd=20.0, comment_budget=5)
+    run = _run_dir(tmp_path, {"findings": _query_rows(3),
+                              "cost": {"total_usd": 0.0}})
+    cert = certify_run(run, manifest=m, cfg=cfg, source=src)
+    check = next(c for c in cert.checks if c.name == "comment budget")
+    assert check.status == "pass"
+
+
+def test_certify_reads_the_budget_from_the_workspace_profile(tmp_path):
+    """No --comment-budget on the approval: the workspace profile's figure
+    (or its word count, one per thousand) is the ceiling."""
+    cfg = _mech_cfg()
+    src = _source(tmp_path)
+    m = build_manifest(source=src, config_path=str(CONFIG), cfg=cfg,
+                       max_spend_usd=20.0)
+    assert m["comment_budget"] is None
+    ws = tmp_path / "ws"
+    (ws / "runs").mkdir(parents=True)
+    (ws / "profile.json").write_text(json.dumps({"word_count": 2500}))
+    run = ws / "runs" / "final"
+    run.mkdir()
+    (run / "findings.json").write_text(json.dumps(
+        {"findings": _query_rows(4), "cost": {"total_usd": 0.0}}))
+    cert = certify_run(run, manifest=m, cfg=cfg, source=src)
+    check = next(c for c in cert.checks if c.name == "comment budget")
+    assert check.status == "fail" and "ceiling of 3" in check.detail
+    assert "profile.json" in check.detail
+
+
+def test_certify_skips_the_comment_budget_when_nothing_states_one(tmp_path):
+    run = _run_dir(tmp_path, {"findings": _query_rows(1),
+                              "cost": {"total_usd": 0.0}})
+    cert = certify_run(run)
+    check = next(c for c in cert.checks if c.name == "comment budget")
+    assert check.status == "skip"

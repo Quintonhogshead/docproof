@@ -249,3 +249,147 @@ def test_cross_book_recall_is_not_presented_as_this_books_gauge(tmp_path):
     untagged = {"overall": 0.5}
     text = render_letter(cf, tmp_path, recall=untagged).read_text(encoding="utf-8")
     assert "cross-book gauge" in text and "50.0%" in text
+
+
+# --- the three documents, from run evidence (Georgis head-to-head) -----------
+
+import json
+
+
+def _evidence_run(tmp_path):
+    ws = tmp_path / "ws"
+    run = ws / "runs" / "final"
+    run.mkdir(parents=True)
+    rows = [
+        {"finding_id": "f-1", "para_id": "body-0001", "error_type":
+         "serial_comma", "status": "validated", "applied": True,
+         "original_text": "a, b and c", "corrected_text": "a, b, and c"},
+        {"finding_id": "f-2", "para_id": "body-0002", "error_type":
+         "comma_splice", "status": "validated", "applied": True,
+         "original_text": "x, y", "corrected_text": "x; y"},
+        {"finding_id": "f-3", "para_id": "body-0003", "error_type":
+         "imported_edit", "status": "query", "queried": True,
+         "applied": False, "original_text": "Mrs. Rodewell",
+         "corrected_text": "Mrs. Rodewell",
+         "explanation": "Is the surname Rodewall or Rodewell? Both appear."},
+        {"finding_id": "f-4", "para_id": "body-0004", "error_type":
+         "imported_edit", "status": "query", "queried": True,
+         "applied": False, "original_text": "twelve years",
+         "corrected_text": "twelve years",
+         "explanation": "Thirteen years by the dates given; which is right?"},
+    ]
+    (run / "findings.json").write_text(json.dumps({
+        "findings": rows, "cost": {"total_usd": 0.0},
+        "stats": {"validated": 2, "query": 2},
+        "normalization": {"ran": True, "spaces": 12, "quotes": 1,
+                          "paragraphs": 9}}), "utf-8")
+    (run / "settlement.json").write_text(json.dumps({
+        "rounds": 2, "counts": {"add": 3, "drop": 2, "query": 1},
+        "records": [], "open": [], "residuals_seen": [1, 2, 3, 4, 5, 6],
+        "convergence": {"last_new_items": 1, "quiet": True}}), "utf-8")
+    (run / "change_verify.json").write_text(json.dumps({
+        "ran": True, "applied_edits": 2, "problems": [{"x": 1}],
+        "settled": True}), "utf-8")
+    (run / "finished_walk.json").write_text(json.dumps({
+        "ran": True, "paragraphs": 9, "residuals": [{"x": 1}, {"x": 2}],
+        "unread_paragraphs": []}), "utf-8")
+    (run / "outcome.json").write_text(json.dumps({
+        "outcome": "done", "reason": "no open items"}), "utf-8")
+    (ws / "profile.json").write_text(json.dumps({
+        "genre": "literary_memoir", "variant": "us", "word_count": 9000,
+        "comment_budget": 9,
+        "proper_nouns": [{"name": "Katena", "count": 70},
+                         {"name": "bronchoscopy", "count": 8},
+                         {"name": "IL", "count": 2}]}), "utf-8")
+    (ws / "approval.json").write_text(json.dumps({
+        "source": "source/Book.docx", "mechanical_only": True,
+        "comment_budget": 9}), "utf-8")
+    (ws / "runs" / "certify.txt").write_text(
+        "Certificate for runs/final:\n"
+        "  [PASS] source hash — abc…\n"
+        "  [skip] intent-zone collisions — no intent-zone record for this run\n"
+        "  [PASS] comment budget — 2 comment(s), ceiling 9\n"
+        "\n  PASSED (0 failing check(s))\n", "utf-8")
+    return run, ws
+
+
+def test_the_letter_from_evidence_reads_like_a_proofreaders_letter(tmp_path):
+    from galley.casefile_synth import casefile_from_run
+    from galley.letter import run_evidence
+
+    run, ws = _evidence_run(tmp_path)
+    cf = casefile_from_run(run)
+    ev = run_evidence(run, ws)
+    text = render_letter(cf, tmp_path / "out", evidence=ev).read_text("utf-8")
+
+    assert "# Proofreading letter" in text
+    assert "**2 tracked correction(s)**" in text
+    assert "**2 margin comment(s)**" in text
+    for heading in ("## Choices and reasons", "## Decisions still needed",
+                    "## Verification and limits", "## Preparation disclosure"):
+        assert heading in text
+    # choices: the family table and the scope line
+    assert "the serial comma | 1" in text and "comma splices | 1" in text
+    assert "mechanical proofreading only" in text
+    # decisions: one bullet per distinct question, with its site
+    assert "Rodewall or Rodewell" in text and "body-0003" in text
+    assert "Thirteen years" in text
+    # verification: the skipped check is named, the limits stated
+    assert "intent-zone collisions" in text
+    assert "no defensible statistical estimate" in text
+    assert "12 space run(s)" in text
+    assert "**Outcome: done.**" in text
+
+
+def test_the_style_sheet_from_evidence_is_never_empty(tmp_path):
+    from galley.casefile_synth import casefile_from_run
+    from galley.letter import run_evidence
+
+    run, ws = _evidence_run(tmp_path)
+    cf = casefile_from_run(run)
+    ev = run_evidence(run, ws)
+    text = render_style_sheet(cf, tmp_path / "out", evidence=ev).read_text("utf-8")
+
+    assert "No rulings were recorded" not in text
+    assert "## Mechanical conventions" in text
+    assert "| Lists |" in text and "| 1 |" in text
+    # names, not vocabulary
+    assert "Katena" in text
+    assert "bronchoscopy" not in text and "IL" not in text.split("Names")[1][:200]
+    # a spelling question is listed as pending, a date question is not
+    assert "## Unresolved, pending the author" in text
+    assert "Rodewall or Rodewell" in text
+    assert "Thirteen years" not in text
+    assert "comment ceiling for this book was 9" in text
+
+
+def test_the_verification_report_names_what_it_checked(tmp_path):
+    from galley.casefile_synth import casefile_from_run
+    from galley.letter import render_verification_report, run_evidence
+
+    run, ws = _evidence_run(tmp_path)
+    cf = casefile_from_run(run)
+    ev = run_evidence(run, ws)
+    path = render_verification_report(ev, tmp_path / "out", cf=cf)
+    assert path.name == "verification.md"
+    text = path.read_text("utf-8")
+
+    assert "| source hash | PASS |" in text
+    assert "| intent-zone collisions | SKIP |" in text
+    assert "did not run 1 check(s)" in text
+    assert "**Result: passed, zero failing checks.**" in text
+    assert "| Applied corrections re-read in context | 2 read; 1 flagged; all settled |" in text
+    assert "9 paragraph(s) read; 2 residual(s); 0 unread" in text
+    assert "2 round(s)" in text
+    # no deliverable in this run: said, not invented
+    assert "No tracked-changes .docx" in text
+    assert "## Untracked preparation" in text
+    assert "statistical estimate" in text
+
+
+def test_render_all_without_evidence_keeps_the_ledger_letter(tmp_path):
+    cf, ms = _scripted_casefile()
+    letter, style = render_all(cf, tmp_path, ms=ms)
+    text = letter.read_text("utf-8")
+    assert "# Editorial letter" in text and "## Open queries" in text
+    assert "Proofreading letter" not in text

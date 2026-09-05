@@ -213,6 +213,22 @@ def _dictionary(name: str):
     return None
 
 
+def dictionary_knows(word: str, dictionary: str = "en_US") -> bool | None:
+    """Whether the dictionary carries `word` (any casing) — or None when no
+    dictionary is loadable, so a caller can tell "unknown word" from "no
+    authority to ask". The one place a closed compound is checked against
+    Merriam-Webster's nearest offline stand-in (Georgis, 2026-09-04: "wash
+    cloth" -> "washcloth" is a spelling fix, not the author's call)."""
+    dic = _dictionary(dictionary)
+    if dic is None:
+        return None
+    w = str(word or "").strip()
+    if not w:
+        return False
+    return bool(dic.lookup(w) or dic.lookup(w.lower())
+                or dic.lookup(w.capitalize()))
+
+
 def _sentence_initial(text: str, pos: int) -> bool:
     """Is this word standing where any word would be capitalized anyway?
 
