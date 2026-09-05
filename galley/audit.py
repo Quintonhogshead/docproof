@@ -1,16 +1,7 @@
-"""The auditor — hypotheses about what a finished run missed (Track C1).
+"""Audit a finished run for likely missed errors.
 
-Read-only over a completed DocProof run. It computes, mechanically, a
-findings-per-1,000-words density by chapter — a chapter that reads suspiciously
-clean next to its neighbors is where a miss most likely hides — samples a few
-pages from the lowest-density chapters, and asks the model for structured
-hypotheses about missed errors against the frozen :class:`Hypothesis` schema.
-
-This is the science the whole agentic premise rests on (see The Galley Plan,
-Part 8): if the auditor cannot locate real misses better than chance, the agent
-premise dies for the price of a memo. The single model call in :func:`audit_run`
-is the only paid step; everything else — density, sampling, parsing — is
-deterministic and unit-tested with a fake provider.
+The auditor computes chapter densities, samples low-density body paragraphs and
+one control chapter, then makes one structured model call for hypotheses.
 """
 
 from __future__ import annotations
@@ -244,21 +235,12 @@ def plan_sample(
     min_words: int = MIN_SAMPLE_WORDS,
     min_chapter_words: int = MIN_QUIET_CHAPTER_WORDS,
 ) -> SamplePlan:
-    """Choose up to ``n`` body paragraphs to read, plus one control chapter.
+    """Sample body paragraphs from quiet chapters and a dense control chapter.
 
-    Drawn from the lowest-density chapters first — where a miss most likely
-    hides — one paragraph per chapter in a round-robin so the sample spreads
-    rather than piling into a single quiet chapter. Only BODY paragraphs of at
-    least ``min_words`` words qualify (never a heading), only chapters of at
-    least ``min_chapter_words`` may rank as quiet (the "(unplaced)" bucket never
-    does), and within a chapter the paragraph is seeded-random rather than
-    always the first, so repeated audits read different pages. Deterministic
-    given the inputs and ``seed``.
-
-    One page always comes from a CONTROL chapter — the densest eligible chapter,
-    where the review demonstrably read carefully — so a hit rate above chance is
-    measurable: hypotheses should land in the quiet chapters, not the control.
-    """
+    Eligible paragraphs meet min_words; eligible chapters meet
+    min_chapter_words and exclude the unplaced bucket. Select round-robin
+    from the lowest-density chapters, reserving a control from the densest
+    eligible chapter. Selection within chapters is deterministic for seed."""
 
     if n <= 0:
         return SamplePlan(seed=seed)

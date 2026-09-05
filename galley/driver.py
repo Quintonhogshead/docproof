@@ -1,38 +1,8 @@
-"""The unattended driver — one book, start to hand-off, no human in the loop.
+"""Run Galley phases with plan approval, subprocess limits, state checks, and
+artifact handoff.
 
-Until now a person ran ONE phase per invocation (``PHASE=ladder galley-run.sh``),
-answered the plan gate in chat, and carried the deliverable somewhere by hand.
-This module sequences the phases, decides the gate under a stated policy, stops
-the moment anything goes wrong, and puts the finished files where DocWatch can
-see them.
-
-Three things it is deliberately NOT:
-
-* **A second brain.** Each phase is still its own lean headless session with the
-  same prompt the shell launcher used — those prompts now live HERE, in the
-  repo, as the single source of truth (``galley/practitioner/galley-run.sh`` is
-  a thin wrapper over ``docproof galley drive``). The driver decides *which*
-  session runs next and *whether* the run may continue; it never edits the
-  book.
-* **A new ledger.** ``state.json`` (galley/state_machine.py) remains the record
-  of where a run is. The driver reads it to prove a phase did what its prompt
-  said, and ``--from PHASE`` restarts against it. ``runs/driver.json`` is a log
-  of the driver's own decisions, not a source of truth.
-* **A gate that can be talked past.** ``--approve auto`` approves only a plan
-  that is BOTH inside the budget and mechanical-only; anything else escalates
-  (``email``) or stops (``manual``). A phase that exits nonzero stops the run
-  and writes ``runs/outcome.json`` as ``needs_human`` naming the phase and the
-  last lines of its log — nothing is retried, nothing is worked around.
-
-**Scope (owner, 2026-09-03): go-live Galley is MECHANICAL PROOFREADING ONLY.**
-``flights`` (the copy-edit deck), the merge desk, and the gated wave-2
-``reread`` are tabled; the driver refuses to run them in mechanical mode, the
-phase prompts say so, and ``galley approve --mechanical-only`` + ``certify``
-enforce it on the artifacts.
-
-Session-spawning is one injectable function (``spawn_claude``) so the whole
-sequence — gate policy, failure handling, state advancement, hand-off naming —
-is testable with a fake spawner against a temp workspace.
+Each phase runs in a separate session. Mechanical mode excludes copyediting
+phases; failures produce a needs_human outcome.
 """
 from __future__ import annotations
 
@@ -48,25 +18,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
-# --- the phase order ---------------------------------------------------------
+from app.watch.naming import PROOF_STAGE as HANDOFF_STAGE
+from galley.journal import JOURNAL_NAME as DECISION_LOG_NAME
+from galley.phases import ALL_PHASES, COPYEDIT_PHASES, MECHANICAL_PHASES
 
-#: Every phase the practitioner loop knows, in order.
-ALL_PHASES: tuple[str, ...] = (
-    "profile", "approve", "sweeps", "ladder", "flights", "audit", "reread",
-    "verify", "settle", "certify", "deliver",
-)
-#: The go-live order: mechanical proofreading only.
-MECHANICAL_PHASES: tuple[str, ...] = (
-    "profile", "approve", "sweeps", "ladder", "audit", "verify", "settle",
-    "certify", "deliver",
-)
-#: Phases that belong to the copy-edit scope, tabled for go-live.
-COPYEDIT_PHASES: tuple[str, ...] = ("flights", "reread")
-
-#: The state each phase must have reached by the time it exits 0. A phase whose
-#: session returned success without advancing the ledger did not do its job —
-#: the driver stops rather than build the next phase on an unproven one.
-#: ``sweeps`` and ``verify`` have no state of their own in RUN_STATES.
+# Minimum state required after each successful phase. Sweeps and verify have
+# no separate run state.
 REQUIRED_STATE: dict[str, str] = {
     "profile": "intake",
     "approve": "plan_approved",
@@ -77,32 +34,16 @@ REQUIRED_STATE: dict[str, str] = {
     "deliver": "delivered",
 }
 
-#: The API ceiling for one book (Quinton, 2026-09-03). It is not advice: the
-#: driver passes it to `galley approve`, so `approval.json` carries it as
-#: `max_spend_usd` and every paid verb REFUSES (exit 5) past it — which stops
-#: the driver as needs_human rather than overspending quietly.
+# API spending ceiling recorded in approval.json.
 DEFAULT_BUDGET_USD = 10.0
 DEFAULT_MODEL = "claude-fable-5-1"
 DEFAULT_PERMISSION_MODE = "acceptEdits"
 DEFAULT_WORKSPACE_ROOT = "~/galley-workspaces"
 DEFAULT_WRAPBIN = "~/galley-bin"
-#: The stage token the proofread deliverable carries in the hand-off. The house
-#: series is Book Original -> book 0 (formatting) -> Book 1 (the developmental
-#: edit) -> Book 2 (this); app/watch/naming.py owns it, and this is a re-export
-#: so the two sides of the hand-off cannot drift. The numbered stages are
-#: written either way — a `Book One` source hands back a `Book Two` — which
-#: `naming.stage_base` decides, not this constant.
-HANDOFF_STAGE = "Book 2"
 #: Where the driver leaves its own log and ledger inside the workspace.
 DRIVER_DIR = "driver"
-#: The decision log Galley ships beside the manuscript (galley/journal.py).
-DECISION_LOG_NAME = "DECISION_LOG.md"
 
-#: Runaway protection on the subscription side. A headless session that loops
-#: spends no API dollars but burns the Max subscription and the wall clock all
-#: the same, so every phase carries BOTH a turn cap (`claude --max-turns`) and
-#: a wall-clock timeout on the subprocess. Hitting either ends the run as
-#: needs_human naming the phase and the cap — never silently.
+# Bound each session by both turns and elapsed time.
 DEFAULT_MAX_TURNS = 100
 PHASE_MAX_TURNS: dict[str, int] = {
     "profile": 80,      # scans + PLAN.md, no spend
@@ -117,46 +58,36 @@ PHASE_MAX_TURNS: dict[str, int] = {
     "certify": 60,
     "deliver": 80,
 }
-#: Wall-clock seconds per phase. Two hours is the floor for a whole-book
-#: command; the ladder runs a full review, and verify/settle re-read the book.
+# Per-phase timeouts in seconds.
 DEFAULT_PHASE_TIMEOUT_S = 2 * 3600.0
 PHASE_TIMEOUT_S: dict[str, float] = {
     "ladder": 3 * 3600.0,
     "verify": 4 * 3600.0,
     "settle": 4 * 3600.0,
 }
-#: What a session says when it stopped because the turn cap was reached. Read
-#: off the phase log, because an exit code alone does not distinguish "hit the
-#: cap" from "the command failed".
+# Fallback turn-cap detection for sessions without a structured result.
 _TURN_CAP_RE = re.compile(r"max(?:imum)?[ _-]?turns?\b|turn limit",
                           re.IGNORECASE)
 #: The conventional exit code for "killed by a timeout".
 TIMEOUT_RC = 124
 
-#: The settle policy (Quinton, 2026-09-03). The until-clean sweep runs at most
-#: SETTLE_ROUNDS rounds; a round raising SETTLE_QUIET_FLOOR new items or FEWER
-#: is quiet and the book is done. `--quiet-floor` is inclusive in
-#: galley/settle.py (`new_items <= quiet_floor`), so "fewer than five" is a
-#: floor of 4. The percentage rule is switched off (`--quiet-share 0` makes
-#: `new_items <= 0` the only share that counts) so the absolute number decides
-#: alone. If the last permitted round is still noisy, the book needs a human.
+# Quiet means <= 4 new items; disable the percentage threshold. Escalate if
+# three rounds remain noisy.
 SETTLE_ROUNDS = 3
 SETTLE_QUIET_FLOOR = 4
 SETTLE_QUIET_SHARE = 0.0
 #: How many trailing log lines a failure reason carries.
 TAIL_LINES = 20
 
-# The keys the brain must never see: the whole point of the launcher's
-# isolation is that the Claude session runs on the Max subscription and only
-# the docproof sifter subprocesses (re-keyed by the ~/galley-bin wrapper) spend
-# API dollars.
+# Keep session authentication on the subscription; the wrapper supplies
+# detector API keys.
 STRIPPED_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
 
 
 log = logging.getLogger("galley.driver")
 
 class DriverError(RuntimeError):
-    """A setup problem the driver refuses to start on. The message is the fix."""
+    """Invalid driver configuration."""
 
 
 def _now() -> str:
@@ -165,11 +96,8 @@ def _now() -> str:
 
 # --- the phase prompts (the single source of truth) --------------------------
 
-# Copied verbatim from ~/galley-bin/galley-run.sh, which is now a thin wrapper
-# over `docproof galley drive`. `{book}` is the source basename inside the
-# workspace. Each prompt reads its inputs from workspace files and stays lean:
-# no session carries the whole book's context, because cache-read scales with
-# context x turns.
+# Each phase reads inputs from workspace files; {book} is the source
+# basename.
 _PROMPTS: dict[str, str] = {
     "profile": (
         "Intake: manuscript at source/{book}. Read CLAUDE.md's Context "
@@ -319,10 +247,7 @@ _PROMPTS: dict[str, str] = {
         "change/comment counts, and the outcome."),
 }
 
-# Appended to the phases where the scope decision changes what the session may
-# do. Kept as one sentence per phase: the manual (CLAUDE.md) carries the
-# doctrine, the prompt only has to make the boundary unmissable in a session
-# that never reads a human's chat message.
+# Scope restrictions appended to the relevant phase prompts.
 _MECHANICAL_NOTE: dict[str, str] = {
     "profile": (
         " MECHANICAL PROOFREADING ONLY (go-live scope): the plan you draft "
@@ -361,12 +286,9 @@ def phase_prompt(phase: str, book: str, *, mechanical_only: bool = True,
                  settle_rounds: int = SETTLE_ROUNDS,
                  settle_quiet_floor: int = SETTLE_QUIET_FLOOR,
                  settle_quiet_share: float = SETTLE_QUIET_SHARE) -> str:
-    """The prompt for one phase's headless session.
-
-    ``book`` is the manuscript's basename inside ``source/``; ``budget_usd`` is
-    the API ceiling the `approve` phase freezes into ``approval.json``. In
-    mechanical mode a phase the scope forbids has no prompt at all — asking for
-    one is a programming error, not a runtime choice."""
+    """Build a phase prompt using the source basename and API budget. Reject
+    phases excluded by mechanical mode.
+    """
     if phase not in _PROMPTS:
         raise DriverError(
             f"unknown phase {phase!r} — expected one of {', '.join(ALL_PHASES)}")
@@ -467,21 +389,14 @@ def seed_workspace(book: str | Path, slug: str, *,
                    workspace_root: str | Path = DEFAULT_WORKSPACE_ROOT,
                    source_dir: Path | None = None, source_id: str = "",
                    on_source_change: str = "refuse") -> Path:
-    """Build (or refresh) the per-book workspace, exactly as launch.sh does.
+    """Create or refresh a workspace while preserving run output and local
+    settings.
 
-    Idempotent: the manual, KNOBS and skills are re-copied so a workspace never
-    runs a stale manual, while ``runs/``, ``settings.local.json`` and anything
-    the session wrote are preserved — a workspace's own edits win.
-
-    The source's content hash (and Drive id, when given) is recorded in
-    ``state.json`` (GALLEY-006). Re-seeding with the SAME content preserves
-    every bit of progress. Re-seeding with DIFFERENT content is a new
-    revision of the book and cannot silently reuse the previous run's
-    verification, settlement or delivery state: with ``on_source_change=
-    "refuse"`` (the default) it raises `SourceChanged` naming the fix; with
-    ``"revise"`` the previous ``runs/``, ``deliverable/`` and ``handoff/``
-    are set aside as ``*.rev<N>`` and the state machine starts over at
-    revision N+1 with the new hash recorded."""
+    Record the source hash and optional Drive id in state.json. Unchanged
+    input preserves progress. Changed input raises SourceChanged unless
+    on_source_change="revise", which archives the previous run artifacts and
+    starts a new revision.
+    """
     from galley.manifest import sha256_file
     src = Path(book).expanduser()
     if not src.is_file():
@@ -545,11 +460,9 @@ def seed_workspace(book: str | Path, slug: str, *,
 
 
 def workspace_slug(name: str, author_last: str = "", file_id: str = "") -> str:
-    """The workspace name for a book: the author's surname plus a suffix of
-    the Drive file id (GALLEY-006), so two different manuscripts that share
-    a filename — a re-upload, a second author's "Book 1" — never share a
-    workspace. `"Redding"`, `"1AbCdEfGhIjKlMnOp"` -> `redding-ijklmnop`;
-    with no id the file's own stem names it (the pre-agent shape)."""
+    """Build a workspace name from the surname and Drive id suffix, or the
+    filename stem when no id is supplied.
+    """
     strip = re.compile(r"[^a-z0-9]+")
     base = strip.sub("-", (author_last or "").lower()).strip("-") or \
         strip.sub("-", Path(name).stem.lower()).strip("-") or "untitled"
@@ -559,12 +472,9 @@ def workspace_slug(name: str, author_last: str = "", file_id: str = "") -> str:
 
 def build_env(base: dict[str, str] | None = None, *,
               wrapbin: str | Path = DEFAULT_WRAPBIN) -> dict[str, str]:
-    """The brain's environment: subscription token in, API keys OUT, the
-    docproof wrapper first on PATH.
-
-    Refuses without ``CLAUDE_CODE_OAUTH_TOKEN`` for the reason the shell
-    launcher does — the fallback is the API key, which is real dollars for
-    every brain turn."""
+    """Require the subscription token, strip API keys, and prepend the docproof
+    wrapper to PATH.
+    """
     env = dict(os.environ if base is None else base)
     token = "".join((env.get("CLAUDE_CODE_OAUTH_TOKEN") or "").split())
     if not token:
@@ -578,8 +488,8 @@ def build_env(base: dict[str, str] | None = None, *,
         env.pop(key, None)
     wrap = str(Path(str(wrapbin)).expanduser())
     env["PATH"] = f"{wrap}{os.pathsep}{env.get('PATH', '')}"
-    # Candidate screening may APPLY in this deployment only; production keeps
-    # the shadow floor (see launch.sh).
+    # Enable applying screened candidates only in this deployment; see
+    # launch.sh.
     env["DOCPROOF_CANDIDATE_APPLY"] = "1"
     return env
 
@@ -608,8 +518,7 @@ class PhaseResult:
     tail: str = ""
     #: Which runaway cap ended this session, if either: "timeout" | "max_turns".
     limit: str | None = None
-    #: The CLI's structured completion, when the log carried one:
-    #: subtype ("success", "error_max_turns", ...) and the turn count.
+    # Structured CLI result, including subtype and turn count.
     subtype: str = ""
     num_turns: int | None = None
 
@@ -618,9 +527,8 @@ class PhaseResult:
         return self.returncode == 0 and not self.limit
 
 
-#: Lines the driver itself writes into a phase log. Excluded from failure
-#: detection: the header names the configured `max-turns`, and matching it
-#: classified a successful short phase as turn-exhausted (GALLEY-003).
+# Exclude driver-written log headers: their configured max-turns value is
+# not evidence of exhaustion.
 DRIVER_LINE_PREFIX = "# galley driver"
 
 
@@ -633,22 +541,21 @@ def transcript_tail(text: str) -> str:
 
 
 def detect_turn_cap(text: str) -> bool:
-    """Whether a phase log's TRANSCRIPT says the session stopped at its turn
-    cap. The driver's own header ("(max-turns 120, timeout 2.0h)") is never
-    evidence — only the session's words are."""
+    """Detect turn exhaustion in session output, excluding the driver header
+    that lists configured caps.
+    """
     return bool(_TURN_CAP_RE.search(transcript_tail(text)))
 
 
-#: The CLI's structured completion (`--output-format stream-json`): the final
-#: `{"type": "result", "subtype": ...}` event. `error_max_turns` is the one
-#: exhaustion signal that needs no text matching.
+# The stream-json completion event provides the explicit error_max_turns
+# signal.
 RESULT_SUBTYPE_MAX_TURNS = "error_max_turns"
 
 
 def parse_session_result(text: str) -> dict[str, Any] | None:
-    """The last structured `result` event in a phase log, or None when the
-    log carries none (an older CLI, or a session killed before it finished).
-    Each stream-json line is one JSON object; anything else is transcript."""
+    """Return the last structured result event in a stream-json log, or None if
+    absent.
+    """
     found = None
     for ln in (text or "").splitlines():
         ln = ln.strip()
@@ -664,17 +571,16 @@ def parse_session_result(text: str) -> dict[str, Any] | None:
 
 
 def session_limit(result: dict[str, Any] | None, tail: str) -> str | None:
-    """"max_turns" when the session hit its cap, else None — from the
-    structured result when there is one, from the transcript's own tail
-    (never the driver's header) otherwise."""
+    """Detect max_turns from the structured result, falling back to the
+    transcript when no result exists.
+    """
     if result is not None:
         subtype = str(result.get("subtype") or "")
         if subtype == RESULT_SUBTYPE_MAX_TURNS:
             return "max_turns"
         if subtype.startswith("success") or subtype == "":
             return None
-        # Any other structured error: the return code carries it; a turn cap
-        # is only ever claimed on the CLI's own word above.
+        # Other structured errors are represented by the return code.
         return None
     return "max_turns" if detect_turn_cap(tail) else None
 
@@ -708,16 +614,12 @@ def _render_stream_line(raw: str) -> str:
 
 
 def spawn_claude(spec: PhaseSpec) -> PhaseResult:
-    """Run one phase as its own headless `claude -p` session, teeing its output
-    to the phase log, under the phase's turn and wall-clock caps. The default
-    spawner; injected over in tests.
+    """Run a headless phase with turn and wall-clock limits.
 
-    The session streams JSON events (`--output-format stream-json`); the raw
-    stream lands in `<phase>.stream.jsonl` and a readable transcript in the
-    phase log. How the session ENDED comes from the structured `result`
-    event — `error_max_turns` is the turn cap — and only when there is no
-    such event does the transcript's own tail (never the driver's header)
-    decide (GALLEY-003)."""
+    Save raw stream-json and a readable transcript. Use the structured
+    result to classify termination; fall back to transcript detection when
+    it is absent.
+    """
     spec.log_path.parent.mkdir(parents=True, exist_ok=True)
     stream_path = spec.log_path.with_suffix(".stream.jsonl")
     with open(spec.log_path, "w", encoding="utf-8") as fh:
@@ -782,23 +684,19 @@ def tail_of(path: str | Path, lines: int = TAIL_LINES) -> str:
 
 # --- the plan gate -----------------------------------------------------------
 
-# The plan's bottom line: "TOTAL est. $2.80 · CAP $10 · stop: …". The FIRST
-# dollar figure after the word TOTAL is the total; a later "CAP $10" on the
-# same line is the cap, not the spend.
+# Use the first dollar amount after TOTAL, excluding a later CAP amount.
 _TOTAL_RE = re.compile(r"^[^\n]*\bTOTAL\b[^$\n]*\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)",
                        re.IGNORECASE | re.MULTILINE)
-# A plan line that puts a copy-edit lane, the merge desk, or a wave-2 re-read
-# in scope. Matched per line so the offending line can be quoted back.
+# Match copyediting scope per line so a refusal can quote the offending
+# text.
 _COPYEDIT_RE = re.compile(
     r"\b(copy[- ]?edit(?:ing|s)?|flight[- ]?deck|flights?|merge[- ]?desk|"
     r"smoothing|rewrite lane|wave[- ]?2|re-?read)\b", re.IGNORECASE)
-# …unless the line is saying it is NOT happening. A mechanical plan is allowed
-# to name what it excludes ("no copy-edit flights — mechanical only").
+# Allow a plan to mention excluded copyediting work.
 _NEGATED_RE = re.compile(
     r"\b(no|none|not|never|off|omitted|omit|excluded|exclude|skipped?|skip|"
     r"locked|out of scope|tabled|n/?a|zero)\b", re.IGNORECASE)
-# The token the driver stamps into QUESTIONS.md so a reply is unambiguously a
-# reply to THIS gate and not to an older question in the same file.
+# Identify the current plan gate in QUESTIONS.md.
 GATE_TOKEN_PREFIX = "GALLEY-GATE"
 _APPROVED_RE = re.compile(r"^\s*(?:[-*>#\s]*)?(APPROVED|APPROVE|YES)\b",
                           re.IGNORECASE | re.MULTILINE)
@@ -889,11 +787,9 @@ def gate_question(slug: str, plan: PlanSummary, budget_usd: float,
 
 def stamp_gate_question(questions_path: str | Path, token: str, subject: str,
                         body: str) -> None:
-    """Log the gate question in the workspace's reply file, marker LAST.
-
-    Everything below the marker is the human's answer, so the driver's own
-    instructions — which necessarily spell APPROVED and DECLINED — can never
-    be read back as a reply."""
+    """Append a gate question with its reply marker last, so instructions above
+    it cannot count as an answer.
+    """
     with open(questions_path, "a", encoding="utf-8") as fh:
         fh.write(f"\n\n## {subject}\n\n{body}\n\n{token}\n"
                  f"(write APPROVED or DECLINED on the next line)\n")
@@ -905,8 +801,7 @@ def reply_after(text: str, token: str) -> str | None:
     idx = text.rfind(token)
     if idx < 0:
         return None
-    # Everything after the marker is the reply; the driver writes its own
-    # instructions ABOVE it precisely so they cannot be mistaken for one.
+    # Only text after the reply marker can answer the gate.
     after = text[idx + len(token):]
     approved = _APPROVED_RE.search(after)
     declined = _DECLINED_RE.search(after)
@@ -955,11 +850,9 @@ class DriveResult:
 
 @dataclass
 class Driver:
-    """Sequence the phases of one book, unattended.
-
-    Every side channel is injectable: ``spawn`` runs a phase, ``ask`` sends the
-    gate escalation, ``sleep``/``clock`` drive the reply poll, ``upload`` puts
-    the hand-off on Drive. The defaults are the real ones."""
+    """Sequence one book through the configured phases with injectable session,
+    notification, timing, and upload functions.
+    """
 
     book: Path
     slug: str
@@ -978,26 +871,22 @@ class Driver:
     poll_interval_s: float = 30.0
     state_gate: bool = True
     question_gate: bool = True
-    #: Runaway caps. `max_turns`/`timeout_s` override every phase; the two
-    #: `*_by_phase` maps override one, and win over the flat override.
+    # Per-phase caps take precedence over global overrides.
     max_turns: int | None = None
     max_turns_by_phase: dict[str, int] = field(default_factory=dict)
     timeout_s: float | None = None
     timeout_by_phase: dict[str, float] = field(default_factory=dict)
-    #: The source's Drive file id (recorded in state.json) and what to do
-    #: when the workspace was seeded with a DIFFERENT manuscript: "refuse"
-    #: (raise) or "revise" (set the previous results aside, next revision).
+    # Source identity and policy for changed content: refuse or archive and
+    # revise.
     source_id: str = ""
     on_source_change: str = "refuse"
-    #: The settle policy: at most `settle_rounds` until-clean rounds, a round
-    #: raising `settle_quiet_floor` new items or fewer is quiet.
+    # A round is quiet when new items <= settle_quiet_floor.
     settle_rounds: int = SETTLE_ROUNDS
     settle_quiet_floor: int = SETTLE_QUIET_FLOOR
     settle_quiet_share: float = SETTLE_QUIET_SHARE
     env: dict[str, str] | None = None
-    # Resolved at call time (see `_spawner`), never bound as a dataclass
-    # default: a default captured here would survive a monkeypatch of
-    # `spawn_claude` and a test would spawn a REAL headless session.
+    # Resolve spawn_claude at call time so injected test spawners replace
+    # it.
     spawn: Callable[[PhaseSpec], PhaseResult] | None = None
     ask: Callable[[str, str, str], str] | None = None
     upload: Callable[[list[Path], str], list[str]] | None = None
@@ -1044,9 +933,8 @@ class Driver:
         argv = ["claude", "-p", prompt, "--model", self.model,
                 "--permission-mode", self.permission_mode,
                 "--max-turns", str(turns),
-                # The structured completion event is how the driver learns
-                # HOW a session ended (GALLEY-003); the raw stream is kept
-                # beside the readable log.
+                # Preserve the structured completion beside the readable
+                # log.
                 "--output-format", "stream-json", "--verbose"]
         return PhaseSpec(phase=phase, prompt=prompt, workspace=self.workspace,
                          log_path=self._driver_dir() / f"{phase}.log",
@@ -1068,14 +956,10 @@ class Driver:
             else after.strip()
 
     def settle_verdict(self) -> str:
-        """Why this book still needs a human after the settle sweep, or "".
-
-        The policy is the sweep's own arithmetic, read back off
-        ``settlement.json``: the loop is allowed `settle_rounds` rounds, and a
-        round raising more than `settle_quiet_floor` new items is noisy. A
-        sweep that ran out of rounds while still noisy has not converged on
-        clean, and no amount of further mechanical work will fix that — it is
-        a human proofreader's book."""
+        """Return a reason for human review if settlement exhausted its rounds
+        without meeting the quiet threshold; otherwise return an empty
+        string.
+        """
         run = self._final_run()
         if run is None:
             return ""
@@ -1130,33 +1014,23 @@ class Driver:
         result.stopped_at = phase
         self._write_outcome(reason)
         self._write_ledger(result)
-        # A stopped run still gets its decision log: what a person picking the
-        # workspace up needs most is the record of what was decided before it
-        # stopped, and why it stopped.
+        # Preserve the decision log for a stopped run.
         self.write_decision_log()
-        # …and it still HANDS OFF. A book that stops has an answer —
-        # needs_human, with the reason — and DocWatch's contract makes
-        # outcome.json the one required file precisely so that answer can come
-        # back from a run that produced nothing else. Without this the stopped
-        # book sits silent in the author's folder until a person notices.
+        # Return a stopped run's outcome even when no manuscript was
+        # produced.
         self._stopped_handoff(result)
         self.log(f"STOPPED at {phase or 'the plan gate'}: {reason}")
         return result
 
     def _stopped_handoff(self, result: DriveResult) -> None:
-        """Best-effort partial hand-off for a run that stopped.
-
-        Everything here is defensive: this runs on the failure path, and an
-        exception raised while reporting a failure would replace a legible
-        `needs_human` with a traceback. A hand-off that cannot be built or
-        uploaded is logged and left on disk for a person."""
+        """Build and upload available artifacts after a stopped run. Log
+        handoff failures without replacing the original error.
+        """
         try:
             out = Path(self.handoff_dir) if self.handoff_dir \
                 else self.workspace / "handoff"
-            # The driver's OWN verdict leads the list. A run that stopped at
-            # certify may have a settle-written `done` beside its findings, and
-            # handing that back would tell DocWatch the book is finished when
-            # the run says it is not.
+            # Prefer the driver failure over an earlier settle-written done
+            # verdict.
             result.handoff = build_handoff(
                 self.workspace, self.book.name, out,
                 outcome_sources=[self.workspace / "runs" / "outcome.json",
@@ -1177,11 +1051,9 @@ class Driver:
                      f"phase once Google sign-in is working")
 
     def write_decision_log(self) -> Path | None:
-        """Render `deliverable/DECISION_LOG.md` from whatever artifacts exist.
-
-        Best-effort by design: a decision log that cannot render must never be
-        the thing that sinks a finished run, so a failure is logged and the
-        run carries on (the hand-off, which requires the file, will say so)."""
+        """Render deliverable/DECISION_LOG.md from available artifacts; log
+        failures and continue.
+        """
         run = self._final_run()
         out = self.workspace / "deliverable" / DECISION_LOG_NAME
         try:
@@ -1194,10 +1066,7 @@ class Driver:
             return None
 
     def _write_outcome(self, reason: str) -> Path:
-        """The driver's own verdict, in the place DocWatch reads: `runs/`.
-
-        A phase's own settle-written outcome.json lives beside its findings;
-        this one says the RUN could not finish, and why."""
+        """Write the driver failure and its reason to runs/outcome.json."""
         from galley.outcome import Outcome, hubspot_fields
         runs = self.workspace / "runs"
         runs.mkdir(parents=True, exist_ok=True)
@@ -1295,9 +1164,8 @@ class Driver:
     # -- the sequence --
 
     def run(self) -> DriveResult:
-        # Setup problems (no token, an unknown or out-of-scope phase) RAISE:
-        # they are a caller's mistake, not a verdict on the book, and must not
-        # write a needs_human outcome DocWatch would act on.
+        # Invalid setup raises without writing an outcome for the
+        # manuscript.
         phases = select_phases(mechanical_only=self.mechanical_only,
                                start=self.start_phase, only=self.only_phases)
         ws = seed_workspace(self.book, self.slug,
@@ -1338,11 +1206,8 @@ class Driver:
                     f"{outcome.log_path}:\n{outcome.tail}")
             asked = self._new_question(asked_before)
             if asked and self.question_gate:
-                # CLAUDE.md's escalation contract is "log it in QUESTIONS.md,
-                # push it, and STOP the blocked thread" — but `galley ask`
-                # exits 0, so a session that escalated and carried on looks
-                # exactly like one that had nothing to ask. Unattended, an
-                # unanswered question must stop the run, not ride along.
+                # galley ask exits zero; an unanswered escalation must still
+                # stop unattended work.
                 return self._stop(
                     result, phase,
                     f"phase {phase} escalated a question and there is nobody "
@@ -1386,9 +1251,7 @@ class Driver:
         return result
 
     def _final_verdict(self, result: DriveResult) -> tuple[str, str]:
-        """The run's own verdict, taken from the delivered outcome.json rather
-        than invented: `galley settle` already made this call from the run's
-        numbers, and the driver must not paper over a `needs_human`."""
+        """Read the delivered outcome.json, preserving any needs_human verdict."""
         from galley.outcome import Outcome
         for candidate in self._outcome_sources():
             payload = Outcome.load(candidate.parent)
@@ -1410,8 +1273,7 @@ class Driver:
     def run_handoff(self) -> list[Path]:
         out = Path(self.handoff_dir) if self.handoff_dir \
             else self.workspace / "handoff"
-        # The decision log is rendered from the run's artifacts at hand-off
-        # time, so it always describes the build that actually ships.
+        # Render the log from the artifacts being handed off.
         self.write_decision_log()
         return build_handoff(self.workspace, self.book.name, out,
                              outcome_sources=self._outcome_sources())
@@ -1426,20 +1288,14 @@ def _default_ask(subject: str, body: str, book: str) -> str:
 # --- hand-off ----------------------------------------------------------------
 
 def handoff_base(source_name: str, stage: str = HANDOFF_STAGE) -> str:
-    """``"Redding - Book 1.docx"`` -> ``"Redding - Book 2"``, and
-    ``"Redding - Book One.docx"`` -> ``"Redding - Book Two"``.
-
-    Straight through ``app/watch/naming.stage_base``, so the surname is read
-    exactly as the watcher reads it — dash-, case- and spacing-tolerant, and
-    tolerant of whichever stage token the source happens to carry — the number's
-    spelling is mirrored the same way, and the two sides of the hand-off cannot
-    disagree about what a file is called."""
+    """Use watcher naming rules to produce Book 2 or Book Two, matching the
+    source spelling.
+    """
     from app.watch import naming
     return naming.stage_base(Path(source_name).stem, stage)
 
 
-#: The hand-off contract DocWatch reads (sibling agent owns the other side):
-#: the deliverable's file within the workspace, and the suffix it lands under.
+# Workspace filenames accepted for handoff.
 _LETTER_NAMES = ("letter.md", "EDITORS_LETTER.md")
 _STYLE_NAMES = ("style-sheet.md", "STYLE_SHEET.md")
 _JOURNAL_NAMES = (DECISION_LOG_NAME, "decision-log.md")
@@ -1450,20 +1306,12 @@ def build_handoff(workspace: str | Path, source_name: str,
                   handoff_dir: str | Path, *,
                   outcome_sources: Iterable[Path] = (),
                   partial: bool = False) -> list[Path]:
-    """Copy the six hand-off files into ``handoff_dir`` under house names.
+    """Copy the manuscript, letter, style sheet, decision log, verification
+    report, and outcome into the handoff directory under house names.
 
-    ``<surname> - Book 2.docx`` (the tracked-changes proofread manuscript),
-    ``… - letter.md``, ``… - style-sheet.md``, ``… - decision-log.md``,
-    ``… - verification.md``, ``… - outcome.json``. On a FINISHED run every
-    one is required: a hand-off missing a piece is not a hand-off, so a
-    missing file raises rather than shipping a partial folder.
-
-    ``partial=True`` is the STOPPED run's hand-off. A run that died at the
-    ladder has no deliverable and no letter, but it does have a verdict and a
-    decision log — and DocWatch's contract makes only ``outcome.json``
-    required, precisely so a stopped book still comes back with its answer
-    instead of sitting silent in the folder. So a partial hand-off ships
-    whatever exists, and raises only when there is no outcome at all."""
+    A complete handoff requires all six files. With partial=True, copy
+    available files and require only outcome.json.
+    """
     ws = Path(workspace)
     out = Path(handoff_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -1561,12 +1409,9 @@ def drive_token(*, get_key=None) -> str:
 
 
 def _default_upload(files: list[Path], folder_id: str) -> list[str]:
-    """Put the hand-off in a Drive folder with the watcher's own sign-in.
-
-    Reuses app/watch/drive.py and the CLI's stored Google refresh token — the
-    same credentials `docproof-watch` runs on, no server needed. A setup gap
-    raises with the command that fixes it; the caller reports the manual
-    fallback (drag the files in the hand-off folder into the Drive folder)."""
+    """Upload handoff files using the watcher's stored Google credentials.
+    Raise on setup or upload failure.
+    """
     from app.watch import drive
 
     token = drive_token()

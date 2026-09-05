@@ -1,27 +1,8 @@
-"""The single-pass adapter — one error-type group over a chosen span set.
+"""Run one error-type group over a chosen paragraph span set.
 
-Where :class:`DocproofLadderAdapter` runs DocProof's whole ladder over the whole
-book, this adapter is the surgical instrument every later wave reaches for: send
-*only* the scoped paragraphs to the model, for *only* the named error-type
-group, and hand back anchored :class:`GFinding`s. A wave that suspects a missed
-comma splice in chapter 3 re-reads chapter 3 for comma splices and nothing else,
-at whatever model and repeat count the wave dials in.
-
-It drives DocProof as a library — ``prepare`` (analyses off) for the ingested,
-normalized document model, then the ``Analyzer`` / ``validate_findings`` pair by
-hand — so the read is exactly the scoped paragraphs and no more. It is read-only
-with respect to the DocProof package and the manuscript.
-
-Like the ladder adapter it HOLDS its provider: the :class:`DetectorAdapter`
-protocol's ``run`` takes no provider, so the orchestrator constructs the adapter
-with one (a real ``Provider`` in production, a fake under test).
-
-Restricting the read to a paragraph subset is done by *rechunking a filtered
-document*, not by ``prepare``'s ``selection=`` — that argument filters by chunk
-id, and a chunk carries neighbouring paragraphs, so it cannot express "only
-these paragraphs". We keep the full ``prepared.doc`` for anchoring (the validator
-needs every paragraph's canonical text) but build the chunks the model actually
-sees from a document filtered to the scoped ids alone.
+It prepares the document with analyses off, rechunks only scoped paragraphs,
+and returns anchored findings for the selected group. The full prepared document
+remains available for anchoring; model input is restricted to the filtered chunks.
 """
 
 from __future__ import annotations

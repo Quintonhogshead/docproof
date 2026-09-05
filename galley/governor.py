@@ -1,23 +1,11 @@
-"""The governor — Galley's budget allocator.
+"""Budget allocator and hard spending gates for Galley waves.
 
-Dollars are the scarce input. The governor holds the hard limits (:class:`Caps`)
-and the append-only spend record (:class:`~galley.casefile.BudgetLedger`), and it
-is the one place a wave may spend. Two questions it answers:
+The governor owns per-wave and total caps, records charges in an append-only
+ledger, and decides whether another wave or panel call may proceed. Gated
+charges cannot exceed caps; explicitly allowed overruns remain recorded and are
+flagged. :meth:`Governor.should_stop` also checks marginal cost and wave limits.
 
-* *May I spend this?* — :meth:`Governor.can_spend` is the exact predicate
-  :meth:`Governor.charge` enforces, so spend can never exceed either the
-  per-wave cap or the total cap under any sequence of gated charges. Money
-  already gone is a different question: a charge made with
-  ``allow_over_cap=True`` is always recorded — the ledger is the truth — and
-  the overrun is flagged in :attr:`Governor.overruns` rather than refused.
-* *Should I stop?* — :meth:`Governor.should_stop` fires when the marginal cost
-  per validated finding crosses a threshold, or when a hard cap is reached
-  (waves exhausted, total budget floor reached).
-
-Pure and deterministic: no I/O, no model calls. The only mutations are to the
-governor's own ledger and counters. The ledger (with the :class:`Caps` snapshot
-stashed in ``ledger.caps``) serializes into the case file, so a governor can be
-reconstructed from a loaded ledger with :meth:`Governor.from_ledger`.
+It performs no I/O or model calls and can be reconstructed from the ledger.
 """
 
 from __future__ import annotations

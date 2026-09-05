@@ -1,17 +1,7 @@
-"""Seeded-error recall gauge (ticket E3).
+"""Plant reversible errors in a copy and score detector recall.
 
-A *reference-independent* recall estimator. Real recall needs a human-marked
-key; here we manufacture one. We plant a handful of known, typed, reversible
-errors into a **copy** of a few sampled chapters, later run the fleet on the
-seeded copy, and score how many planted errors any finding lands on. The ratio
-caught / planted is a blind estimate of the fleet's recall — blind because it
-can only speak to the error classes we know how to plant.
-
-This module owns two of the three moves: it builds the seeded copy + answer key
-(:func:`seed_copy`) and scores catches against that key (:func:`score_catches`).
-Running the fleet on the seeded copy is a separate ticket.
-
-Two invariants matter and are enforced by tests:
+The ratio caught/planted estimates recall for the supplied taxonomy. The source
+manuscript is copied and tagged so it cannot be delivered accidentally.
 
 * **The original is never mutated.** :func:`seed_copy` deep-reads ``ms`` and
   returns a brand-new :class:`~galley.contracts.Manuscript`; ``ms`` compares
@@ -20,12 +10,6 @@ Two invariants matter and are enforced by tests:
   :func:`seed_copy` is tagged; :func:`is_seeded` reports it and
   :func:`assert_deliverable` refuses to let a seeded copy ship.
 
-Determinism: the same ``(ms, n, taxonomy, rng_seed)`` yields byte-identical
-seeded text and an identical answer key on every run — a single
-``random.Random(rng_seed)`` drives every choice, in a fixed order.
-
-Stdlib only (``random``, ``dataclasses``, ``re``, ``copy``, ``weakref``); the
-only project import is the frozen contracts module.
 """
 
 from __future__ import annotations
@@ -292,19 +276,11 @@ def seed_copy(
     taxonomy: Iterable[Mutation] = DEFAULT_TAXONOMY,
     rng_seed: int = 0,
 ) -> tuple[Manuscript, AnswerKey]:
-    """Plant ``n`` typed errors into a copy of a few sampled chapters.
+    """Plant up to n typed errors in a copy and return it with an answer key.
 
-    Deterministically samples 3-4 chapters (fewer if the book has fewer), then
-    plants at most one error per paragraph, drawing mutation types from
-    ``taxonomy``, until ``n`` are placed or the sampled paragraphs are exhausted.
-    Capping at one plant per paragraph keeps every recorded offset valid in the
-    final seeded text (no later plant shifts an earlier one).
-
-    Returns ``(seeded_ms, answer_key)``. ``seeded_ms`` is a fresh manuscript with
-    only the mutated paragraphs changed; ``ms`` is left untouched. If the sampled
-    chapters cannot host ``n`` plants, fewer are planted and
-    ``len(answer_key.planted) < answer_key.requested`` records the shortfall.
-    """
+    Deterministically sample 3-4 chapters, or all if fewer. Plant at most
+    one error per paragraph to preserve offsets. Leave ms unchanged and
+    record any shortfall in the answer key."""
 
     rng = random.Random(rng_seed)
     taxonomy = tuple(taxonomy)

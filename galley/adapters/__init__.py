@@ -1,10 +1,4 @@
-"""The detector seam.
-
-Galley talks to every detector — DocProof's full ladder, a single targeted
-error-type pass, LanguageTool, Sapling, spellscan — through one small protocol.
-DocProof is the first and best adapter, not the skeleton; nothing above this seam
-knows which detector it is driving.
-"""
+"""Detector interfaces, scope selection, and optional registration helpers."""
 
 from __future__ import annotations
 
@@ -18,13 +12,9 @@ from galley.contracts import GFinding, Manuscript
 
 @dataclass(frozen=True)
 class Scope:
-    """What a detector should look at, and how hard.
-
-    Empty ``chapters``/``para_ids`` means "the whole book". When both are set the
-    target is their union. ``error_groups`` names the DocProof error-type groups
-    to run (empty = the adapter's default set); ``model`` and ``passes`` let a
-    wave dial the fleet. ``char_budget`` caps a per-character-billed detector
-    (Sapling) so a targeted wave can never spend past its allowance.
+    """Select the union of chapters and paragraph ids, or the whole manuscript
+    when both are empty. Empty error_groups uses adapter defaults;
+    char_budget limits character-billed detectors.
     """
 
     chapters: tuple[int, ...] = ()
@@ -35,10 +25,8 @@ class Scope:
     char_budget: int | None = None
 
     def paragraph_ids(self, ms: Manuscript) -> list[str]:
-        """Resolve this scope to the ordered paragraph ids it selects in ``ms``.
-
-        An empty scope selects the whole book in reading order. Chapter ids and
-        explicit para ids union; ids not present in the manuscript are dropped.
+        """Resolve selected paragraph ids in manuscript order, dropping unknown
+        ids.
         """
 
         if not self.chapters and not self.para_ids:
@@ -68,13 +56,7 @@ class Scope:
 
 @dataclass
 class AdapterResult:
-    """What a detector hands back: findings, coverage notes, and its own cost.
-
-    ``coverage_notes`` surfaces the detector's honest gaps — a degraded pass, an
-    unruled window, a scope it declined — so the orchestrator can record them
-    rather than mistake silence for a clean sweep. ``cost_usd`` is what this call
-    actually billed; the orchestrator's ledger sums these.
-    """
+    """Detector findings, coverage gaps, and the actual cost of this call."""
 
     findings: list[GFinding] = field(default_factory=list)
     coverage_notes: list[str] = field(default_factory=list)
@@ -83,12 +65,8 @@ class AdapterResult:
 
 @runtime_checkable
 class DetectorAdapter(Protocol):
-    """The one contract every detector implements.
-
-    ``run`` reads the manuscript within ``scope``, spends up to ``budget_usd``,
-    threads the shared ``usage`` object for exact per-model cost accounting, and
-    returns an :class:`AdapterResult`. Implementations are read-only with respect
-    to the manuscript and to the DocProof package.
+    """Read within scope without mutating the manuscript. Track usage and
+    return findings, coverage notes, and actual spend.
     """
 
     name: str
@@ -102,8 +80,8 @@ class DetectorAdapter(Protocol):
     ) -> AdapterResult: ...
 
 
-# The live registry. Adapters register themselves at import; the orchestrator
-# looks them up by name. Kept a plain dict per the frozen contract.
+# Optional registry retained for callers; the orchestrator uses its supplied
+# adapter dictionary.
 ADAPTERS: dict[str, DetectorAdapter] = {}
 
 

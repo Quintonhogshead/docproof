@@ -1,11 +1,8 @@
-"""Ingest a source document into a galley :class:`~galley.contracts.Manuscript`.
+"""Ingest a source document into a Galley manuscript.
 
-Shared by the app's galley runner and the headless ``docproof galley`` CLI so the
-two build paragraph ids identically. Built on DocProof's own ingest: the ids here
-are the ids the ladder adapter's findings carry, which is what scope resolution
-and the auditor's density-by-chapter both key on. A separate normalization pass is
-not owed — the ladder normalizes inside its own ``prepare()``; this manuscript is
-used for id-keyed scope work, not for anchoring.
+Uses DocProof's ingest so paragraph ids match adapter findings. The resulting
+manuscript supports id-keyed scope and density work; the ladder performs its own
+normalization for anchoring.
 """
 
 from __future__ import annotations
@@ -55,24 +52,11 @@ def manuscript_from_source(source_path: str, cfg: "Config") -> Manuscript:
 
 def write_manuscript_docx(source_path: str, cfg: "Config", manuscript: Manuscript,
                           out_path: str) -> Path:
-    """Materialize a galley :class:`Manuscript`'s paragraph text back into a
-    real ``.docx``, built from ``source_path``'s own paragraphs — so
-    ``docproof review`` (or any other tool that reads a ``.docx``) can consume
-    it directly. Closes the seed -> review -> score loop: ``galley seed``
-    produces a seeded ``Manuscript`` and an answer key, but until this, only
-    the JSON existed — nothing a review could actually open.
+    """Write manuscript text into a copy of its source DOCX.
 
-    Every paragraph whose text differs from the source is replaced WHOLE
-    (offset 0 to its full original length), not diffed down to a minimal
-    span: a ``Manuscript`` only carries a paragraph's final text, so replacing
-    it whole is correct regardless of how many separate edits produced that
-    text, and needs no offset bookkeeping to get right. Untracked — the
-    seeded copy is a fresh manuscript to hand to a review, not a reviewed one
-    (see :func:`docproof.reassembler.apply_untracked`).
-
-    Only ``.docx`` sources are supported today; an ``.idml`` source raises
-    ``ValueError`` — the untracked-write path this reuses is docx-only.
-    """
+    Replace each changed paragraph in full without tracked changes. The
+    manuscript carries final text, so no edit offsets are needed. Raise
+    ValueError for non-DOCX sources."""
     from docproof.ingest import build_document_model, preflight
     from docproof.reassembler import apply_untracked
 

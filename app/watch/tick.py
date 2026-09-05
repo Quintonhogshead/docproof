@@ -753,38 +753,18 @@ def _finish_hubspot_plan(hs_token: str | None, ws: WatchSettings,
 
 
 # --- proofing (Galley) --------------------------------------------------------
-#
-# The second pass over a book, on the same status dropdown as formatting moved
-# to its own value pair: "Ready for Proofing" -> "Proofing Complete". Scope is
-# the mechanical proofread — the review ladder, its sweeps and verify — and
-# nothing else; copy-edit flights and the merge desk are not wired here.
-#
-# Two runners, one contract. `proof_runner="app"` runs the read here, through
-# the app's galley job. `proof_runner="external"` runs nothing and waits for the
-# Mac-side practitioner to leave the four hand-off files in the author's folder
-# (see `proof.hand_off_names`). Either way the pass ends at the same place: read
-# the verdict, and act on it.
-#
-# The verdict is the only thing that decides the CRM write, and both verdicts
-# write: `done` moves the property to "Proofing Complete", `needs_human` to
-# "Needs Human PR" — the option that puts the book in front of a human
-# proofreader. Exactly one PATCH per book either way. A book never sits at
-# "Ready for Proofing" after a verdict, because that is the state nobody would
-# notice; `needs_human` also rides the needs-a-person email, because the CRM
-# value alone does not say why.
+# Proofing reads Book 1, runs in app or external mode, then delivers Book 2.
+# Either verdict moves the book off "Ready for Proofing"; needs_human also
+# includes the reason in the needs-a-person report.
 
 def run_proof(token: str, home: Path, ws: WatchSettings,
               listing: list[DriveFile], state: WatchState, runner: JobRunner,
               store: JobStore, *, mock: bool, opener, hs_token: str | None,
               routes: dict[str, str] | None = None,
               report: TickReport) -> None:
-    """Proofread every book HubSpot flagged for it, and apply any verdict that
-    has since landed.
-
-    In subfolder mode `listing` is proofing's own discovery — the folders of the
-    authors flagged "Ready for Proofing" — already gated, so the gate is not run
-    again over it. In flat mode it is the shared folder listing and the gate
-    runs here, the way promo's and the plan's do."""
+    """Process manuscripts ready for proofing. Subfolder listings are already
+    gated by discovery; flat listings are gated here.
+    """
     if not ws.proofing_enabled:
         return
     routes = routes or {}
@@ -870,7 +850,8 @@ def _one_proof(token: str, home: Path, ws: WatchSettings, file: DriveFile,
         return
 
     job = store.get(rec.proof_job_id) if rec.proof_job_id else None
-    paid_for = (job is not None and job.state == "done" and job.results_dir
+    paid_for = (job is not None and job.state in ("done", "needs_human")
+                and job.results_dir
                 and Path(job.results_dir).is_dir())
 
     if rec.proof_attempts >= ws.max_attempts and not paid_for:
@@ -885,7 +866,7 @@ def _one_proof(token: str, home: Path, ws: WatchSettings, file: DriveFile,
 
     job = _prepare_proof(token, home, ws, file, rec, state, runner, store,
                          opener=opener)
-    if job.state != "done":
+    if job.state not in ("done", "needs_human"):
         # Something transient — a model that would not answer, a disk that
         # filled. Raised so the caller counts an attempt against it.
         raise PrepFailed(job.error or "The proofread did not finish.")
@@ -909,15 +890,11 @@ def _one_proof(token: str, home: Path, ws: WatchSettings, file: DriveFile,
 def _prepare_proof(token: str, home: Path, ws: WatchSettings, file: DriveFile,
                    rec, state: WatchState, runner: JobRunner, store: JobStore,
                    *, opener) -> Job:
-    """The manuscript's galley job, run or resumed.
-
-    The shortcut is the point of the state file, and it matters more here than
-    anywhere else in the watcher: a galley run is a wave loop over a whole
-    novel, and running one twice is the most expensive mistake this program can
-    make."""
+    """Reuse terminal jobs with results, or run an unfinished proofreading job."""
     existing = store.get(rec.proof_job_id) if rec.proof_job_id else None
     if existing is not None:
-        finished = (existing.state == "done" and existing.results_dir
+        finished = (existing.state in ("done", "needs_human")
+                    and existing.results_dir
                     and Path(existing.results_dir).is_dir())
         if finished:
             log.info("%s has already been proofread; picking up from there.",
@@ -937,13 +914,9 @@ def _prepare_proof(token: str, home: Path, ws: WatchSettings, file: DriveFile,
 def _await_external_proof(token: str, ws: WatchSettings, file: DriveFile, rec,
                           state: WatchState, *, dest_folder_id: str, opener,
                           report: TickReport) -> None:
-    """Record a book as out with an external practitioner, and say so once.
-
-    No work is started and nothing is spent: the Mac-side loop runs on a Claude
-    Max subscription that cannot run on Fly, so all DocWatch does here is notice
-    the book, mark the manuscript `awaiting` so the folder shows it, and tell
-    the owner where to find it. The marker is deliberately not terminal — the
-    next tick still looks, and picks the verdict up the moment it lands."""
+    """Mark a manuscript awaiting an external practitioner and notify once.
+    Leave it eligible for later outcome checks.
+    """
     folder_link = (f"https://drive.google.com/drive/folders/{dest_folder_id}"
                    if dest_folder_id else "the watched folder")
     reason = (f"is flagged '{ws.hubspot_proof_ready_value}' and is waiting for "
@@ -967,22 +940,10 @@ def _apply_proof_outcome(hs_token: str | None, token: str, ws: WatchSettings,
                          file: DriveFile, rec, state: WatchState,
                          verdict: "proof.Verdict", *, opener,
                          report: TickReport) -> None:
-    """Act on a verdict: move the record on, either way.
-
-    A proofread ends at one of two verdicts and BOTH move the book off "Ready
-    for Proofing" — `done` to "Proofing Complete", `needs_human` to "Needs Human
-    PR", the option that puts it in front of a human proofreader. Neither leaves
-    a book sitting at ready, which is the state nobody would notice.
-
-    Exactly one PATCH either way, guarded by `proof_hubspot_done`; the local
-    record is written before the Drive marker, which is prep's order for prep's
-    reason — a file that reads finished in Drive was finished in HubSpot first,
-    so the two can never disagree in the direction that strands a book.
-
-    `needs_human` also earns its report line and the owner's email, because the
-    CRM value alone does not say *why*. The manuscript is marked terminally
-    either way: the read has been paid for, and repeating it would buy the same
-    answer at the same price."""
+    """Apply the outcome to CRM, record progress, then mark the Drive
+    manuscript. Avoid duplicate CRM writes and include human-review reasons
+    in notifications.
+    """
     rec.proof_outcome = verdict.outcome
     rec.proof_outcome_reason = verdict.reason
     state.record(rec)

@@ -1,23 +1,9 @@
-"""The full-ladder adapter — DocProof's whole pipeline as wave one.
+"""Run DocProof's full pipeline as Galley wave one.
 
-Wraps ``prepare -> run_sync -> finish`` in a wave-keyed run directory and
-converts DocProof's ``Finding`` objects (as written to ``findings.json``, anchors
-resolved) into Galley :class:`GFinding`s with provenance filled. The coverage
-ledger's gaps / unruled / degraded passes surface as ``coverage_notes`` so the
-orchestrator records DocProof's honest holes rather than mistaking silence for a
-clean sweep.
-
-Read-only with respect to the docproof package: it calls the pipeline as a
-library and writes only into its own run directory. That directory is stable
-(``<workspace>/wave<N>_ladder/``, the case file's folder in production) and
-holds DocProof's own ``checkpoint.json``, so a wave interrupted mid-ladder
-replays the reads it already paid for on resume instead of buying them twice.
-
-The adapter holds its own ``provider`` because the :class:`DetectorAdapter`
-protocol's ``run`` takes no provider — the orchestrator constructs the adapter
-with one (a real ``Provider`` in production, a ``FakeProvider`` under test).
-Wave one runs the whole book, so ``scope`` is advisory here; targeted re-reads
-are the single-pass adapter's job (B2).
+It wraps ``prepare -> run_sync -> finish`` in a wave-keyed run directory,
+converts anchored findings to :class:`GFinding`s, and surfaces coverage gaps.
+Checkpoints make an interrupted wave resumable; targeted scope is handled by the
+single-pass adapter.
 """
 
 from __future__ import annotations
@@ -93,20 +79,12 @@ QUERY_STATUSES = frozenset({"query"})
 def gfindings_from_json(
     findings_json: str | Path, *, wave: int, model: str
 ) -> tuple[list[GFinding], int]:
-    """Convert a run's ``findings.json`` into GFindings.
+    """Convert anchored validated findings and queries to GFindings.
 
-    Findings the validator both anchored AND kept as a tracked change
-    (``status == "validated"``) carry a usable, applied fix and convert
-    losslessly on span, error type, and fix text. An anchored "query" row is
-    kept too, as a GFinding with ``confidence="query"`` and an empty
-    ``replace`` — the validator's query anchor has no insert text (a question
-    is not a correction), and ``galley.deliverable`` turns that confidence
-    into a force_query margin comment, so the author still sees the question.
-    A "skipped_low_confidence" or rejected row has an Anchor as well but no
-    real fix, and converting it would hand the case file a fabricated
-    deletion; those, and unanchored rows, are counted and returned as the
-    second element so the caller can note the loss.
-    """
+    Queries have confidence="query" and an empty replacement so delivery
+    renders them as comments. Skip rejected, low-confidence, and unanchored
+    rows; return their count alongside the findings. Their anchors do not
+    imply an applicable fix."""
 
     payload = json.loads(Path(findings_json).read_text(encoding="utf-8"))
     out: list[GFinding] = []
@@ -141,20 +119,12 @@ def gfindings_from_json(
 
 @dataclass
 class DocproofLadderAdapter:
-    """Runs the full DocProof ladder over the source book and returns GFindings.
+    """Run the full DocProof ladder over a source document.
 
-    Construct with the source document path, a built ``Config``, and a ``provider``
-    (real or fake). Each ``run`` works in ``<workspace>/wave<N>_ladder/`` — the
-    orchestrator sets ``workspace`` to the case file's directory and ``wave``
-    to the wave it is running — where DocProof's checkpoint is fingerprinted
-    on the document, config, and prompts, so a re-run of the same wave replays
-    its paid reads and a changed prompt set starts clean on its own.
-
-    ``calibration`` (a ``galley.calibration.Calibration``) lets the adapter
-    answer the orchestrator's pre-flight ``estimate_usd`` from the observed
-    ``$/kword`` of earlier ladder runs; without one it has no honest number
-    and says so with ``None``.
-    """
+    Each run uses <workspace>/wave<N>_ladder/. Checkpoints are keyed by
+    document, config, and prompts, allowing unchanged paid reads to replay.
+    Optional calibration supplies an observed cost estimate; without it,
+    estimate_usd returns None."""
 
     source_path: str | Path
     cfg: Config

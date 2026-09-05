@@ -1,22 +1,11 @@
-"""Cheap-detector adapters: spellscan, LanguageTool, Sapling.
+"""Adapters for local spellscan, LanguageTool, and billed Sapling checks.
 
-Three thin :class:`DetectorAdapter` wrappers over DocProof's own detector
-functions. They share one shape — resolve the scope to paragraphs, build the
-``ParagraphRef`` list those detectors read, run the detector, and hand back
-located :class:`GFinding`\\s — but differ in what they cost and what they
-promise:
+Each wrapper resolves scope to paragraphs and returns located findings.
 
-* **spellscan** and **LanguageTool** run entirely *locally* (a bundled Hunspell
-  dictionary; a local LanguageTool JVM). No network, no per-call billing, so
-  ``cost_usd`` is ``0.0`` and no token bucket is threaded — only ``usage``'s
-  call counter ticks, so the ledger records that a local pass ran.
-* **Sapling** bills *per character*. This adapter never lets a scope past a hard
-  character budget: it sums the scoped text up front and, if that exceeds the
-  budget (or no API key is set), it *refuses* — empty findings, zero cost, a
-  coverage note saying why — without ever calling the billed endpoint.
+Spellscan and LanguageTool are local and free; Sapling enforces a character
+budget and refuses before calling the billed endpoint when over budget or unkeyed.
 
-Every adapter is read-only with respect to both the manuscript and the DocProof
-package: it calls DocProof's detector functions, it does not import a vendor SDK.
+Adapters call DocProof detector functions without importing vendor SDKs.
 """
 
 from __future__ import annotations

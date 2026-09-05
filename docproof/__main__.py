@@ -2756,9 +2756,8 @@ def _galley_agent(args) -> int:
     except ga.AgentError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    # The credentials belong to THIS process too, not only the driver's
-    # children: `get_api_key` reads the environment before it reaches for a
-    # keyring, which is how the Google sign-in works on a headless Linux box.
+    # Set process credentials too, including Google authentication on hosts
+    # without keyring.
     ga.apply_env(env)
 
     agent = ga.Agent(env=env, workspace_root=root,
@@ -2976,9 +2975,8 @@ def _galley_settle(args) -> int:
             print(f"error: --context {args.context}: {e}", file=sys.stderr)
             return 2
 
-    # `--rounds` unset means "the verb's own default" (3) — except under
-    # --until-clean, where unset means "no ceiling of your own" (0), so the
-    # sweep keeps its historical reach to a quiet round or 12.
+    # Unset rounds uses the default, except until-clean leaves its own
+    # 12-round ceiling in effect.
     _rounds = args.rounds if args.rounds is not None \
         else (0 if args.until_clean else DEFAULT_SETTLE_ROUNDS)
 
@@ -3021,8 +3019,7 @@ def _galley_settle(args) -> int:
         if guard is not None:
             return guard
 
-    # The approval's scope carries into settlement: a mechanical-only
-    # manifest means a walker's rewrite ships as a question, not an edit.
+    # Preserve mechanical-only approval scope during settlement.
     mechanical_only = bool(getattr(args, "mechanical_only", False))
     if getattr(args, "approval", None):
         try:
@@ -3301,10 +3298,8 @@ def _galley_audit(args) -> int:
     out = Path(args.out) if args.out else results
     setup_logging(out)
 
-    # The audit is a whole-book reasoning read, so it wants the strong reader the
-    # continuity pass uses, not the cheap per-chunk detector model. The provider
-    # must be built for THAT model's vendor — the resolved model routinely
-    # belongs to a different provider than cfg.api.model.
+    # Resolve the provider for the audit model, which may differ from the
+    # detector provider.
     model = args.model or cfg.continuity.model or cfg.api.model
     guard = _galley_spend_guard(args, cfg, [model])
     if guard is not None:
@@ -3333,13 +3328,10 @@ def _galley_audit(args) -> int:
         "model": model,
         "ran": True,
         "n_samples": args.n_samples,
-        # The experiment record beside its hypotheses: which pages were read
-        # and which chapter was the control, so the hit rate against the
-        # control is measurable after the fact (AuditResult.to_json()).
+        # Record sample ids and the control chapter for later comparison.
         **hyps.to_json(),
         "densities": [d.to_json() for d in densities],
-        # The same shape a findings.json envelope carries, so certify can sum
-        # every cost-bearing artifact of a run the same way.
+        # Use the standard cost envelope for certification accounting.
         "cost": _cost_field(usage, model),
     }
     out.mkdir(parents=True, exist_ok=True)
@@ -3347,8 +3339,7 @@ def _galley_audit(args) -> int:
     audit_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
                           encoding="utf-8")
 
-    # Four decimals on purpose: one audit call on a cheap model is sub-cent,
-    # and "$0.00" reads exactly like the silently-didn't-run anomaly.
+    # Show sub-cent costs instead of rounding them to zero.
     print(f"\n{len(hyps)} hypothesis/-es about likely missed errors "
           f"({usage.api_calls} model call(s), ${cost:.4f}).")
     quiet = sorted(densities, key=lambda d: (d.per_1k, d.index))[:5]
@@ -3363,9 +3354,7 @@ def _galley_audit(args) -> int:
         print(f"  - ch {h.chapter}: {h.error_class} ({h.confidence}) — {why}")
     print(f"\n  {audit_path}")
     if args.json:
-        # audit finds HYPOTHESES about missed errors, not Findings — the
-        # envelope's `findings` array stays empty; the real payload rides
-        # `extra`. `cost` is real: this is the one galley verb that spends.
+        # Audit hypotheses belong in extra; findings stays empty.
         print(json.dumps(_envelope(findings=(), usage=usage, model=model,
                                    extra=payload), ensure_ascii=False))
     return 0
@@ -3406,20 +3395,18 @@ def _galley_verify(args) -> int:
             print(f"error: --context {args.context}: {e}", file=sys.stderr)
             return 2
 
-    # A whole-book reasoning re-read, so it wants the strong reader the
-    # continuity pass uses — built for THAT model's vendor, not cfg.api.model's.
+    # Use the configured continuity model and its provider for verification.
     model = args.model or cfg.continuity.model or cfg.api.model
 
-    # The two gates' inputs are deterministic, so the call count is known
-    # before a provider exists: one change-verify call per DEFAULT_CHANGE_BATCH
-    # applied edits, one walk read per DEFAULT_WALK_CHARS of accepted text.
+    # Estimate calls from edit batches and accepted-text windows before
+    # constructing a provider.
     edits = applied_edits(results)
     accepted = accepted_text(results)
     n_change = (-(-len(edits) // DEFAULT_CHANGE_BATCH)) if run_changes else 0
     walk_reads = _walk_reads(accepted, DEFAULT_WALK_CHARS) if run_walk else []
     n_walk = len(walk_reads)
-    # A rough projection for the budget gate: each call carries its slice of
-    # text (~4 chars/token) plus a fixed prompt, and answers tersely.
+    # Project tokens from text length plus fixed prompt and response
+    # overhead.
     proj_in = n_change * 1200 + (len(edits) * 60 if run_changes else 0)
     proj_in += sum(len(t) for read in walk_reads for _, t in read) // 4
     proj_in += n_walk * 600
@@ -3444,9 +3431,8 @@ def _galley_verify(args) -> int:
 
     engine = getattr(args, "engine", None) or "auto"
     if engine == "auto":
-        # verify's historical default is the configured provider; the
-        # subagent lane is chosen when asked for, or when the model named is
-        # a Claude alias/id (which would otherwise bill through the API).
+        # Use the configured provider unless a subscription model was
+        # explicitly requested.
         from .providers.subagent import is_subagent_model
         engine = "subagent" if (args.model and is_subagent_model(args.model)) \
             else "provider"
@@ -3461,9 +3447,7 @@ def _galley_verify(args) -> int:
         except Exception as e:                              # noqa: BLE001
             print(f"error: {e}", file=sys.stderr)
             return 2
-        # Recorded under a name the price catalog does not know, so the
-        # artifact's cost is $0 with the tokens still counted — a
-        # subscription read, distinguishable from a lane that never ran.
+        # Record subscription usage with zero API cost and its token counts.
         model = f"subagent:{resolve_model(args.model or None)}"
         projected = 0.0
     else:
@@ -3479,10 +3463,8 @@ def _galley_verify(args) -> int:
     para_ids = _paragraph_ids(getattr(args, "paragraphs", None))
 
     concurrency = _lane_concurrency(cfg, engine, model)
-    # One verify_run per gate with its own Usage, so each artifact carries
-    # ITS OWN bill and `ran`/`reason` verdict, and certify can sum the run's
-    # cost-bearing artifacts without double-counting. The deterministic
-    # re-read of the deliverable's views is cheap; the model calls are not.
+    # Separate per-gate usage prevents certification from double-counting
+    # spend.
     usage_changes, usage_walk = Usage(), Usage()
     from .agent_lane import AgentLaneUnavailable
     try:
@@ -3506,8 +3488,7 @@ def _galley_verify(args) -> int:
                               context=context, run_changes=False,
                               run_walk=run_walk)
     except AgentLaneUnavailable as e:
-        # The lane's own refusal (no SDK, no login, no CLI) is a sentence
-        # with the fix in it; a stack trace would bury it.
+        # Report an unavailable lane with its corrective message.
         print(f"error: {e}", file=sys.stderr)
         return 2
     problems, residuals = changes.problems, walk.residuals
@@ -3518,12 +3499,8 @@ def _galley_verify(args) -> int:
     _galley_over_budget(args, cost)
 
     from galley.verify import write_artifacts
-    # One writer for every verify artifact (settle uses the same one): the
-    # build binding (build_sha256 / accepted_sha256 / paragraph_sha256), the
-    # coverage record (unread paragraphs and batches), and — for a
-    # --paragraphs re-read — a MERGE into the existing artifact that keeps
-    # every verdict for paragraphs outside the re-read and never upgrades a
-    # `ran: false` by a read that read nothing (GALLEY-002).
+    # Share the artifact writer with settle to preserve build binding and
+    # merge partial-read coverage.
     walk_paras = sum(1 for t in accepted.values() if t.strip())
     if not changes.ran_changes and not args.walk_only and (
             out / "change_verify.json").exists() and not para_ids:
@@ -3539,8 +3516,7 @@ def _galley_verify(args) -> int:
         applied=len(edits), paragraphs=walk_paras, para_ids=para_ids,
         merge=bool(para_ids) or (out / "change_verify.json").exists())
 
-    # Four decimals: a re-read on a cheap model is sub-cent, and "$0.00" reads
-    # exactly like the silently-didn't-run anomaly.
+    # Show sub-cent verification costs.
     print(f"\nchange verifier: {len(problems)} problem(s) of {len(edits)} "
           f"applied edit(s); finished-text walk: {len(residuals)} residual(s) "
           f"({usage.api_calls} model call(s), ${cost:.4f}).")
@@ -3565,22 +3541,20 @@ def _galley_verify(args) -> int:
     print(f"\n  {cv_path}\n  {fw_path}")
 
     if args.json:
+        payload_changes = json.loads(cv_path.read_text(encoding="utf-8"))
+        payload_walk = json.loads(fw_path.read_text(encoding="utf-8"))
         print(json.dumps(_envelope(findings=(), usage=usage, model=model,
                                    extra={"change_verify": payload_changes,
                                           "finished_walk": payload_walk}),
                          ensure_ascii=False))
-    # A gate that was asked for but could not read anything is not a clean
-    # read: say why and fail, rather than let two empty artifacts pass as
-    # "verified".
+    # A requested gate that did not run must fail.
     if (run_changes and not changes.ran_changes) or \
             (run_walk and not walk.ran_walk):
         print(f"error: {changes.reason or walk.reason or 'a requested gate '
               'did not run'}", file=sys.stderr)
         return 2
-    # The same line certify draws: a flagged applied edit or a HIGH-severity
-    # residual is a real defect in the deliverable — exit nonzero so the
-    # delivery loop stops here. Low/medium residuals are notes for the next
-    # wave (certify passes them too), never a reason to fail the run.
+    # The verify command fails on damaged edits or high-severity residuals.
+    # Certification separately requires every residual to be settled.
     return 1 if (problems or highs) else 0
 
 
@@ -3590,10 +3564,8 @@ def _galley_letter(args) -> int:
 
     target = Path(args.casefile)
     cf_path = target / "casefile.json" if target.is_dir() else target
-    # A bare `review`/`replay` run writes findings.json but no casefile.json.
-    # Fall back to projecting the case file the letter needs from that run's own
-    # findings + cost envelope, so the letter works on any run dir, not only an
-    # orchestrator/app one (P1-6).
+    # Synthesize the case file for review/replay output without
+    # casefile.json.
     synth_dir = target if target.is_dir() else target.parent
     if not cf_path.exists() and not (synth_dir / "findings.json").exists():
         print(f"error: {cf_path} not found and no findings.json in {synth_dir} "
@@ -3635,9 +3607,7 @@ def _galley_letter(args) -> int:
         from galley.casefile_synth import workspace_waves
         waves = workspace_waves(args.workspace)
         if waves:
-            # The workspace ledger replaces the single synthesized wave: every
-            # run's spend, in order, so the letter states what was really
-            # spent and which lanes ran.
+            # Use the workspace ledger to report all paid runs in order.
             cf.waves = list(waves)
             cf.budget.charges = []
             for w in waves:
@@ -3664,10 +3634,8 @@ def _galley_letter(args) -> int:
     print(f"  {letter_path}\n  {style_path}"
           + (f"\n  {report_path}" if report_path else ""))
     if args.json:
-        # No API call here — render_all is a report over decisions the case
-        # file already recorded — so cost is zero. `cf.findings` are galley
-        # GFindings, a different shape than the envelope's Finding-shaped
-        # `findings`; the count rides `extra` instead of the array itself.
+        # Rendering uses recorded decisions. Keep Galley findings out of the
+        # DocProof findings array.
         print(json.dumps(_envelope(findings=(), usage=Usage(),
                                    model=cfg.api.model if args.source else "",
                                    extra={
@@ -3709,10 +3677,8 @@ def _galley_seed(args) -> int:
         json.dumps(key.to_json(), indent=2, ensure_ascii=False),
         encoding="utf-8")
 
-    # Closes the seed -> review -> score loop: without a real document, the
-    # only thing to hand a review was this JSON, which nothing reviews. A
-    # .docx source materializes one directly; other formats (.idml) still get
-    # the JSON alone until write_manuscript_docx grows a second writer.
+    # Materialize seeded DOCX input for review; other formats currently
+    # export JSON only.
     seeded_docx: Path | None = None
     docx_error: str | None = None
     if Path(args.source).suffix.lower() == ".docx":
@@ -3777,11 +3743,8 @@ def _galley_score(args) -> int:
               "envelope)", file=sys.stderr)
         return 2
     if _review_shaped(rows):
-        # A `docproof review` findings.json, not GFindings: route it through
-        # the docproof-ladder adapter, the one converter from that shape
-        # (para_id + original/corrected text + validator anchor) to the span
-        # GFinding the scorer reads. It keeps only the anchored, validated
-        # rows — exactly the catches that landed as tracked changes.
+        # Convert anchored, validated DocProof findings to the scorer's
+        # GFinding format.
         from galley.adapters.docproof_ladder import gfindings_from_json
         if isinstance(raw, dict):
             findings, dropped = gfindings_from_json(findings_path, wave=1,
@@ -3829,9 +3792,7 @@ def _galley_score(args) -> int:
     print(f"\n  {est.caveat}")
     print(f"\n  {recall_path}")
     if args.json:
-        # `findings` here are galley GFindings — a different shape than the
-        # envelope's Finding-shaped `findings` array — and no API call was
-        # made, so cost is zero; the recall payload rides `extra`.
+        # Return recall data in extra; this operation makes no model calls.
         print(json.dumps(_envelope(findings=(), usage=Usage(), model="",
                                    extra=payload), ensure_ascii=False))
     return 0
@@ -3887,10 +3848,8 @@ def _galley_calibrate(args) -> int:
                 print(f"error: could not read {cf_path}: {e}", file=sys.stderr)
                 return 2
         else:
-            # A bare `review`/`replay` run writes findings.json but no case
-            # file. Project one from its cost envelope the way `galley letter`
-            # does; the synthesized wave's one action is scoped to the whole
-            # book, so record_run prices it over every word.
+            # Synthesize a whole-book wave for review/replay output lacking
+            # a case file.
             from galley.casefile_synth import casefile_from_run
             try:
                 cf = casefile_from_run(synth_dir, book=book)
@@ -4012,14 +3971,11 @@ def _galley_flights(args) -> int:
     cfg = load_config(args.config)
     if getattr(args, "variant", None):
         cfg.variant = args.variant
-    # Posture: the flag wins when given; otherwise the config's flights
-    # section — which is where a genre posture preset lands it.
+    # An explicit posture overrides the configured flights posture.
     if args.posture is None:
         args.posture = cfg.flights.posture
-    # The judge likewise: the config's flights judge when one is configured,
-    # else the house default detector. Never a Claude model by default — one
-    # named here bills through the API, and the $0 Claude route is a session
-    # subagent over export-judgments / import-judgments.
+    # Default to the configured flights judge, then the detector model.
+    # Subscription judging uses the external packet workflow.
     if args.judge_model is None:
         args.judge_model = (getattr(cfg.flights, "judge_model", None)
                             or DEFAULT_FLIGHTS_JUDGE)
@@ -4062,8 +4018,7 @@ def _galley_flights(args) -> int:
 
     error_dir = _resolve_error_dir(args.config)
     try:
-        # A dry run prices the flights; prepare() must not spend a whole-book
-        # story-sheet read (or a screening judge) to answer that.
+        # Disable paid preparation passes for a dry run.
         prepared = prepare(cfg, args.input, error_dir,
                            dry_run=bool(args.dry_run))
     except (IngestError, FileNotFoundError, ValueError) as e:
@@ -4106,8 +4061,7 @@ def _galley_flights(args) -> int:
     setup_logging(out)
     try:
         provider_of = _flights_provider_of(cfg)
-        # Resolve every flight's provider up front so a missing key fails
-        # before any propose call is made, not partway through the matrix.
+        # Resolve all providers before spending on any flight.
         for spec in flight_specs:
             provider_of(spec.model)
     except ProviderError as e:

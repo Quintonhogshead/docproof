@@ -1,27 +1,10 @@
-"""Galley's memory store — the compounding layer that outlives any one book.
+"""SQLite store for cross-book Galley precedents and rulings.
 
-A case file (see :mod:`galley.casefile`) is per-book and dies with the job. This
-store is the opposite: a single SQLite database on the app volume that
-*accumulates* across every book Galley ever proofreads — the house style rulings,
-the authors it has met, and the precedents (how a given error type was ruled on a
-given book, and why). Runs are disposable; memory compounds.
+Unlike a per-book case file, this database accumulates house-style rulings and
+precedents across runs.
 
-Design notes
-------------
-
-* **stdlib only.** No ORM, no vendor SDK — just :mod:`sqlite3`.
-* **Single writer, WAL mode.** The store is opened once per process. WAL keeps
-  readers from blocking the writer and survives a crash cleanly.
-* **Versioned migrations.** ``MIGRATIONS`` is an ordered list of callables; the
-  DB's ``PRAGMA user_version`` tracks how many have run, so :meth:`open` is a
-  no-op on an up-to-date file. Idempotence is the contract — reopening never
-  errors and never duplicates the seed.
-* **Deterministic timestamps.** The store never reaches for the wall clock
-  itself; the caller injects a clock (a ``now`` string or a callable), so tests
-  can pin time.
-* **Restorable export.** :meth:`export` writes a plain ``.sql`` dump via
-  :meth:`sqlite3.Connection.iterdump`; :meth:`restore` replays it into a fresh
-  DB. This is the local-file stand-in for the nightly push to Tigris.
+Uses SQLite WAL mode with versioned, idempotent migrations. Callers inject
+timestamps; ``export``/``restore`` provide a plain SQL backup path.
 """
 
 from __future__ import annotations

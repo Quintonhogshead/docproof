@@ -1,36 +1,8 @@
-"""The reviewed-manuscript deliverable — adjudicated GFindings, for real.
+"""Build a tracked-changes manuscript from adjudicated Galley findings.
 
-A finished Galley run had, until now, a case file and nothing a human could
-open: every candidate the fleet raised lived only as JSON. This module is the
-bridge from an :class:`~galley.adjudicate.AdjudicationResult` (or a plain list
-of adjudicated :class:`~galley.contracts.GFinding`) to a real tracked-changes
-``.docx``, driven through DocProof's own :func:`~docproof.pipeline.finish` at
-$0 — no provider, no API call.
-
-The shape mirrors how a mock/scripted review already reaches ``finish()``
-(``docproof review --mock-findings``, ``galley.adapters.docproof_ladder``'s own
-throwaway runs): ``prepare()`` an ordinary :class:`~docproof.pipeline.Prepared`
-from the job's source document, hand ``finish()`` a list of already-decided
-``docproof.models.Finding`` objects instead of running any detector, and let
-DocProof's own validator, sweeps, and reassembler do the rest. Every *paid*
-analyzer pass is forced off first (see :func:`zero_cost_config`) — DocProof's
-own free, deterministic passes (the house-style sweeps, the consistency scan,
-the spell scan) still run, exactly as they would behind any $0 review.
-
-Two invariants:
-
-* **Never a seeded manuscript.** :func:`build_manuscript_deliverable` calls
-  :func:`galley.seeding.assert_deliverable` before touching anything else.
-* **A stale span is a warning, not a crash.** A GFinding whose recorded span no
-  longer anchors in the manuscript's current text — the paragraph moved, the
-  wave that raised it read a different revision — is dropped and named in
-  :attr:`DeliverableResult.dropped`, never allowed to sink the whole run.
-
-Sibling-work note: a companion CLI verb (``docproof import-findings``, a
-different worktree) is building similar GFinding -> ``docproof.Finding``
-conversion machinery for its own entry point. This module's conversion
-(:func:`gfinding_to_finding`) is kept small and separately named so the two
-can be reconciled later without either blocking the other.
+Paid analyzer passes are disabled while DocProof's deterministic passes still
+run. Seeded manuscripts are rejected, and findings whose spans no longer anchor
+are dropped with a warning instead of failing the build.
 """
 
 from __future__ import annotations
@@ -78,18 +50,9 @@ _STAGING = ".deliverable-staging"
 def zero_cost_config(cfg: Config) -> Config:
     """A deep copy of ``cfg`` with every paid analyzer pass forced off.
 
-    Galley's own adjudication (arbitration, and the panel screen when a
-    provider is available) already decided what belongs in the manuscript;
-    re-running any of DocProof's model-backed passes here would both cost
-    money and second-guess a decision that was already made. DocProof's free,
-    deterministic passes — the house-style sweeps, the consistency scan, the
-    spell scan, the residual-coverage and recurrence-propagation post-passes —
-    are untouched: they make no API call and no provider is required for them
-    to run, exactly as they do on any ordinary ``--mock-findings`` review.
-
-    ``ensemble`` has no plain ``enabled`` switch (it is computed from whether
-    any detector is configured), so it is disabled by clearing ``detectors``
-    rather than by attribute assignment.
+    The returned deep copy disables all model-backed analyzers while preserving
+    free deterministic passes. ``ensemble`` is disabled by clearing its
+    detector list because it has no separate ``enabled`` field.
     """
 
     z = cfg.model_copy(deep=True)
@@ -112,23 +75,11 @@ def ensure_format_types_enabled(
 ) -> tuple[Config, list[str]]:
     """Guarantee every format-channel type the findings use is routable.
 
-    A ``title_italics`` finding changes no characters — ``original_text`` and
-    ``corrected_text`` are the same span. The validator routes it down the
-    reversible tracked-format path (a ``w:rPrChange``, which "reject" undoes)
-    ONLY when its ``error_type`` is in ``prepared.format_types``, which is built
-    from the run's enabled ``error_types``. If the config that reaches the
-    deliverable trimmed ``title_italics`` — a genre/posture pack narrowing the
-    house-style group, a lean per-phase config across multiple passes — the same
-    finding falls through to the ordinary change path, where ``shrink`` sees no
-    diff and drops it as ``rejected_noop``: the italic is lost, silently.
-
-    The findings are already adjudicated; whether ``title_italics`` ran as a
-    *detector* is beside the point (paid passes are off here anyway). What has
-    to hold is that it can be *applied*. So any format-channel key present among
-    the findings but absent from ``cfg.error_types`` is appended as its own
-    group. Returns the (possibly unchanged) config and the keys it enabled, for
-    the caller to note. A no-op — byte-identical config — when every needed
-    format type was already enabled.
+    Format findings such as ``title_italics`` have identical original and
+    corrected text and require the validator's format channel. Any format key
+    used by ``findings`` but absent from ``cfg.error_types`` is appended as its
+    own group. Returns the config and newly enabled keys; if none are missing,
+    the config is unchanged.
     """
 
     used = {f.error_type for f in findings if f.error_type}
@@ -153,18 +104,10 @@ def ensure_format_types_enabled(
 def _occurrence_at(haystack: str, needle: str, start: int) -> int | None:
     """The 1-based occurrence number of ``needle`` at exactly ``start``.
 
-    Walks the same stepping :func:`docproof.validator.find_nth` uses (each
-    successive search starts one past the previous match), so the ``n`` this
-    returns reproduces exactly the same offset through
-    :func:`docproof.validator.anchor_offset`. Returns ``None`` when no
-    occurrence sits at ``start`` — the paragraph's text has moved since the
-    finding's span was recorded, so the caller should treat it as unanchorable
-    rather than risk editing the wrong characters.
-
-    Works uniformly for the empty needle (a pure insertion point, ``start ==
-    end`` on the originating :class:`~galley.contracts.Span`): each successive
-    empty-needle match advances by exactly one position, so the n-th occurrence
-    sits at position ``n - 1`` — the same rule a non-empty needle follows.
+    Uses the same one-character stepping as
+    :func:`docproof.validator.find_nth`, returning ``None`` if no occurrence
+    sits at ``start``. Empty needles follow the same rule, so the n-th match is
+    at position ``n - 1``.
     """
 
     pos = -1
@@ -183,25 +126,10 @@ def gfinding_to_finding(
 ) -> Finding | None:
     """Convert one adjudicated GFinding into a docproof Finding, or ``None``.
 
-    ``None`` means the span no longer anchors: the paragraph is gone from
-    ``ms``, or ``g.find`` no longer sits at ``g.span.start`` in it. The caller
-    drops it with a coverage warning rather than failing the run.
-
-    ``query=True`` sets ``force_query``, which routes the validator's query
-    branch instead of the ordinary shrink-to-a-diff edit path (see
-    ``docproof.validator.validate_findings``) — the finding becomes a margin
-    comment, never a tracked change. Used for adjudication queries (arbitration
-    overlap losers, panel rejects) and for a GFinding that names itself a query
-    (``error_type`` or ``confidence`` literally ``"query"``) even though it held
-    its span cleanly — the same self-declared-query convention
-    ``galley.letter``'s open-queries section already honours.
-
-    The finding's ``original_text``/``corrected_text`` are ``g.find``/
-    ``g.replace`` themselves (already the minimal diff, per
-    ``galley.adapters.docproof_ladder.gfindings_from_json``), not a wider
-    sentence quote — ``validate_findings`` shrinks them again, a no-op on an
-    already-minimal pair, and anchors on the correct occurrence via
-    :func:`_occurrence_at` rather than trusting occurrence 1.
+    Returns ``None`` when the paragraph or recorded occurrence no longer
+    anchors. With ``query=True`` (or a self-declared query), sets
+    ``force_query`` so the finding becomes a margin comment. Otherwise the
+    minimal ``g.find``/``g.replace`` pair is anchored at its recorded occurrence.
     """
 
     text = ms.paragraphs.get(g.span.para_id)
@@ -320,25 +248,13 @@ def build_manuscript_deliverable(
     out_dir: str | Path,
     error_dir: str | Path = DEFAULT_ERROR_DIR,
 ) -> DeliverableResult:
-    """Drive ``finish()`` at $0 over one adjudicated Galley run.
+    """Build tracked changes and query comments from adjudicated findings.
 
-    Guarded first by :func:`galley.seeding.assert_deliverable` — a seeded
-    manuscript (deliberately planted errors, from the recall gauge) can never
-    reach this far. ``adjudication.kept`` (minus any self-declared query, see
-    :func:`partition_for_deliverable`) become tracked changes;
-    ``adjudication.queries`` become margin comments. A finding whose span no
-    longer anchors is dropped and named in the result rather than failing the
-    run.
-
-    Every paid analyzer pass is disabled (:func:`zero_cost_config`); no
-    provider is constructed or required. DocProof's own free deterministic
-    passes still run over the source document, same as any ordinary $0 review.
-
-    The findings.json it leaves carries :data:`REBUILD_MARKER`, and the
-    manuscript reaches ``out_dir`` only after the word-count guard passes: a
-    refused build raises :class:`~docproof.replay.WordCountDelta` with the
-    reports promoted and NO manuscript in ``out_dir``.
-    """
+    Reject seeded manuscripts. Report and drop findings that no longer
+    anchor. Disable paid analyzers; free deterministic passes still run.
+    Mark findings.json with REBUILD_MARKER and promote the manuscript to
+    out_dir only after the word-count guard passes. On refusal, preserve
+    reports and raise WordCountDelta without promoting the manuscript."""
 
     assert_deliverable(ms)
     edits, queries = partition_for_deliverable(adjudication)

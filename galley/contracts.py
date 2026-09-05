@@ -1,15 +1,7 @@
-"""Frozen data contracts for Galley.
+"""Frozen, forward-tolerant data contracts for Galley.
 
-Every later ticket codes against these shapes rather than against each other, so
-this module has no behavior beyond serialization. Two rules hold everywhere:
-
-* **Frozen.** Each shape is an immutable ``@dataclass(frozen=True)``. Waves are
-  append-only; nothing rewrites a closed record in place.
-* **Forward-tolerant.** ``from_json`` drops unknown keys instead of raising,
-  matching ``app.json``'s tolerance so an older Galley can read a case file a
-  newer one wrote. ``to_json`` returns a plain JSON-ready ``dict`` (nested
-  shapes flattened to dicts, tuples to lists); round-tripping through
-  ``json.dumps`` / ``json.loads`` is lossless for every shape here.
+All shapes are immutable dataclasses with JSON round-tripping. Deserializers
+drop unknown keys so older readers tolerate newer case files.
 """
 
 from __future__ import annotations

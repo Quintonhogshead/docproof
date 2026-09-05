@@ -1,10 +1,7 @@
-"""The case file — Galley's durable control plane.
+"""Durable control-plane state for a Galley run.
 
-Every candidate ever raised, by which detector, with every verdict and its
-reason, plus the style sheet, the audit hypotheses, the budget ledger, and the
-wave history. It lives on disk as one JSON file beside the job, which keeps the
-orchestrator stateless between waves, resumable after a crash, and auditable
-after delivery.
+The JSON file stores findings, verdicts, style rulings, hypotheses, budget and
+wave history, allowing the orchestrator to resume between waves.
 
 Two invariants:
 

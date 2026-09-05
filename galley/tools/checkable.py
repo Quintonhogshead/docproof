@@ -1,22 +1,8 @@
-"""Checkable facts — deterministic tools for a proofreading agent.
+"""Deterministic arithmetic and calendar checks for proofreading claims.
 
-You are a model reading this because you flagged a claim in a manuscript that
-depends on arithmetic or the calendar — something you cannot reliably compute in
-your head. Call the matching tool with the numbers exactly as the text states
-them. Each tool returns a small structured result whose ``ok`` field tells you
-whether the manuscript's claim holds; the other fields give you the true answer
-so you can propose the correct wording when it does not.
-
-Everything here is pure and deterministic: no network, no clock, no randomness,
-no vendor SDK. Same inputs, same result, forever — safe to call as often as you
-like.
-
-Calendar note: dates are interpreted with Python's proleptic Gregorian calendar
-(the standard library ``datetime``). That means the Gregorian rules are applied
-uniformly to every year, including dates before the 1582 reform and before 1900.
-For historical manuscripts set in Julian-calendar times the weekday may differ
-from a contemporary almanac; say so if it matters. Leap years follow the
-Gregorian rule exactly: 2000 and 2024 are leap years, 1900 is not.
+Each tool returns ``ok`` plus the computed value. Functions are pure and
+deterministic. Dates use Python's proleptic Gregorian calendar (including years
+before 1582); Julian-calendar manuscripts may therefore differ.
 """
 
 from __future__ import annotations
@@ -120,18 +106,10 @@ class AgeResult:
 
 
 def age_at(birth: str, event: str, claimed: int | None = None) -> AgeResult:
-    """Return a person's whole-year age at an event, and check a claim.
+    """Compute completed years between ISO dates and optionally check claimed.
 
-    Both arguments are ISO ``YYYY-MM-DD`` dates. The result is the completed age
-    in years: someone born 2000-03-10 is 23 on 2024-03-09, turns 24 on
-    2024-03-10, and is 24 on 2024-03-11. February-29 birthdays count as having a
-    birthday on March 1 in common years (they have not completed another year
-    until then).
-
-    Pass ``claimed`` when the text states an age ("she was forty-two when...") to
-    have ``ok`` tell you whether it matches. A negative age (event before birth)
-    is returned as-is with ``age`` below zero so you can flag the impossibility.
-    """
+    February 29 birthdays advance on March 1 in non-leap years. Return
+    negative ages for events before birth."""
     b = _parse_iso(birth)
     e = _parse_iso(event)
     age = e.year - b.year
@@ -172,19 +150,10 @@ def sum_check(
     stated_total: float,
     tolerance: float = 1e-9,
 ) -> SumResult:
-    """Check that a list of amounts adds up to a stated total.
+    """Compare the sum of amounts with stated_total using absolute tolerance.
 
-    Use this for any "X plus Y plus Z, for a total of T" claim — invoices,
-    ledgers, headcounts, running totals. Pass the addends as ``amounts`` and the
-    text's total as ``stated_total``. ``ok`` is ``True`` when they match within
-    ``tolerance`` (a small absolute tolerance so floating-point cents do not
-    produce false mismatches). Read ``actual`` for the real sum and ``delta`` for
-    how far off the text is (``actual - stated_total``).
-
-    For exact integer or currency work, the default tolerance already absorbs
-    binary-float rounding; widen ``tolerance`` only if the text rounds to a
-    coarser unit.
-    """
+    Return actual, delta (actual - stated_total), and ok. The default
+    tolerance absorbs floating-point rounding; widen it for coarser units."""
     actual = 0.0
     for a in amounts:
         actual += float(a)

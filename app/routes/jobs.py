@@ -25,6 +25,7 @@ from docproof.models import Usage
 from docproof.providers import build_provider, cost_of_usage, estimate_cost, lookup
 from docproof.profiles import CANDIDATE_ONLY, DETECTOR_ONLY, PROFILE_KEYS
 from docproof.variants import VARIANT_KEYS
+from galley.tiers import GALLEY_DEFAULT_BUDGET, GALLEY_TIERS
 
 from . import common
 from .. import features as featureslib
@@ -446,22 +447,11 @@ def _create_corrections(req: JobRequest, owner: str, paths: Paths,
     return {"jobs": [runner.enqueue(job).to_api()], "group_id": group_id}
 
 
-# The practitioner tiers Galley offers, and the dollar budget each defaults to
-# when the request names a tier but no budget (per-100k-words estimates from the
-# Galley plan; the spending ledger calibrates them). T4 is the ceiling.
-GALLEY_TIERS = ("T0", "T1", "T2", "T3", "T4")
-GALLEY_DEFAULT_BUDGET = {"T0": 15.0, "T1": 30.0, "T2": 60.0, "T3": 150.0,
-                         "T4": 300.0}
-
-
 def _create_galley(req: JobRequest, owner: str, paths: Paths,
                    runner: JobRunner) -> dict:
-    """Create a galley job: one manuscript, a tier, and a dollar budget.
-
-    Galley reviews one manuscript at a time — the case file, style sheet, and
-    per-book budget are specific to it. The tier sets the governor's caps; the
-    budget is what it allocates across waves, defaulting to the tier's estimate
-    when the request leaves it blank."""
+    """Create a single-manuscript Galley job with tier limits and a supplied or
+    default budget.
+    """
     if len(req.file_ids) != 1:
         raise HTTPException(
             400, "Galley reviews one manuscript at a time — its budget and case "

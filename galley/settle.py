@@ -1,53 +1,9 @@
-"""Residual settlement — Galley finishes with ZERO open candidates.
+"""Settle residual findings and edit damage to terminal states.
 
-Every finding a lane ever raised ends in exactly one terminal state: an
-APPLIED tracked edit, a DROPPED row with a recorded reason, or an author QUERY.
-No "candidate slips" list, no human hour, no certify check left failing for
-open items. This module is the loop that gets a finished run there.
-
-Where the open items come from. `galley verify` reads the ACCEPTED manuscript
-— the text the author will read — and raises two kinds: RESIDUALS the
-finished-text walk still finds (a typo that survived, an artifact an edit
-left) and EDIT DAMAGE the change verifier proved (an applied edit that broke
-meaning, grammar, or voice). On the Redding run (2026-09-01) 79 residuals
-could not be settled by hand because they sat inside spans other tracked
-edits already owned; settling them meant hand-editing the owning rows, which
-leaked editor notes and overran the edit guard. So this loop settles them
-THROUGH THE ENGINE:
-
-  A1  the accepted view + EDIT MAP come from the build itself (docproof/
-      editmap.py) — the offsets finish() edited at, not a text-matching
-      reconstruction;
-  A2  each residual is located in the accepted paragraph and translated back
-      to a SOURCE span: untouched text (a new row), inside one applied edit's
-      replacement (revise that owner), or straddling a boundary (widen to
-      absorb every owner touched, whole — a row split into minimal regions is
-      one decision);
-  A3  deterministic decisions first — duplicate, intent zone, editorial note,
-      fact change (I4: a number/name/title/date/quoted line changes -> QUERY,
-      never an edit), pure space deletion, unanchorable — and only then a
-      NARROW model call (absorb | add | drop | query) that never edits text
-      outside the owner's span;
-  A4  absorb = the owner's replacement is REVISED as a composite (I2: one
-      owner per span; the composite rides the same tracked-change machinery,
-      so reject-all stays byte-identical, I6); add = a new row on an unowned
-      span; the deliverable is rebuilt at $0 through the same replay path
-      import-findings uses;
-  A5  the change verifier and the walk re-read ONLY the paragraphs the round
-      touched; a verifier flag on a composite REVERTS it to the owner's
-      previous replacement and turns the residual into a query;
-  A6  rounds are bounded (I5); anything still open after the last becomes a
-      query carrying the walker's suggestion — the book ships with QUESTIONS,
-      not a to-do list — and settlement.json records every decision;
-  A7  certify then requires every residual and every problem to carry a
-      settlement record (galley/manifest.py) before the run can ship.
-
-Model doctrine holds here as everywhere: the narrow judge and the delta
-verifier default to the $0 subscription lane (docproof/providers/subagent.py)
-when this machine can run it, a configured API model otherwise, and a
-deterministic-only mode (`engine="none"`) that queries whatever it cannot
-decide. A headless Galley (DocWatch-triggered, nobody at a keyboard) gets the
-same loop, with the same power, as a practitioner session.
+Every item from ``galley verify`` ends as an applied edit, dropped row with a
+reason, or author query. The loop maps accepted-text findings through the build's
+edit map, revises or adds edits within owned spans, re-verifies touched
+paragraphs, and records bounded-round leftovers in ``settlement.json``.
 """
 from __future__ import annotations
 
@@ -547,18 +503,11 @@ def _norm_words(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+(?:['’][a-z]+)?", text.lower())
 
 
-# ---- the mechanical-only guard (Georgis, 2026-09-04) ---------------------------
+# ---- the mechanical-only guard -----------------------------------------------
 #
-# A mechanical-only run (approval.json `mechanical_only: true`) promises the
-# author a proofread: typos, agreement, punctuation, casing. The finished-text
-# walk does not know that promise — it suggested "No job was too menial for
-# me." for "No job wasn't good enough." and settle applied it as an edit. The
-# guard below is the promise, made executable: a suggestion may become an edit
-# only when its word-level diff against the source span is at most ONE word,
-# and that word is a function word or a same-stem spelling/inflection fix; a
-# punctuation/case/hyphen/space-only change always may. Anything larger ships
-# as a QUERY carrying the suggestion (reason `rewrite_class`), so the author
-# still sees it and nothing is lost — it just is not an edit.
+# A mechanical-only run permits only punctuation/case/hyphen/space changes,
+# one function-word change, or a same-stem spelling/inflection fix. Larger
+# changes become queries with reason `rewrite_class`.
 
 def _function_words() -> frozenset[str]:
     """The closed-class list, shared with docproof.adjudicate's recurrence
@@ -613,11 +562,9 @@ def rewrite_class(before: str, after: str) -> str | None:
     """Why a change is more than a mechanical proofread would make — or None
     when a mechanical-only run may apply it as an edit.
 
-    Punctuation, case, hyphen, and spacing differences never count (the words
-    are compared bare). Of the words, at most one may change, and that one
-    must be a function word (inserted, deleted, or swapped for another) or a
-    same-stem spelling/inflection fix. The return value is a short phrase for
-    the settlement record."""
+    Punctuation, case, hyphen, and spacing are ignored. At most one word may
+    change, and it must be a function word or same-stem spelling/inflection fix.
+    """
     if edit_kind(before, after) == "punctuation":
         return None                  # punctuation/case/hyphen/space only
     bw = [w.lower() for w in _TOKEN_RE.findall(before)]
@@ -649,18 +596,13 @@ def rewrite_class(before: str, after: str) -> str | None:
     return f"word swap {old!r} -> {new!r}"
 
 
-# ---- duplicated fragments (Georgis, 2026-09-04) -------------------------------
+# ---- duplicated fragments ---------------------------------------------------
 
 _XML_UNSAFE_RE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\ufffe\uffff]")
 
 
 def xml_safe(text: str) -> str:
-    """Strip characters OOXML cannot carry (C0/C1 controls, U+FFFE/FFFF).
-
-    A judge or walker reply that smuggles one in (Georgis 2026-09-04: a
-    settle rebuild died on "All strings must be XML compatible" after a
-    round's work) must not take the whole rebuild down; the text minus the
-    control character is what the author would have read anyway."""
+    """Strip characters OOXML cannot carry: C0/C1 controls and U+FFFE/FFFF."""
     return _XML_UNSAFE_RE.sub("", text or "")
 
 
@@ -672,11 +614,7 @@ def duplicated_fragments(text: str, n: int = DUPLICATE_FRAGMENT_WORDS
                          ) -> list[str]:
     """Every run of `n` consecutive words that occurs twice or more in
     `text`, case-insensitive and ignoring punctuation, in first-seen order.
-    A composite that spliced its replacement at the wrong offset leaves
-    exactly this trace — "trot, communicating to urge the horse into a trot
-    ,communicating his frustration" — and nothing else in the pipeline reads
-    a paragraph for it. A refrain the author wrote is in the SOURCE paragraph
-    too; callers subtract that."""
+    Callers subtract fragments already present in the source paragraph."""
     words = _FRAG_WORD_RE.findall(text.lower())
     if len(words) < n:
         return []
@@ -801,9 +739,7 @@ def _fact(before: str, after: str, paragraph: str = "") -> str | None:
     if deletes_an_aside(before, after):
         return None
     if is_chapter_label(paragraph):
-        # A chapter/part label's number is mechanics, not a fact (Quinton,
-        # 2026-09-04): renumbering a heading is a tracked edit, never a
-        # question to the author.
+        # Renumber chapter/part headings as tracked edits, not author queries.
         return None
     try:
         why = fact_change(before, after)
@@ -889,20 +825,10 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
            mechanical_only: bool = False,
            sweeps: "SweepGuard | None" = None,
            skipped: Mapping[str, str] | None = None) -> Decision:
-    """The deterministic half of A3. Returns a Decision whose action is one of
-    absorb/add/drop/query/revise/revert, or `judge` when only a model can
-    settle it (no usable suggestion, or the composite grew past the guard).
-    `replacement` overrides the residual's own suggestion (the judge's
-    answer on a second pass). `sweeps` is the run's SweepGuard: a settlement
-    the deterministic sweeps would undo is dropped (`undoes_house_style`).
-    `mechanical_only` applies the proofread-scope guard: a change beyond one
-    function word / spelling fix / punctuation ships as a query
-    (`rewrite_class`) carrying the suggestion. `skipped` maps the paragraph
-    ids the build never reviews to the reason ingest gave (`style:TOC1`);
-    a residual in a TOC-styled paragraph can never be settled by the engine
-    (the walk still reads it: nine "Error! Bookmark not defined." entries
-    and a "CLASSESES" on Georgis) and is dropped `toc_unreachable` — certify
-    warns on unresolved fields separately."""
+    """Return a deterministic decision, or ``judge`` when a usable suggestion
+    is unavailable or exceeds the growth guard. ``sweeps`` rejects edits that a
+    deterministic sweep would undo; ``mechanical_only`` routes larger rewrites
+    to queries. Skipped TOC paragraphs are dropped as ``toc_unreachable``."""
     why = resolve(res, em, accepted, working)
     if why is not None:
         reason = str((skipped or {}).get(res.para_id, ""))
@@ -1543,10 +1469,7 @@ class SettleOptions:
     # The approval's scope (approval.json `mechanical_only`): a suggestion
     # beyond a proofread's reach ships as a query, never an edit.
     mechanical_only: bool = False
-    # Model calls in flight at once — the judge calls of a round and the
-    # delta re-verify's batches/reads — from the config's own limiter
-    # (`Config.concurrency_for`). 1 is the sequential loop this used to be:
-    # 100+ settle calls in 10+ minutes on Georgis (2026-09-04).
+    # Model calls in flight for judge and delta re-verification work.
     concurrency: int = 1
 
 
@@ -1588,11 +1511,8 @@ class Settler:
         self._variant: Any = None
         self._sweeps: SweepGuard | None = None
         self._skipped: dict[str, str] = {}
-        # Paragraphs changed since their last successful read (GALLEY-002):
-        # a round's edits make them dirty, a delta read that covered them
-        # makes them clean, a revert after the read makes them dirty again.
-        # Whatever is still dirty at the end is recorded as unverified and
-        # certify refuses to pass it — settle never restamps a read.
+        # Edits and reverts invalidate a paragraph's last verification.
+        # Only a successful reread clears it; remaining dirty ids block certify.
         self._dirty: set[str] = set()
 
     # -- one round ----------------------------------------------------------
@@ -1749,14 +1669,8 @@ class Settler:
             rows = list(working.values()) + new_rows
             self._rebuild(rows, snapshot=f"round{round_no}-revert")
 
-        # The composite self-check (Georgis, 2026-09-04): a settlement that
-        # composed the wrong span produced "trot, communicating to urge the
-        # horse into a trot ,communicating his frustration" and nothing
-        # noticed until the walk re-read it. Every paragraph this round wrote
-        # is read back from the rebuilt deliverable and compared with what
-        # the decisions said it should read; a mismatch — or a five-word run
-        # duplicated inside the paragraph that the source did not carry —
-        # reverts this round's settlements there to queries.
+        # Re-read every paragraph this round wrote. A text mismatch or a newly
+        # duplicated five-word fragment reverts its settlements to queries.
         reverted: dict[str, str] = {}
         bad_paras = self._self_check(plans, unplannable, failed, records, em)
         if bad_paras:
@@ -1798,10 +1712,8 @@ class Settler:
         self._merge_coverage(vr, touched)
         have = self.settlement.record_ids()
         fresh: list[Residual] = []
-        # A verifier flag on a composite this round: a second look by the
-        # judge (the verifier is Chicago-trained and the house is not — on
-        # the Georgis run it flagged the house time form 67 times); revert
-        # to a query only when the judge agrees, or cannot be asked.
+        # A verifier flag on a composite gets a second judge look; revert to a
+        # query only when the judge agrees or cannot be asked.
         latest = self.settlement.latest()
         composites = {rec.residual_id: rec for rec in records
                       if rec.action in ("absorb", "add", "revise")
@@ -1828,9 +1740,7 @@ class Settler:
                     item, paragraphs.get(item.para_id, ""), self.provider,
                     self.opt.model, self.usage, context=self.opt.context)
                 rec = composites[hit]
-                # The flag itself is now in change_verify.json (the delta's
-                # coverage is merged, not discarded — GALLEY-002), so it
-                # needs a record of its own beside the residual's.
+                # Record the merged verifier flag separately from the residual.
                 self.settlement.residuals_seen.append(item.to_json())
                 if answer == "keep":
                     log.info("settle: judge overruled the verifier on %s "
@@ -1866,10 +1776,7 @@ class Settler:
             self.settlement.records.extend(self._revert_records(
                 revert_ids, items, records, removed_by, round_no,
                 snapshot=f"round{round_no}-verifier-revert"))
-            # The reverted paragraphs changed AFTER the read above: one more
-            # small delta over them, so the artifacts describe the text as
-            # it now stands (GALLEY-002) rather than a text that no longer
-            # exists.
+            # Reverify reverted paragraphs so evidence matches the current text.
             again = sorted({rec.para_id for rec in self.settlement.records
                             if rec.residual_id in revert_ids and rec.para_id})
             if again:
@@ -1910,14 +1817,8 @@ class Settler:
         """The round's judge calls, fanned out ahead of the sequential
         decide/apply loop when the options allow more than one in flight.
 
-        The loop below must stay sequential — each apply mutates `working`,
-        and the next decide reads it — so the model calls are the part that
-        parallelizes: every item the PRE-ROUND state sends to the judge gets
-        its packet built now, the calls fan out (`docproof.fanout.fan_out`),
-        and the answers are folded in item order and handed to the loop by
-        residual id. An item whose in-loop decision no longer needs the judge
-        simply leaves its answer unused. At concurrency 1 nothing is
-        prefetched and the loop calls the judge itself, exactly as before."""
+        The apply loop remains sequential because each decision mutates
+        ``working``; judge calls may fan out and are folded back by residual id."""
         if self.provider is None or self.opt.concurrency <= 1:
             return {}
         need = [res for res in items
@@ -2049,11 +1950,8 @@ class Settler:
         rows it absorbed go back, and the residual ships as a query. Returns
         the records; rebuilds the deliverable once.
 
-        The owner rows are restored under FRESH keys. `removed_by` is keyed
-        by finding ids from BEFORE the rebuild, and every rebuild re-mints
-        ids, so writing them back by their old key overwrote whatever
-        unrelated row now held that id (Redding lost a number_style row and
-        two galley_read rows that way)."""
+        Owner rows are restored under fresh keys because each rebuild mints new
+        finding ids; old keys must never overwrite unrelated rows."""
         working, _em, _accepted = self._load_state()
         source = self._source
         by_id = {r.id: r for r in items}
@@ -2362,20 +2260,11 @@ def stamp_states(run_dir: str | Path, settlement: Settlement) -> int:
 
 def rewrite_verify_artifacts(run_dir: str | Path, settlement: Settlement, *,
                              unverified: Sequence[str] = ()) -> None:
-    """MERGE the settlement into finished_walk.json and change_verify.json:
-    every residual/problem the loop ever saw, each with its settlement
-    action, so certify's completeness check reads one file per gate and the
-    record beside it.
+    """Merge settlement rows into the two verification artifacts.
 
-    What this never does (GALLEY-002): change `ran`, `reason`,
-    `unread_paragraphs`, `unread_batches`, or the build binding. A read that
-    failed stays a failed read; a paragraph nobody re-read stays unread. It
-    ADDS `unverified_paragraphs` — the paragraphs this loop changed after
-    their last read and never read again (a deterministic settle changes
-    text with no engine to re-verify) — so certify names exactly what a
-    `galley verify --paragraphs` must cover before delivery. `generated_at`
-    is refreshed only so the stale check does not mistake the merge for an
-    older build's verdict; the binding decides whether it is evidence."""
+    Preserve read status, unread rows, and build binding; add
+    ``unverified_paragraphs`` for text changed without a follow-up read.
+    """
     run = Path(run_dir)
     latest = settlement.latest()
     seen_res: dict[str, dict[str, Any]] = {}

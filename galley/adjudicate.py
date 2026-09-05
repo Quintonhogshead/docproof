@@ -1,17 +1,7 @@
-"""Adjudication and union merge.
+"""Arbitrate overlapping findings and screen later-wave disputes.
 
-New-wave findings enter through the same earliest-wins arbitration DocProof's
-validator uses: the earliest finding to claim a span keeps it, so a later wave can
-*add* findings but can never destabilize wave one. A finding that loses a span is
-not deleted — it routes to the query channel, where the author still sees it —
-unless it is the SAME edit the winner already makes (a later wave re-finding
-wave one's typo), which is a duplicate: recorded as merged, never a query.
-
-Genuine disputes among later-wave findings go to a panel via
-:func:`docproof.judges.screen` with a fixed spec; every ruling is recorded as a
-:class:`~galley.contracts.Verdict` with its reason. The panel only ever screens
-findings from waves after the first, so nothing here can delete a wave-one
-finding.
+Earliest-wave findings retain their spans. Overlap losers become queries unless
+they duplicate the winner; later-wave survivors may be screened by the panel.
 """
 
 from __future__ import annotations

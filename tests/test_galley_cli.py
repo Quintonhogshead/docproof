@@ -289,6 +289,23 @@ def test_verify_writes_cost_per_gate_and_passes_on_low_residuals(tmp_path,
     assert len(prov.calls) == 2
 
 
+def test_verify_json_matches_written_artifacts(tmp_path, monkeypatch, capsys):
+    src = _seeded_manuscript(tmp_path)
+    run = _mock_review(tmp_path, src, tmp_path / "run")
+    prov = _Provider({"problems": []}, {"findings": []})
+    monkeypatch.setattr(m, "build_provider", lambda cfg, **k: prov)
+    capsys.readouterr()
+    rc = main(["galley", "verify", str(run), "--config", CONFIG,
+               "--model", "gpt-5.6-luna", "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert payload["change_verify"] == json.loads(
+        (run / "change_verify.json").read_text("utf-8"))
+    assert payload["finished_walk"] == json.loads(
+        (run / "finished_walk.json").read_text("utf-8"))
+    assert len(prov.calls) == 2
+
+
 def test_verify_fails_on_a_high_residual_or_a_flagged_edit(tmp_path, monkeypatch):
     src = _seeded_manuscript(tmp_path)
     run = _mock_review(tmp_path, src, tmp_path / "run")

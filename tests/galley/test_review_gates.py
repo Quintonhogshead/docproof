@@ -367,6 +367,65 @@ def test_delivery_is_abandoned_after_the_bounded_retries(env, tmp_path):
     assert entry["state"] == ga.FAILED and entry["delivery"] == "abandoned"
 
 
+@pytest.mark.parametrize("files_present", ["none", "some", "all"])
+def test_missing_handoff_files_keep_delivery_pending(env, tmp_path, files_present):
+    files = [tmp_path / "book.docx", tmp_path / "outcome.json"]
+    count = {"none": 0, "some": 1, "all": 2}[files_present]
+    for path in files[:count]:
+        path.write_text("artifact")
+    uploaded = []
+
+    def upload(paths, folder):
+        uploaded.extend(p.name for p in paths)
+        return [f"id-{p.name}" for p in paths]
+
+    agent = _agent(env, tmp_path, upload=upload)
+    ledger = agent.ledger()
+    ledger.record("drive-1", ga.PENDING_DELIVERY, name="Test - Book 1.docx",
+                  folder_id="folder-A", outcome="done", delivery_attempts=1,
+                  handoff_files=[str(p) for p in files], next_delivery_at=0)
+    report = ga.RunReport()
+    agent.retry_deliveries(ledger, report, now=1)
+    entry = ga.Ledger.load(agent.ledger_path).claimed("drive-1")
+    assert uploaded == [p.name for p in files[:count]]
+    if count < len(files):
+        assert entry["state"] == ga.PENDING_DELIVERY
+        assert entry["delivery_attempts"] == 2
+        assert "missing" in entry["delivery_error"]
+        assert report.delivered == []
+        for path in files[:count]:
+            path.unlink()  # Previously confirmed uploads need no local copy.
+        for path in files[count:]:
+            path.write_text("restored artifact")
+        agent.retry_deliveries(agent.ledger(), report, now=1e12)
+        entry = ga.Ledger.load(agent.ledger_path).claimed("drive-1")
+        assert entry["state"] == ga.FINISHED
+        assert entry["delivery"] == "delivered"
+        assert uploaded == [p.name for p in files]
+    else:
+        assert entry["state"] == ga.FINISHED
+        assert entry["delivery"] == "delivered"
+
+
+@pytest.mark.parametrize("ids", [None, [], [""], ["  "], [None]])
+def test_upload_without_confirmation_stays_pending(env, tmp_path, ids):
+    path = tmp_path / "book.docx"
+    path.write_text("artifact")
+    agent = _agent(env, tmp_path, upload=lambda paths, folder: ids)
+    ledger = agent.ledger()
+    agent.owe_delivery(ga.AwaitingBook.from_json(BOOK), ledger, "test", "folder-A",
+                      "done", "", [path], why="")
+    entry = ga.Ledger.load(agent.ledger_path).claimed("drive-1")
+    assert entry["state"] == ga.PENDING_DELIVERY
+    assert entry["uploaded_names"] == {}
+    assert "No upload id" in entry["delivery_error"]
+
+
+def test_empty_handoff_is_not_delivered(env, tmp_path):
+    agent = _agent(env, tmp_path)
+    assert agent._upload_missing([], "folder-A", {}) is False
+
+
 # --- GALLEY-006: workspace identity ------------------------------------------------
 
 def test_workspaces_are_named_by_surname_and_drive_id():

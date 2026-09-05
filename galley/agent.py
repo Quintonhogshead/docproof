@@ -1,52 +1,7 @@
-"""The practitioner-side proofing agent — the piece that makes the loop
-unattended.
+"""Poll DocWatch for manuscripts, run the Galley driver, and upload results.
 
-DocWatch runs on Fly and cannot run Galley: the practitioner's brain is a
-Claude Max subscription, which lives on one machine of the owner's (a Mac
-today, a rented Linux box later). So the proofing stage in
-`external` mode stops half way — DocWatch finds `<surname> - Book 1.docx` at
-"Ready for Proofing", marks the manuscript `awaiting`, emails the owner, and
-waits for a person to download the book and type `docproof galley drive`.
-
-This module is that person.
-
-    while True:
-        ask the Fly app which books are awaiting a practitioner
-        for the first one this machine has not already claimed:
-            download the Book 1 with the watcher's own Google sign-in
-            run galley.driver over it, --approve auto, $10, mechanical only
-            the driver's hand-off uploads the Book 2 set to the author folder
-        sleep --poll-interval
-
-DocWatch's next tick reads the `outcome.json` that lands beside the book and
-moves HubSpot on. Nothing else has to happen.
-
-Five things this is careful about, all of them because it runs unwatched:
-
-* **A book is never read twice.** A galley run over a whole novel is the most
-  expensive mistake this program can make, so a local ledger
-  (`~/galley-workspaces/.agent-state.json`) records every file id claimed,
-  finished or failed, and a claim is written BEFORE the work starts. A crash
-  mid-run resumes the same workspace with `--from`, it does not start again.
-* **A book always comes back with an answer.** A download that fails, a driver
-  that crashes, a run that stops — each writes a `needs_human` outcome.json
-  naming what went wrong and uploads it (with the decision log) to the author's
-  folder, so DocWatch's next tick moves the book on instead of leaving it at
-  "Ready for Proofing" forever.
-* **It never loops on the same book.** A failure is terminal in the ledger. The
-  next poll moves to the next book; the failed one waits for a person.
-* **Keys stay where they belong.** The brain's OAuth token and the Fly
-  credential are read from `~/.galley/agent.env`, which must not be readable by
-  anyone but its owner, and never from the shell — a service manager starts a
-  job with almost no environment, and a token in a shell profile is a token in
-  every process. The sifters' API keys stay in `~/.docproof-eval.env`, reached only
-  through the `~/galley-bin/docproof` wrapper, exactly as the driver arranges.
-* **One book at a time.** Two galley runs on one machine would fight over the
-  subscription's rate limits and the wrapper's venv.
-* **Nothing here is macOS-only.** The poll, the download, the driver and the
-  ledger are plain Python and plain HTTPS. Only "keep this running" differs by
-  machine, and only that is behind a platform switch: a launchd LaunchAgent on
-  macOS, a systemd user unit on Linux.
+Track claims and pending deliveries in a local ledger. Service installers
+support launchd on macOS and systemd on Linux.
 """
 from __future__ import annotations
 
@@ -68,38 +23,33 @@ from typing import Any, Callable
 
 log = logging.getLogger("docproof.galley.agent")
 
-#: Where the poller's credentials live. Mode 600 or the agent refuses to start.
+# Credentials file; group/other permissions are forbidden.
 DEFAULT_ENV_FILE = "~/.galley/agent.env"
 #: The ledger of what this machine has claimed, finished and failed.
 LEDGER_NAME = ".agent-state.json"
 #: Where the service writes everything the agent says, on either platform.
 LOG_NAME = "agent.log"
-#: The service's name: launchd's Label, and the stem of the systemd unit.
+# launchd service label.
 LABEL = "com.atmosphere.galley-agent"
-#: Downloads land here, one directory per Drive file id, so two books with the
-#: same name cannot overwrite each other.
+# Store downloads by Drive id to separate identically named books.
 DOWNLOAD_DIR = ".agent-downloads"
 
 DEFAULT_POLL_INTERVAL_S = 300.0
 #: What the server calls the read-only route this poller lives on.
 AWAITING_PATH = "/api/watch/awaiting"
-#: A service manager starts a job with almost no environment; the driver needs
-#: to find `claude`, the wrapper and the venv. Homebrew's prefixes are harmless
-#: on Linux (a missing directory on PATH is ignored), so one list serves both.
+# Service PATH defaults include the CLI and common Homebrew locations.
 PATH = ("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:"
         + str(Path.home() / ".local" / "bin"))
 
-#: The keys `~/.galley/agent.env` is read for. Everything else in the file is
-#: passed through to the driver's environment untouched, so a machine that
-#: needs one more variable (GOOGLE_REFRESH_TOKEN on Linux, where there is no
-#: Keychain for `get_api_key` to fall back to) does not need a code change.
+# Named credential keys; additional file values also pass into the driver
+# environment.
 OAUTH_KEY = "CLAUDE_CODE_OAUTH_TOKEN"
 APP_URL_KEY = "GALLEY_APP_URL"
 AGENT_TOKEN_KEY = "GALLEY_AGENT_TOKEN"
 
 
 class AgentError(RuntimeError):
-    """A setup problem the agent refuses to start on. The message is the fix."""
+    """Invalid agent configuration."""
 
 
 def _now() -> str:
@@ -110,11 +60,9 @@ def _now() -> str:
 
 @dataclass(frozen=True)
 class AgentEnv:
-    """What `~/.galley/agent.env` says.
-
-    `values` is the whole file, so anything the owner adds rides through to the
-    driver's environment; the three named fields are what this module itself
-    needs."""
+    """Agent credentials and additional environment values passed to the
+    driver.
+    """
 
     app_url: str
     token: str
@@ -131,11 +79,9 @@ _ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$"
 
 
 def parse_env(text: str) -> dict[str, str]:
-    """A shell-ish `KEY=value` file, without running a shell.
-
-    `export` is tolerated because everyone writes it; quotes are stripped
-    because everyone uses them; a `#` line is a comment. Nothing is executed —
-    the file holds secrets, and sourcing it would run whatever else is in it."""
+    """Parse KEY=value lines without shell evaluation; allow export, paired
+    quotes, and comment lines.
+    """
     out: dict[str, str] = {}
     for line in text.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
@@ -152,14 +98,9 @@ def parse_env(text: str) -> dict[str, str]:
 
 def read_env(path: str | Path = DEFAULT_ENV_FILE, *,
              stat_fn: Callable[[Path], Any] | None = None) -> AgentEnv:
-    """Read the credentials, refusing a file anyone else can read.
-
-    The permission check is not decoration. This file holds a Claude Max
-    subscription token and the key to a read-only route on the production
-    server; on a shared Mac a group-readable copy is a copy in somebody else's
-    hands. Refused with the one command that fixes it.
-
-    The same check on Linux, for the same reason and with the same fix."""
+    """Load credentials; reject group/other permissions and missing required
+    values.
+    """
     target = Path(str(path)).expanduser()
     if not target.is_file():
         raise AgentError(
@@ -190,19 +131,10 @@ def read_env(path: str | Path = DEFAULT_ENV_FILE, *,
 
 
 def apply_env(env: AgentEnv, *, environ: dict[str, str] | None = None) -> None:
-    """Put the credentials file into this process's own environment.
-
-    Two things need it there rather than only in the driver's child
-    environment. The obvious one is `CLAUDE_CODE_OAUTH_TOKEN`. The other is the
-    Google refresh token: `app.settings.get_api_key` reads the environment
-    FIRST and falls back to `keyring`, and keyring has no backend on a headless
-    Linux box — so on Linux `GOOGLE_REFRESH_TOKEN` belongs in
-    `~/.galley/agent.env` and this is what makes `docproof-watch`'s own Drive
-    sign-in work there. On macOS the Keychain already answers and the file
-    simply need not carry it.
-
-    The file wins over the ambient environment on purpose: it is the thing the
-    owner edited, and a stale token in a shell profile should not outrank it."""
+    """Copy credential-file values into the process environment, overriding
+    existing values. This also supplies Google credentials on hosts without
+    a keyring backend.
+    """
     target = environ if environ is not None else os.environ
     for key, value in env.values.items():
         if value:
@@ -236,11 +168,9 @@ def _open_url(request: urllib.request.Request, timeout: int = 30):
 
 
 def fetch_awaiting(env: AgentEnv, *, opener=_open_url) -> list[AwaitingBook]:
-    """Ask the app which books are awaiting a practitioner.
-
-    Every failure is a WARNING and an empty list, never an exception: the
-    poller runs forever, and a Fly deploy or a dropped Wi-Fi connection must
-    cost one poll, not the agent."""
+    """Fetch awaiting manuscripts; log request failures and return an empty
+    list.
+    """
     request = urllib.request.Request(
         env.awaiting_url,
         headers={"Authorization": f"Bearer {env.token}",
@@ -272,10 +202,8 @@ def fetch_awaiting(env: AgentEnv, *, opener=_open_url) -> list[AwaitingBook]:
 # --- the ledger ---------------------------------------------------------------
 
 CLAIMED, FINISHED, FAILED = "claimed", "finished", "failed"
-#: The proofread reached a verdict but the hand-off could not be uploaded:
-#: delivery is owed and retried on later polls without rerunning the book
-#: (GALLEY-005). Bounded: after MAX_DELIVERY_ATTEMPTS the book is recorded
-#: failed with `delivery: "abandoned"` and a person is told.
+# Retry incomplete delivery without rerunning the book, up to
+# MAX_DELIVERY_ATTEMPTS.
 PENDING_DELIVERY = "pending_delivery"
 MAX_DELIVERY_ATTEMPTS = 6
 #: Backoff between delivery retries, in poll intervals: 1, 2, 4, 8, ...
@@ -284,12 +212,7 @@ DELIVERY_BACKOFF_BASE = 2
 
 @dataclass
 class Ledger:
-    """What this Mac has done with each Drive file id.
-
-    The durable answer to "have I already read this book?" — written before the
-    work starts, so a crash resumes rather than repeats. Drive's own markers
-    and DocWatch's state are the other half of that answer, but they are a
-    network call away and this one is a file read."""
+    """Persist claims, outcomes, and delivery progress by Drive file id."""
 
     path: Path
     books: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -344,17 +267,9 @@ _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 
 
 def slug_for(name: str, author_last: str = "", file_id: str = "") -> str:
-    """The workspace name for a book.
-
-    With a Drive file id (the agent always has one): the author's surname
-    plus the id's last eight characters — `"Test - Book 1.docx"`, `"Test"`,
-    `"drive-1"` -> `test-drive-1` — so two different manuscripts that share
-    a filename (a re-upload, a second "Book 1") never share a workspace
-    (GALLEY-006: reseeding by filename replaced the source while keeping the
-    previous run's state). Without an id, the file's own stem names it
-    (`test-book-1`), the pre-agent shape; a stem that slugs to nothing falls
-    back to the surname, then to a placeholder, because a workspace must
-    always have a name."""
+    """Use the surname and Drive id suffix as the workspace name. Without an
+    id, use the filename stem, then the surname or a placeholder.
+    """
     if file_id:
         from galley.driver import workspace_slug
         return workspace_slug(name, author_last, file_id)
@@ -387,8 +302,9 @@ class RunReport:
 
 @dataclass
 class Agent:
-    """The poller. Every side channel is injectable, so the whole loop is
-    testable without Fly, without Drive, and without a headless session."""
+    """Poll for manuscripts with injectable network, driver, upload, and clock
+    functions.
+    """
 
     env: AgentEnv
     workspace_root: Path = Path("~/galley-workspaces")
@@ -425,9 +341,7 @@ class Agent:
         report.looked_at = len(books)
         ledger = self.ledger()
 
-        # Delivery owed from an earlier poll comes first: the proofread is
-        # done, only the upload is missing, and retrying it costs no model
-        # call (GALLEY-005).
+        # Retry pending delivery before starting another book.
         self.retry_deliveries(ledger, report)
 
         for book in books:
@@ -449,10 +363,7 @@ class Agent:
             try:
                 self.poll_once()
             except Exception:                               # noqa: BLE001
-                # The poller outlives every failure inside it. A book that
-                # blew up is recorded as failed by `run_book`; anything that
-                # escapes to here is a bug, and sleeping through it is still
-                # better than a launchd job that dies at 3am.
+                # Keep polling after unexpected failures.
                 log.exception("The poll failed; trying again next interval.")
             self.sleep(self.poll_interval_s)
 
@@ -460,12 +371,9 @@ class Agent:
 
     def run_book(self, book: AwaitingBook, ledger: Ledger, report: RunReport,
                  *, resume: bool = False) -> None:
-        """Download it, run the driver over it, and record what happened.
-
-        The claim is written FIRST — before the download, before a single
-        model call — because the failure this guards against is running a whole
-        novel twice, and a claim written afterwards would be written after the
-        crash that loses it."""
+        """Record the claim before downloading, then run the driver and record
+        its outcome.
+        """
         slug = slug_for(book.name, book.author_last, book.file_id)
         report.claimed = book.name
         folder = self.drive_folder_override or book.folder_id
@@ -502,9 +410,8 @@ class Agent:
         uploaded = list(getattr(result, "uploaded", []) or [])
         handoff = [Path(p) for p in (getattr(result, "handoff", []) or [])]
         if folder and handoff and not uploaded:
-            # The driver built the hand-off but its upload failed (its reason
-            # says so): the verdict is owed to the author's folder, and the
-            # book must not be recorded finished until it is there.
+            # Queue a failed handoff upload before marking the book
+            # finished.
             self.owe_delivery(book, ledger, slug, folder, outcome, reason,
                               handoff, why="the driver's upload failed")
             return
@@ -524,9 +431,8 @@ class Agent:
         from galley.driver import drive_token
 
         token = drive_token()
-        # Only the id and the name are known from the awaiting list; the mime
-        # type decides download-vs-export, and a Book 1 that is a native Google
-        # Doc is exported. `fetch` handles both, plus .doc/.odt conversion.
+        # Infer download versus native-Doc export from the name; fetch also
+        # converts .doc/.odt.
         handle = DriveFile(id=book.file_id, name=book.name,
                            mime_type=_mime_for(book.name))
         return fetch(token, handle, dest)
@@ -538,9 +444,7 @@ class Agent:
         if self.budget_usd is not None:
             kwargs["budget_usd"] = self.budget_usd
         if resume:
-            # A claimed-but-unfinished book is a crashed run: pick it up where
-            # the workspace's own state machine says it got to, rather than
-            # paying for the ladder twice.
+            # Resume claimed work from its recorded state.
             start = self.resume_phase(slug)
             if start:
                 kwargs["start_phase"] = start
@@ -551,11 +455,9 @@ class Agent:
                       env=self.driver_env(), upload=self.upload, **kwargs)
 
     def resume_phase(self, slug: str) -> str:
-        """The phase to restart a crashed run at, from its own state machine.
-
-        One phase back from where the ledger says it got to would be a guess;
-        `state.json` is the record, and the driver's own phase order says which
-        phase comes after the last state reached."""
+        """Choose the next phase from the recorded run state and driver phase
+        order.
+        """
         from galley.driver import MECHANICAL_PHASES, REQUIRED_STATE
         from galley.state_machine import RunStateMachine
 
@@ -579,13 +481,10 @@ class Agent:
         return MECHANICAL_PHASES[after] if after < len(MECHANICAL_PHASES) else ""
 
     def driver_env(self) -> dict[str, str]:
-        """The environment the driver's sessions inherit.
-
-        The process environment plus the credentials file, so a launchd job —
-        which starts with almost none of one — still has a PATH, a HOME and the
-        subscription token. The driver strips the API keys from it and puts the
-        `~/galley-bin` wrapper first, which is what keeps the brain on the
-        subscription and the sifters on the keys."""
+        """Combine the process environment and credential file, supplying
+        service PATH and HOME defaults. The driver strips API keys before
+        spawning sessions.
+        """
         env = dict(os.environ)
         env.setdefault("PATH", PATH)
         env.update(self.env.values)
@@ -593,16 +492,9 @@ class Agent:
 
     def give_up(self, book: AwaitingBook, ledger: Ledger, report: RunReport,
                 slug: str, folder_id: str, reason: str) -> None:
-        """Write a `needs_human` verdict for a book that never got one, and put
-        it in the author's folder.
-
-        The whole point: a book DocWatch marked `awaiting` sits at "Ready for
-        Proofing" until an outcome.json lands beside it. A download that failed
-        or a driver that crashed would otherwise strand it there silently, and
-        the owner would find out weeks later. So the failure is written as a
-        verdict, uploaded, and the ledger marks the book done-with — never
-        retried, because a loop that retries a crash is a loop that crashes
-        forever."""
+        """Write a needs_human outcome and attempt delivery. Failed delivery is
+        retried without rerunning the proofread.
+        """
         report.outcome, report.reason = "needs_human", reason
         try:
             files = self.write_failure(slug, book.name, reason)
@@ -631,11 +523,9 @@ class Agent:
     def owe_delivery(self, book: AwaitingBook, ledger: Ledger, slug: str,
                      folder_id: str, outcome: str, reason: str,
                      files: list[Path], *, why: str) -> None:
-        """Try the upload now; on failure record a DURABLE pending delivery
-        that later polls retry without rerunning the proofread (GALLEY-005).
-        The upload is one file at a time and each success is recorded at
-        once, so a retry uploads only what is still missing — never a second
-        copy of a file that already landed."""
+        """Attempt delivery and save confirmed uploads. On failure, record the
+        remaining files for a later poll to retry.
+        """
         entry = ledger.claimed(book.file_id)
         uploaded_names = dict(entry.get("uploaded_names") or {})
         ok = self._upload_missing(files, folder_id, uploaded_names)
@@ -657,7 +547,7 @@ class Agent:
                       uploaded=list(uploaded_names.values()),
                       delivery_attempts=attempts,
                       next_delivery_at=time.time() + wait,
-                      delivery_error=str(entry.get("delivery_error") or "")[:300])
+                      delivery_error=self._last_delivery_error[:300])
         self.log(f"{book.name}: {outcome} — the verdict is written but "
                  f"{len(files) - len(uploaded_names)} hand-off file(s) could "
                  f"not be uploaded{f' ({why})' if why else ''}; delivery "
@@ -666,34 +556,42 @@ class Agent:
 
     def _upload_missing(self, files: list[Path], folder_id: str,
                         uploaded_names: dict[str, str]) -> bool:
-        """Upload every file not yet in `uploaded_names` (name -> Drive id),
-        one at a time, recording each success in place. True when every file
-        is up."""
+        """Upload unconfirmed files and update name-to-id mappings. Return true
+        only when every expected file has an upload id.
+        """
+        self._last_delivery_error = ""
+        if not files:
+            self._last_delivery_error = "No hand-off files were recorded."
+            return False
         uploader = self.upload or _default_upload
         for path in files:
-            if path.name in uploaded_names:
+            if uploaded_names.get(path.name):
                 continue
             if not path.is_file():
                 log.warning("hand-off file %s is missing; skipped", path)
-                continue
+                self._last_delivery_error = f"Hand-off file {path.name} is missing."
+                return False
             try:
                 ids = uploader([path], folder_id)
             except Exception as e:                          # noqa: BLE001
                 log.warning("upload of %s failed: %s", path.name, e)
                 self._last_delivery_error = str(e)
                 return False
-            uploaded_names[path.name] = str(ids[0]) if ids else ""
-        return all(p.name in uploaded_names for p in files if p.is_file())
+            if (not ids or len(ids) != 1 or not isinstance(ids[0], str)
+                    or not ids[0].strip()):
+                self._last_delivery_error = f"No upload id returned for {path.name}."
+                return False
+            uploaded_names[path.name] = ids[0]
+        return all(uploaded_names.get(p.name) for p in files)
 
     _last_delivery_error: str = ""
     _file_id: str = ""
 
     def retry_deliveries(self, ledger: Ledger, report: RunReport,
                          *, now: float | None = None) -> None:
-        """Retry every pending delivery whose backoff has elapsed. A delivery
-        past MAX_DELIVERY_ATTEMPTS is abandoned — recorded failed with
-        `delivery: "abandoned"` so a person puts the files in the folder by
-        hand — never retried forever."""
+        """Retry due deliveries with exponential backoff; abandon them after
+        MAX_DELIVERY_ATTEMPTS.
+        """
         clock = time.time() if now is None else now
         for file_id in ledger.pending_deliveries():
             entry = ledger.claimed(file_id)
@@ -758,9 +656,8 @@ class Agent:
                                  outcome_sources=[runs / "outcome.json"],
                                  partial=True)
         except Exception:                                   # noqa: BLE001
-            # Not even a partial hand-off could be built. The verdict itself is
-            # the one file that matters, so it goes on its own under the name
-            # DocWatch looks for.
+            # If a partial handoff cannot be built, deliver the outcome
+            # alone.
             out.mkdir(parents=True, exist_ok=True)
             import shutil
             dest = out / f"{handoff_base(source_name)} - outcome.json"
@@ -790,11 +687,9 @@ _MIME_BY_SUFFIX = {".docx": _DOCX, ".doc": "application/msword",
 
 
 def _mime_for(name: str) -> str:
-    """What a Drive file of this name most likely is.
-
-    The awaiting list carries the name, not the mime type. A name with no
-    extension is a native Google Doc — that is what a Doc looks like in Drive —
-    and `fetch` exports those; anything else is downloaded as-is."""
+    """Infer MIME type from the filename; assume an extensionless name is a
+    native Google Doc.
+    """
     suffix = Path(name).suffix.lower()
     if not suffix:
         from app.watch.drive import GOOGLE_DOC_MIME
@@ -803,12 +698,7 @@ def _mime_for(name: str) -> str:
 
 
 def _run_driver(**kwargs: Any) -> Any:
-    """The real driver, in this process — never a subprocess shell-out.
-
-    In-process so the agent sees the `DriveResult` itself: the outcome, the
-    reason and what was uploaded, rather than an exit code it would have to
-    interpret. The driver spawns its own headless sessions; that is the
-    subprocess boundary, and it is already the right one."""
+    """Run the driver in-process and return its DriveResult."""
     from galley.driver import Driver
 
     upload = kwargs.pop("upload", None)
@@ -824,25 +714,16 @@ def _default_upload(files: list[Path], folder_id: str) -> list[str]:
     return upload(files, folder_id)
 
 
-# --- running it as a service --------------------------------------------------
-#
-# The agent itself is platform-neutral: it polls an HTTPS endpoint, downloads a
-# file, and runs the driver. Only "keep this running" differs by machine, so
-# only that is behind a platform switch — a launchd LaunchAgent on macOS, a
-# systemd user unit on Linux, both with the same env file, the same log, and
-# the same command line. The owner's Mac holds the subscription today; a rented
-# Linux box is the same agent with a different unit file.
+# Platform service installers.
 
 def is_linux(platform: str | None = None) -> bool:
     return (platform or sys.platform).startswith("linux")
 
 
 def executable() -> str:
-    """The `docproof` to schedule, by absolute path.
-
-    `sys.argv[0]` first, because the copy running right now is the copy the
-    owner means: a machine with two virtualenvs would otherwise get whichever
-    one is earlier in a PATH the service manager does not share."""
+    """Find an absolute docproof executable path, preferring the currently
+    invoked copy.
+    """
     import shutil
 
     argv0 = Path(sys.argv[0])
@@ -858,9 +739,9 @@ def executable() -> str:
 
 def program(*, workspace_root: Path, env_file: Path,
             poll_interval_s: float) -> list[str]:
-    """Everything is spelled out — a service manager passes almost no
-    environment, and a poller that quietly used a different workspace root or a
-    different credentials file would be a puzzle nobody enjoys."""
+    """Build the service command with explicit workspace, credential, and
+    polling options.
+    """
     return [executable(), "galley", "agent",
             "--workspace-root", str(workspace_root),
             "--env-file", str(env_file),
@@ -879,20 +760,15 @@ def plist_path() -> Path:
 
 def plist_content(*, command: list[str], log_path: Path,
                   workspace_root: Path) -> bytes:
-    """The launch agent.
-
-    `KeepAlive` rather than a calendar interval: this is a poller, not a
-    scheduled pass — it should be running whenever the machine is, and launchd
-    should start it again if it dies. `RunAtLoad` is true for the same reason,
-    and unlike the watcher's schedule it costs nothing to start: the first poll
-    only asks the app a question."""
+    """Build a launchd definition that starts at login, restarts the poller,
+    and writes agent.log.
+    """
     return plistlib.dumps({
         "Label": LABEL,
         "ProgramArguments": command,
         "RunAtLoad": True,
         "KeepAlive": True,
-        # A crash loop should back off rather than spin: launchd will not
-        # restart the job more than once every 60 seconds.
+        # Throttle crash restarts to once per minute.
         "ThrottleInterval": 60,
         "StandardOutPath": str(log_path),
         "StandardErrorPath": str(log_path),
@@ -910,9 +786,8 @@ def _install_launchd(*, command: list[str], workspace_root: Path,
                                      log_path=workspace_root / LOG_NAME,
                                      workspace_root=workspace_root))
     domain = f"gui/{os.getuid()}"
-    # Unloaded first so a changed agent replaces the old one rather than being
-    # refused for already existing. It fails when nothing is loaded, which is
-    # the ordinary case the first time and not worth reporting.
+    # Unload the previous definition; a missing service is normal on first
+    # install.
     run(["launchctl", "bootout", f"{domain}/{LABEL}"],
         capture_output=True, text=True)
     result = run(["launchctl", "bootstrap", domain, str(target)],
@@ -938,8 +813,7 @@ def _uninstall_launchd(*, run, path: Path | None) -> bool:
 
 # -- Linux: a systemd user unit --
 
-#: The unit's file name. `galley-agent`, not the reverse-DNS label: systemd
-#: units are named the way a person types them into `systemctl --user`.
+# The systemd unit name.
 UNIT_NAME = "galley-agent.service"
 
 
@@ -956,14 +830,7 @@ def unit_path() -> Path:
 
 def unit_content(*, command: list[str], log_path: Path,
                  workspace_root: Path) -> str:
-    """The systemd user unit.
-
-    `Restart=always` is systemd's `KeepAlive`; `RestartSec` is its
-    `ThrottleInterval`. Output goes to the same `agent.log` the LaunchAgent
-    writes rather than to the journal, so "read the log" is one answer on both
-    machines. `default.target` is the user-session equivalent of RunAtLoad —
-    with lingering enabled (see `install`) that means "whenever the box is
-    up", which is the point of renting one."""
+    """Build a systemd user unit with automatic restarts and agent.log output."""
     args = " ".join(_quote_unit(part) for part in command)
     return (
         "[Unit]\n"
@@ -1003,10 +870,8 @@ def _install_systemd(*, command: list[str], workspace_root: Path,
                       encoding="utf-8")
     run(["systemctl", "--user", "daemon-reload"], capture_output=True,
         text=True)
-    # Lingering is what makes a user unit survive logout and come back after a
-    # reboot — without it a rented box runs the agent only while somebody is
-    # signed in over SSH. It needs root, so a refusal is reported rather than
-    # raised: the unit is installed and works for this session either way.
+    # Lingering keeps the user service running after logout and reboot.
+    # Report permission failures without undoing installation.
     linger = run(["loginctl", "enable-linger", _user()], capture_output=True,
                  text=True)
     if getattr(linger, "returncode", 0) != 0:
@@ -1054,13 +919,9 @@ def install(*, workspace_root: Path, env_file: Path,
             platform: str | None = None,
             wrapper_source: Path | None = None,
             wrapper_dest: Path | None = None) -> Path:
-    """Write this machine's service definition and start it.
-
-    A LaunchAgent on macOS, a systemd user unit on Linux — same command line,
-    same env file, same log. Also refreshes the `~/galley-bin/galley-run.sh`
-    wrapper from the repo's copy when one is there to refresh: the phase
-    prompts live in the repo now, and a machine still carrying the pre-driver
-    script would run a stale loop the moment somebody typed a phase by hand."""
+    """Install and start the platform service, then refresh the existing
+    galley-run.sh wrapper.
+    """
     workspace_root.mkdir(parents=True, exist_ok=True)
     refresh_wrapper(source=wrapper_source, dest=wrapper_dest)
     command = program(workspace_root=workspace_root, env_file=env_file,
@@ -1084,11 +945,9 @@ def installed(*, path: Path | None = None,
 
 def refresh_wrapper(*, source: Path | None = None,
                     dest: Path | None = None) -> Path | None:
-    """Copy the repo's `galley-run.sh` over the one in `~/galley-bin`.
-
-    The install verb does this so the owner never has to; nothing else in
-    DocProof writes outside the repo. The old copy is kept beside it as
-    `.bak` — it is somebody's working script until it is not."""
+    """Refresh an existing galley-run.sh wrapper from the repository, saving
+    its previous contents as .bak.
+    """
     import shutil
 
     src = source or (Path(__file__).resolve().parent / "practitioner"

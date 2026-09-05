@@ -1,24 +1,5 @@
-"""The resumable run state machine — explicit states, verified on resume.
-
-A Galley run moves through named states: intake → profiled → plan_approved →
-mechanical_complete → copyedit_complete → audited → certified → delivered.
-Recording them explicitly (in ``state.json`` beside the run) lets a resumed
-session VERIFY where it is from artifacts and hashes rather than trusting a
-session instruction that says "the mechanical wave is done." Resume recomputes
-the source and config hashes and re-hashes every recorded artifact; if anything
-changed since the state was written, ``verify_resume`` reports the mismatch and
-the caller stops rather than building on a moved foundation.
-
-Two rules, matching galley/casefile.py:
-
-* **Forward only.** A state may re-enter itself (idempotent) or advance to a
-  LATER state; it can never move backward. History is append-only.
-* **Hash-anchored.** Every transition stamps the source and config hashes it was
-  made against, plus the artifacts it produced, so a later state can prove the
-  inputs have not changed underneath it.
-
-Timestamps are supplied by the caller (never read from a clock), so a
-reconstructed machine is deterministic and testable.
+"""Persist forward-only run transitions and verify recorded inputs and
+artifacts on resume. Timestamps are supplied by callers.
 """
 from __future__ import annotations
 
@@ -30,9 +11,7 @@ from pydantic import BaseModel, Field
 
 STATE_SCHEMA_VERSION = 1
 
-# The ordered run states. Index in this tuple is the ordering used for the
-# forward-only rule; a run need not touch every one (a proofread-only job skips
-# copyedit_complete).
+# Transitions follow this order; a run may skip optional stages.
 RUN_STATES = (
     "intake",
     "profiled",
@@ -69,11 +48,8 @@ class StateError(RuntimeError):
 class RunStateMachine(BaseModel):
     state_schema_version: int = STATE_SCHEMA_VERSION
     history: list[RunStateRecord] = Field(default_factory=list)
-    # The manuscript this workspace was seeded with (GALLEY-006): its content
-    # hash, its Drive file id when known, and the revision counter. A source
-    # whose hash differs from the recorded one is a NEW revision and may not
-    # silently reuse this history — the driver requires an explicit
-    # revision transition (see driver.seed_workspace).
+    # Source identity recorded by seed_workspace. Changed content requires
+    # an explicit revision transition.
     source_sha256: str = ""
     source_id: str = ""
     source_name: str = ""
@@ -93,9 +69,9 @@ class RunStateMachine(BaseModel):
                 note: str = "", source_sha256: str = "",
                 config_sha256: str = "",
                 artifacts: list[ArtifactHash] | None = None) -> RunStateRecord:
-        """Append a transition to ``to_state``. Refuses a move to an earlier
-        state (forward-only); re-entering the current state is allowed (an
-        idempotent re-run of a stage). Returns the appended record."""
+        """Append a transition and return it. Allow the current state or a
+        later state; reject backward and unknown transitions.
+        """
         target = self._index(to_state)
         if self.history and target < self._index(self.current):
             raise StateError(
@@ -117,20 +93,14 @@ class RunStateMachine(BaseModel):
     def verify_resume(self, *, source_sha256: str = "",
                       config_sha256: str = "",
                       artifact_hasher=None) -> list[str]:
-        """Check that the run can safely resume from its current state. Returns
-        a list of human-readable mismatches; an empty list means it is safe to
-        continue. Compares the CURRENT source/config hashes (recompute them and
-        pass them in) against EVERY recorded state that stamped one — not only
-        the latest, so an early wave's hash still anchors a run whose later
-        stages were advanced without one — and, when an
-        ``artifact_hasher(path) -> sha256`` is given, re-hashes every recorded
-        artifact to confirm none changed or vanished.
+        """Return mismatches against recorded source/config hashes and artifact
+        hashes.
 
-        A hash present on one side and absent on the other is a mismatch, not
-        a vacuous pass: a resume that supplies a hash no stage ever stamped has
-        nothing to prove the inputs against (re-advance with --source/--config),
-        and a resume that supplies none against a stamped stage is declining to
-        check. Only when neither side carries a hash is there nothing to say."""
+        Compare inputs with all stamped transitions. A hash supplied on only
+        one side is a mismatch. When artifact_hasher is supplied, check
+        every recorded path against its latest hash, allowing later stages
+        to replace earlier versions.
+        """
         if not self.history:
             return ["no recorded state to resume from"]
         last = self.history[-1]
@@ -159,7 +129,10 @@ class RunStateMachine(BaseModel):
                     f"{label} changed since {r.state!r}: now {current[:12]}"
                     f"…, recorded {recorded[:12]}…")
         if artifact_hasher is not None:
-            for art in last.artifacts:
+            # A later stage may replace an artifact at the same path.
+            artifacts = {art.path: art for record in self.history
+                         for art in record.artifacts}
+            for art in artifacts.values():
                 try:
                     now = artifact_hasher(art.path)
                 except OSError:
