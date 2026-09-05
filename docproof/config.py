@@ -18,33 +18,13 @@ class APIConfig(BaseModel):
     max_retries: int = Field(default=2, ge=0)
     max_output_tokens: int = Field(default=16000, ge=1)
     prompt_caching: bool = True
-    # Reasoning depth. Medium is the shipped default: on a real manuscript it
-    # caught ~40% more in-taxonomy errors than low for ~$0.16 more per book,
-    # with trap false positives unchanged; high tripled output tokens for zero
-    # further recall (Johnson Book 1 compare-vs-human, 2026-08). Ignored on
-    # models that don't accept it. null omits the parameter entirely.
+    # Ignored by models that do not support reasoning effort; None omits it.
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
-    # How many chunk requests a synchronous ("right now") review has in flight
-    # at once. A review is one call per (pass, chunk), and they are independent,
-    # so fetching several concurrently is most of the wall-clock win. Ordering,
-    # cost accounting and resume are unaffected — findings are still assembled
-    # in document order. 1 restores the old strictly-serial behaviour; keep it
-    # modest so a big manuscript does not trip the provider's rate limit. 1 is
-    # strictly serial and overrides the per-vendor table below.
+    # Concurrent requests per pass; 1 forces serial execution and overrides the
+    # per-provider values below.
     concurrency: int = Field(default=8, ge=1)
-    # Per-vendor overrides of the number above, because "modest" is a different
-    # number at each vendor and the pass that is running decides which one
-    # applies — a valve may confirm on an OpenAI model under an Anthropic
-    # detector. 8 was set when the OpenAI keys were Tier-1 (200K TPM); they now
-    # carry 2M TPM / 5K RPM, where 8 in flight leaves the ceiling untouched.
-    # This is not a niche path: the engine default here is Haiku, but the app
-    # ships gpt-5.6-luna as its detector AND its glossary reader (app/settings),
-    # so most real reviews are the OpenAI ones this raises.
-    # Anthropic keeps the conservative number: its headroom has never been
-    # measured, and a 429 that outlives max_retries is not retried — it becomes
-    # a silent coverage gap, not a loud failure. Guessing there is expensive.
-    # Keyed by vendor id — "anthropic" | "openai" | "gemini" | "deepinfra".
-    # See `Config.concurrency_for`.
+    # Per-provider overrides. The model used by each pass selects the value;
+    # unspecified providers use `concurrency`.
     concurrency_by_provider: dict[str, int] = Field(
         default_factory=lambda: {"openai": 24})
 
@@ -67,15 +47,10 @@ class APIConfig(BaseModel):
 
 
 class ChunkingConfig(BaseModel):
-    token_budget: int = Field(default=2500, ge=1)         # soft target per chunk
-    hard_cap_tokens: int = Field(default=8000, ge=1)      # beyond this, split paragraph
-    # Paragraphs shorter than this reach the sweeps but not a model pass. The
-    # default is 0 — every non-empty paragraph is reviewed — because in fiction
-    # the short lines are dialogue ("“Who?” he asked."), which is exactly where
-    # a missing word, a homophone slip, or a mispunctuated tag hides. A floor
-    # skips them silently, and that was a recall hole. Raise it to reintroduce a
-    # floor if 1–3 character fragments prove noisy — a call the eval scorecard
-    # should drive, not a guess.
+    token_budget: int = Field(default=2500, ge=1)
+    hard_cap_tokens: int = Field(default=8000, ge=1)
+    # Paragraphs below this length reach deterministic sweeps but skip model
+    # passes. Zero reviews every non-empty paragraph.
     min_paragraph_chars: int = Field(default=0, ge=0)
     # How many tokens of the previous chunk's trailing paragraphs to prepend to
     # each chunk as read-only context, so a pronoun or name whose antecedent
@@ -783,13 +758,8 @@ class SaplingConfig(BaseModel):
     pass is skipped with a warning rather than failing the review.
     Whole-document only. See docproof/sapling.py."""
     enabled: bool = False
-    # Route every Sapling edit through the SHARED rewrite.confirm valve: an LLM
-    # rules on each in literary context and KEEPs anything touching voice,
-    # dialect, invented names, or style, so Sapling never edits blind. On by
-    # default — the whole point of the pass on a novel. Off restores the older
-    # behaviour (Sapling's edits fold straight in, gated only by the
-    # deterministic sweeps/edit-guard), kept so a run can A/B raw vs valved and
-    # measure the rejection rate.
+    # Route Sapling edits through the shared contextual confirmation valve.
+    # Disabling this sends them directly to deterministic validation.
     confirm: bool = True
     # Sapling's regional spelling variety: "", "us-variety", "gb-variety",
     # "au-variety", "ca-variety". Empty sends no preference.
@@ -856,13 +826,7 @@ class ChapterSweepConfig(BaseModel):
     # buy context and lose retry granularity; a failed window is skipped and
     # reported, never fatal.
     window_chars: int = Field(default=48_000, ge=4_000)
-    # The ceiling covers THINKING too (xhigh on a frontier model), and a
-    # truncated structured reply parses as nothing — the 2026-08-23 Redding run
-    # lost 2 of 6 windows (a third of the book unswept) at 32k. 64k does not
-    # raise the cost of a clean window: output is billed as generated and clean
-    # windows stop well short (3k–25k on that run). Only a window that would
-    # have truncated spends more, bounded by the extra headroom — and 32k of
-    # that spend was already being burned for nothing.
+    # Includes reasoning tokens; truncation invalidates the structured reply.
     max_output_tokens: int = Field(default=64_000, ge=1)
     # Confirm-valve sizing, mirroring Sapling/LanguageTool. The sweep model
     # proposes; the confirm judge disposes. Unset confirm_model = api.model.
@@ -1044,21 +1008,9 @@ class SmoothingConfig(BaseModel):
     # surfaces the judge's defensible-but-skippable calls, the most FP-prone.
     min_confidence: Literal["low", "medium", "high"] = "medium"
     batch_size: int = Field(default=40, ge=1)   # candidates per judge request
-    # The proposing read. Sized like the judge below and for the same reason: on
-    # a reasoning model the ceiling covers the THINKING too, so 4,000 truncated a
-    # dense window on real input — and unlike the judge, a truncated propose read
-    # is dropped whole and shows up only as fewer suggestions, which reads as
-    # restraint. An unused ceiling is free; you are billed for tokens generated,
-    # never for the cap. propose() also counts any read that still fails, so a
-    # residual truncation is reported rather than mistaken for silence.
+    # Includes reasoning tokens. A truncated proposal is discarded and reported.
     max_output_tokens: int = Field(default=16000, ge=1)
-    # The judge gets its own, much larger ceiling. Its VISIBLE output is tiny —
-    # a verdict is three fields — but on a reasoning model the thinking counts
-    # against this budget too, and judging forty literary calls at high effort
-    # burns far more of it than the verdicts occupy. Sized from the propose
-    # ceiling it truncates, and a truncated batch returns no verdicts at all:
-    # every candidate in it vanishes, and the run reports a restrained pass
-    # rather than a failed one. Measured that on the first real book.
+    # Separate ceiling for judge reasoning; a truncated batch yields no verdicts.
     judge_max_output_tokens: int = Field(default=16000, ge=1)
     # Both system prompts, editable per job the way the round judge's is. Empty
     # (the default) uses the built-in one in smoothing.py; a non-empty value
@@ -1066,57 +1018,20 @@ class SmoothingConfig(BaseModel):
     propose_prompt: str = ""
     judge_prompt: str = ""
 
-    # --- Tier C: opt-in recall levers ---------------------------------------
-    # Each of these defaults to today's behaviour, so a run that sets none of
-    # them is byte-for-byte the shipped pass. They exist so the proposer's
-    # restraint, the judge's preference-veto, the window size, and the dialogue
-    # skip can each be loosened and MEASURED without changing what a production
-    # run does until a flag is set. None is a proven recall gain yet (the pass
-    # reads statistically indistinguishable from null on the current corpus), so
-    # none ships on. See docproof/smoothing.py and the taste-pass recall memo.
-
-    # C1 — where the proposer's restraint lives. "restrained" is the shipped
-    # PROPOSE_SYSTEM; "open" swaps in PROPOSE_SYSTEM_OPEN, which keeps every
-    # voice-safety constraint (the NEVER-touch block, single-sentence,
-    # meaning-identical, the mechanical-error wall) VERBATIM but drops the "say
-    # almost nothing" framing, leaving the skeptical judge as the sole taste
-    # gate. The proposer is the binding constraint on how much this pass
-    # surfaces — a fully-open, unjudged read still finds only ~100 on a whole
-    # novel — so this is the lever with the most movement, and the most voice
-    # risk, which is why it is off by default and gated on measurement.
+    # The open proposer retains the safety rules but leaves taste to the judge.
     proposer_restraint: Literal["restrained", "open"] = "restrained"
-    # C2 — how much manuscript goes into one propose read. Smaller windows probe
-    # whether a "most paragraphs get nothing" proposer satisfices: it surfaces a
-    # similar handful whatever the window holds, so per-paragraph recall would
-    # fall as the window grows. Defaults are today's constants; ~5000 / ~24 is
-    # the setting to test. Smaller windows also give less cross-paragraph
-    # context, on which the rhetorical-repetition protections partly rely — run
-    # it as an isolated A/B, not alongside another proposer change.
+    # Smaller windows trade cross-paragraph context for finer coverage.
     propose_chars: int = Field(default=12_000, ge=1)
     propose_max_paras: int = Field(default=60, ge=1)
-    # C4 — the judge's HARSHNESS, as a dial rather than a fixed prompt. The judge
-    # is what decides how much of the proposer's output reaches the author, and
-    # the right setting differs by manuscript and by author, so it is a selector
-    # like the reasoning-effort knob. Four levels, least- to most-rejecting:
+    # Four judge levels, least to most rejecting:
     #   lenient  — lean toward keeping; reject only voice damage / no improvement
     #   balanced — judge on merits; keep what earns its place, need not reject most
     #   strict   — DEFAULT TO NO, expect to reject most (the shipped JUDGE_SYSTEM)
     #   severe   — keep only the undeniable handful
-    # "strict" is the shipped prompt byte-for-byte, so the default changes nothing.
-    # Across the whole dial the three voice-SAFETY vetoes (dialect/idiolect/coined/
-    # character-voice, fragment/rhetorical-repetition, meaning/emphasis/rhythm)
-    # hold verbatim — leniency buys back the merely-conventional and preference
-    # rejects, never the voice line. See JUDGE_SYSTEMS in docproof/smoothing.py.
+    # Every level retains the voice-safety vetoes.
     judge_harshness: Literal["lenient", "balanced", "strict", "severe"] = "strict"
-    # C5 — clarity-only smoothing INSIDE dialogue. Dialogue is skipped wholesale
-    # by default; `include_dialogue` above is the all-or-nothing opt-in, and this
-    # is the middle setting. A candidate that overlaps quoted speech is normally
-    # dropped before the judge; if its category is listed here it survives to the
-    # judge instead. Only "clarity" is permitted (enforced below): an ambiguous
-    # pronoun can be a real error even in speech, whereas tightening or
-    # re-idioming a character's diction is exactly the voice damage the dialogue
-    # skip exists to prevent. Empty (the default) is today's total skip. The 9
-    # dialect/idiolect silence-trap items are the tripwire if this is widened.
+    # Dialogue categories allowed through the filter. Validation currently
+    # permits only clarity; an empty list skips all dialogue candidates.
     dialogue_categories: list[str] = Field(default_factory=list)
 
     @field_validator("dialogue_categories")
@@ -1338,7 +1253,7 @@ class ExaminationJudgmentConfig(BaseModel):
     max_sites: int = Field(default=2_000, ge=1)
     max_cost_usd: float = Field(default=2.0, gt=0)
     sample_rate: float = Field(default=0.10, gt=0.0, le=1.0)
-    # Phase 1B starts only with exact, locally generated candidates. The broad
+    # Screening starts only with exact, locally generated candidates. The broad
     # paragraph/category placeholders remain useful coverage measurements but
     # are not correction-shaped sites and must not be billed as if they were.
     eligible_generator_prefixes: tuple[str, ...] = (
@@ -1359,7 +1274,7 @@ class ExaminationGraphConfig(BaseModel):
     enabled: bool = False
     mode: Literal["shadow"] = "shadow"
     model_obligations: bool = True
-    # Phase 2 makes a successful production detector response explicitly name
+    # A successful production detector response explicitly names
     # every paragraph it reviewed.  A named paragraph with no finding is then a
     # model pass for that paragraph/category obligation; a missing name stays
     # pending.  The verdict is ledger evidence only and cannot create a Finding.
@@ -1410,7 +1325,7 @@ class CandidateScreeningConfig(BaseModel):
         "list_punctuation", "punctuation_style", "homophone",
         "compound_sentence_comma", "term_consistency", "grammar",
     )
-    # P2-01/02: reuse the free local analyzers (sweeps, unbalanced-quote and
+    # Reuse the free local analyzers (sweeps, unbalanced-quote and
     # term-consistency scans) as candidate sources so standalone candidate mode
     # is not limited to the per-paragraph regex generators. Everything they find
     # still flows through the ledger as candidates, never straight to the output.
@@ -1682,12 +1597,8 @@ class JudgeGateConfig(BaseModel):
     # stop a silent change, and a judge that cannot vouch for one has not vouched
     # for it. Off applies anything not positively flagged.
     flag_unsure: bool = True
-    # Mostly reasoning tokens (frontier judge at effort high). At 12k the
-    # 2026-08-23 Redding run truncated on one heavily corrected paragraph and
-    # its 7 changes were applied UNREAD — the fail-open worst case. The judge
-    # models here are cheap relative to the detectors, and a clean reply stops
-    # far short of the ceiling, so the raise costs only on calls that would
-    # otherwise have truncated.
+    # Includes reasoning tokens. The ceiling must prevent a heavily corrected
+    # paragraph from truncating before any verdicts are returned.
     max_output_tokens: int = Field(default=24000, ge=1)
     # The judge's instructions, meant to be edited per job in the review panel.
     # Empty uses the built-in default (docproof.judges.default_prompt(key)), so
@@ -2051,8 +1962,7 @@ EXAMINATION_PRODUCTION_VERDICTS_ENV = \
 CANDIDATE_SCREENING_ENV = "DOCPROOF_CANDIDATE_SCREENING"
 CANDIDATE_APPLY_ENV = "DOCPROOF_CANDIDATE_APPLY"
 
-# Release gate for candidate-screening Apply mode (P0-01 containment).
-# While the subsystem's validation gates (P4-04) have not been cleared, Apply is
+# Release gate for candidate-screening apply mode. Until validation clears, it is
 # not a released capability: any request for it is contained to Shadow so the
 # lane can generate, screen, and record a ledger without ever mutating a
 # document. Flip this to True (or set DOCPROOF_CANDIDATE_APPLY=1 for a single

@@ -95,8 +95,6 @@ def embed_fonts(pkg, fonts: list[EmbeddedFont]) -> int:
     return count
 
 
-# --- parts and registration ---------------------------------------------------
-
 def _font_table(pkg) -> etree._Element:
     if pkg.has(FONT_TABLE):
         pkg.mark_modified(FONT_TABLE)

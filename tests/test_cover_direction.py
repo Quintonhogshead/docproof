@@ -22,7 +22,6 @@ from docproof.providers import ProviderResult
 
 from .fakes import FakeProvider, USAGE
 
-# -- fixtures -----------------------------------------------------------------
 
 def _brief(**overrides) -> Brief:
     data = dict(title="The Lighthouse at Gull Point", author="J. R. Vance",

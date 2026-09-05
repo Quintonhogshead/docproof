@@ -218,7 +218,6 @@ def _check_it_is_newer(fresh: Path, checked: dict) -> None:
                           f"but the release is {wanted}; not installing it.")
 
 
-# --- rebuilding from the checkout this build came from ------------------------
 #
 # Everything above installs a *published* DocProof: fetch a release, swap it in.
 # That is right for a Mac somebody was sent an .app on, and useless on the one

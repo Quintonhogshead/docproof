@@ -61,7 +61,6 @@ class CoverFont:
     pairs_with: tuple[str, ...] = field(default=())
 
 
-# --- The launch ten (config/prep/fonts) --------------------------------------
 # One static weight each — chosen for cover DISPLAY use, which is not always
 # the weight the book-interior design (config/prep/book_design.yaml) picks
 # from the same file set. Family names match config/prep/fonts/README.md's
@@ -133,7 +132,6 @@ _PREP_FAMILIES: dict[str, CoverFont] = {
         pairs_with=("IM FELL English", "Spectral")),
 }
 
-# --- The expansion shelf (config/cover/fonts, §15.11) ------------------------
 # Vendored from https://github.com/google/fonts (raw files under ofl/<slug>/),
 # every license verified OFL 1.1 and every file fsType=0 at vendoring time.
 # Static cuts only; four spec candidates ship variable-only upstream and were

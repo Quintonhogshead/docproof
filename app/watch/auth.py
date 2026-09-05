@@ -60,7 +60,6 @@ class AuthError(DriveError):
     """The sign-in did not finish. Says what to do about it."""
 
 
-# --- the pure parts -----------------------------------------------------------
 
 def consent_url(client_id: str, redirect_uri: str, state: str) -> str:
     """The page a person approves.
@@ -132,7 +131,6 @@ def exchange_code(client_id: str, client_secret: str, code: str,
     return token
 
 
-# --- the listener -------------------------------------------------------------
 
 class _Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:                            # noqa: N802 - stdlib
@@ -189,7 +187,6 @@ class Loopback:
         return False
 
 
-# --- the flow -----------------------------------------------------------------
 
 def run_flow(client_id: str, client_secret: str, *,
              open_browser=webbrowser.open, opener=drive._open_url,

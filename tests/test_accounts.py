@@ -103,7 +103,6 @@ def test_hash_carries_its_own_salt(accounts):
     a = accounts.create_user("a@press.com", "same password")
     b = accounts.create_user("b@press.com", "same password")
     assert a.id != b.id
-    # And a stored hash verifies only against its own password.
     assert _verify_password("same password", _dummy_stored(accounts, "a@press.com"))
 
 

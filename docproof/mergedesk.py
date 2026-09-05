@@ -122,7 +122,6 @@ class MergeError(ValueError):
     wrong shape entirely. Raised at load time, before anything is anchored."""
 
 
-# --- loading and lane-tagging --------------------------------------------------
 
 def tag_lane(raw: Sequence[dict | Finding], default_lane: str) -> list[Finding]:
     """Normalize a list of raw finding dicts (as findings.json / a run
@@ -182,7 +181,6 @@ def tag_lane(raw: Sequence[dict | Finding], default_lane: str) -> list[Finding]:
     return out
 
 
-# --- provisional anchoring (read-only; never claims a span) -------------------
 
 @dataclass(frozen=True)
 class _Span:
@@ -283,7 +281,6 @@ def _overlaps(s1: int, e1: int, s2: int, e2: int) -> bool:
     return s1 < e2 and s2 < e1
 
 
-# --- rule (b): is a rewrite clean? ---------------------------------------------
 
 def rewrite_is_clean(sentence: str, *, sweep_keys: Sequence[str] | None = None,
                      variant=None, ellipsis_style: str = "nbsp",
@@ -321,7 +318,6 @@ def rewrite_is_clean(sentence: str, *, sweep_keys: Sequence[str] | None = None,
     return True, ""
 
 
-# --- the claim ledger -----------------------------------------------------------
 
 # The doctrine each ledger rule enforces, in words, carried on the record
 # itself so a ledger read on its own says WHY without a lookup table. `rule`
@@ -529,7 +525,6 @@ def merge_lanes(mechanical: Sequence[dict | Finding],
                       ledger=ledger, rejected=rejected)
 
 
-# --- deliverable 2: the merged-result artifact scan ----------------------------
 
 @dataclass(frozen=True)
 class ArtifactHit:

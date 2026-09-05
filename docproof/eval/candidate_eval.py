@@ -135,7 +135,6 @@ def score_generation(cases: "list[Case] | None" = None) -> dict:
     }
 
 
-# --- release gates (P4-04) ---------------------------------------------------
 
 @dataclass(frozen=True)
 class GateResult:
@@ -184,7 +183,6 @@ def gates_pass(gates: list[GateResult]) -> bool:
     return all(g.passed for g in gates)
 
 
-# --- shadow eval over a document (P4-03) -------------------------------------
 
 def shadow_report(cfg, doc: DocumentModel, *, paragraphs=None,
                   provider_factory=None, source: str = "shadow-eval") -> dict:

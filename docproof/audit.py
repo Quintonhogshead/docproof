@@ -65,7 +65,7 @@ class Mismatch:
 class AuditReport:
     checked: int = 0
     mismatches: tuple[Mismatch, ...] = ()
-    missing: tuple[str, ...] = ()      # paragraphs that vanished entirely
+    missing: tuple[str, ...] = ()
     ran: bool = False
 
     @property

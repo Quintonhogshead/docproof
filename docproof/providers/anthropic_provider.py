@@ -34,7 +34,6 @@ class AnthropicProvider:
         self.prompt_caching = prompt_caching
         self.effort = effort
 
-    # -- request construction -------------------------------------------------
 
     def _params(self, *, model: str, system: str, user: str,
                 schema: dict[str, Any], max_tokens: int,
@@ -59,7 +58,6 @@ class AnthropicProvider:
             "output_config": output_config,
         }
 
-    # -- synchronous ----------------------------------------------------------
 
     def complete_structured(self, *, model: str, system: str, user: str,
                             schema: dict[str, Any], schema_name: str,
@@ -84,7 +82,6 @@ class AnthropicProvider:
             return ProviderResult(stop_reason="error", error=str(e))
         return _to_result(resp)
 
-    # -- batch ----------------------------------------------------------------
 
     def submit_batch(self, *, model: str, requests: Sequence[BatchRequest],
                      max_tokens: int) -> str:

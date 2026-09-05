@@ -123,7 +123,6 @@ class EditLayer:
     non-overlapping entries. Immutable; every operation returns a new layer."""
     edits: tuple[Edit, ...] = ()
 
-    # -- reading ------------------------------------------------------------
 
     def render(self, orig: str) -> str:
         """The current working text: `orig` with every entry applied."""
@@ -151,7 +150,6 @@ class EditLayer:
     def is_empty(self) -> bool:
         return not self.edits
 
-    # -- folding a round ----------------------------------------------------
 
     def fold_round(self, orig: str, edits: list[RoundEdit],
                    guard=None) -> FoldResult:
@@ -263,7 +261,6 @@ class EditLayer:
         """Fold one edit, given in the coordinates of `render(orig, self)`."""
         return self.fold_round(orig, [re], guard)
 
-    # -- bridging to the pipeline ------------------------------------------
 
     def to_findings(self, para: ParagraphRef, chunk_id: str,
                     ids: Iterator[str], *, confidence: str = "high") -> list[Finding]:
@@ -301,7 +298,6 @@ def _apply_disjoint(text: str, edits: list[tuple[int, int, str]]) -> str:
     return text
 
 
-# --- segment geometry --------------------------------------------------------
 
 def _segments(orig: str, edits: tuple[Edit, ...], wk: str) -> list[_Seg]:
     """Slice the working text into keep/repl segments in order. `wk` is passed in
@@ -310,7 +306,7 @@ def _segments(orig: str, edits: tuple[Edit, ...], wk: str) -> list[_Seg]:
     o = 0
     w = 0
     for i, e in enumerate(edits):
-        if e.orig_start > o:                       # untouched original run
+        if e.orig_start > o:
             width = e.orig_start - o
             segs.append(_Seg("keep", w, w + width, o, e.orig_start, -1))
             w += width
@@ -319,10 +315,10 @@ def _segments(orig: str, edits: tuple[Edit, ...], wk: str) -> list[_Seg]:
         segs.append(_Seg("repl", w, w + rlen, e.orig_start, e.orig_end, i))
         w += rlen
         o = e.orig_end
-    if o < len(orig):                              # trailing original run
+    if o < len(orig):
         segs.append(_Seg("keep", w, w + (len(orig) - o), o, len(orig), -1))
         w += len(orig) - o
-    if not segs:                                   # empty paragraph, no edits
+    if not segs:
         segs.append(_Seg("keep", 0, 0, 0, 0, -1))
     assert w == len(wk), f"segment width {w} != rendered {len(wk)}"
     return segs
@@ -355,9 +351,9 @@ def _orig_at_clean(segs: list[_Seg], p: int) -> int:
             if s.kind == "keep":
                 return s.orig_lo + (p - s.wk_lo)
             if p == s.wk_lo:
-                return s.orig_lo                       # entry.orig_start
+                return s.orig_lo
             if p == s.wk_hi:
-                return s.orig_hi                       # entry.orig_end
+                return s.orig_hi
     raise AssertionError(f"position {p} is not a clean working coordinate")
 
 

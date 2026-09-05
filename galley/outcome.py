@@ -17,16 +17,8 @@ from typing import Any, Mapping
 OUTCOME_NAME = "outcome.json"
 OUTCOMES = ("done", "needs_human")
 
-# HubSpot: the DocProof gate targets the Projects object (0-970), property
-# `docproof`; option values equal their labels verbatim. Both verdicts move the
-# book on — "Proofing Complete" when the loop finished it, "Needs Human PR" when
-# it did not and a human proofreader has to take over. The second is a real
-# option on the property, so the book leaves "Ready for Proofing" either way and
-# nothing sits in a queue nobody is reading.
-#
-# A blank value is still refused rather than written: PATCHing "" would blank
-# the status property instead of moving it, so `hubspot_fields` hands back an
-# empty dict in that case and the caller writes nothing at all.
+# Both verdicts move the Projects record out of "Ready for Proofing". Blank
+# values are refused because PATCHing "" would clear the status property.
 HUBSPOT_OBJECT = "0-970"
 HUBSPOT_PROPERTY = "docproof"
 DEFAULT_DONE_VALUE = "Proofing Complete"
@@ -38,9 +30,7 @@ class Thresholds:
     """When a book is beyond a mechanical proofread. Each is a share or a
     rate; the FIRST one crossed names the reason."""
 
-    # Share of reviewable paragraphs that needed a rewrite-class touch: a
-    # repair cluster, three or more WORDING edits, or two or more real
-    # residuals after every lane. "Most sentences must be rewritten."
+    # Share of reviewable paragraphs needing rewrite-class work.
     rewrite_share: float = 0.50
     # Wording edits per 1,000 words, excluding punctuation, spacing, and case.
     # The default allows roughly one reworded phrase every 17 words.

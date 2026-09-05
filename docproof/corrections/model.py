@@ -298,7 +298,6 @@ class ApplyReport:
                 f"({n - self.applied - len(self.flagged)} no-op)")
 
 
-# --- the reviewer-comment ledger ---------------------------------------------
 # Every comment read off the proof ends at exactly one of these, so none is ever
 # swallowed: it either became an edit (applied / flagged / no-op) or the model
 # turned it into nothing (not_extracted) — and the last is the one that used to
@@ -355,8 +354,6 @@ class CheckItem:
     why: str                           # the reviewer's note, or what was applied
     edit_ids: tuple[str, ...] = ()
 
-
-# --- verification -------------------------------------------------------------
 
 APPLIED_EXACTLY = "applied_exactly"
 DEVIATES = "deviates"              # the change was made but not as asked

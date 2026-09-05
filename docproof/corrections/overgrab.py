@@ -54,7 +54,6 @@ _CLASSES = (("double", _DOUBLE), ("single", _SINGLE), ("terminal", _TERMINAL))
 # has said what to do with it, so the repair stands back — even at the cost of
 # leaving a real over-grab alone, which costs a flag, where repairing a mark the
 # reviewer meant to change costs a wrong line in a printed book.
-#
 # "quote"/"quotation" are deliberately in both quote classes: a reviewer writing
 # "remove the quote" has not said which, and not touching either is the direction
 # to be wrong in.
@@ -188,8 +187,6 @@ def repair_pair(find: str, replace: str, instruction: str = ""
     return keep_marked_dash(find, replace, instruction)
 
 
-# --- pulling an edit back to the plain sense of its note ----------------------
-#
 # Three more repairs, each reading the reviewer's note beside the find/replace and
 # each narrow enough to be wrong about nothing else. Unlike the two above — which
 # read only the pair — these need the note, because the failure is a mismatch

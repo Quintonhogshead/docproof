@@ -26,15 +26,11 @@ from .ops import OP_NAMES, OpError, apply, apply_many
 from .wrap import WrapError, panels, to_wrap
 
 __all__ = [
-    # model.py
     "DOC_VERSION", "CanvasDoc", "Size", "Wrap", "Frame", "Effect", "Warp",
     "Stop", "Gradient", "PlateVersion", "LayerBase", "ArtLayer", "TextLayer",
     "ScrimLayer", "FrameLayer", "ShapeLayer", "Layer", "parse_layer",
     "new_layer_id", "load_doc", "save_doc",
-    # ops.py
     "OpError", "OP_NAMES", "apply", "apply_many",
-    # ingest.py
     "CanvasIngestError", "ingest",
-    # wrap.py
     "WrapError", "to_wrap", "panels",
 ]

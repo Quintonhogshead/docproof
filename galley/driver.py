@@ -94,7 +94,6 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# --- the phase prompts (the single source of truth) --------------------------
 
 # Each phase reads inputs from workspace files; {book} is the source
 # basename.
@@ -338,7 +337,6 @@ def select_phases(*, mechanical_only: bool = True, start: str | None = None,
     return list(order)
 
 
-# --- the workspace -----------------------------------------------------------
 
 _SETTINGS_SEED = {
     "permissions": {
@@ -494,7 +492,6 @@ def build_env(base: dict[str, str] | None = None, *,
     return env
 
 
-# --- spawning ----------------------------------------------------------------
 
 @dataclass(frozen=True)
 class PhaseSpec:
@@ -682,7 +679,6 @@ def tail_of(path: str | Path, lines: int = TAIL_LINES) -> str:
     return "\n".join(text.splitlines()[-lines:])
 
 
-# --- the plan gate -----------------------------------------------------------
 
 # Use the first dollar amount after TOTAL, excluding a later CAP amount.
 _TOTAL_RE = re.compile(r"^[^\n]*\bTOTAL\b[^$\n]*\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)",
@@ -812,7 +808,6 @@ def reply_after(text: str, token: str) -> str | None:
     return None
 
 
-# --- the run -----------------------------------------------------------------
 
 @dataclass
 class DriveResult:
@@ -894,7 +889,6 @@ class Driver:
     clock: Callable[[], float] = time.monotonic
     log: Callable[[str], None] = print
 
-    # -- helpers --
 
     @property
     def workspace(self) -> Path:
@@ -1081,7 +1075,6 @@ class Driver:
                                    ensure_ascii=False), encoding="utf-8")
         return path
 
-    # -- the gate --
 
     def run_gate(self, result: DriveResult) -> bool:
         """Decide the plan gate. Returns True to continue into `approve`."""
@@ -1161,7 +1154,6 @@ class Driver:
                 return None
             self.sleep(self.poll_interval_s)
 
-    # -- the sequence --
 
     def run(self) -> DriveResult:
         # Invalid setup raises without writing an outcome for the
@@ -1268,7 +1260,6 @@ class Driver:
                       key=lambda p: p.stat().st_mtime, reverse=True)
         return found + runs
 
-    # -- hand-off --
 
     def run_handoff(self) -> list[Path]:
         out = Path(self.handoff_dir) if self.handoff_dir \
@@ -1285,7 +1276,6 @@ def _default_ask(subject: str, body: str, book: str) -> str:
     return send_question(default_watch_home(), subject, body, book=book)
 
 
-# --- hand-off ----------------------------------------------------------------
 
 def handoff_base(source_name: str, stage: str = HANDOFF_STAGE) -> str:
     """Use watcher naming rules to produce Book 2 or Book Two, matching the

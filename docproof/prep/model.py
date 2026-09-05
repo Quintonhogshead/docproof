@@ -17,17 +17,17 @@ class StructureParagraph:
     would have filtered down to a third of its size."""
     para_id: str
     part: str
-    index: int              # position in document order — what the model reasons over
-    location: str           # "body" | "table" | "header" | ...
-    text: str               # paragraph_text(), unmodified
-    style: str              # whatever the source called it, usually "Normal"
+    index: int
+    location: str
+    text: str
+    style: str
     is_blank: bool
-    leading_ws: int         # typed spaces/tabs before the first word
+    leading_ws: int
     trailing_ws: int
     has_italics: bool
     has_link: bool
-    has_image: bool = False  # an image lives here, even if there is no text
-    is_list: bool = False   # a numbered or bulleted item
+    has_image: bool = False
+    is_list: bool = False
     # A line of the manuscript's own table of contents. Read from the file
     # rather than from the words, because "Chapter One" in a contents list and
     # "Chapter One" forty pages later are the same eleven characters.
@@ -77,9 +77,9 @@ class Structure:
 class Tag:
     """One paragraph as the model labelled it."""
     para_id: str
-    role: str               # a style name from the sheet, or a pseudo-role
-    flag: str = ""          # something the model wants the designer to see
-    source: str = "model"   # "model" | "unanswered"
+    role: str
+    flag: str = ""
+    source: str = "model"
 
 
 @dataclass(frozen=True)
@@ -98,10 +98,10 @@ class ParagraphPlan:
     which is what keeps the clean file and the tracked file the same decision
     expressed two ways."""
     para_id: str
-    role: str                     # what the model said, kept for the notes
-    style: str | None = None      # house style name to apply, None when dropped
-    drop: bool = False            # a blank line that was only spacing
-    insert_glyph: bool = False    # a blank line that was a scene break
+    role: str
+    style: str | None = None
+    drop: bool = False
+    insert_glyph: bool = False
     strip_leading: int = 0
     strip_trailing: int = 0
 
@@ -115,7 +115,7 @@ class ParagraphPlan:
 class PrepPlan:
     plans: tuple[ParagraphPlan, ...]
     flags: tuple[Flag, ...]
-    glyph: str                    # what an inserted scene break says
+    glyph: str
 
     def by_id(self) -> dict[str, ParagraphPlan]:
         return {p.para_id: p for p in self.plans}

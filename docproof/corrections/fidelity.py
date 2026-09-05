@@ -113,8 +113,6 @@ def screen_edits(edits, comments, *, book_pages=None, pdf_pages=None,
     return out, withheld
 
 
-# --- reading the comment list -------------------------------------------------
-
 def _comments_by_id(comments) -> dict:
     by_id: dict = {}
     for c in comments or ():
@@ -139,8 +137,6 @@ def _cget(comment, field: str, default=""):
         return comment.get(field, default) or default
     return getattr(comment, field, default) or default
 
-
-# --- the checks ---------------------------------------------------------------
 
 # How far from the cited page an edit may land before it reads as the wrong copy. A
 # mark near the foot of a page routinely quotes a line the book set on the next one,

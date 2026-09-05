@@ -225,8 +225,6 @@ do not guess a location and do not silently omit the item.
 - One edit per correction. Do not merge or split them."""
 
 
-# --- repairing the three anchors a model writes from the note, not the book ----
-#
 # The rules above tell the model not to make these mistakes. This is what catches
 # the ones it makes anyway, deterministically, before the list ever reaches a
 # person to review — each repair reads only the note the correction came from and

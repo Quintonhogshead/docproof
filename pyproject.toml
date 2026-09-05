@@ -1,6 +1,5 @@
 [project]
 name = "docproof"
-# Read from docproof/__init__.py — see [tool.setuptools.dynamic] below.
 dynamic = ["version"]
 description = "LLM-assisted grammar review with native Word tracked changes"
 requires-python = ">=3.11"
@@ -11,31 +10,15 @@ dependencies = [
     "lxml>=5.0",
     "pydantic>=2.7",
     "PyYAML>=6.0",
-    # Offline Hunspell for the spell scan, dictionary included. The scan is on
-    # in the shipped config, and docproof degrades gracefully without it, but
-    # a default that quietly does nothing is worse than a dependency.
+    # Bundles the offline Hunspell dictionary used by the default spell scan.
     "spylls>=0.1.7",
-    # Word-frequency data (bundled, offline) for the candidate-adjudication
-    # pass: a real-word typo like "staired" (freq ~0) next to "stared" (common)
-    # is invisible to a membership-only dictionary. wordfreq generates the
-    # candidate; the model still adjudicates it in context, so nothing is
-    # corrected on frequency alone.
+    # Offline frequency data proposes candidates; the model adjudicates them.
     "wordfreq>=3.0",
-    # The change log is a Word document the press hands to authors alongside
-    # the manuscript. Everything else here edits .docx files that already
-    # exist; this is the one thing docproof writes from nothing, and
-    # hand-rolling OOXML for a report would be gratuitous.
+    # Creates Word reports.
     "python-docx>=1.1",
-    # Reading a commented PDF proof (corrections engine): pure-Python, BSD, and
-    # it reads the annotation layer — the comments and highlights the
-    # corrections live in — not just the page text. No OCR, so a scanned proof
-    # yields nothing and is reported as such rather than guessed at.
+    # Reads PDF annotations for the corrections engine.
     "pypdf>=5.0",
-    # The page geometry for the same proof: exact per-word bounding boxes, so a
-    # highlight resolves to the words under it by intersecting rectangles instead
-    # of estimating glyph advances from a font's /Widths (which drifts across
-    # justified text and silently anchors a mark to the wrong words). MIT, and
-    # pure-Python on top of pdfminer.six — no AGPL, unlike PyMuPDF.
+    # Word bounding boxes anchor PDF highlights accurately in justified text.
     "pdfplumber>=0.11",
 ]
 
@@ -45,15 +28,10 @@ app = [
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
     "keyring>=25.0",
-    # Signed session cookies for the web build's sign-in (Starlette's
-    # SessionMiddleware imports it). The desktop app never signs anyone in, but
-    # it is one small pure-Python package and both builds install this extra.
+    # Required by Starlette's SessionMiddleware for signed session cookies.
     "itsdangerous>=2.0",
 ]
 cover = [
-    # Cover Studio's composer (docproof/cover/compose.py, typeset.py): the
-    # only new dependency the feature needs — art direction and imaging reuse
-    # the Provider protocol and the openai SDK, both already installed.
     "pillow>=10.4",
 ]
 desktop = [
@@ -61,23 +39,13 @@ desktop = [
     "pywebview>=5.0",
 ]
 languagetool = [
-    # The local rules-based mechanical-floor pass (docproof/languagetool.py). Opt
-    # in and off by default: enabling it also needs a Java runtime, and the
-    # library downloads the LanguageTool jar (~260 MB, cached) on first use.
-    # Pinned to the 3.x line: 3.3 relocated the jar-cache env var to LTP_PATH
-    # (see fly.toml), so an unbounded pin risks another silent semantics shift.
+    # Requires Java and downloads a cached jar on first use. The 3.x line uses
+    # LTP_PATH for its cache (see fly.toml).
     "language_tool_python>=3.4,<4",
 ]
 canvas = [
-    # The agent lane (docproof/agent_lane.py): the Cover Canvas AI box
-    # (docproof/canvas/assistant.py) AND the per-concept builders a new cover
-    # job now runs on (docproof/cover/atelier.py). Both drive the local Claude
-    # Code login through the agent SDK, so a Max subscription — not an API
-    # key — pays for those turns.
-    #
-    # This stopped being optional when the atelier replaced the fixed
-    # critique loop: the editor still opens without it, but MAKING a cover
-    # does not, so any deployment that runs jobs must install this extra.
+    # Canvas chat and cover generation use the local Claude Code login.
+    # Deployments that generate covers must install this extra.
     "claude-agent-sdk>=0.2",
 ]
 build = [
@@ -113,24 +81,17 @@ include = ["docproof*", "app*", "config*", "galley*"]
 
 [tool.setuptools.package-data]
 app = ["static/*", "static/art/*", "static/canvas/*", "static/canvas/vendor/*"]
-# The auditor's system prompt, read at run time by galley/audit.py.
 "galley.prompts" = ["*.md"]
 config = ["*.yaml"]
 "config.error_types" = ["*.yaml"]
-# The consistency engine's spelling-variant table and Chicago preference notes.
 "config.consistency" = ["*.tsv", "*.yaml"]
 "config.prep" = ["*.yaml", "*.idml", "*.jsx"]
-# The book-output fonts, embedded into book_*.docx files at write time.
 "config.prep.fonts" = ["*.ttf", "README.md"]
 "config.prep.fonts.licenses" = ["*.txt"]
 "config.promo" = ["*.yaml"]
 "config.variants" = ["*.yaml"]
-# Cover Studio's archetype templates (docproof/cover/archetypes.py).
 "config.cover" = ["*.yaml"]
 "config.cover.archetypes" = ["*.yaml"]
 "config.cover.recipes" = ["*.yaml"]
-# Cover Studio's stocked texture shelf (docproof/cover/textures.py, v2.2 wave).
 "config.cover.textures" = ["*.png", "*.jpg"]
-# Cover Studio's expansion font shelf: TTFs + per-family license texts +
-# provenance README (docproof/cover/fonts.py, spec §15.11).
 "config.cover.fonts" = ["*.ttf", "*.txt", "*.md"]

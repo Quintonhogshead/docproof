@@ -144,7 +144,6 @@ def summary(report) -> tuple[str, str] | None:
     return subject, body
 
 
-# --- the completion log -------------------------------------------------------
 #
 # A finished book's whole record in one email: what it cost, what model and
 # effort produced it, how long it took, and — the reason this is worth sending
@@ -362,7 +361,6 @@ def maybe_complete(token: str, ws, job, file, rec, uploaded: list[str],
         return False
 
 
-# --- the completion log for any job, watched or not ---------------------------
 #
 # The watched-book log above is the richest form, because a watched book has
 # routing and Drive links to show. A job dropped in the app has none of that —

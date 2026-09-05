@@ -93,8 +93,6 @@ class SubscriptionUnavailable(RuntimeError):
     Studio."""
 
 
-# -- the SDK seam -------------------------------------------------------------
-
 def _sdk() -> Any:
     """The agent SDK, or the sentence that says how to get it.
 
@@ -278,8 +276,6 @@ def _run_turn(*, model: str, system: str, content: Any, cwd: str) -> str:
     return str(box.get("value") or "")
 
 
-# -- structure without a structured-output parameter --------------------------
-
 def _json_contract(schema: dict[str, Any], schema_name: str) -> str:
     """The schema the caller already built, restated as a prompt-side
     contract.
@@ -377,8 +373,6 @@ def _zero_usage() -> NormalizedUsage:
     return NormalizedUsage()
 
 
-# -- the Provider (direction, revision, reality) -------------------------------
-
 class SubscriptionProvider:
     """docproof.providers.Provider, answered on the Claude subscription.
 
@@ -429,13 +423,6 @@ class SubscriptionProvider:
                                   error=problem)
         return ProviderResult(parsed=parsed, usage=_zero_usage())
 
-    # -- batch --
-    #
-    # Cover Studio never batches (every call here is one interactive step of
-    # one job), and a CLI turn has no batch endpoint behind it. Refused with
-    # a sentence rather than faked, so a future batching caller finds out at
-    # the call instead of silently running N sequential subscription turns.
-
     def submit_batch(self, *, model: str, requests: Sequence[BatchRequest],
                      max_tokens: int) -> str:
         raise NotImplementedError(
@@ -451,8 +438,6 @@ class SubscriptionProvider:
             "The Claude subscription lane has no batch endpoint.")
 
 
-# -- the anthropic-client shim (critique, planner) -----------------------------
-#
 # critique.py and planner.py talk to the `anthropic` SDK directly, because the
 # Provider protocol is text-only and both send images. They touch exactly one
 # call shape between them — `with client.messages.stream(**params) as s:

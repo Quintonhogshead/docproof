@@ -625,7 +625,6 @@ class AdjustLayer(LayerBase):
     # which has no blend in it. The names are §15.1's table verbatim.
     blend: Literal["normal", "multiply", "overlay", "soft_light", "screen",
                    "add", "lighten", "darken", "color_dodge"] = "normal"
-    # -- flat per-op params ---------------------------------------------------
     brightness: float = Field(default=0.0, ge=-1.0, le=1.0)   # grade
     contrast: float = Field(default=0.0, ge=-1.0, le=1.0)     # grade
     saturation: float = Field(default=0.0, ge=-1.0, le=1.0)   # grade

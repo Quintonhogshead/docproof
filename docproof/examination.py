@@ -41,7 +41,7 @@ class ShadowExamination:
     judgment_usage: dict = field(default_factory=dict)
     legacy_observations: dict[str, list[dict]] = field(default_factory=dict)
     failures: list[dict] = field(default_factory=list)
-    # Phase 2's production-lane receipts. Expected and observed are keyed by
+    # Production-lane receipts. Expected and observed are keyed by
     # the paid call/checkpoint id, then by the broad paragraph/category site.
     # They stay separate until every response has folded so repeated passes and
     # ensembles cannot make the ledger result depend on arrival order.
@@ -391,7 +391,7 @@ class ShadowExamination:
                 self._observe_target(site_id, finding, applied)
             return
 
-        # A Phase 2 explicit pass is terminal evidence from the production
+        # An explicit pass is terminal evidence from the production
         # detector. A later auxiliary pass may still surface a matching finding,
         # but that is independent evidence, not permission to rewrite history.
         if self.ledger.state(site_id) in TERMINAL_STATES:

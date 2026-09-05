@@ -203,8 +203,6 @@ def panels(wrap: Wrap) -> dict[str, Any]:
     return out
 
 
-# -- the front panel ----------------------------------------------------------
-
 def _remap_to_front(doc: CanvasDoc, wrap: Wrap) -> list[Any]:
     """Every existing layer, moved into the front panel.
 
@@ -261,8 +259,6 @@ def _remap_to_front(doc: CanvasDoc, wrap: Wrap) -> list[Any]:
                 f"remapped onto the front panel: {e.errors()[0]['msg']}") from e
     return out
 
-
-# -- the ground ---------------------------------------------------------------
 
 def _ground_layer(doc: CanvasDoc, wrap: Wrap,
                   job_dir: str | Path | None) -> ShapeLayer:
@@ -343,8 +339,6 @@ def _plate_mean(path: Path) -> str | None:
     return "#" + "".join(f"{max(0, min(255, round(c))):02x}" for c in mean[:3])
 
 
-# -- the back panel -----------------------------------------------------------
-
 def _back_layers(doc: CanvasDoc, wrap: Wrap, ground: str) -> list[Any]:
     """The back panel's placeholder copy, inside the safe margin.
 
@@ -391,8 +385,6 @@ def _readable_on(background: str) -> str:
     r, g, b = (int(background[i:i + 2], 16) for i in (1, 3, 5))
     return "#111111" if (0.299 * r + 0.587 * g + 0.114 * b) > 140 else "#ffffff"
 
-
-# -- the spine ----------------------------------------------------------------
 
 def _spine_layers(doc: CanvasDoc, wrap: Wrap) -> list[Any]:
     """The spine's title and author, copied off the front cover's own type.

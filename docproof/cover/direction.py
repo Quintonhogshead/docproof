@@ -126,8 +126,6 @@ class RevisionResult:
     skipped: tuple[str, ...] = ()
 
 
-# -- art direction: brief -> N distinct concepts (spec §6.1) -----------------
-
 def _normalize_genre(genre: str) -> str | None:
     """The brief's genre is free text OR one of the ten subject keys (see
     docproof.cover.model.Brief) — only an EXACT match narrows the archetype
@@ -521,20 +519,8 @@ def run_directions(brief: Brief, provider: Provider, *, n: int,
                            cost=cost_of_usage(usage, fallback_model=model))
 
 
-# -- revision: spec + notes -> a small patch, applied in code (spec §6.2) ----
-#
-# The revision call used to hand back a whole edited CoverSpec — a full-
-# document echo, wire-schema-identical to the input. Anthropic's structured-
-# output grammar compiler rejected that schema outright ("The compiled
-# grammar is too large"), even after every enum in it was collapsed to a
-# plain typed field (this module's old `_relaxed` helper — deleted, its job
-# gone with the schema it was relaxing). The fix is architectural, not a
-# bigger relaxation: the model never sees or emits the whole document again.
-# It answers with SpecEdits — a short list of {path, value} patches against
-# the spec it was shown — and this code applies each one to a plain dict,
-# then validates the RESULT as a real CoverSpec exactly as before. The wire
-# schema for SpecEdits is two string fields repeated at most 40 times: tiny,
-# by construction, regardless of how large CoverSpec itself ever grows.
+# Revisions use bounded path/value patches so the wire schema stays small as
+# CoverSpec grows; the patched document is validated as a complete spec.
 
 # A path segment is a field name (lowercase letters/underscore) with an
 # optional trailing `[n]` list index — `text[1]` tokenizes to `"text"` then

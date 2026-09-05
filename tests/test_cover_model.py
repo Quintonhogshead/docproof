@@ -18,7 +18,6 @@ from docproof.cover.model import (PROCEDURAL_KINDS, ArtPrompt, ArtSlot, Brief,
                                   PaletteRole, RenderReport, ScrimSpec, Shadow,
                                   Stroke, TextSlot, Zone, build_spec)
 
-# -- fixtures -----------------------------------------------------------------
 
 def _palette(**overrides) -> Palette:
     data = dict(background="#101010", primary="#f5f1e8", accent="#c9a227",

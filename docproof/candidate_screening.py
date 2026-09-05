@@ -85,7 +85,7 @@ class CandidateScreeningRun:
     def prepare(cls, cfg, doc: DocumentModel, *, paragraphs, sweep_findings=(),
                 finding_sources=None) -> "CandidateScreeningRun":
         from .config import resolve_candidate_mode
-        # P0-01 containment: a requested ``apply`` is clamped to ``shadow`` until
+        # A requested ``apply`` is clamped to ``shadow`` until
         # the release gate opens, so no path (config, profile, or UI) can mutate
         # a document while the subsystem is unvalidated.
         run = cls(CandidateLedger(), doc, mode=resolve_candidate_mode(cfg.mode))
@@ -120,7 +120,7 @@ class CandidateScreeningRun:
         unresolved = [candidate for candidate in run.ledger.candidates
                       if run.ledger.status(candidate.candidate_id)
                       == CandidateStatus.NEEDS_MODEL_JUDGMENT]
-        # P3-02: a candidate whose recipe asks for context ContextService cannot
+        # A candidate whose recipe asks for context ContextService cannot
         # assemble is deferred with an explicit reason, not packaged and judged
         # on partial context as if it were complete.
         ready = []
@@ -539,7 +539,7 @@ class CandidateScreeningRun:
                          + original[anchor.end_offset:])
             if corrected == original:
                 continue
-            # Defense-in-depth universal insertion guard (P1-02/P1-04): even
+            # Defense-in-depth insertion guard: even
             # though validate_correction already rejected invariant-violating
             # verdicts before they reached ERROR, withhold any correction that
             # would still create duplicate punctuation or malformed spacing, and
@@ -827,7 +827,7 @@ class CandidateScreeningRun:
         ]
 
 
-# Punctuation sweeps reused as candidate sources (P2-04) — ERROR sweeps only.
+# Only punctuation-error sweeps are reused as candidate sources.
 # The ellipsis and dash sweeps are deliberately absent: they are house-style
 # normalization, and routing them through the candidate lane buried the real
 # catches under hundreds of restyling edits (the Johnson canary was ~90% dash
@@ -934,7 +934,7 @@ def prepare_candidate_screening(cfg, doc: DocumentModel, *, paragraphs,
     finding_sources = None
     # Standalone candidate mode: no ordinary detector or ensemble is running, so
     # reused analyzer output cannot double up with the normal review — route it
-    # through the ledger as candidates (P2-01/02).
+    # through the ledger as candidates.
     standalone = (not getattr(cfg, "error_types", None)
                   and not cfg.ensemble.detectors)
     if screen_cfg.reuse_local_analyzers and standalone:
@@ -971,7 +971,7 @@ def validate_candidate_anchor(candidate: Candidate,
             return _invalid(candidate, "offset_out_of_bounds",
                             "The candidate offsets are outside the paragraph.")
         if index == 0:
-            # P1-03: distinguish a replacement span from a zero-width insertion
+            # Distinguish a replacement span from a zero-width insertion
             # and fail closed on ambiguity. A replacement must name the
             # non-empty text it replaces and match it exactly; an insertion
             # cannot claim observed text (an empty observed span validates at

@@ -49,7 +49,6 @@ _TERMINAL = ".!?…:\u201d\u2019\"')"
 _PROMPT_PATH = Path(__file__).with_name("prompts") / "audit.md"
 
 
-# ---- mechanical density (no model) -------------------------------------
 
 @dataclass(frozen=True)
 class ChapterDensity:
@@ -327,7 +326,6 @@ def sample_pages(
     return list(plan_sample(ms, densities, n, seed=seed, **floors).pages)
 
 
-# ---- prompt + parsing --------------------------------------------------
 
 def _system_prompt() -> str:
     try:

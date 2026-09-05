@@ -164,7 +164,7 @@ def build_toccheck(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
     the review proceeds as it would without the pass."""
     extract = structure_extract(paragraphs, skip)
     if not extract.strip() or "H: " not in extract:
-        return TocReport()               # no structure to compare against
+        return TocReport()
     cache_path = None
     if cache_dir:
         cache_path = (Path(cache_dir)

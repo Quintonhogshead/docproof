@@ -48,7 +48,6 @@ __all__ = ["fetch", "make_job", "run_job", "artifacts", "upload_outputs",
            "gather_inputs", "PlanInputs"]
 
 
-# --- gathering the inputs -----------------------------------------------------
 
 @dataclass(frozen=True)
 class PlanInputs:
@@ -141,7 +140,6 @@ def _read_or_skip(token: str, file: DriveFile | None, dest_dir: str | Path,
         return ""
 
 
-# --- generating it ------------------------------------------------------------
 
 def make_job(local: Path, ws: WatchSettings, *, pen_name: str = "",
              blurbs: str = "", questionnaire: str = "") -> Job:
@@ -202,7 +200,6 @@ def _run_mock(runner: JobRunner, store: JobStore, job: Job) -> None:
                  verified=True)
 
 
-# --- putting it back ----------------------------------------------------------
 
 @dataclass(frozen=True)
 class Artifact:

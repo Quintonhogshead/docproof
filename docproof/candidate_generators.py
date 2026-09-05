@@ -25,18 +25,17 @@ INITIAL_CANDIDATE_TYPES = (
     "word_echo",
     "heading_sequence",
     "list_punctuation",
-    # P2-04 punctuation across more boundaries (semicolon, colon, parenthesis
-    # balance) plus the adapted deterministic punctuation ERROR sweeps.
+    # Punctuation across semicolon, colon, and parenthesis boundaries, plus
+    # deterministic punctuation-error sweeps.
     "punctuation_style",
     # The top documented detector gap: the comma before a coordinating
     # conjunction joining two independent clauses.
     "compound_sentence_comma",
-    # P2-03 lexical: commonly confused homophones/near-homophones.
+    # Commonly confused homophones and near-homophones.
     "homophone",
-    # P2-03 lexical: document-wide term/spelling inconsistency (adapted from the
-    # existing consistency scan).
+    # Document-wide term and spelling inconsistency.
     "term_consistency",
-    # P2-05 grammar: LanguageTool / parser-backed mechanical floor (adapted).
+    # LanguageTool/parser-backed mechanical grammar floor.
     "grammar",
     # Exhaustive comma-boundary sweep: every comma-eligible seam becomes a
     # question — clause joins in both directions (missing AND removable),
@@ -115,7 +114,7 @@ _DIRECT_ADDRESS = re.compile(
     r"come on|thank you|thanks))(?P<gap>\s+)(?P<name>[A-Z][a-z]+)\b",
     re.IGNORECASE)
 
-# P2-03: confusable words, signal-gated. Flagging every there/their/its for
+# Confusable words are signal-gated. Flagging every there/their/its for
 # judgment burned real money confirming correct usage (the Johnson canary
 # judged 5,214 of them for ~zero errors). Instead, each pattern below fires
 # only when the surrounding words suggest the WRONG member of the pair — the
@@ -179,8 +178,8 @@ _COMPILED_CONFUSABLES = tuple(
     (re.compile(pattern, re.IGNORECASE), reason)
     for pattern, reason in _CONFUSABLE_SIGNALS)
 
-# P2-04: space before a comma/semicolon/colon/terminal mark is a deterministic
-# error (period excluded — ellipsis and abbreviations make it ambiguous).
+# Space before a comma, semicolon, colon, or terminal mark is a deterministic
+# error. Periods are excluded because ellipses and abbreviations are ambiguous.
 _SPACE_BEFORE_PUNCT = re.compile(r"(?P<span>\s+(?P<mark>[,;:!?]))")
 
 # Compound sentences: two independent clauses joined by a coordinating
@@ -988,9 +987,8 @@ _SWEEP_CANDIDATE_TYPES = {
     "sweep_compound_number": "number_style",
     "sweep_century": "number_style",
     "unclosed_quote": "quote_balance",
-    # P2-04: the deterministic punctuation ERROR sweeps become candidates
-    # instead of bypassing the ledger. The ellipsis/dash sweeps are style
-    # normalization and stay out of this lane on purpose.
+    # Deterministic punctuation-error sweeps become candidates instead of
+    # bypassing the ledger. Ellipsis and dash normalization stays separate.
     "sweep_stacked_punctuation": "punctuation_style",
     "sweep_terminal_period": "punctuation_style",
     "sweep_quote_punctuation": "punctuation_style",

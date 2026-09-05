@@ -19,9 +19,6 @@ from galley.contracts import Manuscript, WaveRecord
 from galley.journal import JournalSources, _CHECK_RE
 
 
-# --------------------------------------------------------------------------
-# small formatting helpers
-# --------------------------------------------------------------------------
 
 
 def _money(value: float) -> str:
@@ -128,9 +125,6 @@ def _coverage_notes(cf: CaseFile) -> list[str]:
     return notes
 
 
-# --------------------------------------------------------------------------
-# run evidence — the artifacts a finished run leaves behind
-# --------------------------------------------------------------------------
 
 
 def run_evidence(run_dir: str | Path, workspace: str | Path | None = None
@@ -335,9 +329,6 @@ def grouped_questions(rows: Sequence[Mapping[str, Any]]
             for q, span in order]
 
 
-# --------------------------------------------------------------------------
-# section renderers — the case file's own ledger
-# --------------------------------------------------------------------------
 
 
 def _section_what_ran(cf: CaseFile) -> list[str]:
@@ -412,13 +403,8 @@ def _section_queries(cf: CaseFile, heading: str = "## Open queries") -> list[str
     out = [heading, ""]
     finding_by_id = {f.id: f for f in cf.findings}
 
-    # "query" (an arbitration overlap loser) and "reject" (a panel withhold,
-    # galley.adjudicate.screen_disputes) both route their finding to the
-    # margin, never delete it — see galley.contracts.Verdict. Both belong
-    # here; showing only "query" would silently drop every panel-rejected
-    # finding from the one document that promises none is ever hidden. A
-    # later wave's re-find of an edit already made ("downgrade", "duplicate
-    # of …") is not a question for the author — it was merged, not withheld.
+    # Query and panel-reject verdicts both route to the margin. Duplicate
+    # re-finds were merged and are not author questions.
     query_verdicts = [
         v for v in cf.verdicts
         if v.ruling in ("query", "reject") and not _is_duplicate(v)
@@ -515,9 +501,6 @@ def _section_confidence(
     return out
 
 
-# --------------------------------------------------------------------------
-# section renderers — the run's evidence
-# --------------------------------------------------------------------------
 
 
 def _summary_line(src: JournalSources, cf: CaseFile) -> str:
@@ -750,9 +733,6 @@ def _section_closing(src: JournalSources) -> list[str]:
     return [text, ""]
 
 
-# --------------------------------------------------------------------------
-# public renderers
-# --------------------------------------------------------------------------
 
 
 def render_letter(

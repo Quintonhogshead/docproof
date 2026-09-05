@@ -85,7 +85,6 @@ class Provider(Protocol):
     def collect_batch(self, batch_id: str) -> dict[str, ProviderResult]: ...
 
 
-# --- schema normalization -----------------------------------------------------
 
 def strict_json_schema(model: type[BaseModel]) -> dict[str, Any]:
     """A JSON schema both vendors accept in strict/structured-output mode.

@@ -242,9 +242,7 @@ def main(argv: list[str] | None = None) -> int:
 
     out = Path(args.out) if args.out else (
         Path(tempfile.gettempdir()) / "docproof-trap-reconcile")
-    # "never inside the repo" was a promise in the --out help and in this
-    # module's docstring, and nothing enforced it: `--out eval/anything` wrote
-    # per-run JSON straight into the working tree. Refuse instead of documenting.
+    # Keep generated per-run artifacts outside the repository.
     if out.resolve().is_relative_to(REPO):
         raise SystemExit(
             f"--out must not be inside the repo: {out.resolve()} is under "

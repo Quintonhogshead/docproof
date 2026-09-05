@@ -65,7 +65,6 @@ class RewriteCandidate:
     cluster_id: str = ""
 
 
-# --- propose: rewrite each paragraph, diff against the source ------------------
 
 PROPOSE_SYSTEM = """\
 You are a meticulous copy editor performing a MINIMAL-EDIT proofread of a novel.
@@ -302,7 +301,6 @@ def _candidates_from_rows(paragraphs, rows: dict, *, max_add: int,
     return out
 
 
-# --- confirm: rule on each proposed edit in context ---------------------------
 
 _CONFIRM_SYSTEM = """\
 You are a careful proofreader ruling on suggested edits to a novel. Each item \

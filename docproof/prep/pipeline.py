@@ -80,7 +80,7 @@ class PreparedPrep:
 
 @dataclass(frozen=True)
 class PrepOutputs:
-    documents: dict[str, Path]           # kind → written file
+    documents: dict[str, Path]
     notes_md: Path
     notes_json: Path
     plan: PrepPlan

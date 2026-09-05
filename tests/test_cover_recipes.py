@@ -159,7 +159,6 @@ def test_expansion_appends_real_layers_at_the_top_in_order():
     adjust_by_id = {a.id: a for a in spec.adjust}
     assert isinstance(adjust_by_id["fx_vign"], AdjustLayer)
     assert adjust_by_id["fx_vign"].strength == 0.28
-    # And the document revalidates as-is: fully self-contained.
     CoverSpec.model_validate(spec.model_dump())
 
 

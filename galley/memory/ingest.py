@@ -25,9 +25,6 @@ from galley.memory.store import MemoryStore
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Ruling vocabulary
-# ---------------------------------------------------------------------------
 
 # The canonical, deliberately *small* ruling vocabulary a precedent row stores.
 # Matches the Precedent dataclass's documented set (accept | reject | downgrade |
@@ -123,9 +120,6 @@ def _normalize_ruling(raw: Any) -> str | None:
     return _RULING_NORMALIZATION.get(raw.strip().lower())
 
 
-# ---------------------------------------------------------------------------
-# Summary
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -154,9 +148,6 @@ class IngestSummary:
         self.ignored += other.ignored
 
 
-# ---------------------------------------------------------------------------
-# Field plucking — tolerant of naming drift
-# ---------------------------------------------------------------------------
 
 
 def _first(d: dict[str, Any], *keys: str, default: str = "") -> str:
@@ -176,9 +167,6 @@ def _book_of(job: dict[str, Any], book_hint: str | None) -> str:
     return book_hint or ""
 
 
-# ---------------------------------------------------------------------------
-# Idempotent insert
-# ---------------------------------------------------------------------------
 
 
 def _dedup_key(
@@ -252,9 +240,6 @@ def _now_text(now: Any) -> str | None:
     return str(now)
 
 
-# ---------------------------------------------------------------------------
-# Shape detection
-# ---------------------------------------------------------------------------
 
 _CORRECTIONS_KINDS = frozenset({"corrections", "correction", "resolutions"})
 _REVIEW_KINDS = frozenset({"review", "findings", "proofread"})
@@ -293,9 +278,6 @@ def _pluck_list(job: dict[str, Any], keys: tuple[str, ...]) -> list[Any]:
     return []
 
 
-# ---------------------------------------------------------------------------
-# Per-shape ingest
-# ---------------------------------------------------------------------------
 
 
 def _ingest_corrections(
@@ -418,9 +400,6 @@ def _ingest_review(
         )
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 
 def ingest_job(

@@ -34,13 +34,8 @@ log = logging.getLogger("docproof.cover.model")
 
 _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
-# v2 BODY wave: an ArtSlot/ArtPrompt/ArchetypeArt id is any lowercase slug
-# matching this pattern — widened from the launch/effects-rack closed Literal
-# five (see ART_SLOT_IDS below) so an archetype can name a slot for what it
-# IS ("vine_left", "emblem", "border_motif") instead of contorting every
-# decorative layer into "focal2"/"foreground". 1-24 chars, lowercase letters/
-# digits/underscore, must start with a letter (so a slug can never be
-# confused with a scrim's "scrim:N" layer-ref shorthand or a bare digit).
+# Slot ids are lowercase slugs so they cannot be confused with a scrim's
+# ``scrim:N`` layer reference or a bare index.
 _SLOT_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,23}$")
 
 
@@ -63,14 +58,7 @@ def _validate_hex(value: str) -> str:
     return value
 
 
-# The five names every launch/effects-rack archetype already used, back when
-# ArtSlot.id/ArtPrompt.slot were a closed Literal over exactly this tuple.
-# The v2 BODY wave widened both to _SLOT_ID_RE (any lowercase slug) — these
-# five still validate unchanged (they're just slugs now, like any other), and
-# this tuple survives purely as a documented "the legacy names, for
-# reference" constant. archetypes.ArchetypeArt.id mirrors the same widening
-# independently — see that module's docstring for why it never imports this
-# one.
+# Conventional slot ids retained for callers that build launch archetypes.
 ART_SLOT_IDS: tuple[str, ...] = ("background", "focal", "focal2", "foreground", "texture")
 
 # Every blend mode a pixel-owning or adjust layer may name (deep-stack wave,
@@ -112,13 +100,11 @@ def _validate_role_or_hex(value: str) -> str:
 # still rhyme. This is the smallest fix that keeps the bargain: the template
 # still owns scale, opacity, effects and z-order, and the direction call gets
 # ONE closed choice over where the pair sits.
-#
 # Every entry keeps the arrangement's two load-bearing properties — the two
 # tokens are on OPPOSITE sides and at DIFFERENT heights — because that
 # diagonal, not the tokens themselves, is what carries the eye across the
 # face. A layout that stacked them would be a different composition, not a
 # variation, so there isn't one on the shelf.
-#
 # Names read as "where the FAR (smaller, higher-up-the-stack) token sits";
 # the near one always answers it from the opposite corner.
 TOKEN_LAYOUTS: dict[str, dict[str, tuple[float, float]]] = {
@@ -146,26 +132,11 @@ TOKEN_SLOT_IDS: tuple[str, ...] = ("token_far", "token_near")
 ART_TREATMENTS: tuple[str, ...] = ("none", "duotone", "silhouette", "posterize",
                                    "sticker", "photo_soft")
 
-# The named procedural synthesizers (v2 BODY wave) an ArchetypeArt/ArtSlot
-# may request via `procedural: <name>` instead of (or as the no-asset
-# fallback alongside) an AI-generated `prompt` — compose.py's
-# PROCEDURAL_SYNTHESIZERS dict is the other half of this contract, one pure
-# function per name, keyed on exactly these strings. This tuple is the
-# single source of truth for which names are legal (mirroring how
-# ART_TREATMENTS is the source of truth for `treatment`, even though the
-# pixel logic for both lives downstream in compose.py) — a typo'd name fails
-# loudly at spec-validation/archetype-load time, not silently as a blank
-# layer three steps later in compose().
+# Legal procedural names must match procedural.PROCEDURAL_SYNTHESIZERS.
 PROCEDURAL_KINDS: tuple[str, ...] = (
     "gradient", "grain", "paper", "halftone", "canvas", "speckle", "rule_frame",
-    # v2.2 wave, deliverable 7: the frame family — rule_frame's siblings, all
-    # parameterized off the same inset constants (see compose._frame_inner_rect).
     "frame_hairline", "frame_thickthin", "frame_corners", "frame_deco",
     "frame_octagon",
-    # Deep-stack wave, §15.5: the light & atmosphere bank — ordinary art
-    # slots (usually screen/overlay/soft_light at low opacity), zero
-    # per-synth params by design: anchor = center/origin/band-y, scale =
-    # extent, opacity/blend as ever, inks derived from the palette only.
     "radial_glow", "light_leak", "fog_gradient", "rays", "bokeh", "dust",
     "scratches", "stars")
 
@@ -316,7 +287,6 @@ class Effect(BaseModel):
 
     kind: Literal["drop_shadow", "inner_shadow", "outer_glow", "inner_glow",
                   "bevel", "gradient_overlay", "texture_overlay", "stroke"]
-    # -- flat params, same forgiving-fields rule as AdjustLayer ---------------
     dx: float = 0.0                    # shadows: fraction of canvas HEIGHT
     dy: float = 0.004
     blur: float = Field(default=0.006, ge=0.0)       # shadows/glows
@@ -416,11 +386,7 @@ class TextSlot(BaseModel):
     color_role: PaletteRole = PaletteRole.text
     shadow: Shadow | None = None
     stroke: Stroke | None = None
-    # The ordered layer-style stack (§15.4). Empty — every pre-wave spec —
-    # means compose reads the legacy shadow/stroke fields EXACTLY as it
-    # always has (byte-identical path); non-empty means _fold_shadow_stroke
-    # below has already folded those two fields into this stack, and the
-    # effects engine is the single code path that draws it.
+    # Non-empty stacks already contain any legacy shadow and stroke.
     effects: list[Effect] = Field(default_factory=list)
     optional: bool = False                     # subtitle/series render only if content
     # "fill" (default) is typeset.draw_text's normal ink-colored glyphs.
@@ -429,23 +395,9 @@ class TextSlot(BaseModel):
     # concept always starts "fill", and only a hand-authored archetype or a
     # human revision's notes ever choose otherwise.
     mode: Literal["fill", "knockout", "art_fill"] = "fill"
-    # "thing inside of thing" (v2 BODY wave): the id of an ArtSlot whose
-    # POSITIONED alpha this text is clipped to — a title living inside a
-    # lighthouse beam, an image inside a train's smoke plume. "" = off (draw
-    # normally). Archetype/revision territory, same bucket as mode: no
-    # Direction field ever sets it. Unlike ArtSlot.mask_from, the referenced
-    # slot need NOT precede this text slot in `layers` — see CoverSpec's own
-    # _text_mask_from_resolves for why draw order doesn't matter here.
+    # Art slot whose positioned alpha clips this text; draw order is irrelevant.
     mask_from: str = ""
-    # -- expressive typography (§15.12) — the four type moves. All default
-    # inert (every pre-wave spec renders byte-identical); all revision-
-    # editable. The one-signature-move rule binds DIRECTIONS at build_spec
-    # (PR6's vocabulary mapping), never this model: a hand-authored
-    # archetype or a revision may legitimately combine moves.
-    #
-    # "uniform" is the launch fit search (one size for every line);
-    # "justify_stack" sizes each line INDEPENDENTLY so its tracked width
-    # fills the zone width exactly — the nonfiction/thriller poster stack.
+    # justify_stack sizes lines independently to fill the zone width.
     fit_mode: Literal["uniform", "justify_stack"] = "uniform"
     # Circular-baseline bow as a fraction of ZONE height (+ = arch/upward
     # bow, − = valley); glyphs place along the bowed baseline and rotate to
@@ -469,7 +421,6 @@ class TextSlot(BaseModel):
     # START a new line — a hard, designed break, as opposed to the automatic
     # search's opinion. [] (the default, and every slot that predates the
     # field) keeps the search exactly as it was.
-    #
     # WHY THIS HAD TO EXIST: both fit paths choose breaks by a scoring rule,
     # and neither rule can express a designed one. The uniform fit ranks
     # fitting splits by LOWEST WIDTH VARIANCE, which structurally refuses to
@@ -733,11 +684,9 @@ class ArtSlot(BaseModel):
     # different move entirely.)
     mirror: bool = False
     # WHAT `anchor` AND `scale` ARE MEASURED AGAINST.
-    #
     # "frame" (the default, and every pre-existing spec's behaviour) measures
     # the PLATE: scale 0.9 means the returned PNG is 90% of the canvas, and
     # anchor [1.0, y] flushes the PNG's right border to the trim.
-    #
     # That is very nearly never what an archetype means. A generated cutout
     # comes back as a full-frame PNG with the subject somewhere inside it and
     # a wide, arbitrary, model-chosen transparent margin around it. Against
@@ -750,49 +699,21 @@ class ArtSlot(BaseModel):
     # author to choose `anchor` "from WHERE THE CUT IS on that plate" — a
     # promise the frame measurement cannot keep, since the cut is a property
     # of the ink and the plate border knows nothing about it.
-    #
     # "ink" measures the subject: the source is cropped to its alpha bounding
     # box before any fit runs, so scale 1.0 means THE OBJECT fills the canvas
     # on its binding axis and anchor [1.0, y] puts THE OBJECT's own edge on
     # the trim. Opt-in, and defaulted to "frame", so every spec and template
     # written before this field renders byte-identically.
     place_by: Literal["frame", "ink"] = "frame"
-    # WHETHER THIS PLATE'S SUBJECT MAY BE CUT BY THE TRIM AT ALL.
-    #
-    # "Severed ends must leave the frame" is doctrine for a plate whose
-    # subject GROWS OR HANGS: a stem, cane, chain, ribbon or blade has a cut
-    # end, and carrying that end out through the trim is what makes it read as
-    # a slice of a larger scene rather than an object lying on the cover. An
-    # overshooting anchor is right for those, and every such slot should keep
-    # keep_whole False.
-    #
-    # It is exactly wrong for a plate whose subject is a SCATTER OF DISCRETE
-    # WHOLE OBJECTS — glass floats, berries, pearls, stones. A sphere has no
-    # cut end to carry out. Sliced by the trim it does not read as continuing
-    # off the page; it reads as a bulb cut in half, which is the one thing the
-    # overshoot rule was invented to prevent. The doctrine is about severed
-    # ENDS, and a round thing has none.
-    #
-    # keep_whole clamps placement so the slot's ink lands entirely inside the
-    # trim, overriding an anchor or offset that would push it past. It is a
-    # CLAMP, not a re-anchor: a slot already inside is untouched, so this can
-    # only ever pull a plate back in, never move one that was placed correctly.
+    # Clamp discrete objects inside the trim; continuous stems and ribbons
+    # should remain free to overshoot it.
     keep_whole: bool = False
     opacity: float = Field(default=1.0, ge=0.0, le=1.0)
-    # The full BLEND_MODES table (deep-stack wave, §15.1) — hue/color/
-    # luminosity deferred, see that constant's comment.
+    # Must match BLEND_MODES.
     blend: Literal["normal", "multiply", "overlay", "soft_light", "screen",
                    "add", "lighten", "darken", "color_dodge"] = "normal"
     asset: str = ""                            # relative path under the job dir once generated
-    # Names a compose.PROCEDURAL_SYNTHESIZERS entry to draw when this slot
-    # has no `asset` on disk (v2 BODY wave). "" = no opinion — a slot with
-    # id "background"/"texture" then falls back to the ORIGINAL hardcoded-by-
-    # id behavior (gradient / grain respectively) so every pre-existing
-    # YAML/spec keeps rendering byte-identical pixels; any other id with ""
-    # draws nothing, exactly like before this field existed. A non-"" name
-    # applies regardless of id — including a GENERATABLE slot whose asset
-    # never arrived, which is a graceful, designed fallback rather than a
-    # blank layer.
+    # procedural.PROCEDURAL_SYNTHESIZERS fallback used when no asset exists.
     procedural: Literal["", "gradient", "grain", "paper", "halftone",
                         "canvas", "speckle", "rule_frame", "frame_hairline",
                         "frame_thickthin", "frame_corners", "frame_deco",
@@ -800,52 +721,21 @@ class ArtSlot(BaseModel):
                         "fog_gradient", "rays", "bokeh", "dust", "scratches",
                         "stars"] = ""
 
-    # -- effects rack (§7.4a) — archetype/revision territory; a fresh
-    # art-direction call only ever sets `treatment` (via ArtPrompt, folded in
-    # by build_spec), never these four directly. ------------------------------
     treatment: Literal["none", "duotone", "silhouette", "posterize",
                        "sticker", "photo_soft"] = "none"
     mask_from: str = ""                        # another art slot's id, or "" = off
-    # First-class mask (deep-stack wave, §15.2). `mask_from` above STAYS as
-    # sugar for the common single-stencil case: when `mask` is unset,
-    # _fold_mask_from below materializes it as mask.from_layer at
-    # validation (byte-identical pixels — effects.resolve_mask keeps the
-    # exact hard-threshold stencil semantics for from_layer), so compose
-    # has exactly one mask code path. Setting both to different things is a
-    # validation error; only the exact folded equivalent may coexist, which
-    # is what keeps an already-validated spec revalidating cleanly on every
-    # round-trip (revisions re-validate the whole document).
+    # mask_from folds into mask.from_layer; conflicting forms are invalid.
     mask: MaskSpec | None = None
     corners: bool = False                      # mirror into all four corners (transparent slots)
-    # v2.2 wave, deliverable 1 (gravity-safe corners): by default, corners
-    # placement keeps all four copies upright (only h-mirrored on the right
-    # side) — a v-flipped bottom copy reads as gravity-defying for any
-    # ornament whose own weight isn't top/bottom symmetric (a honey drip
-    # pointing UP on the bottom corners, say). Set True to restore the
-    # original full-mirror-into-all-four behavior, for a genuinely
-    # symmetric ornament that wants it.
+    # Opt in to vertical mirroring for genuinely symmetric ornaments.
     corners_flip_vertical: bool = False
     scatter: int = Field(default=0)            # stamp N copies, 0 = off (transparent slots)
-    # v2.2 wave, deliverable 3 (line-gap snap): "" = off (place normally via
-    # anchor/scale/offset). "line_gap" only applies to a contain-fit slot
-    # whose layer draws immediately after a text layer — it centers the
-    # ornament in the largest real gap between that text's own fitted
-    # lines instead of at a fixed anchor point that has no idea where the
-    # glyphs actually landed. See compose._snap_to_line_gap.
+    # line_gap centers a following contain-fit ornament between fitted lines.
     snap: Literal["", "line_gap"] = ""
-    # v2.2 wave, deliverable 5 (texture shelf): names a
-    # docproof.cover.textures.TEXTURES plate to draw when this slot has no
-    # `asset` on disk — a third tier alongside `procedural` (checked first,
-    # since a stocked plate is a more deliberate choice than a generic
-    # procedural fallback), rendered per `texture_fit` and composited with
-    # this slot's own opacity/blend like any other layer. "" = no opinion.
+    # Shelf texture checked before the generic procedural fallback.
     texture_file: str = ""
     texture_fit: Literal["tile", "cover"] = "cover"
-    # v2.2 wave, deliverable 7 (frame family + interactions): names another
-    # art slot in this spec whose positioned alpha bbox (padded ~1.5%) gets
-    # erased from THIS slot's own painted pixels — a frame politely
-    # breaking around an emblem that overlaps it. "" = off. See
-    # compose._apply_frame_notches.
+    # Another art slot whose padded bounds are erased from this layer.
     notch_for: str = ""
     # The ordered layer-style stack (§15.4), same model and same fixed
     # paint-order semantics as TextSlot.effects — a rim-lit cutout is
@@ -907,10 +797,7 @@ class ArtSlot(BaseModel):
 class ScrimSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    # "halo" (v2.2 wave, deliverable 2): a radial soft darkening centered on
-    # the protected zone, blurred at a scale that never leaves a
-    # discernible edge anywhere — pure atmosphere behind text, never a
-    # panel with soft corners. See compose._paint_halo_scrim.
+    # halo is radial protection without a visible panel edge.
     kind: Literal["gradient_down", "gradient_up", "vignette", "panel", "halo"] = "panel"
     zone: Zone | None = None                   # None = derived from the protected TextSlot
     protects: Literal["title", "subtitle", "author", "series"] | None = None
@@ -947,7 +834,6 @@ class AdjustLayer(BaseModel):
     blend: Literal["normal", "multiply", "overlay", "soft_light", "screen",
                    "add", "lighten", "darken", "color_dodge"] = "normal"
     mask: MaskSpec | None = None
-    # -- flat per-op params ---------------------------------------------------
     brightness: float = Field(default=0.0, ge=-1.0, le=1.0)   # grade
     contrast: float = Field(default=0.0, ge=-1.0, le=1.0)     # grade
     saturation: float = Field(default=0.0, ge=-1.0, le=1.0)   # grade
@@ -1023,26 +909,11 @@ class CoverSpec(BaseModel):
     rationale: str                              # one sentence, shown on the card
     palette: Palette
     art: list[ArtSlot]
-    # Adjust layers (deep-stack wave, §15.3) — defaulted empty so every
-    # pre-wave spec (and every archived job.json without the key) validates
-    # and renders byte-identically.
     adjust: list[AdjustLayer] = Field(default_factory=list)
     scrims: list[ScrimSpec]
     text: list[TextSlot]
     layers: list[LayerRef]                      # explicit z-order, bottom first
-    # Balance & symmetry (§15.10): which vertical axis this composition
-    # declares. "center" snaps near-miss ink centers onto the canvas
-    # midline; "left"/"right" snap leading/trailing ink edges onto the
-    # `axis_x` rail (defaulting to 0.08/0.92 when axis_x is None — see
-    # balance.resolve_axis_x; "center" never reads axis_x at all). None —
-    # the default, and what every archived spec without the key validates
-    # to — means PRE-WAVE behavior: the snap pass never runs, so a spec
-    # that never declared an axis renders the exact bytes it rendered
-    # before this wave existed (§15.0 constraint 2; a "center" default
-    # would silently move any element already within tolerance). The
-    # balance MEASUREMENTS still run for None — they are report-only and
-    # change no pixels — reading it as the center composition every
-    # pre-wave archetype in fact is.
+    # None disables snapping; left and right use axis_x or conventional rails.
     axis: Literal["center", "left", "right"] | None = None
     # The left/right rail as a fraction of canvas width. Validated for
     # shape whenever set, read only when axis is "left"/"right" — inert
@@ -1269,8 +1140,6 @@ class RenderReport(BaseModel):
     adjustments: list[str] = Field(default_factory=list)
 
 
-# -- the art-direction call's answer -----------------------------------------
-
 # The registry's family names, fixed at import time — built via create_model
 # exactly the way docproof.prep.meta.detect_meta builds BookFacts.subject as
 # a Literal over BookDesign.subject_choices: a family that does not exist on
@@ -1487,8 +1356,6 @@ class Directions(BaseModel):
     concepts: list[Direction] = Field(min_length=1, max_length=6)
 
 
-# -- job/concept persistence (§8) --------------------------------------------
-
 class ConceptState(BaseModel):
     """One direction's progress through painting and composing. Lives inside
     JobState, which is rewritten to job.json after every step, so a poll — or
@@ -1536,8 +1403,6 @@ class JobState(BaseModel):
     ledger: list[dict[str, Any]] = Field(default_factory=list)   # {kind, detail, usd}
     created: str                                 # ISO UTC
 
-
-# -- the merge: archetype + direction + brief -> spec ------------------------
 
 # Reserved for recipe-expanded layers (§15.6) — hand-authored archetype
 # slots may never carry it (archetypes.py refuses at load), purely so

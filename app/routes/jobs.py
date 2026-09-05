@@ -788,11 +788,8 @@ def register(app: FastAPI) -> None:
             raise HTTPException(
                 400, f"{req.profile} requires one review round and cannot be "
                      "combined with continuity-only")
-        # Phase 1B is deliberately a narrow experiment on Fly: an administrator
-        # may run it synchronously over one ordinary review. It never enters the
-        # batch collector (whose checkpoint lifecycle is different), prep, or a
-        # multi-round run. Enforce that at the API boundary as well as in the UI
-        # so a hand-written request cannot create an unsupported run.
+        # Independent judgment supports only synchronous, single-round admin
+        # reviews; enforce the boundary server-side as well as in the UI.
         _house = None
         judgment_asked = (req.features or {}).get("examination_judgment")
         if judgment_asked is None:

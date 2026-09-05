@@ -61,7 +61,6 @@ def canonical_anchors(base: str, target: str) -> list[Anchor]:
     return anchors
 
 
-# --- ensemble merge ----------------------------------------------------------
 
 def _edit_region(f: Finding, para_text: str) -> tuple[int, int, str] | None:
     """(lo, hi, folded insert) of a finding's edit in paragraph coordinates, or
@@ -86,7 +85,7 @@ def _touch(r1: tuple[int, int], r2: tuple[int, int]) -> bool:
     lo, hi = max(r1[0], r2[0]), min(r1[1], r2[1])
     if lo < hi:
         return True
-    if lo == hi:                                  # meet at a single point
+    if lo == hi:
         return r1[0] == r1[1] == lo or r2[0] == r2[1] == lo
     return False
 
@@ -125,7 +124,7 @@ def merge(findings: list[Finding], doc: DocumentModel) -> list[Finding]:
     order = {p.para_id: i for i, p in enumerate(doc.paragraphs)}
 
     by_para: dict[str, list] = {}
-    passthrough: list[tuple[Finding, int]] = []      # (finding, sort position)
+    passthrough: list[tuple[Finding, int]] = []
     for f in findings:
         para = paras.get(f.para_id)
         region = _edit_region(f, para.text) if para else None

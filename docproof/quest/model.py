@@ -36,11 +36,11 @@ class SkinSpec(BaseModel):
                      "verdigris", "bone", "gold", "slate", "rust", "frost"]
     language: str
     is_fiction: bool
-    themes: list[str]                   # a few words each, for logging/QA
-    narration: str                      # Galley's greeting, grounded in the book
-    empty_party: str                    # the empty party-zone line, in register
-    empty_bench: str                    # the everyone-hired line, in register
-    signoff: str                        # the how-we'll-reach-you joke
+    themes: list[str]
+    narration: str
+    empty_party: str
+    empty_bench: str
+    signoff: str
     pip: CharacterSkin
     bram: CharacterSkin
     maple: CharacterSkin

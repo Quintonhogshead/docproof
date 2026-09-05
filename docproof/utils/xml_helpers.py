@@ -11,7 +11,6 @@ from lxml import etree
 
 from .package import ZipPackage
 
-# --- Namespaces -------------------------------------------------------------
 
 W_NS   = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 MC_NS  = "http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -71,7 +70,6 @@ TEXT_SKIP_ANCESTORS = {TXBXCONTENT_TAG, MC_FALLBACK_TAG}
 TEXTBOX_LOCATION = "textbox"
 
 
-# --- The canonical text contract --------------------------------------------
 
 # Run content that IS a character but holds no w:t text: a soft line break, a
 # carriage return, a tab. Left unrendered, the two halves of a Shift+Enter line
@@ -134,7 +132,6 @@ def set_text(t: etree._Element, s: str) -> None:
         t.set(XML_SPACE, "preserve")
 
 
-# --- The shared paragraph walker --------------------------------------------
 
 class WalkedParagraph(NamedTuple):
     part: str        # e.g. "word/document.xml"
@@ -252,7 +249,6 @@ def walk_package(pkg: "DocxPackage") -> Iterator[WalkedParagraph]:
                                        f"{loc}-{nid}-p", f"{loc}-{nid}-tbl")
 
 
-# --- Run normalization -------------------------------------------------------
 
 def merge_adjacent_runs(p: etree._Element) -> None:
     """Coalesce adjacent runs with identical formatting whose content is
@@ -290,7 +286,6 @@ def _last_t(run):
     return [c for c in run if c.tag == T_TAG][-1]
 
 
-# --- The package wrapper ------------------------------------------------------
 
 class DocxPackage(ZipPackage):
     """A .docx opened as a zip held in memory. Everything it does is the

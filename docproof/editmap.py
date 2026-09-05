@@ -149,7 +149,7 @@ def edit_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
         if a is None:
             continue
         if a["start"] == a["end"] and not str(a.get("insert_text") or ""):
-            continue                                        # a no-op
+            continue
         out.append(dict(r))
     return out
 
@@ -363,7 +363,6 @@ def build_editmap(source_paras: Mapping[str, str],
     return em
 
 
-# ---- translating an accepted range back to the source --------------------------
 
 @dataclass(frozen=True)
 class Resolution:
@@ -564,7 +563,7 @@ def as_row(source: str, comp: Composite, *, para_id: str, error_type: str,
     if lo == hi:
         lo = max(0, lo - 1)
         hi = min(len(source), hi + 1)
-    if lo == hi:                                            # empty paragraph
+    if lo == hi:
         lo, hi = 0, len(source)
     quote = source[lo:hi]
     corrected = (source[lo:comp.src_start] + comp.text

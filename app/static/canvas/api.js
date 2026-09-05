@@ -164,7 +164,6 @@ export async function fileObjectURL(jobId, name) {
   return URL.createObjectURL(await resp.blob());
 }
 
-/* ------------------------------------------------------------------ toasts */
 let toastHost = null;
 
 export function toast(message, kind = 'info', ms = 5200) {

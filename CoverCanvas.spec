@@ -6,12 +6,6 @@
 # right-click → Open (Gatekeeper refuses a plain double-click on an unsigned
 # bundle, once, per machine).
 #
-# Deliberately a sibling of DocProof.spec rather than a mode of it: the two
-# apps share a codebase but not a Dock identity — a person proofreading and a
-# person laying out a cover should find two icons, each opening on its own
-# job. Shared build logic (version, build stamp) is inlined the same way for
-# the same reason the .spec files themselves are: a build must need nothing
-# but PyInstaller.
 import ast
 import json
 import subprocess
@@ -49,8 +43,6 @@ BUILD_INFO.write_text(json.dumps({
     "source": str(Path.cwd()),
 }, indent=2), encoding="utf-8")
 
-# DocProof's icon until Cover Canvas earns its own (tools/make_icon.py is the
-# path to one). The Dock still tells them apart by name.
 ICON = "app/DocProof.icns"
 
 datas = [
@@ -67,10 +59,8 @@ hiddenimports = [
     # cannot see them in the import graph.
     *collect_submodules("uvicorn"),
     "keyring.backends.macOS",
-    # The AI box's brain is imported lazily inside the chat route, so the
-    # analyzer never sees it — and a bundle without it would answer 501 on a
-    # machine that has everything. The SDK drives the `claude` CLI it finds
-    # on the system; the CLI itself is not bundled.
+    # Include the lazily imported agent SDK. It uses the system Claude CLI;
+    # the CLI itself is not bundled.
     "claude_agent_sdk",
     *collect_submodules("claude_agent_sdk"),
 ]

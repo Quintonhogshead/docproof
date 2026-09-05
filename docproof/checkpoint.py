@@ -95,7 +95,6 @@ class Checkpoint:
         self.fingerprint = {"version": VERSION, **fingerprint}
         self._entries: dict[str, Entry] = {}
 
-    # -- lifecycle ------------------------------------------------------------
 
     def load(self) -> int:
         """Read what a previous attempt saved. Returns the number of usable
@@ -171,7 +170,6 @@ class Checkpoint:
         self._entries = {}
         self.path.unlink(missing_ok=True)
 
-    # -- what a resume needs to know ------------------------------------------
 
     def max_finding_id(self) -> int:
         """The highest f-NNNN handed out so far, so the shared counter resumes
@@ -184,7 +182,6 @@ class Checkpoint:
                     highest = max(highest, int(match.group(1)))
         return highest
 
-    # -- disk -----------------------------------------------------------------
 
     def _append(self, key: str, entry: Entry) -> None:
         """One completed call, one line.

@@ -129,7 +129,6 @@ def plist_content(times, *, command: list[str], log_path: Path) -> bytes:
     })
 
 
-# --- putting it in place ------------------------------------------------------
 
 def install(times, home: str | Path, *, run=subprocess.run,
             path: Path | None = None) -> Path:

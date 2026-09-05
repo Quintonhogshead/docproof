@@ -142,7 +142,6 @@ class Accounts:
                 conn.execute("INSERT INTO schema_version (version) VALUES (?)",
                              (CURRENT_SCHEMA,))
 
-    # -- writes ---------------------------------------------------------------
 
     def create_user(self, email: str, password: str, *,
                     is_admin: bool = False,
@@ -196,7 +195,6 @@ class Accounts:
             if cur.rowcount == 0:
                 raise AccountError("No such user")
 
-    # -- reads ----------------------------------------------------------------
 
     def verify_credentials(self, email: str, password: str) -> User | None:
         """Return the user for a correct email+password, or None. A disabled

@@ -13,9 +13,7 @@ from pydantic import BaseModel
 
 
 class SocialPost(BaseModel):
-    # Which channel this post is written for. Left blank in v1: the copy specs
-    # that decide the platform split across the twelve have not landed, so the
-    # model is asked for varied posts and this stays "" until they do.
+    # Reserved for platform-specific copy; blank while posts are channel-neutral.
     platform: str = ""
     text: str
     # Coined on purpose, so the grounding check never reads these as invented

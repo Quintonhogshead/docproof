@@ -206,7 +206,6 @@ def paragraph_lookup(stories: list[Story]) -> dict[tuple[str, int], Paragraph]:
     return {(s.story_id, p.index): p for s in stories for p in s.paragraphs}
 
 
-# --- the folios the proof itself prints ----------------------------------------
 # The fallback for a proof whose page count does not match the file's (a cover
 # the file does not carry, a spread exported as one page): the folio printed at
 # the head or foot of each page is direct evidence of what InDesign calls it,

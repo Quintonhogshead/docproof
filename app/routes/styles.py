@@ -275,7 +275,6 @@ def register(app: FastAPI) -> None:
                               width=88).encode("utf-8")
         return _install_sheet(paths, body, _override_path(paths))
 
-    # -- the house InDesign template ------------------------------------------
 
     @app.get("/api/prep/template")
     def prep_template() -> dict:

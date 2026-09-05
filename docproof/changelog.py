@@ -173,12 +173,10 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
         f"nothing. Revisions and {noun}s are authored "
         f"by “{cfg.revision_author}”.")
 
-    # --- style basis ---------------------------------------------------------
     d.add_heading("Style basis", level=1)
     for line in _style_basis(cfg, variant):
         d.add_paragraph(line, style="List Bullet")
 
-    # --- corrections ---------------------------------------------------------
     d.add_heading("Corrections", level=1)
     if not applied:
         d.add_paragraph("No corrections were applied.")
@@ -206,7 +204,6 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
             row[2].text = f.corrected_text
             row[3].text = _reason(f)
 
-    # --- scripted checks -----------------------------------------------------
     rows = scripted_check_rows(sweeps, findings, applied_ids)
     if rows:
         d.add_heading("Scripted checks", level=1)
@@ -223,7 +220,6 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
                          f"earlier change and were left to it)")
             d.add_paragraph(line, style="List Bullet")
 
-    # --- silent normalizations ----------------------------------------------
     if normalization is not None and normalization.ran and normalization.total:
         d.add_heading("Applied without tracked changes", level=1)
         d.add_paragraph(
@@ -242,7 +238,6 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
                 f"way would not be visible as a tracked change, so these were "
                 f"left for a person to set.")
 
-    # --- queries -------------------------------------------------------------
     d.add_heading("Queries", level=1)
     if not (queries or low):
         d.add_paragraph("No questions were raised.")
@@ -264,7 +259,6 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
             p.add_run(f.original_text).italic = True
             p.add_run(f" — {f.explanation}")
 
-    # --- deliberately left unchanged ----------------------------------------
     d.add_heading("Deliberately left unchanged", level=1)
     d.add_paragraph(
         "Author voice wins. Dialect in dialogue, intentional fragments, "
@@ -290,7 +284,6 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
             f"added new text the original did not contain. A proofreading pass "
             f"corrects; it does not rewrite or invent, so these were held back "
             f"rather than applied.")
-    # --- the words taken on trust -------------------------------------------
     # The full protected list, never a truncated aside. This is the one part
     # of the pass that shields text from checking, so it is rendered as a
     # checklist a person can actually review — alphabetical, so near-identical
@@ -338,7 +331,6 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
             f"{', '.join(sorted((c.word for c in spell.recurring),
                                 key=str.lower))}.")
 
-    # --- coverage and honesty ------------------------------------------------
     d.add_heading("Footnotes and endnotes", level=1)
     d.add_paragraph(_notes_statement(doc))
 

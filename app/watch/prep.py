@@ -62,7 +62,6 @@ class Artifact:
     mime: str
 
 
-# --- getting it ---------------------------------------------------------------
 
 def local_name(file: DriveFile) -> str:
     """What to call this manuscript on disk.
@@ -102,7 +101,6 @@ def fetch(token: str, file: DriveFile, dest_dir: str | Path, *,
     return source
 
 
-# --- preparing it -------------------------------------------------------------
 
 def make_job(local: Path, ws: WatchSettings) -> Job:
     return Job(id=new_job_id(local.name), filename=local.name,
@@ -169,7 +167,6 @@ def _run_mock(runner: JobRunner, store: JobStore, job: Job) -> None:
                  words=outputs.words)
 
 
-# --- putting it back ----------------------------------------------------------
 
 def artifacts(job: Job, ws: WatchSettings) -> list[Artifact]:
     """What of this run belongs in the author's folder, and what to call it there.

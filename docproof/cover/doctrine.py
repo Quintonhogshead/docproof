@@ -49,7 +49,6 @@ from dataclasses import dataclass
 # Every surface `render` knows how to dress. A typo'd name would silently
 # render an empty doctrine block — the one failure mode of a filter — so
 # render() checks against this tuple and raises instead.
-#
 # "atelier" replaced "atelier" when the fixed judge loop became an agent
 # (docproof.cover.atelier): the surface was never really "the judge", it was
 # "the eyes that look at a finished render", and the agent is those eyes now.

@@ -566,18 +566,6 @@ def has_real_alpha(png_bytes: bytes) -> bool:
         # empty, so demand that too.
         transparent_px = sum(alpha.histogram()[:16])
         return transparent_px / (w * h) >= 0.10
-
-
-# -- future engines (out of scope for v1 — stubs only, per
-# docs/cover_designer_spec.md §7.2 and §14) ----------------------------------
-#
-# Recraft V4.x vector: native SVG output — resolution-independent focal
-# elements and flat-illustration styles, appealing for the deferred print
-# path and for clean cutouts without an alpha-fidelity guessing game. Would
-# be a second generate()-shaped function behind the same seam
-# (docproof.cover.pipeline picks an engine per slot), not a rewrite of this
-# one. Not built.
-
 __all__ = ["IMAGE_COST", "NEGATIVE_SUFFIX", "PARTIAL_IMAGES", "ImagingError",
           "edit", "generate", "has_real_alpha", "make_client", "refine",
           "reset_capability_cache"]

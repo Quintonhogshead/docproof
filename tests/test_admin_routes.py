@@ -87,7 +87,6 @@ def test_admin_lists_and_creates_users(app):
                   json={"email": "new@press.com", "password": "password1",
                         "monthly_cap": 15.0})
     assert r.status_code == 200 and r.json()["monthly_cap"] == 15.0
-    # And the new user can now sign in.
     assert _as(app, "new@press.com").get("/api/me").status_code == 200
 
 
@@ -190,7 +189,6 @@ def test_admin_uploads_and_resets_house_style(app):
     r = boss.post("/api/prep/styles/sheet",
                   files={"file": ("house.yaml", shipped, "application/x-yaml")})
     assert r.status_code == 200 and r.json()["using_override"] is True
-    # And reset goes back to the shipped default.
     assert boss.delete("/api/prep/styles/sheet").json()["using_override"] is False
 
 

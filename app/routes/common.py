@@ -31,7 +31,6 @@ log = logging.getLogger("docproof.app")
 OUTPUT_TOKEN_GUESS = 600
 
 
-# --- spend caps ---------------------------------------------------------------
 
 CAP_ENV = "DOCPROOF_DEFAULT_CAP"
 
@@ -88,7 +87,6 @@ def month_spend(store: JobStore, owner: str) -> float:
                if (j.created_at or "").startswith(prefix))
 
 
-# --- shared route plumbing ----------------------------------------------------
 
 def admin_gate(app: FastAPI, refusal: str):
     """A dependency that lets only administrators through on the web build.

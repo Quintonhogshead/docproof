@@ -112,15 +112,11 @@ class RenderError(RuntimeError):
     """
 
 
-# -- the parity table ---------------------------------------------------------
-#
 # Every geometric constant this module needs, and the engine.js expression it
 # mirrors. Nothing below this block invents a number; if a value has to change,
 # it changes here and in engine.js together, and the test suite asserts these
 # literals so a one-sided edit fails loudly.
-#
 #   name                        engine.js counterpart
-#   --------------------------  ------------------------------------------
 #   MIN_BOX_FRACTION            boxOf: Math.max(1e-4, l.frame.w)
 #   TEXT_MIN_FONT_PX            buildText: Math.max(1, size * H())
 #   TEXT_DEFAULT_SIZE           buildText: (l.size || 0.05)
@@ -150,7 +146,6 @@ class RenderError(RuntimeError):
 #   PIN_KINDS                   buildLayer: pinned = l.kind === 'art' && ...
 #   SQUARE_TO_QUAD_EPS          squareToQuad: Math.abs(sx) > 1e-9
 #   LEVELS_*                    levelsOf: the wire clamps
-#
 # The remaining constants have no engine.js counterpart because they answer a
 # question a browser never asks (how big to allocate a bitmap, how far a
 # Gaussian reaches); each says so on itself.
@@ -203,7 +198,6 @@ LEVELS_BRIGHTNESS_LIMIT = 1.0
 LEVELS_CONTRAST_MIN = -0.95
 LEVELS_CONTRAST_MAX = 4.0
 
-# -- no engine.js counterpart: rasterizer bookkeeping -------------------------
 
 # Canvas defines shadowBlur as twice the Gaussian standard deviation; Pillow's
 # GaussianBlur radius IS the standard deviation.
@@ -228,8 +222,6 @@ _WARP_RESAMPLE = Image.Resampling.BICUBIC
 
 _DEG = math.pi / 180.0
 
-
-# -- small shared helpers -----------------------------------------------------
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
@@ -315,8 +307,6 @@ def _scale_alpha(img: Image.Image, factor: float) -> Image.Image:
     return out
 
 
-# -- fonts --------------------------------------------------------------------
-
 @functools.lru_cache(maxsize=512)
 def _face(family: str, style: str, size_px: float) -> ImageFont.FreeTypeFont:
     """One rasterizer handle per (family, style, size), cached the way
@@ -343,8 +333,6 @@ def _face(family: str, style: str, size_px: float) -> ImageFont.FreeTypeFont:
             f"the {family} font file is missing from this install: "
             f"{path} ({exc})") from exc
 
-
-# -- art ----------------------------------------------------------------------
 
 def _plate(layer: ArtLayer, job_dir: Path) -> Image.Image:
     """This layer's plate as RGBA, or a sentence naming what is missing.
@@ -393,8 +381,6 @@ def _art_tile(layer: ArtLayer, box_w: float, box_h: float,
                          round((box_h - draw_h) / 2)))
     return _Tile(tile)
 
-
-# -- text ---------------------------------------------------------------------
 
 def _x_start(align: str, box_w: float, line_w: float) -> float:
     """Where a line of width `line_w` starts in a box of width `box_w` —
@@ -608,8 +594,6 @@ def _glyph(layer: TextLayer, char: str, size_px: float,
     return img
 
 
-# -- scrim --------------------------------------------------------------------
-
 def _ramp_alpha(stops: list[Any], along: float) -> float:
     """The gradient's alpha at `along` (0..1), clamped at both ends the way a
     canvas gradient clamps to its terminal stops."""
@@ -669,8 +653,6 @@ def _scrim_tile(layer: ScrimLayer, box_w: float, box_h: float) -> _Tile:
     tile.putalpha(mask)
     return _Tile(tile)
 
-
-# -- ornament frames ----------------------------------------------------------
 
 def _stroke_px(width: float) -> int:
     """A stroke wide enough to survive rasterization. Canvas draws a 0.3px rule
@@ -762,8 +744,6 @@ def _frame_tile(layer: FrameLayer, box_w: float, box_h: float,
     return _Tile(tile, -pad, -pad)
 
 
-# -- shapes -------------------------------------------------------------------
-
 def _shape_tile(layer: ShapeLayer, box_w: float, box_h: float,
                 canvas_w: int) -> _Tile:
     """buildShape: a rect (with an optional corner radius, a fraction of the
@@ -799,8 +779,6 @@ def _shape_tile(layer: ShapeLayer, box_w: float, box_h: float,
                 width=_stroke_px(stroke_w))
     return _Tile(tile, -pad, -pad)
 
-
-# -- effects ------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class _Shadow:
@@ -929,8 +907,6 @@ def _levels(layer: Any, img: Image.Image) -> Image.Image:
                                 blue.point(lut), alpha))
 
 
-# -- the corner pin -----------------------------------------------------------
-
 def _square_to_quad(quad: list[tuple[float, float]]) -> tuple[float, ...]:
     """squareToQuad, restated: the projective map taking (0,0), (1,0), (1,1),
     (0,1) onto TL, TR, BR, BL. Returned as the nine entries of a 3x3 matrix
@@ -1019,8 +995,6 @@ def _pinned_art(layer: ArtLayer, canvas_w: int, canvas_h: int,
     return warped
 
 
-# -- masks and adjust layers (§15.2 / §15.3) ----------------------------------
-#
 # Both go through docproof.cover.effects rather than being reimplemented here,
 # which is a deliberate exception to this module's usual "mirror engine.js"
 # habit. A mask's threshold and a grade's curve are not geometry — they are the
@@ -1029,7 +1003,6 @@ def _pinned_art(layer: ArtLayer, canvas_w: int, canvas_h: int,
 # one way in the editor and another in the delivered file. The geometry around
 # them (which box, which order, which alpha) is this module's own and is
 # mirrored in engine.js the usual way.
-#
 # The one adaptation is naming: effects.resolve_mask addresses its sources by
 # ART SLOT id, and a canvas layer id is not required to be a legal slot id
 # (`ly_ab12` happens to be, a layer somebody renamed may not). So references
@@ -1150,8 +1123,6 @@ def _apply_adjust(out: Image.Image, layer: AdjustLayer,
                                       opacity=layer.opacity)
 
 
-# -- placement ----------------------------------------------------------------
-
 def _flip(layer: Any, tile: _Tile, box_w: float, box_h: float) -> _Tile:
     """The inner `flip` group's -1 scales. They mirror about the BOX centre,
     not about the tile's, so the tile's origin is reflected too — which is what
@@ -1192,8 +1163,6 @@ def _place(out: Image.Image, tile: _Tile, box_w: float, box_h: float,
     _composite(out, spun, centre_x - spun.width / 2.0,
                centre_y - spun.height / 2.0)
 
-
-# -- the renderer -------------------------------------------------------------
 
 def _content(layer: Any, box_w: float, box_h: float, canvas_w: int,
              canvas_h: int, job_dir: Path) -> _Tile:

@@ -76,7 +76,6 @@ def _render_md(curve: dict[str, Scorecard], default_gate: str) -> str:
     lines.append(f"{head.input_tokens:,} in / {head.output_tokens:,} out "
                  f"tokens · {cost} · {head.total_findings} findings\n")
 
-    # The two trust numbers, at the shipping gate.
     lines.append("## Headline\n")
     lines.append(f"- **Trap false-positive rate** "
                  f"(deliberate prose wrongly flagged, at `{default_gate}`): "
@@ -85,7 +84,6 @@ def _render_md(curve: dict[str, Scorecard], default_gate: str) -> str:
                  f"(`rejected_no_anchor` ÷ findings): "
                  f"{_pct(head.anchor_failure_rate)}\n")
 
-    # The curve.
     lines.append("## Precision / recall by confidence gate\n")
     lines.append("| gate | micro P | micro R | micro F1 | macro F1 | trap FP |")
     lines.append("|---|---|---|---|---|---|")
@@ -98,7 +96,6 @@ def _render_md(curve: dict[str, Scorecard], default_gate: str) -> str:
                      f"| {_pct(mf)} | {_pct(c.trap_fp_rate)} |")
     lines.append("")
 
-    # Per type, at the shipping gate.
     lines.append(f"## By error type (at `{default_gate}`)\n")
     lines.append("| type | seeded | caught | R | traps | trap-flagged "
                  "| P | F1 | fix-exact |")

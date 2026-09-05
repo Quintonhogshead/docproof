@@ -67,31 +67,13 @@ from pathlib import Path
 
 import yaml
 
-# eval/tools/style_traps.py -> eval/ -> eval/smoothing/traps.yaml
 DEFAULT_TRAPS = Path(__file__).resolve().parents[1] / "smoothing" / "traps.yaml"
 
 # The discriminator. A file without it is not a trap file, whatever it contains.
 KIND = "smoothing_traps"
-# 1 was silence-only, with no `role` and no `difficulty`. 2 adds both, so a
-# scorer written against 1 would silently score controls as silence traps and
-# report a firing rate that is wrong in the flattering direction. 3 turns
-# `mechanical_overlap` from one type key into a LIST of them, because running
-# the real detector over the file showed passages where two first-class types
-# have a claim at once (rhy-08: a splice AND a withheld introductory comma).
-# 4 adds the required `reconciliation` block. A v3 file could carry a whole
-# detector-reconciliation section measured on some model other than the one
-# `config/default.yaml` configures and say nothing about it — which is exactly
-# what v3 did — so the model is a field a test cross-checks rather than a
-# parenthesis inside a comment nobody can verify.
-# 5 adds `reconciliation.runner`: the repo path of the script that REGENERATES
-# the section. v4's header claimed the section "is regenerated whenever a
-# passage changes rather than being inherited" while the script that produced
-# it lived in a scratchpad that did not survive the session — an unfalsifiable
-# claim about an unrepeatable measurement. The runner is now a field, and
-# `tests/test_style_traps.py` checks that the file it names exists, so the
-# claim cannot outlive the tool again.
-# A v2 scalar read as a v3 list iterates its characters, so every version below
-# the current one is refused outright rather than coerced.
+# Older schemas differ in role fields, overlap types, and reconciliation
+# metadata. Reject them rather than silently misclassifying controls or
+# iterating an old scalar overlap value as characters.
 SCHEMA_VERSIONS = (5,)
 
 # `status` gates use: the set is agent-drafted, and `docs/accuracy-eval-plan.md`

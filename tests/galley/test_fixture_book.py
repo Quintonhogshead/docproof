@@ -141,7 +141,6 @@ def test_corrections_repair_their_quotes(model):
             f"planted error may be missing")
 
 
-# --- helpers --------------------------------------------------------------
 
 def _load(path):
     return json.loads(path.read_text(encoding="ascii"))

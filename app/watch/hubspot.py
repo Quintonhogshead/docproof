@@ -62,7 +62,6 @@ class HubSpotRecord:
         )
 
 
-# --- the wire -----------------------------------------------------------------
 
 def _open_url(request: urllib.request.Request, timeout: int = 60):
     """The one place this module touches the network. Passed in by every caller
@@ -138,7 +137,6 @@ def _json_call(request: urllib.request.Request, *, opener, what: str) -> dict:
     return parsed
 
 
-# --- asking --------------------------------------------------------------------
 
 def find_by_value(token: str, object_type: str, prop: str, value: str, *,
                   want_properties, opener=_open_url, cap: int = 500

@@ -49,7 +49,7 @@ def chunk_document(doc: DocumentModel, cfg: Config, *,
         if not p.reviewable:
             continue
         t = estimate_tokens(p.text)
-        if t > budget:                       # oversized paragraph: its own chunk(s)
+        if t > budget:
             flush()
             for piece in _oversized_pieces(p, cfg):
                 chunks.append(Chunk(f"{id_prefix}chunk-{len(chunks):03d}", (piece,),

@@ -201,7 +201,6 @@ def check(text: str, api_key: str, *, variety: str | None = None,
     return edits
 
 
-# --- running a whole document, paragraph by paragraph -----------------------
 
 @dataclass(frozen=True)
 class ParaEdit:
@@ -281,7 +280,6 @@ def check_paragraphs(paragraphs: Iterable[tuple[str, str]], api_key: str, *,
     return out
 
 
-# --- feeding the shared confirm valve ---------------------------------------
 
 def _errant_keys(error_type: str) -> list[str]:
     """The category tails of an ERRANT code, operation letter dropped, most

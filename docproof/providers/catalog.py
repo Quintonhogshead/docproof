@@ -26,7 +26,6 @@ class ModelInfo:
 
 
 MODELS: tuple[ModelInfo, ...] = (
-    # --- Anthropic -----------------------------------------------------------
     # Fable is the most capable model available and priced accordingly — twice
     # Opus, ten times Haiku. Grammar detection is a precise, well-specified
     # task, so it is listed for the judgment-call error types rather than
@@ -43,13 +42,10 @@ MODELS: tuple[ModelInfo, ...] = (
               5.00, 25.00),
     ModelInfo("claude-sonnet-5", "anthropic", "Claude Sonnet 5",
               "Balanced. A good default for full manuscripts.",
-              # Standard rates; an introductory $2/$10 runs through 2026-08-31,
-              # so real bills may come in under the estimate until then.
               3.00, 15.00),
     ModelInfo("claude-haiku-4-5", "anthropic", "Claude Haiku 4.5",
               "Fastest and cheapest. Good for spelling and typos.",
               1.00, 5.00, supports_effort=False),
-    # --- OpenAI --------------------------------------------------------------
     ModelInfo("gpt-5.6-sol", "openai", "ChatGPT 5.6 Sol",
               "Most thorough of the ChatGPT models.",
               5.00, 30.00),
@@ -59,7 +55,6 @@ MODELS: tuple[ModelInfo, ...] = (
     ModelInfo("gpt-5.6-luna", "openai", "ChatGPT 5.6 Luna",
               "Fastest and cheapest ChatGPT option.",
               0.20, 1.20),
-    # --- Google --------------------------------------------------------------
     # Gemini prices two of these by context length. A docproof request is one
     # chunk against a token budget of a few thousand, so the sub-200k tier is
     # the one that ever applies — those are the rates listed here.
@@ -72,7 +67,6 @@ MODELS: tuple[ModelInfo, ...] = (
     ModelInfo("gemini-3.1-flash-lite", "gemini", "Gemini 3.1 Flash Lite",
               "Fastest and cheapest Gemini option.",
               0.25, 1.50),
-    # --- DeepInfra (hosted open weights) ------------------------------------
     # Open-weight models served per token. Prices from deepinfra.com model
     # pages on 2026-09-04. Nothing here is watermarked and inputs are not
     # retained after the call, but the text does transit a third party's GPU —
@@ -145,7 +139,7 @@ def effort_multiplier(model_id: str, effort: str | None) -> float:
 # and Gemini bill a cached-input read at ~half and charge nothing extra to write
 # (the write is just ordinary input), so 0.5x/1.0x. Reads dominate a repeated-
 # context run — the whole-book passes re-send the manuscript every call — so
-# dropping them (as the old estimate did) is the larger of the two errors.
+# Omitting reads is the larger of the two estimation errors.
 # DeepInfra lists a cached-input rate per model, 1/5 to 1/10 of input; 0.2 is
 # the conservative end.
 _CACHE_READ_MULT = {"anthropic": 0.10, "openai": 0.50, "gemini": 0.25,

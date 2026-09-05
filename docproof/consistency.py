@@ -369,7 +369,6 @@ def _share_a_sentence(outliers: Sequence[Occurrence],
     return False
 
 
-# --- mechanical variant scans (spelling / abbreviation / acronym case) --------
 #
 # These three are what a key-folding compound scan structurally cannot do:
 # grey/gray differ by a letter, not by hyphenation, so _key never groups them;
@@ -605,7 +604,6 @@ def find_variant_policy(paragraphs: Sequence[ParagraphRef], *,
     return tuple(_cap(out, "variant-policy", max_queries))
 
 
-# --- deity pronouns -----------------------------------------------------------
 
 # The pronouns reverent capitalization applies to, and the names that anchor a
 # sentence to God plainly enough for a query to be worth the margin space.
@@ -672,7 +670,6 @@ def find_deity_pronouns(paragraphs: Sequence[ParagraphRef], *,
     return DeityPronounDrift(capitalized, tuple(outliers))
 
 
-# --- clock-time style ----------------------------------------------------------
 
 # An H:MM time anywhere in the book: the style evidence.
 _TIME_WITH_MINUTES = re.compile(r"\b\d{1,2}:[0-5]\d\b")
@@ -738,7 +735,6 @@ def find_time_style(paragraphs: Sequence[ParagraphRef], *,
     return TimeStyleDrift(with_minutes, example, tuple(candidates))
 
 
-# --- accented loanwords ---------------------------------------------------------
 
 # Loanwords whose unaccented spelling is not an English word of its own, mapped
 # to the accented form Merriam-Webster sets. Deliberately short: a pair where
@@ -1176,7 +1172,7 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
                 error_type=CONSISTENCY_KEY,
                 original_text=window,
                 occurrence=occurrence,
-                corrected_text=window,          # a query changes nothing
+                corrected_text=window,
                 explanation=(
                     f"This manuscript writes this term more than one way: "
                     f"“{o.form}” here, and elsewhere {others}. Is the "
@@ -1229,7 +1225,7 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
                     error_type=CONSISTENCY_KEY,
                     original_text=window,
                     occurrence=occurrence,
-                    corrected_text=window,          # a query changes nothing
+                    corrected_text=window,
                     explanation=(
                         f"This manuscript spells what may be one name more "
                         f"than one way: “{o.form}” here, and elsewhere "
@@ -1261,7 +1257,7 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
                 error_type=CONSISTENCY_KEY,
                 original_text=window,
                 occurrence=occurrence,
-                corrected_text=window,          # a query changes nothing
+                corrected_text=window,
                 explanation=(
                     f"“{vg.site.form}” is a loanword the dictionary sets "
                     f"with its accent: “{vg.dominant}”.{both} Change here "
@@ -1290,7 +1286,7 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
             error_type=CONSISTENCY_KEY,
             original_text=window,
             occurrence=occurrence,
-            corrected_text=window,              # a query changes nothing
+            corrected_text=window,
             explanation=f"{lead}: {forms}.{note}{tail}",
             confidence="high",
         ))
@@ -1313,7 +1309,7 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
             error_type=CONSISTENCY_KEY,
             original_text=window,
             occurrence=occurrence,
-            corrected_text=window,              # a query changes nothing
+            corrected_text=window,
             explanation=(
                 f"House style prefers the U.S. spelling “{vg.dominant}”; "
                 f"this book uses {forms} throughout.{note} Change to "
@@ -1337,7 +1333,7 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
                 error_type=CONSISTENCY_KEY,
                 original_text=window,
                 occurrence=occurrence,
-                corrected_text=window,          # a query changes nothing
+                corrected_text=window,
                 explanation=(
                     f"This book capitalizes pronouns referring to God "
                     f"({report.deity.capitalized} mid-sentence uses of "
@@ -1373,7 +1369,7 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
                 error_type=CONSISTENCY_KEY,
                 original_text=window,
                 occurrence=occurrence,
-                corrected_text=window,          # a query changes nothing
+                corrected_text=window,
                 explanation=(
                     f"This book writes clock times with minutes — "
                     f"“{report.times.example}”, {report.times.with_minutes} "

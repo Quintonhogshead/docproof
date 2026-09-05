@@ -669,7 +669,6 @@ def _match(edit: Edit, stories: list[Story], cache: IndexCache, scope=None,
         # exactly how a mark for page 157 landed on the identical wording of page
         # 181. A lone match on the wrong page is a wrong copy, not an answer: refuse
         # it. (An unplaced page tells us nothing, so it still applies.)
-        #
         # Unless the proof itself sets this text on the cited page: `on_page` is the
         # map's *alignment*, which can under-cover a page and drop the very run a mark
         # sits on, and this is the only copy in the book — so if the proof's own page

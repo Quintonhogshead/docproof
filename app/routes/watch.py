@@ -46,17 +46,8 @@ class WatchUpdate(BaseModel):
     # Subfolder mode's one book-to-book knob (the mode itself is CLI-set):
     # prepare only "<surname> - Book Original" in each author's folder.
     require_source_label: bool | None = None
-    # The proofing stage: whether it runs at all, who reads the book — DocWatch
-    # itself ("app") or the Mac-side practitioner loop ("external"), which
-    # DocWatch only waits on — and the three values of the HubSpot dropdown it
-    # gates and writes on.
-    #
-    # Those three are editable here, unlike the formatting pair, because the
-    # proofing vocabulary is newer than the panel and an admin should not need a
-    # terminal on the Fly volume to correct a value they typed into HubSpot. The
-    # write allowlist is untouched by that: `hubspot.set_properties` still only
-    # ever accepts `hubspot_status_property`, so what a person can change here is
-    # which *value* DocProof writes, never which property it writes to.
+    # Proofing HubSpot values are editable, but the property-name allowlist in
+    # hubspot.set_properties remains fixed.
     proofing_enabled: bool | None = None
     proof_runner: str | None = None
     hubspot_proof_ready_value: str | None = None

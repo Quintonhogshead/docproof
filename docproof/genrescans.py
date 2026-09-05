@@ -53,7 +53,6 @@ _WORD = re.compile(r"[A-Za-z][A-Za-z'-]*")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
 
-# --- anachronism ---------------------------------------------------------
 
 # Curated word -> earliest plausible year AD its modern sense entered ordinary
 # use, for the sense this scan cares about (a technology, an institution, a
@@ -146,7 +145,6 @@ def anachronism_findings(paragraphs: Sequence[ParagraphRef],
     return findings
 
 
-# --- citation format -------------------------------------------------------
 
 # Two citation-style families, matched independently. Neither claims to be a
 # complete citation grammar — only common enough that two DIFFERENT styles
@@ -205,7 +203,6 @@ def citation_format_findings(paragraphs: Sequence[ParagraphRef],
     return findings
 
 
-# --- reading level -----------------------------------------------------------
 
 def _ari(text: str) -> float | None:
     """Automated Readability Index: 4.71*(chars/word) + 0.5*(words/sentence)

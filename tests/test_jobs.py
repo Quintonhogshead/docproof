@@ -304,7 +304,6 @@ def test_a_running_corrections_job_names_its_own_steps():
     # Its own "writing" wins over the review's, which writes a document.
     assert Job(**common, stage="writing").plain_state() \
         == "Almost done — writing your file"
-    # And with no stage at all it still reads the way it always did.
     assert Job(**common).plain_state() == "Applying your corrections"
     # A review is untouched by any of it.
     review = dict(common, kind="review", filename="a.docx")

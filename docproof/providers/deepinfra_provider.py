@@ -79,7 +79,6 @@ class DeepInfraProvider:
             body["reasoning_effort"] = _EFFORT.get(self.effort, "low")
         return body
 
-    # -- synchronous ----------------------------------------------------------
 
     def complete_structured(self, *, model: str, system: str, user: str,
                             schema: dict[str, Any], schema_name: str,
@@ -96,7 +95,6 @@ class DeepInfraProvider:
             return ProviderResult(stop_reason="error", error=str(e))
         return result_from_completion(resp.model_dump())
 
-    # -- batch: none ----------------------------------------------------------
 
     def submit_batch(self, *, model: str, requests: Sequence[BatchRequest],
                      max_tokens: int) -> str:

@@ -70,13 +70,13 @@ class SkinError(RuntimeError):
 class SkinResult:
     """One generated costume plus everything the caller wants to log or price."""
     skin: SkinSpec
-    title: str                    # file stem, the identifier of record
+    title: str
     word_count: int
-    band: float                   # price multiplier for this length
+    band: float
     model: str
-    cost: float | None            # dollars for this one call, None off-catalog
-    fallback: bool                # True when skin is DEFAULT_SKIN
-    error: str | None             # why, when fallback is True
+    cost: float | None
+    fallback: bool
+    error: str | None
     # Historical field: invented aliases are gone (names are permanent), so
     # this is always empty. Kept so the /api/quest/skin payload stays stable.
     alias_collisions: tuple[str, ...] = ()

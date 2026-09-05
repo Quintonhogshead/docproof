@@ -211,7 +211,6 @@ class _Session:
         self.summary = ""
         self.composed = False
 
-    # -- tools ---------------------------------------------------------------
 
     async def read_spec(self, args: dict[str, Any]) -> dict[str, Any]:
         return _text(self.spec.model_dump_json(indent=2))
@@ -384,7 +383,6 @@ class _Session:
         self.summary = summary
         return _text("Recorded. This concept is done.")
 
-    # -- machinery -----------------------------------------------------------
 
     async def _compose(self) -> tuple[RenderReport, list[str]]:
         image, report = await asyncio.to_thread(compose, self.spec,

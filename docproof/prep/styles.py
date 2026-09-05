@@ -70,7 +70,6 @@ class StyleSheet:
     pseudo: tuple[tuple[str, str], ...]     # (key, describe)
     path: str
 
-    # -- lookups --------------------------------------------------------------
 
     def by_name(self, name: str) -> Style:
         for s in self.styles:
@@ -119,8 +118,6 @@ class StyleSheet:
 def _one_line(text: str) -> str:
     return " ".join((text or "").split())
 
-
-# --- loading ------------------------------------------------------------------
 
 def load_style_sheet(path: str | Path, *,
                      override_dir: str | Path | None = None) -> StyleSheet:
@@ -227,8 +224,6 @@ def _check_unique(source: Path, styles) -> None:
                     f"have to be unique.")
             seen.add(value)
 
-
-# --- the Word style sheet -----------------------------------------------------
 
 def _sub(parent, tag: str, **attrs):
     return etree.SubElement(parent, qn(tag),

@@ -126,7 +126,6 @@ def minimal_regions(original: str, corrected: str
 _IMPORT_ID_PREFIXES = ("import", "replay", "curated")
 
 
-# --- number labels are not prose numbers -------------------------------------
 #
 # The typed number_style pass spells a numeral out when it reads as a count in a
 # sentence ("she had 3 dogs" -> "three dogs"). A LABEL is not that: "Mindset

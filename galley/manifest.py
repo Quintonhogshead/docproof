@@ -273,7 +273,6 @@ def verify_plan(manifest: dict[str, Any], *, source: str | Path, cfg: Any,
     return devs
 
 
-# --- certify -----------------------------------------------------------------
 
 @dataclass
 class Check:

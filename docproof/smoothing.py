@@ -375,7 +375,6 @@ class _Suggestions(BaseModel):
     suggestions: list[_Suggestion]
 
 
-# --- deterministic filters ----------------------------------------------------
 
 def quote_spans(text: str, closing: str) -> list[tuple[int, int]]:
     """The [start, end) spans of quoted speech in a paragraph.
@@ -479,7 +478,6 @@ def margin_note(suggestion: str, rationale: str) -> str:
     return text + "."
 
 
-# --- propose ------------------------------------------------------------------
 
 def _windows(paragraphs: Sequence[ParagraphRef],
              max_chars: int = _PROPOSE_CHARS,
@@ -535,7 +533,7 @@ def propose(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
     windows = _windows(usable, propose_chars, propose_max_paras)
     if not windows:
         return [], 0, 0, 0
-    schema = strict_json_schema(_Suggestions)     # deep-copies; hoist off the pool
+    schema = strict_json_schema(_Suggestions)
 
     def fetch(window):
         body = "\n".join(f'<paragraph id="{p.para_id}">{p.text}</paragraph>'
@@ -591,7 +589,7 @@ def propose(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
             continue
         end = start + len(s.quote)
         original = text[start:end]
-        if s.suggestion == original:             # a no-op suggestion
+        if s.suggestion == original:
             dropped += 1
             continue
         if any(_overlaps(start, end, a, b) for a, b in dialogue.get(s.para_id, ())):
@@ -629,7 +627,6 @@ def propose(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
     return cands, dropped, len(windows), windows_failed
 
 
-# --- cap ----------------------------------------------------------------------
 
 _RANK = {"low": 0, "medium": 1, "high": 2}
 

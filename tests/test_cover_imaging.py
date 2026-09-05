@@ -937,7 +937,6 @@ def test_a_remembered_shape_that_stops_working_still_falls_back():
     state["reject_fallback"] = True
 
     def later(params, n):
-        # Now only the documented shape is accepted.
         if "size" in params:
             raise _bad_request("Unknown parameter: 'size'.")
         return _Response(_b64(payload))

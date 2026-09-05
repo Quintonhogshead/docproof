@@ -27,16 +27,13 @@ from __future__ import annotations
 from ..validator import fold_punct
 
 # Characters the normalized view drops entirely, after folding.
-#
 # Whitespace: the PDF reader reports a kerning jump as a space, so the book's
 # `.’` arrives as `. ’`; a word split across chunks arrives as `un nam ed`. Word
 # boundaries are worth less here than the ability to match at all.
-#
 # Hyphens (and the dashes folded onto them): a word broken over a line end keeps
 # its hyphen in the PDF and has none in the book, and an em dash is spaced in one
 # rendering and unspaced in the other. Dropping the character covers every one of
 # those without a special case for which is which.
-#
 # The set is widened past the ASCII space and hyphen to the whole family a PDF
 # reader emits and `fold_punct` does not canonicalize: the narrow, thin and other
 # fixed-width spaces a justified line is set with; the zero-width joiners and the

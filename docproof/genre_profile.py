@@ -140,17 +140,14 @@ class Profile(BaseModel):
     model_notes: str = ""
     # Unresolved Word field results anywhere in the file, the skipped TOC
     # styles included ("body-0012: CLASSESES\tError! Bookmark not defined.").
-    # The designer regenerates the TOC; the plan notes them; no lane edits
-    # them (Georgis, 2026-09-04).
+    # The designer regenerates the TOC; the plan notes them; no lane edits them.
     field_errors: list[str] = Field(default_factory=list)
-    # Chapter/part labels as written, and the import-findings rows that make
-    # each sequence continuous in the dominant style (Quinton, 2026-09-04:
-    # label inconsistencies are mechanics — fix them, never query them).
+    # Chapter/part labels and the rows that normalize each sequence to its
+    # dominant style. Label inconsistencies are mechanical edits, not queries.
     chapter_labels: list[dict] = Field(default_factory=list)
     chapter_label_rows: list[dict] = Field(default_factory=list)
 
 
-# --- deterministic extraction -------------------------------------------------
 
 def _word_count(text: str) -> int:
     return len(_WORD.findall(text))
@@ -381,7 +378,6 @@ def _field_errors(path: Path) -> list[str]:
     return [f"{pid}: {text}" for pid, text in unresolved_field_results(path)]
 
 
-# --- optional model confirmation ---------------------------------------------
 
 class _GenreConfirmation(BaseModel):
     genre: str = Field(description="one of: fantasy_sf, self_help_business, "

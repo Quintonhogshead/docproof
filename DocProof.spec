@@ -6,11 +6,8 @@
 # right-click → Open (Gatekeeper refuses a plain double-click on an unsigned
 # bundle, once, per machine).
 #
-# The two data entries are what the app reads at runtime: the shipped config
-# and error-type prompts, and the frontend. app/settings.resource_root() finds
-# them through sys._MEIPASS once frozen. Everything the user creates —
-# settings, jobs, edited prompts — lives in ~/Library/Application Support and
-# is deliberately not in here.
+# resource_root() resolves bundled config and frontend data via sys._MEIPASS.
+# User settings and jobs remain in ~/Library/Application Support.
 import ast
 import json
 import subprocess
@@ -52,9 +49,7 @@ def _repo_slug(url: str) -> str:
 
 VERSION = _version()
 
-# Stamped into the bundle so the running app can say exactly what it is and,
-# because it remembers where it was built from, whether that source has moved
-# on since. Written under build/ rather than into the source tree.
+# Bundle version and source provenance for update checks.
 BUILD_INFO = Path("build/build_info.json")
 BUILD_INFO.parent.mkdir(parents=True, exist_ok=True)
 BUILD_INFO.write_text(json.dumps({
@@ -70,18 +65,14 @@ BUILD_INFO.write_text(json.dumps({
     "repo": _repo_slug(_git("remote", "get-url", "origin")),
 }, indent=2), encoding="utf-8")
 
-# The Dock, the Finder and ⌘-Tab all read this. It is checked in rather than
-# generated at build time so a build needs nothing but PyInstaller; to change
-# it, edit tools/make_icon.py and run it.
+# Regenerate the checked-in icon with tools/make_icon.py.
 ICON = "app/DocProof.icns"
 
 datas = [
     ("config", "config"),
     ("app/static", "app/static"),
     (str(BUILD_INFO), "."),
-    # The Hunspell dictionary the spell scan reads. It is data, not code, so
-    # the import graph never sees it and a build without this line ships an
-    # app whose scan silently finds nothing.
+    # The Hunspell dictionary is runtime data, invisible to import analysis.
     *collect_data_files("spylls"),
 ]
 
@@ -90,9 +81,7 @@ hiddenimports = [
     # cannot see them in the import graph.
     *collect_submodules("uvicorn"),
     "keyring.backends.macOS",
-    # Reached only through a function-level import in docproof_desktop.py, and
-    # only by a scheduled pass. Named here so a build cannot lose the one part
-    # of the app that runs while nobody is looking.
+    # Include the scheduled watch entry point, imported lazily.
     "app.watch.cli",
 ]
 

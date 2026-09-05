@@ -232,7 +232,6 @@ def _logging(home: Path, *, verbose: bool) -> None:
         print(f"note: could not write a log in {home} ({e})", file=sys.stderr)
 
 
-# --- signing in ---------------------------------------------------------------
 
 def cmd_auth(args, home: Path) -> int:
     ws = WatchSettings.load(home)
@@ -289,7 +288,6 @@ def _ask(prompt: str) -> str:
         return ""
 
 
-# --- what to watch ------------------------------------------------------------
 
 def cmd_init(args, home: Path) -> int:
     ws = WatchSettings.load(home)
@@ -562,7 +560,6 @@ def _missing(ws: WatchSettings) -> str:
     return _NEEDS.get(statuslib.missing(ws, get_key=get_api_key), "")
 
 
-# --- one pass -----------------------------------------------------------------
 
 def cmd_once(args, home: Path) -> int:
     ws = WatchSettings.load(home)
@@ -654,7 +651,6 @@ def _preview_counts(report: ticklib.TickReport) -> str:
     return ", ".join(clauses[:-1]) + " and " + clauses[-1]
 
 
-# --- what it has been doing ---------------------------------------------------
 
 def cmd_schedule(args, home: Path) -> int:
     ws = WatchSettings.load(home)

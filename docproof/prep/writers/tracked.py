@@ -94,8 +94,6 @@ def write_tracked(pkg, structure: Structure, plan: PrepPlan, sheet: StyleSheet,
                       missing=tuple(missing))
 
 
-# --- the four shapes ----------------------------------------------------------
-
 def _rev_attrs(ids, author: str, date: str) -> dict:
     return {qn("w:id"): str(next(ids)), qn("w:author"): author,
             qn("w:date"): date}

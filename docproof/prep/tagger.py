@@ -77,8 +77,6 @@ def load_tagging_prompt(path: str | Path, *,
         path=str(source))
 
 
-# --- the wire contract --------------------------------------------------------
-
 class RawTag(BaseModel):
     para_id: str
     role: str
@@ -149,7 +147,6 @@ class Tagger:
         self.output_model = build_output_model(sheet.model_choices)
         self.schema = strict_json_schema(self.output_model)
 
-    # -- public ---------------------------------------------------------------
 
     def plan_windows(self, structure: Structure) -> list[Window]:
         return windows(structure.taggable, max_paragraphs=self.max_paragraphs,
@@ -192,7 +189,6 @@ class Tagger:
                 progress(done, len(planned))
         return self._order(tags, structure)
 
-    # -- internals ------------------------------------------------------------
 
     def _tag_window(self, window: Window, assigned: dict[str, str],
                     usage: Usage) -> list[Tag]:

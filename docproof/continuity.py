@@ -199,7 +199,6 @@ def build_continuity(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
     return r
 
 
-# --- report -> query findings -------------------------------------------------
 
 _MAX_QUOTE_IN_COMMENT = 90
 
@@ -310,7 +309,6 @@ def report_to_findings(report: ContinuityReport,
     return out
 
 
-# --- deterministic calendar tier ($0, no API) ---------------------------------
 
 _MONTHS = {m.lower(): i for i, m in enumerate(calendar.month_name) if m}
 _WEEKDAYS = {d.lower(): i for i, d in enumerate(calendar.day_name)}
@@ -377,41 +375,10 @@ def calendar_findings(paragraphs: Sequence[ParagraphRef], ids) -> list[Finding]:
     return out
 
 
-# =============================================================================
-# Chapter-scoped continuity: the third tier of sight
-# =============================================================================
-#
-# The whole-book read above sees the whole book at once, and spends its attention
-# on the loudest cross-book drift — an eye colour that changes between chapter 1
-# and chapter 20, an age the arithmetic breaks. What it does not spend attention
-# on is the break whose two ends sit two pages apart: a character who sits down
-# who never stood, someone who leaves the room and then speaks inside it, a
-# cigarette lit twice, dawn that becomes evening inside one continuous scene, a
-# reply to a question nobody asked. Those are exactly the errors the chunk
-# detectors are also blind to — a detector reads ~2,500 tokens and never sees the
-# two ends together — and they close, almost always, INSIDE one chapter.
-#
-# So this is a third reading distance: not the paragraph, not the whole book, but
-# the chapter. It is built on the taste-judge's shape rather than the book read's,
-# because a chapter-scoped reader has less context than a whole-book one and will
-# over-propose, so a skeptical judge earns its place as the precision gate:
-#
-#   segment the manuscript into chapters (on the heading styles the sweeps already
-#   know) -> read each chapter once for in-scene breaks -> drop anything whose two
-#   quotes do not both land in that same chapter (the precision guardrail, and the
-#   thing that keeps this pass off the book read's territory) -> a skeptical judge
-#   rules on the survivors in literary context -> a per-chapter cap keeps the
-#   margin readable.
-#
-# Query-only, structurally, exactly like the book read and the smoothing pass:
-# every finding is force_query, a margin comment and never a tracked change, at
-# any confidence — which of two contradictory facts is the right one is the
-# author's to settle. Dialogue is IN scope here, the one deliberate inversion of
-# the smoothing pass's defaults: a contradiction someone speaks aloud is still a
-# contradiction, and knowledge/logic breaks surface most often in speech.
-#
-# Additive and best-effort like everything else on the whole-document path: any
-# failure returns nothing and the review proceeds as if the pass were off.
+# Chapter reads catch nearby in-scene breaks that chunk and whole-book reads can
+# miss. Both quoted sentences must anchor in the same chapter before a skeptical
+# judge rules on the candidate. Results are query-only because the author must
+# resolve contradictory facts. Dialogue remains in scope. Failures are nonfatal.
 
 CHAPTER_CATEGORIES = ("blocking", "object", "time", "knowledge", "logic", "other")
 
@@ -619,7 +586,6 @@ def default_chapter_continuity_prompt() -> str:
     return _CHAPTER_SYSTEM
 
 
-# --- chapter segmentation -----------------------------------------------------
 
 @dataclass(frozen=True)
 class ChapterUnit:
@@ -796,7 +762,6 @@ def chapters(paragraphs: Sequence[ParagraphRef],
     return units
 
 
-# --- propose: read each chapter for in-scene breaks ---------------------------
 
 @dataclass
 class _ChapterCand:
@@ -823,7 +788,6 @@ def _chapter_cache_key(doc_text: str, model: str, system: str,
     return _cache_key(doc_text, model, system, effort)
 
 
-# --- reads as batch requests (the propose stage can ride a batch) -------------
 #
 # A chapter read is one independent request, and there are N of them — the
 # textbook batch candidate, and where nearly all this pass's cost lives. So the
@@ -1064,7 +1028,6 @@ def propose_chapter_breaks(
     return cands, dropped, read_failed
 
 
-# --- judge: skeptically rule on each candidate --------------------------------
 
 class _BreakVerdict(BaseModel):
     index: int = Field(description="the item number being ruled on")
@@ -1159,7 +1122,6 @@ def judge_chapter_breaks(
     return affirmed, report.lost
 
 
-# --- to findings: floor, per-chapter cap, force_query -------------------------
 
 def breaks_to_findings(affirmed: Sequence[_ChapterCand], ids, *,
                        min_confidence: str = "medium", max_per_chapter: int = 10

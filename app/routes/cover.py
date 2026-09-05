@@ -145,16 +145,8 @@ def _data_root(request: Request) -> Path:
     return Path(root) if root else cover_pipeline.default_root()
 
 
-# -- which purse the Anthropic roles spend from -------------------------------
-#
-# The owner ran Cover Studio on his own machine and art direction died on
-# "Your credit balance is too low" while a Max subscription sat unused. Every
-# Anthropic-model role can now run on that subscription instead
-# (docproof.cover.subscription), and which purse a run spends from is a
-# per-run choice: the request names it, the environment names the default,
-# and the resolved answer is stored on the job so a revision cannot silently
-# switch purses mid-book. Image generation is untouched — gpt-image has no
-# subscription lane and stays metered.
+# Anthropic billing lane is resolved per run and stored so revisions cannot
+# silently switch lanes. Image generation remains metered.
 
 LANE_ENV = "COVER_ANTHROPIC_LANE"
 
@@ -227,16 +219,8 @@ def _resolve_lane(requested: str) -> str:
     return "subscription"
 
 
-# -- how sharp this job's art is rolled ---------------------------------------
-#
-# gpt-image-2 sells the same composition at several resolutions, and the
-# owner's actual working habit is to shop concepts cheap and sharpen only the
-# keeper afterwards (Cover Canvas's Finalize button is the other half of that
-# ladder). So a job may be a DRAFT job — every image it ever generates rolled
-# at 1K and billed at 1K — or a full job, which is what every job was before
-# this existed. The choice is made once, at creation, and stored on the job:
-# see docproof.cover.pipeline._image_tier, the one resolver the pipeline
-# reads it through.
+# Image quality is fixed at job creation: draft uses 1K generation and full
+# preserves the previous 2K behavior. See cover.pipeline._image_tier.
 
 _IMAGE_QUALITY_SENTENCE = (
     "image_quality must be \"full\" (2K art, about 5 cents an image) or "

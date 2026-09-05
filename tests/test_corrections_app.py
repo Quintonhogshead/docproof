@@ -562,7 +562,6 @@ def test_clicking_an_option_resolves_the_flag_over_http(client):
     # The card's counters moved with it.
     card = client.get(f"/api/jobs/{job['id']}").json()
     assert card["flags"] == 0 and card["applied"] == 1
-    # And it cannot land twice.
     again = client.post(f"/api/jobs/{job['id']}/corrections/resolve",
                         json={"item_id": item["id"],
                               "option_id": option["id"]})
@@ -699,7 +698,6 @@ def test_applying_a_no_change_suggestion_resolves_the_flag(client, monkeypatch):
     corrected = Path(job["results_dir"]) / "layout_corrected.idml"
     joined = " ".join(story_text(corrected, "ue0"))
     assert "was" in joined
-    # And the report logs it as a confirmed no-change.
     report = client.get(f"/api/jobs/{job['id']}/corrections").json()
     assert any(x["kind"] == "no_change" for x in report.get("resolutions") or [])
 
@@ -854,7 +852,6 @@ def test_the_manual_editor_reads_and_saves_a_line_over_http(client):
                        f"?story_id={option['story_id']}"
                        f"&paragraph={option['paragraph']}").json()
     assert any(r["italic"] for r in state["runs"])
-    # And the printable report says what happened.
     report = client.get(f"/api/jobs/{job['id']}/corrections").json()
     assert report["resolutions"][0]["kind"] == "manual"
 

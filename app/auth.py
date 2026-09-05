@@ -155,7 +155,6 @@ def install_auth(app: FastAPI, accounts: Accounts, *, secret: str | None = None,
         return _public_user(request.state.user)
 
 
-# -- dependencies routes use ---------------------------------------------------
 
 def current_user(request: Request) -> User:
     """The signed-in user, or 401. On the web the gate has already set this; the

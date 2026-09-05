@@ -41,7 +41,6 @@ class ReassemblyStats:
     already_set: tuple[str, ...] = ()
 
 
-# --- offset map and run splitting --------------------------------------------
 
 def _text_spans(p) -> list[tuple[etree._Element, int, int]]:
     """Every content element with its [start, end) slice of the canonical
@@ -98,7 +97,7 @@ def _split_run(r, t, k: int) -> None:
             if c.tag != RPR_TAG:
                 r.remove(c)
 
-    for run in (left, r):                    # prune husks
+    for run in (left, r):
         if not _has_content(run):
             run.getparent().remove(run)
 
@@ -127,7 +126,6 @@ def _ensure_boundary(p, off: int) -> None:
             return
 
 
-# --- the core operation -------------------------------------------------------
 
 _VIRTUAL_SPLIT = re.compile(r"([\n\t])")
 
@@ -181,7 +179,7 @@ def apply_replacement(p, a: Anchor, author: str, date: str, ids
             d = _rev_el("w:del", ids, author, date)
             parent.insert(parent.index(grp[0]), d)
             for r in grp:
-                d.append(r)                          # move, don't copy
+                d.append(r)
             for t in d.iter(T_TAG):
                 t.tag = DELTEXT_TAG                  # attrs (xml:space) survive
             dels.append(d)
@@ -191,7 +189,7 @@ def apply_replacement(p, a: Anchor, author: str, date: str, ids
         ins_parent = dels[-1].getparent()
         ins_at = ins_parent.index(dels[-1]) + 1
 
-    else:                                            # pure insertion
+    else:
         _ensure_boundary(p, a.start)
         spans = _text_spans(p)
         ins_parent, ins_at = p, len(p)
@@ -203,7 +201,7 @@ def apply_replacement(p, a: Anchor, author: str, date: str, ids
                 run = t.getparent()
                 ins_parent, ins_at = run.getparent(), run.getparent().index(run)
                 break
-        if prev_run is not None:                     # inherit preceding format
+        if prev_run is not None:
             rpr = prev_run.find(RPR_TAG)
 
     ins = None
@@ -220,7 +218,6 @@ def apply_replacement(p, a: Anchor, author: str, date: str, ids
     return first, last
 
 
-# --- tracked formatting changes ----------------------------------------------
 
 # w:rPr's children are a schema-enforced sequence, so a mark cannot simply be
 # appended. These are the elements that legally precede w:i; the new mark goes
@@ -272,7 +269,7 @@ def apply_format_change(p, a: Anchor, mark: str, author: str, date: str, ids
             rpr = etree.Element(RPR_TAG)
             r.insert(0, rpr)
         if _is_set(rpr, tags[0]):
-            continue                              # already set the right way
+            continue
 
         # The old properties, minus any revision record of their own: a
         # rPrChange nested inside a rPrChange is not a thing.
@@ -294,7 +291,7 @@ def apply_format_change(p, a: Anchor, mark: str, author: str, date: str, ids
 
         change = _rev_el("w:rPrChange", ids, author, date)
         change.append(old)
-        rpr.append(change)                        # always last in the sequence
+        rpr.append(change)
         touched.append(r)
 
     if not touched:
@@ -302,7 +299,6 @@ def apply_format_change(p, a: Anchor, mark: str, author: str, date: str, ids
     return touched[0], touched[-1]
 
 
-# --- accept / reject views (the invariant checkers) ---------------------------
 
 def paragraph_view_text(p, mode: Literal["accept", "reject"]) -> str:
     parts: list[str] = []
@@ -338,7 +334,6 @@ def paragraph_view_text(p, mode: Literal["accept", "reject"]) -> str:
     return "".join(parts)
 
 
-# --- Word comments -------------------------------------------------------------
 
 _CT_COMMENTS = ("application/vnd.openxmlformats-officedocument."
                 "wordprocessingml.comments+xml")
@@ -437,7 +432,6 @@ def _p_level(el, p):
     return el
 
 
-# --- the words the spell scan took on trust -----------------------------------
 
 def _excluded_note(words: Sequence[str], limit: int) -> str:
     """The body of the top-of-document comment: what was excluded, and the ask."""
@@ -481,7 +475,7 @@ def annotate_excluded_words(pkg: DocxPackage, doc: DocumentModel,
     if elem is None:
         return False
     merge_adjacent_runs(elem)
-    if paragraph_text(elem) != first.text:        # canonical-text drift: refuse
+    if paragraph_text(elem) != first.text:
         return False
     m = re.search(r"\S+", first.text)
     start, end = (m.start(), m.end()) if m else (0, min(1, len(first.text)))
@@ -496,7 +490,6 @@ def annotate_excluded_words(pkg: DocxPackage, doc: DocumentModel,
     return placed
 
 
-# --- untracked application (working copies for multi-round review) -----------
 
 def _accept_all_revisions(p) -> None:
     """Turn the tracked changes just written into plain text: drop every
@@ -509,7 +502,7 @@ def _accept_all_revisions(p) -> None:
             parent.remove(d)
     for ins in list(p.iter(INS_TAG)):
         parent = ins.getparent()
-        if parent is None:                       # was nested in a removed del
+        if parent is None:
             continue
         at = parent.index(ins)
         for child in list(ins):
@@ -539,8 +532,8 @@ def apply_untracked(pkg: DocxPackage, doc: DocumentModel,
     if not edits_by_para:
         return
     paras = index_paragraphs(doc)
-    ids = itertools.count(_next_rev_id(pkg))         # transient; accepted away
-    author, date = "docproof", "1970-01-01T00:00:00Z"    # discarded on accept
+    ids = itertools.count(_next_rev_id(pkg))
+    author, date = "docproof", "1970-01-01T00:00:00Z"
     parts = {paras[pid].part for pid in edits_by_para if pid in paras}
     for part in parts:
         pkg.mark_modified(part)
@@ -554,9 +547,9 @@ def apply_untracked(pkg: DocxPackage, doc: DocumentModel,
                 log.error("%s vanished before untracked apply — skipping.",
                           para_id)
                 continue
-            merge_adjacent_runs(p)                        # text-preserving
+            merge_adjacent_runs(p)
             expected = paras[para_id].text
-            if paragraph_text(p) != expected:            # defense-in-depth
+            if paragraph_text(p) != expected:
                 log.error("Canonical-text drift in %s — refusing untracked "
                           "edit.", para_id)
                 continue
@@ -571,7 +564,6 @@ def apply_untracked(pkg: DocxPackage, doc: DocumentModel,
             _accept_all_revisions(p)
 
 
-# --- orchestration -------------------------------------------------------------
 
 def _next_rev_id(pkg: DocxPackage) -> int:
     mx = 0
@@ -659,8 +651,8 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                 skipped += [f.finding_id for f in plist]
                 continue
 
-            merge_adjacent_runs(p)                       # text-preserving
-            if paragraph_text(p) != paras[para_id].text:  # defense-in-depth 1
+            merge_adjacent_runs(p)
+            if paragraph_text(p) != paras[para_id].text:
                 log.error("Canonical-text drift in %s — refusing to edit it.",
                           para_id)
                 skipped += [f.finding_id for f in plist]
@@ -705,7 +697,7 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                 a = f.anchor
                 if paragraph_text(p)[a.start:a.end] != a.delete_text:
                     log.error("%s: anchor slice mismatch at apply time — "
-                              "skipping.", f.finding_id)   # defense-in-depth 2
+                              "skipping.", f.finding_id)
                     skipped.append(f.finding_id)
                     continue
                 author = _author(f)

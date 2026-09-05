@@ -184,7 +184,6 @@ def run_mock(prepared: PreparedPromo, *,
     return result, Usage()
 
 
-# --- the marketing plan -------------------------------------------------------
 #
 # Promo's third deliverable, and its own generation: a separate call because it
 # takes author/book metadata (pen name, blurbs, city, keywords) the teaser call

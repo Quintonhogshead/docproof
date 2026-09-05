@@ -76,7 +76,6 @@ SERVER_NAME = "canvas"
 LOOK_WIDTH = 900
 
 # What a look may weigh, and the ladder it climbs down to get there.
-#
 # A tool result travels back through the CLI transport as ONE line of JSON,
 # and the SDK reads those lines into a 1MB buffer — a frame over that size is
 # not truncated, it is a CLIJSONDecodeError that kills the whole turn. A
@@ -86,7 +85,6 @@ LOOK_WIDTH = 900
 # size as JPEG"), with a budget checked against the ENCODED bytes rather than
 # assumed from the dimensions — a busy plate and a flat one differ by an
 # order of magnitude at the same size.
-#
 # The budget is the binary size; base64 is a third larger again, and the
 # frame carries the rest of the message around it. 480KB encodes to ~640KB
 # and leaves the megabyte comfortable.
@@ -140,15 +138,12 @@ class ChatResult:
     cost_usd: float
 
 
-# -- the doctrine -------------------------------------------------------------
-
 # docs/cover_designer_spec.md §15.18-15.23, distilled once in
 # docproof.cover.doctrine and rendered here for the `canvas` surface: the
 # editing session is the only surface that gets all seventeen, because three
 # of them (measure before you move, change the KIND of move, fewest ops) are
 # about conduct across a conversation with tools and mean nothing to the
 # studio's one-shot direction, planner and critique calls.
-#
 # This used to be a hand-typed block right here, and that was the bug: an
 # addendum written after a real cover reached the canvas assistant and never
 # reached the studio that generates the covers. Editing the rules is now one
@@ -383,8 +378,6 @@ and never lecture twice about the same thing.
 {_MODE_CONDUCT}"""
 
 
-# -- the working session ------------------------------------------------------
-
 @dataclass
 class _ToolSpec:
     """One tool, described without touching the SDK.
@@ -440,8 +433,6 @@ class _Session:
         if self.history_at_start < 0:
             self.history_at_start = len(self.doc.history)
 
-    # -- tools --
-
     async def inspect(self, args: dict[str, Any]) -> dict[str, Any]:
         """The document as compact JSON, bottom to top.
 
@@ -476,15 +467,6 @@ class _Session:
             f"applied {len(raw)} op{'' if len(raw) == 1 else 's'} ({names}); "
             f"layers bottom to top: "
             f"{', '.join(l.id for l in self.doc.layers) or 'none'}")
-
-    # -- the plate verbs --
-    #
-    # Four tools that are not ops (see the module docstring). The three that
-    # spend money share a shape, deliberately and visibly: lazy import, a
-    # `layer_id` that has to be a real string, the image-lane guard, the call
-    # off the event loop, and every failure returned as a tool RESULT rather
-    # than raised — the model is the thing that can pick a different layer or
-    # a different verb, and it cannot read a traceback the turn died on.
 
     def _no_image_lane(self, phrase: str) -> dict[str, Any] | None:
         """The image-key refusal the three spending verbs share, or None to
@@ -807,8 +789,6 @@ class _Session:
             "data": base64.b64encode(self.snapshot_png).decode("ascii"),
             "mimeType": _image_mime(self.snapshot_png),
         }]}
-
-    # -- registry --
 
     def specs(self) -> list[_ToolSpec]:
         """The tools this turn actually gets.
@@ -1169,8 +1149,6 @@ def _round(value: Any) -> Any:
     return round(value, 4) if isinstance(value, float) else value
 
 
-# -- the SDK seam -------------------------------------------------------------
-
 # The lane plumbing lives in docproof.agent_lane, shared with the cover
 # atelier — above all `child_env`, the billing fence, which must have exactly
 # one implementation. Bound as module-level names so a test can still swap
@@ -1224,8 +1202,6 @@ def _options(sdk: Any, session: _Session, model: str) -> Any:
     )
 
 
-# -- the prompt ---------------------------------------------------------------
-
 def _prompt_text(messages: list[dict]) -> str:
     """The rolling transcript flattened into one prompt.
 
@@ -1276,8 +1252,6 @@ def _user_message(text: str, snapshot_png: bytes | None) -> dict[str, Any]:
             "message": {"role": "user", "content": content},
             "parent_tool_use_id": None}
 
-
-# -- the turn -----------------------------------------------------------------
 
 def resolve_model(model: str | None = None) -> str:
     """Explicit argument, then the env override, then Opus 5."""

@@ -51,19 +51,12 @@ log = logging.getLogger("docproof.app.jobs")
 
 APP_MANIFEST = "app.json"
 POLL_SECONDS = 120
-# How many times the ticker will start collecting one batch before giving up and
-# marking it failed. A collect that raises fails on the first try; this cap is
-# for a collect that keeps killing the process (an OOM under the LanguageTool
-# JVM, a machine restart) and so never reaches the except — without it the ticker
-# retries forever and the card reads "almost done" the whole time. Three leaves
-# room for a transient blip while still converging on a visible failure.
+# Caps retries when the process dies during collection before an exception can
+# be recorded; ordinary raised errors fail on their first attempt.
 MAX_COLLECT_ATTEMPTS = 3
 
-# How long a single heavy engine call (batch submit's prepare, or a collect's
-# full-book rewrite) may run before the app starts saying so in the logs. Not a
-# kill switch — Python threads can't be killed, and abandoning one leaves it
-# racing its replacement — just visibility: a stack dump names the hang so the
-# next freeze is diagnosable from `fly logs` rather than guesswork.
+# Logging threshold only: Python threads cannot be killed safely, so a stalled
+# call keeps running while its stack is recorded for diagnosis.
 ENGINE_STALL_SECONDS = int(os.environ.get("DOCPROOF_STALL_MINUTES", "45")) * 60
 
 # State → what the user reads. Keep the vocabulary out of the vendor's world:
@@ -79,13 +72,8 @@ PLAIN_STATE = {
     "cancelled": "Cancelled",
 }
 
-# The steps a running review moves through, in order. The per-chunk detector
-# loop ("reviewing") is the one with a real count; the rest are whole-book passes
-# that run around it, each a single stretch of work with no per-call progress —
-# so the card names the step instead of leaving the bar frozen at 100%. Keyed by
-# the stage ids the pipeline's on_phase callback emits (run_sync, finish, and
-# batch collect all speak it now), plus "preparing", which the app also sets
-# itself ahead of the run. See Job.plain_state.
+# Whole-book stages have no item count, so the UI names their current phase.
+# Keys match the pipeline's on_phase ids; see Job.plain_state.
 STAGE_STATE = {
     "preparing": "Reading your manuscript",
     "reviewing": "Reviewing ({done} of {total} sections)",
@@ -95,21 +83,10 @@ STAGE_STATE = {
     "adjudicate": "Checking for real-word typos",
     "rewrite": "Rewriting and comparing, line by line",
     "languagetool": "Running the mechanical check",
-    # The frontier chapter sweep: a second, looser proofread over chapter-sized
-    # windows on a strong model, complementary to the typed section pass. Whole-
-    # window work with no per-call count, so — like the passes below — it names
-    # the step rather than leaving a stale section count on the card.
     "chapter_sweep": "Reading each chapter again, start to finish",
-    # Batch only: the judgment screen that weighs the raw candidate findings
-    # before they become tracked changes.
     "candidate_screening": "Weighing the candidate findings",
     "continuity": "Reading the whole book for continuity",
-    # Multi-round only: the between-rounds judge that rules on each round's
-    # corrections before the next round reads the corrected text.
     "round_judge": "Putting this round's corrections to the judge",
-    # The finish()-time passes, which used to hide under "writing" — on a big
-    # book, many minutes of whole-book reads and judges with no sign of which
-    # was running. Same ids as the feature switches wherever one exists.
     "verify": "Cross-checking the detectors' findings",
     "sapling": "Running the Sapling grammar check",
     "low_confidence": "Second look at the softer catches",
@@ -120,38 +97,26 @@ STAGE_STATE = {
     "fix_check": "Checking every fix is the right fix",
     "examination_judgment": "Running the independent shadow examination",
     "writing": "Almost done — writing your document",
-    # A re-judge is not the pipeline above: it runs the gates over a finished
-    # run's corrections and writes a new deliverable, emitting this one stage and
-    # no other. Borrowing "reviewing" made the card claim a section count and a
-    # step tracker for passes that never run. See JobRunner.rejudge.
+    # Re-judging emits no detector progress, so it needs its own uncounted stage.
     "judging": "Putting the corrections to the judges",
 }
 
-# Prep does a different job, so it says so. Only the states that differ.
 PREP_STATE = {
     "running": "Reading your manuscript ({done} of {total})",
     "collecting": "Almost done — writing your files",
 }
 
-# Promo, likewise: one call over the whole book, then two documents written.
 PROMO_STATE = {
     "running": "Reading the book and writing your copy",
     "collecting": "Almost done — writing your files",
 }
 
-# Corrections is deterministic and quick: no model, no vendor, no batch. It
-# anchors the edit list to the exported IDML and writes the corrected file, so
-# the card only ever passes through these before "Ready".
 CORR_STATE = {
     "running": "Applying your corrections",
     "collecting": "Almost done — writing your file",
 }
 
-# …except that it is not always quick: with the second look and the last tier
-# switched on, a proof full of open queries is minutes of frontier reads, and
-# the card used to sit on a single "Applying your corrections" for all of it.
-# These are the steps apply_corrections emits through its `progress` hook,
-# keyed the same way STAGE_STATE is. See _run_corrections.
+# Keys match apply_corrections progress ids; frontier reads can take minutes.
 CORR_STAGE = {
     "reading": "Reading the corrections list",
     "pagemap": "Matching the proof's pages to the book ({done} of {total})",
@@ -224,33 +189,17 @@ class Job:
     schedule_at: str | None = None      # "HH:MM" local, batch mode only
     done: int = 0
     total: int = 0
-    # Which step a running review is on, so the results card reads the truth
-    # while a whole-book pass (glossary, rewrite, …) runs after the per-chunk
-    # loop — where done/total would otherwise sit frozen at 100%. Set by the
-    # pipeline's on_phase callback; "" on older records and non-review jobs, and
-    # cleared when the job finishes. See STAGE_STATE and _run_now.
+    # Current on_phase id; empty on older, non-review, and finished jobs.
     stage: str = ""
-    # When the current stage began (UTC ISO), stamped by JobStore whenever
-    # `stage` changes value. The no-count whole-book passes (preparing, glossary,
-    # rewrite, …) write nothing else while they run, so the card would otherwise
-    # sit frozen with no sign it is alive: this lets it show time-in-stage. "" on
-    # older records and until the first stage is set. See Job.to_api and app.js.
+    # UTC timestamp used to show activity during uncounted whole-book stages.
     stage_since: str = ""
     error: str | None = None
     applied: int | None = None
-    # The review's other channel. `applied` counts tracked changes — the
-    # corrections; `queried` counts the margin comments, which are questions
-    # the author answers and which change nothing. `judge_held` is how many of
-    # those questions are corrections a judge gate withdrew rather than let
-    # through. Both are 0 on older records and on jobs that are not reviews;
-    # see docproof.pipeline.Outputs, which counts them.
+    # `queried` counts margin questions; `judge_held` is the subset withheld by
+    # a judge gate. Both default to 0 for older and non-review jobs.
     queried: int = 0
     judge_held: int = 0
-    # Non-fatal warnings from a finished review — chiefly paid passes that fell
-    # open and produced nothing (a dead or unkeyed judge/continuity/glossary
-    # model). Empty on a clean run and on older records; the card shows them so a
-    # "done" review that quietly skipped a pass does not read as a clean one. The
-    # full accounting is in summary.md's Coverage section.
+    # Non-fatal pass failures shown on otherwise completed reviews.
     warnings: list[str] = field(default_factory=list)
     results_dir: str | None = None
     min_confidence: str = "medium"
@@ -258,12 +207,8 @@ class Job:
     # distinct from `preset`, which is only the card label shown to the user.
     # Empty on old jobs and ordinary reviews.
     profile: str = ""
-    # Which English this manuscript is written in: "us" | "uk" | "ca" | "au".
-    # Empty means whatever config/default.yaml says, which is what the watcher
-    # submits and what every job recorded before this field existed meant. It
-    # lives on the job rather than in the runner because a batch is collected
-    # days after it is submitted, and a setting the manifest cannot carry is a
-    # setting that quietly reverts. See docproof/variants.py.
+    # Stored per job so delayed batch collection cannot pick up a newer default.
+    # Empty uses config/default.yaml, including for older records.
     variant: str = ""
     # Reasoning depth for the model. Older records predate this field; the
     # default keeps them on the shipped "low" behaviour.
@@ -279,21 +224,15 @@ class Job:
     # a run that touched nothing) leaves the config's per-category defaults. See
     # Config.category_states / Config.apply_category_knobs.
     category_knobs: dict = field(default_factory=dict)
-    # Multi-round review: review the manuscript this many times, each round
-    # reading the previous round's corrections, with a strong judge between
-    # rounds. 1 (older records, or the ordinary run) is a single review. The
-    # judge's instructions, edited on the panel; empty means the built-in
-    # default. See docproof/rounds.py and docproof/verifier.py.
+    # One round is the ordinary/legacy default; later rounds read the prior
+    # corrections and pass through the judge.
     rounds: int = 1
     judge_prompt: str = ""
     # Which model rules on corrections between rounds. Empty (older records, or a
     # run that didn't touch the picker) means the config default. See catalog.py.
     judge_model: str = ""
-    # The continuity read's editable system prompt, edited on the panel; empty
-    # (older records, or a run that left it alone) means the built-in default.
-    # And whether this run is continuity-only — the whole-book contradiction read
-    # by itself, with every detector pass and sweep stripped off. See
-    # docproof/continuity.py and JobStore.config_for.
+    # Empty prompt uses the built-in default. continuity_only strips detector
+    # passes and sweeps, leaving the whole-book contradiction read.
     continuity_prompt: str = ""
     continuity_only: bool = False
     # The whole-book continuity reader's model. Empty (older records, or a run that
@@ -309,33 +248,19 @@ class Job:
     # alone) means the config default.
     chapter_continuity_model: str = ""
     chapter_continuity_sensitivity: int | None = None
-    # The two judge gates — one reads every proposed change for whether it moves
-    # the sentence's sense, the other for whether the fix is right — each with
-    # its own model and editable instructions. Empty (older records, or a run
-    # that left the picker alone) means the config default. The gates themselves
-    # are the "meaning_check" and "fix_check" feature toggles. See
-    # docproof/judges.py and JobStore.config_for.
+    # Model/prompt pairs for the meaning and fix judge gates. Empty values use
+    # config defaults; features controls whether each gate runs.
     meaning_model: str = ""
     meaning_prompt: str = ""
     fix_model: str = ""
     fix_prompt: str = ""
-    # Which effort tier the submitter picked, purely as a label for the results
-    # card ("Light touch", "Standard", "Hard", "The hammer", or "" for a custom
-    # or older run). The tier is a client-side macro over the controls above, so
-    # this changes nothing about how the job runs; it only records what was
-    # chosen. Empty on older records and on any run that didn't send one.
+    # Results-card label only; the client expands tiers into the actual controls.
     preset: str = ""
-    # The smoothing pass's two dials, applied only when the "smoothing" feature is
-    # on. proposer_restraint = how much the line editor surfaces; judge_harshness
-    # = how hard the taste judge culls it. The defaults are the shipped config
-    # defaults, so older records and runs that never touched the pass behave
-    # exactly as before. See docproof/smoothing.py and JobStore.config_for.
+    # Smoothing proposer volume and taste-judge strictness; ignored when the
+    # smoothing feature is off.
     proposer_restraint: str = "restrained"
     judge_harshness: str = "strict"
-    # Multi-round progress: which round a running multi-round review is on, and
-    # how many it will run. Both 0 on single reviews and older records; the card
-    # reads them only when total_rounds > 1. Set by _run_rounds' on_progress
-    # callback as the driver moves through its rounds. See plain_state.
+    # Multi-round progress; both stay 0 for single and legacy reviews.
     review_round: int = 0
     total_rounds: int = 0
     # Which sections the user picked, or None for the whole document.
@@ -346,22 +271,15 @@ class Job:
     # InDesign template. Older records have no `kind` and are reviews.
     kind: str = "review"               # review | prep | promo | corrections
     prep_output: str = "indesign"      # book | indesign | tracked | both | all
-    # Corrections only: the corrections list the designer's exported IDML is to
-    # be edited by, as the JSON the parser accepts (docproof.corrections.parse).
-    # Kept on the record — not a model prompt, just the input — so a retry
-    # replays it and the completion log can say how many it carried. Empty on
-    # every other kind.
+    # Parsed corrections input is retained so retries replay the same list.
     corrections: str = ""
     # Corrections from a marked-up PDF: the reviewer comments the edits were read
     # from, as JSON [{id, page, kind, instruction, anchor}, …]. Threaded into the
     # run so every comment is accounted for in the change log — including any the
     # model turned into no edit. Empty for a typed/pasted list.
     corrections_comments: str = ""
-    # Corrections from a marked-up PDF: the text of every page of the proof, in
-    # order, as JSON ["page 1 text", …]. An IDML has no pages, so this is what
-    # lets a mark on page 49 be narrowed to the run of book text page 49 set —
-    # without it, a correction to a comma has every comma in the book to choose
-    # from and can only be flagged. Empty for a typed/pasted list.
+    # Ordered proof-page text narrows PDF marks to the matching IDML text span.
+    # Empty for typed/pasted lists.
     corrections_pages: str = ""
     # Corrections only: run the model sanity gate before applying. It is a grammar
     # safety net over the author's approved marks — it holds an edit back only when,
@@ -376,12 +294,8 @@ class Job:
     # Corrections only: run the last tier — a frontier model given the whole book
     # for the queries the second look declined. On by default with the second look.
     corrections_escalate: bool = True
-    # Prep, book output only: the operator's per-job answers for the sketch —
-    # subject matter (picks the title-page face), running-head title and
-    # author. Empty means "use what the detector reads off the opening pages",
-    # the same sentinel the prompt overrides use. `prep_book` is written back
-    # when the job finishes: the merged answers the file was actually built
-    # with, so the panel can show what was detected.
+    # Empty prep answers defer to opening-page detection; prep_book records the
+    # merged values actually used.
     prep_subject: str = ""
     prep_title: str = ""
     prep_author: str = ""
@@ -396,13 +310,8 @@ class Job:
     # drop time and chose to send the whole book in one call anyway. Older
     # records have no such field and were never overridden.
     allow_oversize: bool = False
-    # Promo, plan mode only: this promo job writes a marketing plan — promo's
-    # third deliverable — instead of the teaser and posts. The plan is its own
-    # model call, taking author/book metadata the copy call never sees; on a
-    # manual panel run the operator types those, and they ride along here. All
-    # empty/False on a teaser+posts run and on review/prep. Every field but the
-    # book is optional: the prompt degrades to a thinner but valid plan, so a
-    # bare manuscript still produces one. See docproof/promo.prepare_plan.
+    # Plan mode replaces teaser/posts with a separate metadata-aware model call.
+    # All metadata is optional; the prompt degrades cleanly when fields are empty.
     plan_only: bool = False
     plan_author: str = ""              # display / pen name, printed on the plan
     plan_blurbs: str = ""              # back-cover synopsis + endorsement blurbs
@@ -418,10 +327,7 @@ class Job:
     # single-pass limit, so the watcher can email a person about that case
     # specifically. "" on success and on ordinary failures.
     error_kind: str = ""
-    # Which door this job came in by: somebody dropping a file on the window,
-    # or the watcher finding one in a Drive folder. Two job stores adding up to
-    # one bill, and a spending figure that cannot say which is a figure nobody
-    # trusts. Older records have no `source` and were all the app.
+    # Intake source used to reconcile spending across the app and watcher.
     source: str = "app"                # app | watch
     # Whose review this is, in the web build. The id of the signed-in user who
     # created it; the desktop build has no users, so its records carry the
@@ -436,13 +342,8 @@ class Job:
     # count that landed and `flags` the count refused for a human, reusing the
     # same fields prep does; this one has no prep analogue. None on other kinds.
     discrepancies: int | None = None
-    # Corrections from a PDF: how many reviewer comments came in, how many landed,
-    # and how many a person still owns (flagged, or never turned into an edit).
-    # These three reconcile — applied + no-change + unresolved == total, where
-    # no-change is the remainder — so the card can add up to the total the reviewer
-    # marked. `applied` above is an *edit* count and deliberately does not: a
-    # comment can make several edits or none. `unresolved` is the count that used
-    # to vanish silently. None on other kinds and on a typed list (no ledger).
+    # PDF comment counts reconcile independently of `applied`, which counts edits:
+    # one reviewer comment can produce several edits or none.
     total_comments: int | None = None
     applied_comments: int | None = None
     unresolved: int | None = None
@@ -474,22 +375,10 @@ class Job:
     # written with the audit downgraded to a warning, so it is clear the
     # integrity check did not pass.
     audit_overridden: bool = False
-    # How many times we have started collecting this batch's results. A collect
-    # that RAISES becomes a visible "failed"; this counts the other way it can
-    # end — the process dying mid-collect (an OOM under the LanguageTool JVM, a
-    # machine restart) — which leaves the job stuck in "collecting" for the
-    # ticker to retry forever. Counted before each attempt so a crash still
-    # counts, and capped at MAX_COLLECT_ATTEMPTS so a repeating crash becomes a
-    # failure the user can see and recover, not "almost done" with no end.
+    # Incremented before collection so process death still counts toward the cap.
     collect_attempts: int = 0
-    # The Drive output archive: whether this job's produced files have been
-    # pushed to the durable off-box record, and where. "" is the default and
-    # means "not looked at yet" — an install with the archive off leaves every
-    # record here, inert; the moment it is switched on, the ticker's sweep finds
-    # them by this very emptiness and backfills. "pending" is an attempt that hit
-    # a Drive hiccup and will be retried with backoff; "done" is safely archived;
-    # "failed" is given up on (Drive kept refusing, or the results were already
-    # gone). See app/watch/archive.py.
+    # Empty means unexamined and lets a newly enabled archive backfill old jobs;
+    # pending retries with backoff, while done/failed are terminal.
     archive: str = ""                  # "" | pending | done | failed
     archive_error: str = ""
     archive_attempts: int = 0
@@ -498,12 +387,7 @@ class Job:
     # what is missing rather than a second copy of it. Empty until first tried.
     drive_folder_id: str = ""
     drive_files: dict[str, str] = field(default_factory=dict)
-    # Galley only: the practitioner tier (T0–T3) the governor's caps come from,
-    # and the dollar budget it allocates across waves. `galley_wave` is the wave
-    # the loop is on (or the last one it closed), so the card can show progress
-    # while a whole wave rides a batch for hours; spend rides the shared `cost`
-    # field, shown against `budget_usd`. All zero/empty on every other kind and on
-    # older records. See galley.orchestrator.run_galley.
+    # Galley tier, budget, and wave progress; zero/empty for other and older jobs.
     tier: str = ""
     budget_usd: float = 0.0
     galley_wave: int = 0
@@ -541,16 +425,8 @@ class Job:
         # where they share a name ("writing" writes one file, not a document).
         stage_states = ({**STAGE_STATE, **CORR_STAGE} if self.is_corrections
                         else STAGE_STATE)
-        # A running review names the actual step it is on, so the card doesn't
-        # read "reviewing" while the rewrite pass retypes the book. Only reviews
-        # set a stage; prep and promo never do, so they keep their own messages.
-        #
-        # A multi-round review starts its section count over every round, so the
-        # count alone would read as the bar jumping backwards. Name the round —
-        # and add the within-round count only once it exists: a round still
-        # being ingested, or riding a vendor batch, has none to show. A batch
-        # round has none for hours, so it says "processing overnight" rather than
-        # a bare "reviewing" that reads as a stuck synchronous pass.
+        # Round labels prevent the reset section count from looking like
+        # backwards progress; batch rounds can lack a count for hours.
         if (self.state in ("queued", "running", "collecting")
                 and self.stage == "reviewing" and self.total_rounds > 1):
             head = f"Round {max(self.review_round, 1)} of {self.total_rounds}"
@@ -576,14 +452,9 @@ class Job:
         d["is_plan"] = self.is_plan
         d["is_corrections"] = self.is_corrections
         d["is_galley"] = self.is_galley
-        # Whether the proof carried page texts, which is what decides whether the
-        # run takes the page-matching step at all. A boolean, so the card can
-        # promise that step (or not) without the texts themselves riding on
-        # every poll.
+        # Expose page matching without sending the page texts on every poll.
         d["corrections_paged"] = bool(self.corrections_pages)
-        # The stored reviewer-comment list and page texts are backend input for
-        # the run, not card data, and on a big proof they are large — keep them off
-        # every job payload.
+        # Large corrections inputs are backend-only.
         d.pop("corrections_comments", None)
         d.pop("corrections_pages", None)
         # Which application the reviewed file opens in, so the results card can
@@ -624,12 +495,7 @@ class Job:
                   and (Path(self.results_dir)
                        / "candidate-screening-report.md").is_file())
                  or "candidate-screening-report.md" in self.drive_files))
-        # Galley's deliverables: the adjudicated tracked-changes manuscript
-        # (same reviewed-document naming a plain review uses — the "document"/
-        # "docx" download buttons already resolve it), and the two prose
-        # documents that fall out of a finished run. Each is independently
-        # best-effort (see JobRunner._run_galley), so the card offers only the
-        # ones that actually landed on disk.
+        # Galley deliverables are best-effort, so expose only files that landed.
         d["has_galley_document"] = bool(
             d["format"] and self.kind == "galley"
             and self.state in ("done", "needs_human")
@@ -818,7 +684,6 @@ class JobRunner:
         self._cancel_lock = threading.Lock()
         self._cancel_requested: set[str] = set()
 
-    # -- lifecycle ------------------------------------------------------------
 
     def start(self) -> None:
         self._threads = [
@@ -914,7 +779,6 @@ class JobRunner:
             elif job.state == "queued":
                 self.queue.put(job.id)
 
-    # -- cancellation ---------------------------------------------------------
 
     def request_cancel(self, job_id: str) -> None:
         """Ask a running job to stop. The worker notices between calls and
@@ -943,7 +807,6 @@ class JobRunner:
             self.store.update(job_id, state="cancelled", error=None)
         log.info("Job %s aborted by request", job_id)
 
-    # -- submission -----------------------------------------------------------
 
     def enqueue(self, job: Job) -> Job:
         """Hand a job to the worker. Batch submission is queued rather than
@@ -964,7 +827,6 @@ class JobRunner:
                 raise TimeoutError("worker did not settle")
             time.sleep(0.01)
 
-    # -- config ---------------------------------------------------------------
 
     def config_for(self, job: Job) -> Config:
         cfg = load_config(self.config_path)
@@ -1428,7 +1290,6 @@ class JobRunner:
             # won't clear.
             log.warning("Could not record spending for %s: %s", job.id, e)
 
-    # -- worker ---------------------------------------------------------------
 
     def _work(self) -> None:
         while not self._stop.is_set():
@@ -1666,7 +1527,6 @@ class JobRunner:
         self._record_usage(job_id, out, cfg.api.model, batch=False)
         self._finish(job_id)
 
-    # -- prep -----------------------------------------------------------------
 
     def _run_prep(self, job_id: str) -> None:
         """Tag a manuscript into the house style set.
@@ -1783,7 +1643,6 @@ class JobRunner:
         self._record_usage(job_id, out, cfg.api.model, batch=False)
         self._finish(job_id)
 
-    # -- corrections ----------------------------------------------------------
 
     def _run_corrections(self, job_id: str) -> None:
         """Apply a corrections list to the designer's exported IDML.
@@ -1977,7 +1836,6 @@ class JobRunner:
                         exc_info=True)
             return None
 
-    # -- galley ---------------------------------------------------------------
 
     def _manuscript_from_source(self, job: Job, cfg: Config):
         """Ingest the source into a galley Manuscript (paragraphs + chapters).
@@ -2281,7 +2139,6 @@ class JobRunner:
             log.warning("Could not remove the partial galley manuscript for "
                         "job %s", job.id, exc_info=True)
 
-    # -- promo ----------------------------------------------------------------
 
     def _run_promo(self, job_id: str) -> None:
         """Write a teaser and a set of social posts from a finished manuscript.
@@ -2445,7 +2302,6 @@ class JobRunner:
             cache_write_tokens=usage.cache_creation_input_tokens,
             api_calls=usage.api_calls, cost=cost)
 
-    # -- finishing: archive, then tell a person -------------------------------
 
     def _finish(self, job_id: str) -> None:
         """Everything a job does once it has reached a terminal state with its
@@ -2537,7 +2393,6 @@ class JobRunner:
         except Exception:                     # noqa: BLE001 - never over a job
             log.exception("Completion email for %s failed", job_id)
 
-    # -- what it cost ---------------------------------------------------------
 
     def _record_usage(self, job_id: str, out: Path, model: str, *,
                       batch: bool) -> None:
@@ -2570,7 +2425,6 @@ class JobRunner:
             api_calls=usage.get("api_calls", 0), cost=cost,
             sapling_cost=sapling_cost)
 
-    # -- batch ----------------------------------------------------------------
 
     def _submit_batch(self, job_id: str) -> None:
         job = self.store.get(job_id)

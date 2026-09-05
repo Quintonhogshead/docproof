@@ -47,7 +47,6 @@ class OpenAIProvider:
             body["reasoning"] = {"effort": self.effort}
         return body
 
-    # -- synchronous ----------------------------------------------------------
 
     def complete_structured(self, *, model: str, system: str, user: str,
                             schema: dict[str, Any], schema_name: str,
@@ -64,7 +63,6 @@ class OpenAIProvider:
             return ProviderResult(stop_reason="error", error=str(e))
         return result_from_response(resp.model_dump())
 
-    # -- batch ----------------------------------------------------------------
 
     def submit_batch(self, *, model: str, requests: Sequence[BatchRequest],
                      max_tokens: int) -> str:

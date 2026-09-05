@@ -174,8 +174,7 @@ def judge_screening_packet(
             # is a hallucinated ID that maps to no candidate. Neither is
             # grounds to abandon the whole packet: drop the unknowns, treat the
             # duplicated candidates as unanswered, and retry the focused
-            # remainder alongside any missing IDs. (Previously this raised,
-            # losing every candidate in the packet to one judge slip.)
+            # remainder alongside any missing IDs.
             missing.update(exc.missing)
             missing.update(exc.duplicate)
         known = set(remaining.candidate_ids)

@@ -44,7 +44,6 @@ from .providers import Provider, strict_json_schema
 log = logging.getLogger("docproof.judges")
 
 
-# --- the wire protocol -------------------------------------------------------
 #
 # One neutral vocabulary for every judge: the question is what differs, and the
 # prompt owns that. `keep` and `withhold` name the CONSEQUENCE rather than the
@@ -106,7 +105,6 @@ class JudgeSpec:
     unsure_note: str
 
 
-# --- the meaning judge -------------------------------------------------------
 
 _MEANING_PROMPT = """\
 You are a senior editor performing the LAST check before corrections reach an \
@@ -196,7 +194,6 @@ MEANING = JudgeSpec(
 )
 
 
-# --- the fix judge -----------------------------------------------------------
 
 _FIX_PROMPT = """\
 You are a senior proofreader checking corrections before they reach an author's \
@@ -269,7 +266,6 @@ def default_prompt(key: str) -> str:
     return spec.prompt if spec else ""
 
 
-# --- the report --------------------------------------------------------------
 
 @dataclass(frozen=True)
 class JudgeReport:
@@ -301,7 +297,6 @@ class JudgeReport:
         return max(0, self.checked - self.answered)
 
 
-# --- rendering ---------------------------------------------------------------
 
 def _change_view(f: Finding, para_text: str) -> tuple[str, str]:
     """The sentence the change sits in, before and after it.
@@ -322,7 +317,6 @@ def _change_view(f: Finding, para_text: str) -> tuple[str, str]:
     return window, after
 
 
-# --- cohorts: changes that ship together are judged together -----------------
 #
 # The pipeline forces a coupled repair to arrive in pieces. "2 and 3" -> "two and
 # three" under the spell-out rule is one thought, but ONE FINDING PER ERROR (see
@@ -447,7 +441,7 @@ def _meaning_trivial(f: Finding) -> bool:
         # differs by one comma is read as the comma, not as two sentences.
         from .validator import shrink
         _pre, delete_text, insert_text = shrink(f.original_text, f.corrected_text)
-    if delete_text == insert_text:                  # nothing changes
+    if delete_text == insert_text:
         return False
     if all(not c.isalnum() for c in delete_text + insert_text):
         return True                                 # punctuation / whitespace
@@ -493,7 +487,7 @@ class Judge:
         joint: dict[int, tuple[str, str]] = {}
         for coh in _cohorts(findings, para_text, act):
             if len(coh) < 2:
-                continue                       # a lone change renders as it always did
+                continue
             before, after = _cohort_view(findings, coh, para_text)
             for i in coh:
                 companions[i] = [j + 1 for j in coh if j != i]
@@ -636,7 +630,7 @@ def screen(findings: Sequence[Finding], para_text: dict[str, str],
             # correct comma or capital. Kept as an edit, never sent to the judge.
             bypassed += 1
             continue
-        if f.para_id in para_text:              # no paragraph -> nothing to read
+        if f.para_id in para_text:
             by_para.setdefault(f.para_id, []).append((i, f))
     if bypassed:
         log.info("%s: %d punctuation/case-only change(s) bypassed the gate "

@@ -73,7 +73,6 @@ def verify_grounding(manuscript: Manuscript,
     return flagged
 
 
-# --- the model-based entailment pass ------------------------------------------
 
 class ClaimCheck(BaseModel):
     claim: str

@@ -218,7 +218,6 @@ def generate(paragraphs: Sequence[ParagraphRef], *,
     return cands
 
 
-# --- model adjudication -------------------------------------------------------
 
 _SENTENCE_END = re.compile(r"[.!?][\"'”’)\]]*\s")
 
@@ -319,7 +318,6 @@ def site_word_candidates(words: Mapping[str, str],
     return cands
 
 
-# --- recurrence propagation ---------------------------------------------------
 
 # The verbatim surface of a validated edit worth repeating across the book: one
 # alphabetic word, or a short run of them joined by single spaces, hyphens or
@@ -333,14 +331,10 @@ _PROPAGATABLE_SURFACE = re.compile(r"[A-Za-z]+(?:[’'\- ][A-Za-z]+)*\Z")
 # A minimal diff can trim to a degenerate surface — a single letter ("B" from a
 # "B" -> "B." initial fix) or a bare function word ("and" from "try and" ->
 # "try to", once the shared "try " prefix is stripped). Propagating such a
-# surface sweeps the whole book with noise the pass exists to prevent (a
-# Breniman review raised 179 "and" comments off one idiom fix). Two deterministic
-# floors keep propagation to surfaces that actually recur as the same error:
+# surface can sweep the book with noise. Two deterministic floors keep
+# propagation to surfaces that plausibly recur as the same error:
 _MIN_PROPAGATE_LEN = 3     # a shorter deleted surface never seeds propagation
-_MAX_SEED_FIX_WORDS = 2    # a fix longer than this is a phrase rewrite, not a
-                           # recurring typo — "and use them" from a chapter-
-                           # sweep composite landed in eight unrelated
-                           # paragraphs on Georgis (2026-09-04)
+_MAX_SEED_FIX_WORDS = 2    # longer fixes are phrase rewrites, not recurring typos
 # Closed-class words: a surface that IS one of these never seeds propagation
 # (a swap of "and" or "them" is context, not a typo that recurs). Shared with
 # galley.settle's mechanical-only guard, which reads the same list.
@@ -508,11 +502,11 @@ def propagate_recurrences(validated: Sequence[Finding],
                 start, end = m.start(), m.end()
                 if any(s < end and start < e
                        for s, e in claimed.get(p.para_id, ())):
-                    continue                         # a finding already has it
+                    continue
                 surface = m.group(0)
                 fix = _match_case(surface, fix_base)
                 if fix == surface:
-                    continue                         # a no-op at this casing
+                    continue
                 sites.append((p, start, end, surface, fix))
         if ask and len(sites) > _MAX_ASK_SITES:
             # A dictionary word matching this widely is context-dependent, not a
@@ -611,7 +605,7 @@ def adjudicate(candidates: Sequence[Candidate],
                 for c in candidates if c.para_id in text_of]
     windows = [enriched[i:i + batch_size]
                for i in range(0, len(enriched), batch_size)]
-    schema = strict_json_schema(_Verdicts)           # deep-copies; hoist off the pool
+    schema = strict_json_schema(_Verdicts)
 
     def fetch(window, ceiling: int = max_tokens):
         numbered = [(n + 1, c, sent) for n, (c, _para, sent) in enumerate(window)]
@@ -663,7 +657,7 @@ def _rows_of(parsed: dict, items) -> dict[int, "_Verdict"]:
     re-asks, rather than counting them as ruled."""
     try:
         return {v.index: v for v in _Verdicts.model_validate(parsed).verdicts}
-    except Exception as e:                           # malformed structured output
+    except Exception as e:
         log.error("adjudication: response did not match the schema: %s", e)
         return {}
 
@@ -687,7 +681,7 @@ def _findings_from(rows: dict, window, ids, rank: dict,
             continue
         correction = _match_case(cand.word, v.correction.strip())
         if correction.lower() == cand.word.lower():
-            continue                                 # a no-op "fix"
+            continue
         corrected_para = (para_text[:cand.start] + correction
                           + para_text[cand.end:])
         conf = v.confidence if v.confidence in rank else "low"

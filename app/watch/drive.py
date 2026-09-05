@@ -83,7 +83,6 @@ class DriveFile:
         )
 
 
-# --- the wire -----------------------------------------------------------------
 
 def _open_url(request: urllib.request.Request, timeout: int = 60):
     """The one place this module touches the network. Passed in by every
@@ -182,7 +181,6 @@ def _url(base: str, params: dict) -> str:
     return f"{base}?{urllib.parse.urlencode(params)}"
 
 
-# --- signing in ---------------------------------------------------------------
 
 def refresh_access_token(client_id: str, client_secret: str,
                          refresh_token: str, *, opener=_open_url) -> str:
@@ -219,7 +217,6 @@ def refresh_access_token(client_id: str, client_secret: str,
     return token
 
 
-# --- reading the folder -------------------------------------------------------
 
 FILE_FIELDS = "id,name,mimeType,appProperties,modifiedTime,size"
 
@@ -354,7 +351,6 @@ def _write(dest: str | Path, body: bytes) -> Path:
     return path
 
 
-# --- writing back -------------------------------------------------------------
 
 MULTIPART_LIMIT = 5 * 1024 * 1024        # Google's cap for multipart uploads
 

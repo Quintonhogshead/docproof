@@ -460,7 +460,6 @@ export function createEngine({ host, getDoc, imageFor, onSelect, onCommit, onVie
   let guideNodes = [];         // {node, pts} — points in DOC fractions
   let snapCache = null;        // {key, lines} — rebuilt only when the wrap does
 
-  /* ------------------------------------------------------------- geometry */
   const doc = () => getDoc();
   const W = () => doc().canvas.w;
   const H = () => doc().canvas.h;
@@ -500,7 +499,6 @@ export function createEngine({ host, getDoc, imageFor, onSelect, onCommit, onVie
     });
   }
 
-  /* --------------------------------------------------------------- layers */
   /* The pinned plate: one Konva.Shape whose sceneFunc walks a MESH×MESH grid
      and drawImages each cell through the affine map its three corners imply.
 
@@ -1117,7 +1115,6 @@ export function createEngine({ host, getDoc, imageFor, onSelect, onCommit, onVie
     return { group, art };
   }
 
-  /* ---------------------------------------------------------------- render */
   function render() {
     const d = doc();
     paper.width(W()); paper.height(H());
@@ -1173,7 +1170,6 @@ export function createEngine({ host, getDoc, imageFor, onSelect, onCommit, onVie
     });
   }
 
-  /* -------------------------------------------------------- corner pin */
   const toScreen = (x, y) => ({
     x: world.x() + x * world.scaleX(), y: world.y() + y * world.scaleY(),
   });
@@ -1237,7 +1233,6 @@ export function createEngine({ host, getDoc, imageFor, onSelect, onCommit, onVie
     });
   });
 
-  /* --------------------------------------------------- print-wrap guides */
   /* The fold lines, the trim boxes, the bleed edge and the dashed safe boxes,
      drawn from `doc.wrap` through the one panels() mirror (wrap.js).
 
@@ -1326,7 +1321,6 @@ export function createEngine({ host, getDoc, imageFor, onSelect, onCommit, onVie
     overlay.batchDraw();
   }
 
-  /* ---------------------------------------------------------- snapping */
   /* One axis of a snap: the dragged box's CENTRE and its two EDGES are offered
      to the lines that accept each, and the nearest catch inside the tolerance
      wins. Returns the centre the layer should take, in world pixels, plus the
@@ -1440,7 +1434,6 @@ export function createEngine({ host, getDoc, imageFor, onSelect, onCommit, onVie
     onCommit(ops);
   });
 
-  /* ------------------------------------------------------------- selection */
   function hitLayerId(target) {
     let n = target;
     while (n && n !== stage) {
@@ -1467,7 +1460,6 @@ export function createEngine({ host, getDoc, imageFor, onSelect, onCommit, onVie
     if (id && id !== selectedId) select(id);
   });
 
-  /* ------------------------------------------------------------ zoom / pan */
   function setView(scale, x, y) {
     const s = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, scale));
     world.scale({ x: s, y: s });
@@ -1534,7 +1526,6 @@ export function createEngine({ host, getDoc, imageFor, onSelect, onCommit, onVie
     host.parentElement?.classList.remove('is-grabbing');
   });
 
-  /* ------------------------------------------------------- repair marquee */
   function beginMarquee(layerId, onDone) {
     marqueeMode = { layerId, onDone, start: null };
     host.parentElement?.classList.add('is-marquee');
@@ -1615,7 +1606,6 @@ export function createEngine({ host, getDoc, imageFor, onSelect, onCommit, onVie
     return c.toDataURL('image/png').split(',')[1];
   }
 
-  /* ----------------------------------------------------- composite output */
   /* Both the export and the assistant's `look` want the whole cover at
      reference size, not the letterboxed viewport — so the world is momentarily
      put back to 1:1 at the origin and drawn into its own canvas. The overlay

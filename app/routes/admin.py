@@ -128,7 +128,6 @@ def register(app: FastAPI) -> None:
                          "monthly_cap": None, "effective_cap": None, **totals})
         return {"users": rows, "default_cap": common.default_cap()}
 
-    # -- provider API keys ----------------------------------------------------
 
     def _key_rows() -> list[dict]:
         rows = []

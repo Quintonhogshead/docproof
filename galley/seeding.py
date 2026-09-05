@@ -22,7 +22,6 @@ from typing import Any, Callable, Iterable, Optional
 
 from galley.contracts import Chapter, GFinding, Manuscript
 
-# --- planted-error records ----------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -105,7 +104,6 @@ class AnswerKey:
         )
 
 
-# --- the default taxonomy of deterministic, reversible mutations --------------
 
 
 @dataclass(frozen=True)
@@ -237,7 +235,6 @@ DEFAULT_TAXONOMY: tuple[Mutation, ...] = (
 )
 
 
-# --- the seeded-copy tag ------------------------------------------------------
 #
 # Manuscript carries a ``dict`` field, so it is not hashable and cannot live in a
 # WeakSet. We tag by object identity instead: id -> weakref-held object. The
@@ -267,7 +264,6 @@ def assert_deliverable(ms: Manuscript) -> Manuscript:
     return ms
 
 
-# --- planting -----------------------------------------------------------------
 
 
 def seed_copy(
@@ -340,7 +336,6 @@ def seed_copy(
     return seeded_ms, key
 
 
-# --- scoring ------------------------------------------------------------------
 
 
 @dataclass(frozen=True)

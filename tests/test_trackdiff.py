@@ -147,8 +147,6 @@ def test_partial_overlap_is_one_clean_miss_not_a_double_count():
 
 
 def test_canonical_anchors_merges_a_close_fix_but_not_distant_ones():
-    # The engine now lives in docproof.agreement (shared with the ensemble
-    # merge); Compare imports it from there.
     from docproof.agreement import canonical_anchors
     # A dialogue-tag fix — period→comma and the pronoun it lowercases, with the
     # closing quote and a space between — is one logical edit, so one anchor.

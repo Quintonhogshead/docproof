@@ -261,7 +261,6 @@ def test_an_oversized_edit_becomes_a_comment_not_a_silent_rejection(tmp_path):
     assert any("too large to apply" in t for t in texts)
     # The whole sentence is highlighted, not the scattered edit sites.
     assert list(_comment_ranges(out.reviewed_path).values()) == [original]
-    # And it has its own summary section, not the terse rejected list.
     assert "too large to auto-correct" in out.summary_md.read_text()
 
 

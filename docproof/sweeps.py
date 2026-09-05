@@ -67,7 +67,6 @@ class SweepReport:
     remaining: int
 
 
-# --- shared helpers ----------------------------------------------------------
 
 def apply_hits(text: str, hits: Sequence[Hit]) -> str:
     """The text as it would read with every hit applied. Used for the
@@ -127,7 +126,6 @@ def _sentence_starts_at(text: str, pos: int) -> bool:
     return i < 0 or text[i] in ".!?…\n"
 
 
-# --- ellipsis ----------------------------------------------------------------
 
 # Three or more dots, however they are spaced, or an ellipsis character that
 # may already be there. The glyph is always normalized to …; whether an
@@ -174,7 +172,6 @@ def _sweep_ellipsis(text: str, variant=None, style: str = "nbsp") -> list[Hit]:
     return hits
 
 
-# --- dashes ------------------------------------------------------------------
 
 _DASHES = re.compile(r"(?P<pre>[ \t\u00a0]*)(?P<run>-{2,}|–|—|-)(?P<post>[ \t\u00a0]*)")
 
@@ -241,10 +238,8 @@ def _sweep_dash(text: str, variant=None) -> list[Hit]:
             # A single hyphen reads as a dash only standing alone between
             # words, spaced on BOTH sides ("it was late - too late"). With a
             # space on one side only it is a compound broken around its
-            # hyphen ("fast- flowing"), which is closed up here when the
-            # sweep can be sure, and otherwise left for a reader — never a
-            # dash (Georgis, 2026-09-04: "fast- flowing" became
-            # "fast—flowing"). Unspaced on both sides it is a compound
+            # hyphen ("fast- flowing"), which is closed up only when certain.
+            # Unspaced on both sides it is a compound
             # (well-known) and none of this sweep's business; between digits
             # it is arithmetic or a loose range, both judgment calls; at a
             # line edge it is a bullet or a dangling mark.
@@ -278,7 +273,6 @@ def _sweep_dash(text: str, variant=None) -> list[Hit]:
     return hits
 
 
-# --- stacked punctuation -----------------------------------------------------
 
 _STACKED = re.compile(r"[!?]{2,}|‽")
 
@@ -294,7 +288,6 @@ def _sweep_stacked_punctuation(text: str, variant=None) -> list[Hit]:
     return hits
 
 
-# --- doubled words -----------------------------------------------------------
 
 _DOUBLED = re.compile(r"\b(\w+)[ \t\u00a0]+\1\b", re.IGNORECASE)
 
@@ -320,7 +313,6 @@ def _sweep_doubled_word(text: str, variant=None) -> list[Hit]:
     return hits
 
 
-# --- centuries ---------------------------------------------------------------
 
 _CENTURY = re.compile(
     r"\b(?P<num>\d{1,2})(?P<ord>st|nd|rd|th)(?P<sep>[ \t\u00a0-])"
@@ -388,7 +380,6 @@ def _sweep_century(text: str, variant=None) -> list[Hit]:
     return hits
 
 
-# --- compound numbers --------------------------------------------------------
 
 # A spelled-out compound number from twenty-one to ninety-nine written as two
 # words. CMOS and the house guide hyphenate these, so "Chapter Twenty Four"
@@ -418,7 +409,6 @@ def _sweep_compound_number(text: str, variant=None) -> list[Hit]:
     return hits
 
 
-# --- dialogue tags -----------------------------------------------------------
 
 # The house brief builds this as a table and warns against assembling it from
 # ad hoc regexes, because the row that gets missed that way is period +
@@ -515,7 +505,6 @@ def _sweep_dialogue_tag(text: str, variant=None) -> list[Hit]:
     return hits
 
 
-# --- terminal punctuation ----------------------------------------------------
 
 # Sentence-ending marks (and their close-quote/bracket tails) that mean the
 # paragraph already ends cleanly, plus the marks whose absence is deliberate:
@@ -646,7 +635,6 @@ def _sweep_terminal_period(text: str, variant=None) -> list[Hit]:
                 "A sentence ends without terminal punctuation.")]
 
 
-# --- punctuation against a closing quote --------------------------------------
 
 # A period or comma AFTER a curly closing double quote. U.S. convention (and
 # the house style) sets both inside; the human pass fixed `thanks".` four
@@ -732,7 +720,6 @@ def _single_close_punct_hits(text: str) -> list[Hit]:
     return hits
 
 
-# --- nested quotations ---------------------------------------------------------
 
 _NESTED_WHY = ("A quotation inside dialogue takes single quotation marks "
                "(U.S. convention).")
@@ -769,7 +756,6 @@ def _sweep_nested_quote(text: str, variant=None) -> list[Hit]:
     return hits
 
 
-# --- headings in title case ----------------------------------------------------
 
 # The words Chicago sets lowercase mid-title: articles, coordinating
 # conjunctions, and prepositions. Prepositions of every length, per Chicago —
@@ -891,7 +877,6 @@ def heading_case_findings(paragraphs: Sequence[ParagraphRef],
     return findings, report
 
 
-# --- unclosed quotations (a question, never an edit) ---------------------------
 
 def unclosed_quote_findings(paragraphs: Sequence[ParagraphRef],
                             variant=None) -> list[Finding]:
@@ -953,7 +938,6 @@ def unclosed_quote_findings(paragraphs: Sequence[ParagraphRef],
     return findings
 
 
-# --- time of day --------------------------------------------------------------
 
 # A clock time with an AM/PM meridiem attached to a digit: "3:40AM", "2:00 a.m.",
 # "4:15PM", "at 2 PM". The digit requirement is what keeps the sweep off the
@@ -1005,7 +989,6 @@ def _sweep_time_of_day(text: str, variant=None) -> list[Hit]:
     return hits
 
 
-# --- the deity capital ---------------------------------------------------------
 
 # "god" (lowercase g) as the monotheistic deity in a fixed interjection —
 # "oh my god", "thank god". The leading word is what makes the reference the
@@ -1027,7 +1010,7 @@ def _sweep_deity_capital(text: str, variant=None) -> list[Hit]:
         # The "god god" arm of the alternation ("...god God...") is not a frame
         # we fix; the real openers are the others. Locate the final "god".
         gpos = m.end() - 3
-        if text[gpos:gpos + 3] != "god":            # already "God"
+        if text[gpos:gpos + 3] != "god":
             continue
         # "god of war/thunder" is a common noun, not the deity's name.
         if text[m.end():m.end() + 4].lower() == " of ":
@@ -1045,21 +1028,6 @@ def _sweep_deity_capital(text: str, variant=None) -> list[Hit]:
                         "this expression."))
     return hits
 
-
-# --- dialogue splice: an action beat mistaken for a tag -----------------------
-#
-# RETIRED, Redding Book 1 (2026-09-01): this sweep also used to turn the comma
-# of a tag standing between two quotations into a period —
-#   "Of course!" Raymond said, "Anything for you."
-#      ->  "Of course!" Raymond said. "Anything for you."
-# on the theory that the first quote's ! had already ended the sentence. Over a
-# real book that rule wrote "He said. “Well then…" and "Bodhi said. “You
-# might…": a comma standing immediately before an opening quotation mark is the
-# comma that INTRODUCES the speech, and it is correct. A reporting verb followed
-# straight by an opening quote therefore never has its comma rewritten here. The
-# genuinely spliced pair of quoted sentences is a judgment call and belongs to
-# the dialogue_tag error type, which can weigh what the second quotation does.
-# Only the action-beat half of this sweep remains.
 
 # Physical-action verbs that CANNOT take speech as their object, so a comma
 # before them inside a quote is a run-on, not a tag: the quote ends with a
@@ -1108,7 +1076,6 @@ def _sweep_dialogue_splice(text: str, variant=None) -> list[Hit]:
     return hits
 
 
-# --- trailing whitespace --------------------------------------------------------
 
 # Whitespace at the very end of a paragraph. Normalization strips these
 # silently at ingest, so post-normalize the only producer is the speaker-split
@@ -1131,7 +1098,6 @@ def _sweep_trailing_space(text: str, variant=None) -> list[Hit]:
                 "Trailing spaces at the end of a paragraph are removed.")]
 
 
-# --- initialisms set in capitals ----------------------------------------------
 
 # A short whitelist, not a heuristic: each entry is an initialism with no
 # common-word homograph, safe to capitalize wherever it appears as its own
@@ -1167,7 +1133,6 @@ def _sweep_initialism(text: str, variant=None) -> list[Hit]:
     return hits
 
 
-# --- two-digit decades ---------------------------------------------------------
 
 # "the 80s" -> "the ’80s": a decade abbreviated to two digits takes an
 # apostrophe for the omitted century. Bounded to decade-reading leads (the /
@@ -1208,7 +1173,6 @@ def _sweep_decade_apostrophe(text: str, variant=None) -> list[Hit]:
     return hits
 
 
-# --- front-/back-matter labels (a question, never an edit) ---------------------
 
 # A heading that reads as the near-homophone of the standard book-part label.
 # AFTERWARD for AFTERWORD is the classic; each is raised as a query because
@@ -1260,7 +1224,6 @@ def heading_vocab_findings(paragraphs: Sequence[ParagraphRef],
     return findings
 
 
-# --- registry ----------------------------------------------------------------
 
 SWEEPS: tuple[Sweep, ...] = (
     Sweep("sweep_ellipsis", "Ellipsis character and spacing", _sweep_ellipsis),
