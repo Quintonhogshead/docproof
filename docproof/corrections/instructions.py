@@ -316,7 +316,6 @@ def _replace_punctuation_over_line(low, note, anchor, context) -> Resolved | Non
     return _focus(context, replaced, "replace-punctuation-over-line")
 
 
-# --- adjudicating an author's reply to a proofreader's mark --------------------
 # A proof often makes a second pass through the author, who answers the
 # proofreader's queries in place: a reply annotation hanging off the mark. That
 # reply is the author's decision on the mark, and there are three of them —
@@ -813,8 +812,6 @@ def fill_edit_occurrences(edits, comments, *, book_pages=None, pdf_pages=None):
         out.append(e if occ == e.occurrence else replace(e, occurrence=occ))
     return out
 
-
-# --- the rules ----------------------------------------------------------------
 
 # Notes about how the page *composed* — where a line broke, whether a heading was
 # left stranded, whether the rag reads badly. Each is a result of InDesign setting
@@ -1497,8 +1494,6 @@ def _bare_replacement(low, note, anchor, highlighted) -> Resolved | None:
         return None                    # nothing close enough, or a mere quotation
     return Resolved(find, note, MECHANICAL, "bare-replacement")
 
-
-# --- helpers ------------------------------------------------------------------
 
 # How like the note a run of the marked span has to be for the note to be read as
 # a correction *of that run*. A copy editor writing "all right" against "alright"

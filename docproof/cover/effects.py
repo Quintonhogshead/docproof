@@ -53,8 +53,6 @@ MASK_SCALE = 0.25
 TEMPERATURE_MAX_SHIFT = 24
 
 
-# -- WCAG relative luminance --------------------------------------------------
-#
 # Moved here verbatim from compose.py (which now imports these back) so
 # bloom's "relative luminance above which pixels glow" threshold and the
 # composer's legibility autopilot measure brightness with the SAME curve —
@@ -110,8 +108,6 @@ def lightness_band(rgb_img: Image.Image) -> Image.Image:
     mixed = Image.blend(r, g, 0.7152 / (0.2126 + 0.7152))
     return Image.blend(mixed, b, 0.0722)
 
-
-# -- the blend-mode table (§15.1) ---------------------------------------------
 
 def _color_dodge(base_rgb: Image.Image, source_rgb: Image.Image) -> Image.Image:
     """The "light pops" blend — glows, leaks, foil glints. No ImageChops op
@@ -183,8 +179,6 @@ def composite_layer(base: Image.Image, source: Image.Image, opacity: float,
     out.alpha_composite(layer)
     return out
 
-
-# -- mask synthesis & resolution (§15.2) --------------------------------------
 
 def gradient_mask(gradient: GradientMask, canvas: tuple[int, int]) -> Image.Image:
     """One GradientMask as a canvas-sized 'L' image, 0 = fully masked out,
@@ -302,8 +296,6 @@ def apply_mask(img: Image.Image, mask_img: Image.Image | None) -> Image.Image:
     r, g, b, a = img.split()
     return Image.merge("RGBA", (r, g, b, ImageChops.multiply(a, mask_img)))
 
-
-# -- adjust-layer ops (§15.3) -------------------------------------------------
 
 def _resolve_color(value: str, palette: Palette, default_role: PaletteRole) -> str:
     """An AdjustLayer color reference as a #rrggbb hex: "" falls back to
@@ -471,8 +463,6 @@ def apply_adjust(base: Image.Image, adjust: AdjustLayer, palette: Palette,
     return Image.composite(op_result, base, mask_img)
 
 
-# -- layer-style effect stacks (§15.4) ----------------------------------------
-#
 # Eight small functions over one positioned, canvas-sized RGBA layer, plus
 # the one dispatcher (apply_effect_stack) that runs an ordered Effect list
 # with FIXED paint-order semantics: *under* effects (drop_shadow,

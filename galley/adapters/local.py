@@ -20,7 +20,6 @@ from docproof.models import ParagraphRef, Usage
 from galley.adapters import AdapterResult, Scope
 from galley.contracts import GFinding, Manuscript, Provenance, Span
 
-# --- shared plumbing ---------------------------------------------------------
 
 
 def _refs(ms: Manuscript, para_ids: list[str]) -> list[ParagraphRef]:
@@ -45,7 +44,6 @@ def _refs(ms: Manuscript, para_ids: list[str]) -> list[ParagraphRef]:
     ]
 
 
-# --- spellscan ---------------------------------------------------------------
 
 # spellscan reports *terms*, not spans, so a found word is located by searching
 # the paragraph it was seen in. Apostrophe styles are folded together because
@@ -160,7 +158,6 @@ class SpellscanAdapter:
         return AdapterResult(findings=findings, coverage_notes=notes, cost_usd=0.0)
 
 
-# --- LanguageTool ------------------------------------------------------------
 
 
 @dataclass
@@ -229,7 +226,6 @@ class LanguageToolAdapter:
         return AdapterResult(findings=findings, coverage_notes=notes, cost_usd=0.0)
 
 
-# --- Sapling (budget-fenced) -------------------------------------------------
 
 # A module default cap on how much text one Sapling scope may cover, used when a
 # scope names no char_budget of its own. Chosen well under a whole novel so an

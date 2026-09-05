@@ -126,8 +126,6 @@ def write_book(pkg, structure: Structure, plan: PrepPlan, sheet: StyleSheet,
     return replace(stats, drop_caps=drops, fonts=fonts)
 
 
-# --- the designed style sheet -------------------------------------------------
-
 def _defaults(design: BookDesign) -> dict:
     body = design.styles.get("body para") or {}
     return {"family": design.fonts["body"].family,
@@ -173,8 +171,6 @@ def _fonts_to_embed(design: BookDesign, subject_key: str) -> list[EmbeddedFont]:
             out.append(EmbeddedFont(family=display.family, file=file))
     return out
 
-
-# --- page geometry ------------------------------------------------------------
 
 def _apply_geometry(pkg, design: BookDesign, header_refs: dict[str, str],
                     footer_refs: dict[str, str]) -> None:
@@ -230,8 +226,6 @@ def _order_children(el: etree._Element, order: tuple[str, ...]) -> None:
     for child in children:
         el.append(child)
 
-
-# --- running heads and folio --------------------------------------------------
 
 def _running_head_parts(pkg, design: BookDesign,
                         meta: BookMeta) -> tuple[dict[str, str], dict[str, str]]:
@@ -461,8 +455,6 @@ def _drop_first_letter(p, sheet: StyleSheet, design: BookDesign,
     p.addprevious(frame)
     return True
 
-
-# --- settings and part plumbing -----------------------------------------------
 
 def _ensure_settings(pkg, tags: list[str]) -> None:
     if pkg.has(SETTINGS_PART):

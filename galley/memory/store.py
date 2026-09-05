@@ -22,9 +22,6 @@ DEFAULT_DB_NAME = "galley_memory.db"
 _DEFAULT_NOW = "1970-01-01T00:00:00Z"
 
 
-# ---------------------------------------------------------------------------
-# Row dataclasses
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -74,9 +71,6 @@ class Precedent:
         return asdict(self)
 
 
-# ---------------------------------------------------------------------------
-# Seed data — Atmosphere's known standing rules
-# ---------------------------------------------------------------------------
 
 # (subject, rule, source). ``subject`` is the stable unique key the seed is
 # idempotent on (INSERT OR IGNORE against a UNIQUE index).
@@ -105,9 +99,6 @@ SEED_RULINGS: tuple[tuple[str, str, str], ...] = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Migrations — an ordered list applied in sequence.
-# ---------------------------------------------------------------------------
 
 Migration = Callable[[sqlite3.Connection, str], None]
 
@@ -165,9 +156,6 @@ MIGRATIONS: tuple[Migration, ...] = (
 )
 
 
-# ---------------------------------------------------------------------------
-# The store
-# ---------------------------------------------------------------------------
 
 
 class MemoryStore:
@@ -177,7 +165,6 @@ class MemoryStore:
         self._conn = conn
         self._now = now
 
-    # ---- lifecycle -----------------------------------------------------
 
     @classmethod
     def open(
@@ -230,7 +217,6 @@ class MemoryStore:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    # ---- rulings -------------------------------------------------------
 
     def add_ruling(
         self, subject: str, rule: str, *, source: str = "house"
@@ -256,7 +242,6 @@ class MemoryStore:
         ).fetchall()
         return [_ruling_from_row(r) for r in rows]
 
-    # ---- authors -------------------------------------------------------
 
     def add_author(self, name: str, *, notes: str = "") -> Author:
         now = self._now()
@@ -271,7 +256,6 @@ class MemoryStore:
         rows = self._conn.execute("SELECT * FROM authors ORDER BY id").fetchall()
         return [_author_from_row(r) for r in rows]
 
-    # ---- precedents ----------------------------------------------------
 
     def add_precedent(
         self,
@@ -311,7 +295,6 @@ class MemoryStore:
             ).fetchall()
         return [_precedent_from_row(r) for r in rows]
 
-    # ---- export / restore ---------------------------------------------
 
     def export(self, dest_path: str | Path) -> Path:
         """Write a restorable ``.sql`` dump (the nightly-to-Tigris hook, local).
@@ -359,9 +342,6 @@ class MemoryStore:
         return cls(conn, clock)
 
 
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
 
 
 def _resolve_path(path: str | Path) -> Path:

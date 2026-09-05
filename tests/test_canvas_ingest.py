@@ -34,7 +34,6 @@ CANVAS = (400, 640)
 PLATE = (512, 512)
 
 
-# -- fixtures -----------------------------------------------------------------
 
 def _palette(**overrides) -> Palette:
     data = dict(background="#101820", primary="#f5f1e8", accent="#c9a227",

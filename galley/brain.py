@@ -35,11 +35,8 @@ log = logging.getLogger("docproof.galley.brain")
 # planner returning no dispatches is the graceful convergence signal.
 DEFAULT_MARGINAL_STOP_USD = 2.0
 
-# Audit hypothesis classes -> shipped error-type keys for a targeted re-read.
-# Exact key matches pass through on their own; this table covers the audit
-# prompt's suggested vocabulary where it differs from the config keys. A class
-# that resolves to nothing is dropped with a log line — better an honest skip
-# than a re-read with the wrong prompt.
+# Maps audit vocabulary to shipped keys; exact key matches pass through and
+# unknown classes are logged and dropped.
 CLASS_TO_TYPES: dict[str, tuple[str, ...]] = {
     "missing_comma": ("introductory_comma", "direct_address_comma",
                       "serial_comma"),

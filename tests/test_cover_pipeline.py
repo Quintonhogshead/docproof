@@ -52,7 +52,6 @@ CRITIQUE_CLIENT = object()     # still accepted by run_job/run_revision
 FAKE_IMAGE = object()          # stands in for a PIL.Image.Image
 
 
-# -- fixtures -----------------------------------------------------------------
 
 def _brief(**overrides) -> Brief:
     data = dict(title="The Lighthouse at Gull Point", author="J. R. Vance",

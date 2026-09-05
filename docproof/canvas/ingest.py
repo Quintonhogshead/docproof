@@ -176,8 +176,6 @@ def ingest(job_dir: Path, *, concept: int = 0,
         source_spec=spec.model_dump(mode="json"))
 
 
-# -- masks and adjust layers (§15.2 / §15.3) ----------------------------------
-
 def _mask(source: Any, slot_layers: dict[str, str],
           owner: str) -> Mask | None:
     """One CoverSpec MaskSpec as a canvas Mask, or None when nothing of it
@@ -269,8 +267,6 @@ def _hex(value: str, spec: CoverSpec, default: PaletteRole) -> str:
     return spec.palette.get(value) if value in roles else value
 
 
-# -- reading the job ----------------------------------------------------------
-
 def _read_manifest(job_dir: Path) -> dict[str, Any]:
     path = job_dir / JOB_MANIFEST
     if not path.is_file():
@@ -324,8 +320,6 @@ def _read_spec(job_dir: Path, raw: dict[str, Any], concept: int) -> CoverSpec:
         raise CanvasIngestError(
             f"{path} concept {concept}'s spec does not validate: {e}") from e
 
-
-# -- art ----------------------------------------------------------------------
 
 def _art_layer(slot: ArtSlot, spec: CoverSpec, job_dir: Path,
                canvas: tuple[int, int]) -> Any:
@@ -458,8 +452,6 @@ def _field_stand_in(slot: ArtSlot, spec: CoverSpec) -> Any:
                                  Stop(at=1.0, alpha=1.0)]))
 
 
-# -- scrims -------------------------------------------------------------------
-
 def _scrim_layer(scrim: ScrimSpec, index: int, spec: CoverSpec,
                  text_by_id: dict[str, TextSlot],
                  report: dict[str, Any]) -> Any:
@@ -568,8 +560,6 @@ def _scrim_ramp(kind: str, left: float, top: float, right: float,
                      Stop(at=1.0, alpha=0.0)]
     return box, [Stop(at=0.0, alpha=strength), Stop(at=1.0, alpha=strength)]
 
-
-# -- text ---------------------------------------------------------------------
 
 def _text_layer(slot: TextSlot, spec: CoverSpec,
                 canvas: tuple[int, int]) -> Any:

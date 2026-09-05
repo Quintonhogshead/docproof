@@ -42,14 +42,12 @@ KINDS = (MECHANICAL, JUDGMENT, DESIGN)
 # characters. Below this a find is not a location but a character class: a bare ","
 # has about seven thousand homes in a novel and a bare "." rather more, and an edit
 # carrying one can only ever be counted and flagged.
-#
 # Such a find is an extraction failure, not a correction, and it is refused here so
 # it reads as one. The alternative — which is what used to happen — is that it
 # travels all the way to `apply`, matches thousands of places, and is reported as
 # "the text appears 6947 times": true, useless, and indistinguishable from a
 # genuinely ambiguous correction. An entry refused here still reaches a person: its
 # reviewer comment is accounted for in the change log as one no edit was made for.
-#
 # A short find WITH an anchor is fine and common — "Replace single quote with
 # double" is a one-character find, and its page or its marked line is what places
 # it — so the guard only fires when there is nothing to place it by.
@@ -169,8 +167,6 @@ def parse_edits(source: Any, *, id_prefix: str = "c") -> ParseResult:
     return ParseResult(edits=tuple(edits), issues=tuple(issues))
 
 
-# --- loading the source -------------------------------------------------------
-
 def _load(source: Any) -> list:
     """Normalize any accepted input to a list of entries, or raise `ValueError`
     if the source as a whole is not one."""
@@ -196,8 +192,6 @@ def _load(source: Any) -> list:
                          f"'edits' list), got {type(source).__name__}")
     return source
 
-
-# --- one entry ----------------------------------------------------------------
 
 def _parse_entry(entry: Any, index: int):
     """Turn one entry into (fields-for-Edit, explicit-id-or-None), or a

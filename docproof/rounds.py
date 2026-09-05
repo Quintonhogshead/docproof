@@ -172,7 +172,6 @@ def run_rounds(orig_doc: DocumentModel, review: Review, provider: Provider, *,
     return _compose(orig_ref, layers, collected_queries, rejected, rounds_run)
 
 
-# --- composing the final, original-coordinate result -------------------------
 
 @dataclass(frozen=True)
 class _Query:
@@ -201,13 +200,13 @@ def _compose(orig_ref, layers, queries, rejected, rounds_run) -> RoundsResult:
         if para is None:
             continue
         text = para.text
-        if q.orig_lo < q.orig_hi:                       # quote the span
+        if q.orig_lo < q.orig_hi:
             quote = text[q.orig_lo:q.orig_hi]
             occ = text[:q.orig_lo].count(quote) + 1
-        else:                                           # zero-width: quote the paragraph
+        else:
             quote = text
             occ = 1
-        if find_nth(text, quote, occ) == -1:            # cannot happen, but stay safe
+        if find_nth(text, quote, occ) == -1:
             continue
         query_findings.append(Finding(
             finding_id=next(ids), chunk_id="rounds", para_id=q.para_id,
@@ -235,7 +234,6 @@ def _join_reasons(contribs) -> str:
     return " ".join(seen)
 
 
-# --- the synchronous review adapter ------------------------------------------
 #
 # Drives `run_rounds` against the real pipeline on the sync path: each round
 # builds the working document from the current layers, reviews it with
@@ -462,7 +460,6 @@ def run_batch_rounds(cfg, input_path, error_dir, workspace, *, out_dir,
                      usage, out_dir, source_path, on_phase=on_phase)
 
 
-# --- shared driver helpers (sync and batch) ----------------------------------
 
 def _build_judge(cfg, mock: bool):
     from .providers import build_provider

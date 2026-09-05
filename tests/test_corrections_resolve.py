@@ -319,7 +319,6 @@ def test_a_resolution_moves_the_counts_and_the_notes(tmp_path):
     # The notes were re-rendered beside the JSON and say what happened.
     md = (json_path.parent / "corrections_notes.md").read_text("utf-8")
     assert "Resolved in review" in md
-    # And the equation still reconciles.
     assert "counts do not reconcile" not in md
 
 
@@ -462,7 +461,6 @@ def test_bolding_a_selection_lands_and_reads_back(tmp_path):
     bolded = [r for r in state["runs"] if r["bold"]]
     assert bolded == [{"start": start, "end": end, "bold": True,
                        "italic": False}]
-    # And clearing it again takes the override back off.
     apply_manual(corrected, {
         "story_id": "ue0", "paragraph": 2, "expected": ROOM, "text": ROOM,
         "runs": []})
@@ -876,7 +874,6 @@ def test_the_agent_triages_a_mixed_layout_request(tmp_path):
     assert len(res["proposals"]) == 1                  # the quote edit
     cats = sorted(f["category"] for f in res["flags"])
     assert cats == ["hold", "task"]                    # routed, not dropped
-    # And the report groups them into a worklist, a blocked list, and edits.
     from docproof.corrections.report import _markdown
     report["agent"] = {"chat": [], "proposals": res["proposals"],
                        "flags": res["flags"]}
@@ -937,7 +934,6 @@ def test_accepting_an_agent_proposal_writes_and_logs_it(tmp_path):
     # The file carries the change now.
     assert "It was late, we were tired and the lane went on forever." \
         in _texts(out.corrected_idml)
-    # And it is logged as an agent change, with the reason.
     agent_res = [r for r in updated["resolutions"] if r["kind"] == "agent"]
     assert len(agent_res) == 1 and agent_res[0]["why"] == "wants 'lane'"
     md = (out.report_json.parent / "corrections_notes.md").read_text("utf-8")

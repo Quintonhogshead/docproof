@@ -49,7 +49,6 @@ def _stamp() -> str:
     return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
 
-# --- the live paragraph -------------------------------------------------------
 
 class _Paragraph:
     """A paragraph's Content nodes, kept in step with the tree as we edit it.
@@ -99,12 +98,11 @@ class _Paragraph:
                 parent = node.getparent()
                 return parent, parent.index(node), i
             pos += len(node.text or "")
-        last = self.nodes[-1]                    # off is the paragraph's end
+        last = self.nodes[-1]
         parent = last.getparent()
         return parent, parent.index(last) + 1, len(self.nodes)
 
 
-# --- the core operation -------------------------------------------------------
 
 def _change(kind: str, author: str, date: str) -> etree._Element:
     return etree.Element(CHANGE, {"ChangeType": kind, "Date": date,
@@ -130,7 +128,7 @@ def apply_replacement(para: _Paragraph, anchor: Anchor, author: str,
         ins_parent = first_node.getparent()
         ins_at = ins_parent.index(first_node)
         list_at = covered[0][0]
-    else:                                        # pure insertion
+    else:
         ins_parent, ins_at, list_at = para.insert_point(anchor.start)
 
     first_written: etree._Element | None = None
@@ -178,7 +176,6 @@ def apply_replacement(para: _Paragraph, anchor: Anchor, author: str,
     return first_written
 
 
-# --- notes (the InDesign counterpart of a Word comment) -----------------------
 
 def _note(text: str, author: str, date: str) -> etree._Element:
     """The Note element itself, in the shape InDesign 2026 writes its own
@@ -221,7 +218,7 @@ def attach_note_at(para: _Paragraph, off: int, text: str, author: str,
     Content node preserves canonical text exactly, and the Note is skipped by
     the walker. Every offset the tracked changes below rely on therefore still
     points where it did. Returns False when there is nowhere to hang it."""
-    if not para.nodes:                       # an empty paragraph has no anchor
+    if not para.nodes:
         return False
     para.ensure_boundary(off)
     parent, at, _ = para.insert_point(off)
@@ -251,7 +248,6 @@ def ensure_document_user(pkg: IdmlPackage, author: str) -> None:
     pkg.mark_modified(DESIGNMAP)
 
 
-# --- accept / reject views (the invariant checkers) ---------------------------
 
 def paragraph_view_text(contents_root, mode: str) -> str:
     """The text a paragraph would have if every tracked change were accepted
@@ -278,7 +274,6 @@ def paragraph_view_text(contents_root, mode: str) -> str:
     return "".join(parts)
 
 
-# --- orchestration ------------------------------------------------------------
 
 def apply_tracked_changes(pkg: IdmlPackage, doc: DocumentModel,
                           findings: list[Finding], cfg: Config
@@ -350,7 +345,7 @@ def apply_tracked_changes(pkg: IdmlPackage, doc: DocumentModel,
                 refuse(para_findings)
                 continue
 
-            if walked.location == "footnote":        # defense-in-depth 0
+            if walked.location == "footnote":
                 # Ingest already skips these; a finding reaching here would
                 # mean a stale document model, and the cost of being wrong is
                 # an .idml InDesign crashes on rather than a bad edit. A Note
@@ -364,7 +359,7 @@ def apply_tracked_changes(pkg: IdmlPackage, doc: DocumentModel,
                 continue
 
             para = _Paragraph(walked)
-            if para.text != paras[para_id].text:      # defense-in-depth 1
+            if para.text != paras[para_id].text:
                 log.error("Canonical-text drift in %s — refusing to edit it.",
                           para_id)
                 refuse(para_findings)
@@ -390,7 +385,7 @@ def apply_tracked_changes(pkg: IdmlPackage, doc: DocumentModel,
                 anchor = f.anchor
                 if para.text[anchor.start:anchor.end] != anchor.delete_text:
                     log.error("%s: anchor slice mismatch at apply time — "
-                              "skipping.", f.finding_id)   # defense-in-depth 2
+                              "skipping.", f.finding_id)
                     skipped.append(f.finding_id)
                     continue
                 first = apply_replacement(para, anchor, author, date)

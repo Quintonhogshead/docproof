@@ -59,7 +59,6 @@ _ENTRY_PREVIEW = 80       # how much of a reference entry an issue quotes
 _RENDER_CAP = 40          # issue lines render() prints before "+N more"
 _MIN_ENTRIES = 3          # a "reference section" must parse at least this many
 
-# --- reference section --------------------------------------------------
 
 _REF_HEADING = re.compile(
     r"^(?:references|bibliography|works\s+cited|reference\s+list|sources)\s*:?$",
@@ -77,7 +76,6 @@ _YEAR = r"(?:1[5-9]\d\d|20\d\d)[a-z]?"
 _ENTRY_HEAD = re.compile(rf"^({_NAME}),\s")
 _YEAR_ANY = re.compile(rf"\b({_YEAR})\b")
 
-# --- in-text citations --------------------------------------------------
 
 _PAREN = re.compile(r"\(([^()]*)\)")
 # One citation inside a parenthetical, after splitting on ";". Allows an
@@ -104,7 +102,6 @@ _STOPLIST = frozenset((
     "for", "when", "with", "e.g", "i.e", "cf",
 ))
 
-# --- chapters -----------------------------------------------------------
 
 _CH_HEADING = re.compile(r"^chapter\s+([A-Za-z0-9]+(?:-[A-Za-z]+)?)\b",
                          re.IGNORECASE)
@@ -164,7 +161,6 @@ def _chapter_number(token: str, *, allow_roman: bool) -> int | None:
     return n
 
 
-# --- figures & tables ---------------------------------------------------
 
 # Case-sensitive on purpose: captions and formal cross-refs capitalize the
 # label; lowercase "the table below" prose must not match.
@@ -172,7 +168,6 @@ _CAPTION = re.compile(r"^(Figure|Fig\.|Table)\s+(\d+(?:\.\d+)*)")
 _FT_REF = re.compile(r"\b(?:see\s+)?(Figure|Fig\.|Table)\s+(\d+(?:\.\d+)*)\b")
 
 
-# --- public data shapes -------------------------------------------------
 
 @dataclass(frozen=True)
 class CiteIssue:
@@ -208,7 +203,6 @@ class CiteReport:
         }
 
 
-# --- internals ----------------------------------------------------------
 
 def _is_heading_shaped(p: ParagraphRef) -> bool:
     t = p.text.strip()
@@ -287,7 +281,6 @@ def _find_citations(paras, ref_start: int):
 def check(paragraphs: Sequence[ParagraphRef]) -> CiteReport:
     paras = list(paragraphs)
 
-    # -- locate the reference section -------------------------------------
     # Prefer the first candidate heading whose section parses like a real
     # reference list; a mid-book short line that merely reads "Sources" then
     # cannot shadow the actual References at the back.
@@ -315,7 +308,6 @@ def check(paragraphs: Sequence[ParagraphRef]) -> CiteReport:
         log.info("citecheck: reference section at %s with %d parsed entries",
                  paras[ref_start].para_id, len(entries))
 
-    # -- in-text citations -------------------------------------------------
     citations = _find_citations(paras, ref_start)
 
     # kind -> list of (para_index, offset, seq, CiteIssue); merged and sorted
@@ -362,7 +354,6 @@ def check(paragraphs: Sequence[ParagraphRef]) -> CiteReport:
                 f"citation keys)")))
             seq += 1
 
-    # -- chapters ----------------------------------------------------------
     heading_paras = set()
     chapter_numbers = []
     for i, p in enumerate(paras):
@@ -398,7 +389,6 @@ def check(paragraphs: Sequence[ParagraphRef]) -> CiteReport:
                 f"chapter heading found is chapter {chapters_found}")))
             seq += 1
 
-    # -- figures & tables --------------------------------------------------
     captions = {"figure": set(), "table": set()}
     caption_counts = {"figure": 0, "table": 0}
     caption_paras = set()
@@ -456,7 +446,6 @@ def check(paragraphs: Sequence[ParagraphRef]) -> CiteReport:
     )
 
 
-# --- rendering ----------------------------------------------------------
 
 _KIND_ORDER = ("unmatched_citation", "unmatched_entry",
                "chapter_ref", "figure_ref", "table_ref")

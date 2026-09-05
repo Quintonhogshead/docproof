@@ -139,7 +139,6 @@ class CaseFile:
     waves: list[WaveRecord] = field(default_factory=list)
     budget: BudgetLedger = field(default_factory=BudgetLedger)
 
-    # ---- serialization -------------------------------------------------
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -169,7 +168,6 @@ class CaseFile:
             budget=BudgetLedger.from_json(d.get("budget", {}) or {}),
         )
 
-    # ---- disk ----------------------------------------------------------
 
     def save(self, path: str | Path) -> None:
         """Write the case file atomically (temp file + ``os.replace``)."""

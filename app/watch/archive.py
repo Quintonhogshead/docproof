@@ -72,7 +72,6 @@ BACKOFF = (0, 60, 300, 900, 1800, 3600, 7200, 14400)
 ERROR_LIMIT = 300
 
 
-# --- is it on, and who is finished ---------------------------------------------
 
 def is_enabled(ws: WatchSettings) -> bool:
     """Whether the archive is switched on and has somewhere to write. Both are
@@ -87,7 +86,6 @@ def _archivable(job) -> bool:
     return job.state in ("done", "failed") and bool(job.results_dir)
 
 
-# --- the two entry points ------------------------------------------------------
 
 def archive_done(home, store, job_id: str, *, get_key=None,
                  opener=None) -> bool:
@@ -194,7 +192,6 @@ def refresh_files(home, job, names, *, get_key=None, opener=None) -> int:
     return done
 
 
-# --- reading back: one file, and the whole list --------------------------------
 
 def fetch_file(home, job, name: str, dest_dir, *, save_as: str | None = None,
                get_key=None, opener=None) -> Path | None:
@@ -337,7 +334,6 @@ def _due(job, now: datetime) -> bool:
         return True
 
 
-# --- archiving one job ---------------------------------------------------------
 
 def _archive_job(token: str, ws: WatchSettings, store, job, *, cache: dict,
                  opener) -> bool:
@@ -499,7 +495,6 @@ def _manifest(job, files: dict[str, str]) -> dict:
     }
 
 
-# --- naming and small helpers --------------------------------------------------
 
 def _already_there(listing: list, job_id: str, name: str):
     """A file from a previous attempt at this job that the record lost track of.

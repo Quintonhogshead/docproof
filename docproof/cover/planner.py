@@ -133,8 +133,6 @@ class PlannerError(RuntimeError):
     call site, not here."""
 
 
-# -- the plan itself (§15.16's wire shapes) ------------------------------------
-#
 # Defined HERE, not in model.py: the plan is planner vocabulary, not spec
 # vocabulary — a CoverSpec renders identically with or without one, and
 # keeping it out of model.py keeps the archival spec contract untouched.
@@ -286,8 +284,6 @@ class StageReview(_ReviewPayload):
     model: str = ""
 
 
-# -- image prep (critique.py's exact downscale discipline) ---------------------
-
 def _downscale_to_base64(png_bytes: bytes, *, max_width: int = MAX_WIDTH) -> str:
     """A prior stage's render, downscaled to at most `max_width` px wide and
     re-encoded as a BARE base64 PNG string (no data-URI prefix) — the shape
@@ -309,8 +305,6 @@ def _image_block(b64: str) -> dict[str, Any]:
     return {"type": "image", "source": {
         "type": "base64", "media_type": "image/png", "data": b64}}
 
-
-# -- prompts -------------------------------------------------------------------
 
 def _plan_system_prompt() -> str:
     return f"""You are the composition planner at a traditional press's art \
@@ -504,8 +498,6 @@ def _review_user_content(plan: CompositionPlan, slot_id: str,
     content.append({"type": "text", "text": "\n".join(lines)})
     return content
 
-
-# -- request shape (critique.py's mirror of anthropic_provider's own) ----------
 
 def _request_params(*, model: str, system: str, content: list[dict[str, Any]],
                     schema_model: type[BaseModel], effort: str) -> dict[str, Any]:

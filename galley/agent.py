@@ -56,7 +56,6 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# --- the environment file -----------------------------------------------------
 
 @dataclass(frozen=True)
 class AgentEnv:
@@ -141,7 +140,6 @@ def apply_env(env: AgentEnv, *, environ: dict[str, str] | None = None) -> None:
             target[key] = value
 
 
-# --- what the server says -----------------------------------------------------
 
 @dataclass(frozen=True)
 class AwaitingBook:
@@ -199,7 +197,6 @@ def fetch_awaiting(env: AgentEnv, *, opener=_open_url) -> list[AwaitingBook]:
     return [b for b in books if b.file_id and b.name]
 
 
-# --- the ledger ---------------------------------------------------------------
 
 CLAIMED, FINISHED, FAILED = "claimed", "finished", "failed"
 # Retry incomplete delivery without rerunning the book, up to
@@ -261,7 +258,6 @@ class Ledger:
                       if v.get("state") == PENDING_DELIVERY)
 
 
-# --- naming -------------------------------------------------------------------
 
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 
@@ -281,7 +277,6 @@ def slug_for(name: str, author_last: str = "", file_id: str = "") -> str:
     return f"{fallback}-book" if fallback else "untitled-book"
 
 
-# --- the agent ----------------------------------------------------------------
 
 @dataclass
 class RunReport:
@@ -319,7 +314,6 @@ class Agent:
     sleep: Callable[[float], None] = time.sleep
     log: Callable[[str], None] = log.info
 
-    # -- paths --
 
     @property
     def root(self) -> Path:
@@ -332,7 +326,6 @@ class Agent:
     def ledger(self) -> Ledger:
         return Ledger.load(self.ledger_path)
 
-    # -- one poll --
 
     def poll_once(self) -> RunReport:
         """Look once, and run at most one book."""
@@ -367,7 +360,6 @@ class Agent:
                 log.exception("The poll failed; trying again next interval.")
             self.sleep(self.poll_interval_s)
 
-    # -- one book --
 
     def run_book(self, book: AwaitingBook, ledger: Ledger, report: RunReport,
                  *, resume: bool = False) -> None:
@@ -518,7 +510,6 @@ class Agent:
         self.owe_delivery(book, ledger, slug, folder_id, "needs_human",
                           reason, files, why="")
 
-    # -- delivery: owed, retried, idempotent --
 
     def owe_delivery(self, book: AwaitingBook, ledger: Ledger, slug: str,
                      folder_id: str, outcome: str, reason: str,
@@ -664,7 +655,6 @@ class Agent:
             shutil.copy2(runs / "outcome.json", dest)
             return [dest]
 
-    # -- what the ledger says --
 
     def status(self) -> dict[str, Any]:
         ledger = self.ledger()
@@ -748,7 +738,6 @@ def program(*, workspace_root: Path, env_file: Path,
             "--poll-interval", str(int(poll_interval_s))]
 
 
-# -- macOS: a LaunchAgent --
 
 def agents_dir() -> Path:
     return Path.home() / "Library" / "LaunchAgents"
@@ -811,7 +800,6 @@ def _uninstall_launchd(*, run, path: Path | None) -> bool:
     return True
 
 
-# -- Linux: a systemd user unit --
 
 # The systemd unit name.
 UNIT_NAME = "galley-agent.service"
@@ -906,7 +894,6 @@ def _user() -> str:
     return os.environ.get("USER") or os.environ.get("LOGNAME") or "$USER"
 
 
-# -- the switch --
 
 def service_path(platform: str | None = None) -> Path:
     """Where this machine's service definition lives."""

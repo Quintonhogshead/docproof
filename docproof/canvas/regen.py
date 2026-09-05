@@ -117,7 +117,6 @@ RESOLUTION_ENV = "DOCPROOF_CANVAS_IMAGE_RESOLUTION"
 # can look at it. The pixels are the same picture either way — the draft
 # lane is where somebody is deciding whether they like the composition, not
 # where they are inspecting an edge — and it is seconds a click.
-#
 # Transparent plates stay PNG at every rung regardless (see _plate_format):
 # a cutout's alpha is exactly the thing lossy compression is worst at, and
 # imaging.has_real_alpha's border test reads that alpha.
@@ -144,10 +143,8 @@ def _resolution() -> str:
     return tier
 
 
-# -- the quality ladder (§5, §8) ----------------------------------------------
 # A canvas session rolls plates cheap while the composition is still moving
 # and pays for detail exactly once, on the plate that is kept:
-#
 #   "draft"   — force DRAFT_TIER, the ~3-cent rung. What a person clicks
 #               twenty times while deciding what the cover even is.
 #   "final"   — force the machine's real tier. What finalize() re-renders a
@@ -332,8 +329,6 @@ def inpaint(job_dir: Path, doc: CanvasDoc, layer_id: str, *, client,
     return _charge(doc, tier, fake)
 
 
-# -- finalize: the top of the quality ladder (§5, §8) -------------------------
-
 # What finalize() asks for, verbatim and unconditionally. Every clause here
 # is load-bearing against the one failure mode a re-render has: the model
 # treating "render this again" as an invitation to improve the composition.
@@ -421,8 +416,6 @@ def finalize(job_dir: Path, doc: CanvasDoc, layer_id: str, *, client,
                         "tier": tier})
     return _charge(doc, tier, fake)
 
-
-# -- ground the figure (§15.23's cardinal rule) -------------------------------
 
 # How much of the PLATE's height the generated ground band covers, measured
 # from the bottom edge. 18% is enough to hold a floor plane running away
@@ -539,8 +532,6 @@ def ground_figure(job_dir: Path, doc: CanvasDoc, layer_id: str, *, client,
                         "source": rel, "instruction": text})
     return _charge(doc, tier, fake)
 
-
-# -- rebalance: measure, nudge, report ($0) -----------------------------------
 
 # The effect type this verb writes. One entry per layer, replaced rather
 # than repeated — see plan_levels.
@@ -740,8 +731,6 @@ def rebalance(job_dir: Path, doc: CanvasDoc, layer_id: str) -> str:
              layer_id, brightness, contrast)
     return _measured_sentence(reading, brightness, contrast)
 
-
-# -- shared plumbing ----------------------------------------------------------
 
 def _art_target(doc: CanvasDoc, layer_id: str, verb: str) -> Any:
     """The art layer this verb addresses, with the three refusals every

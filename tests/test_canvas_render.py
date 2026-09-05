@@ -32,7 +32,6 @@ WHITE = (255, 255, 255, 255)
 BLACK = (0, 0, 0, 255)
 
 
-# -- fixtures and helpers -----------------------------------------------------
 
 @pytest.fixture
 def job_dir(tmp_path):

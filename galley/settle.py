@@ -69,7 +69,6 @@ def settle_residual_of(row: Mapping[str, Any]) -> str | None:
     return None
 
 
-# ---- contracts ---------------------------------------------------------------
 
 @dataclass
 class Residual:
@@ -254,7 +253,6 @@ class Settlement:
             return None
 
 
-# ---- the working set: rows that reproduce the deliverable -----------------------
 
 def load_envelope(run_dir: str | Path) -> dict[str, Any]:
     p = Path(run_dir) / "findings.json"
@@ -361,7 +359,6 @@ def open_items(run_dir: str | Path) -> list[Residual]:
     return out
 
 
-# ---- deterministic decisions (A3, first half) ----------------------------------
 
 @dataclass
 class Decision:
@@ -503,7 +500,6 @@ def _norm_words(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+(?:['’][a-z]+)?", text.lower())
 
 
-# ---- the mechanical-only guard -----------------------------------------------
 #
 # A mechanical-only run permits only punctuation/case/hyphen/space changes,
 # one function-word change, or a same-stem spelling/inflection fix. Larger
@@ -596,7 +592,6 @@ def rewrite_class(before: str, after: str) -> str | None:
     return f"word swap {old!r} -> {new!r}"
 
 
-# ---- duplicated fragments ---------------------------------------------------
 
 _XML_UNSAFE_RE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\ufffe\uffff]")
 
@@ -841,7 +836,6 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
             return Decision("query", why, question=_question(res))
         return Decision("drop", why)
 
-    # --- edit damage: the flagged edit itself is the item -----------------
     if res.kind == "edit_damage":
         key = res.owner_finding_id or ""
         owner = working.get(key, {})
@@ -891,7 +885,6 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
         return Decision("revise", f"edit_damage:{res.verdict or 'flagged'}",
                         replacement=fix, owner_key=key)
 
-    # --- a walk residual ---------------------------------------------------
     segs = em.paragraphs[res.para_id]
     acc = emap.accepted_of(segs)
     lo = acc.index(res.quote)
@@ -993,7 +986,6 @@ def _question(res: Residual, suggestion: str = "") -> str:
     return xml_safe(what)
 
 
-# ---- the narrow judge (A3, second half) ------------------------------------------
 
 _JUDGE_SYSTEM = """\
 You settle ONE residual at a time on a finished book proofread. You are shown a
@@ -1178,7 +1170,6 @@ def second_look(problem: Residual, paragraph: str, provider, model: str,
     return answer, reason
 
 
-# ---- applying decisions (A4) ---------------------------------------------------
 
 def _query_row(res: Residual, source: Mapping[str, str], question: str,
                *, lane: str = "") -> dict[str, Any] | None:
@@ -1329,7 +1320,6 @@ def apply_decision(res: Residual, dec: Decision,
     return rec, new_rows, removed
 
 
-# ---- import-findings --anchor accepted (rows in hand, no loop) ------------------
 
 @dataclass
 class Folded:
@@ -1433,7 +1423,6 @@ def fold_accepted_rows(run_dir: Path, rows: Sequence[Mapping[str, Any]], *,
     return folded
 
 
-# ---- the loop (A1–A7) ---------------------------------------------------------
 
 # --until-clean: keep sweeping while a round is still finding real work, stop
 # when a round comes back quiet. "Quiet" is judged against how much the round
@@ -1515,7 +1504,6 @@ class Settler:
         # Only a successful reread clears it; remaining dirty ids block certify.
         self._dirty: set[str] = set()
 
-    # -- one round ----------------------------------------------------------
 
     def _rebuild(self, rows: list[dict[str, Any]], *, snapshot: str) -> Any:
         from docproof.replay import rebuild_from_rows
@@ -1849,7 +1837,6 @@ class Settler:
                      res.para_id, out[res.id].action)
         return out
 
-    # -- the composite self-check and the shared revert ------------------------
 
     @staticmethod
     def _plan(plans: dict[str, list[tuple[int, int, str, str]]],
@@ -2073,7 +2060,6 @@ class Settler:
                      "sites nearby", len(out_rows))
         return out_rows, out_recs, out_plans
 
-    # -- the whole loop -----------------------------------------------------
 
     def _quiet(self, new_items: int) -> bool:
         """--until-clean's stop rule: a round is quiet when the new items it

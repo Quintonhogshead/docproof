@@ -25,7 +25,6 @@ ROOT = Path(__file__).resolve().parent.parent
 ICONSET = ROOT / "build" / "DocProof.iconset"
 ICNS = ROOT / "app" / "DocProof.icns"
 
-# The app's own palette, so the icon and the window agree.
 INK = (0x7c / 255, 0x4a / 255, 0x2d / 255)          # accent brown
 INK_DEEP = (0x5d / 255, 0x36 / 255, 0x1f / 255)
 PAPER = (0xfb / 255, 0xfa / 255, 0xf8 / 255)
@@ -90,13 +89,11 @@ def render(px: int) -> bytes:
 
     paper = _color(PAPER)
     if px < 64:
-        # Two letters, as large as they will go: at this size a wordmark is a
-        # grey smear, and a monogram still reads as this app.
+        # Use the monogram where the wordmark would be unreadable.
         _draw_centered(_fit("DP", side * 0.58, paper), px / 2, px / 2)
     else:
         _draw_centered(_fit("Doc", side * 0.44, paper), px / 2, px * 0.635)
         _draw_centered(_fit("Proof", side * 0.62, paper), px / 2, px * 0.435)
-        # A proof mark under the word: the reason the app exists, in one line.
         rule_w, rule_h = side * 0.34, max(1.0, side * 0.026)
         rule = Foundation.NSMakeRect((px - rule_w) / 2, px * 0.245,
                                      rule_w, rule_h)

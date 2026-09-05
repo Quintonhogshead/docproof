@@ -118,8 +118,6 @@ def measure(text: str, font: ImageFont.FreeTypeFont, tracking_px: float) -> floa
     return font.getlength(text) + tracking_px * (len(text) - 1)
 
 
-# -- emphasis (§15.12): word-granular style runs ------------------------------
-
 @dataclass(frozen=True)
 class _EmphasisPlan:
     """One slot's resolved emphasis, computed once per fit/draw: WHICH words
@@ -212,8 +210,6 @@ def _line_word_starts(lines: tuple[str, ...]) -> tuple[int, ...]:
         count += len(line.split())
     return tuple(starts)
 
-
-# -- balanced line breaking --------------------------------------------------
 
 @dataclass(frozen=True)
 class _Break:
@@ -357,8 +353,6 @@ def _best_break(words: list[str], measure_fn, zone_w_px: float,
     return _best_break_greedy(words, measure_fn, zone_w_px, max_lines)
 
 
-# -- fit search ---------------------------------------------------------------
-
 @dataclass(frozen=True)
 class FitResult:
     """One text slot's resolved typography: the chosen size, its line
@@ -498,7 +492,6 @@ def fit_text(slot: TextSlot, canvas_size: tuple[int, int], *,
                          lines=br.lines, tracking_px=tracking_px,
                          fits=True, warning=None)
 
-    # -- floor escalation: ink must never overflow the zone -------------------
     # Step 1: keep the floor size, allow as many lines as the zone's height
     # holds. Only worth trying when that is genuinely more than max_lines.
     height_allows = int(zone_h_px // (size_min_px * LINE_HEIGHT))
@@ -639,7 +632,6 @@ def _fit_justify_stack(slot: TextSlot, canvas_size: tuple[int, int],
         cap = STACK_RATIO_CAP * min(sizes)
         return [min(s, cap) for s in sizes]
 
-    # -- candidate sweep ------------------------------------------------------
     candidates: list[tuple[tuple[str, ...], tuple[int, ...]]] = []
     forced = _forced_split(words, slot.line_breaks)
     if forced:
@@ -683,7 +675,6 @@ def _fit_justify_stack(slot: TextSlot, canvas_size: tuple[int, int],
     assert chosen is not None   # words is non-empty — fit_text guarded
     _, _, lines, starts = chosen
 
-    # -- exact solve for the winner -------------------------------------------
     sizes = ratio_capped([fill_exact(line, start)
                          for line, start in zip(lines, starts)])
     block_h = sum(s * LINE_HEIGHT for s in sizes)
@@ -709,8 +700,6 @@ def _fit_justify_stack(slot: TextSlot, canvas_size: tuple[int, int],
                      fits=fits, warning=warning,
                      line_sizes_px=tuple(sizes))
 
-
-# -- rendering ------------------------------------------------------------
 
 def _render_line(line: str, font: ImageFont.FreeTypeFont, tracking_px: float,
                  color: tuple[int, int, int], zone_left: float, zone_w: float,
@@ -761,8 +750,6 @@ def _render_line(line: str, font: ImageFont.FreeTypeFont, tracking_px: float,
     return layer
 
 
-# -- expressive rendering (§15.12) --------------------------------------------
-#
 # The four type moves change WHERE and HOW glyph ink is laid, never what the
 # downstream machinery consumes: draw_text/text_mask/line_ink_boxes below
 # each branch to this path the moment a slot carries any move (or a

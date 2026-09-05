@@ -287,7 +287,6 @@ def _regular_form(word: str, dic) -> str:
     return ""
 
 
-# --- near-duplicate hygiene ---------------------------------------------------
 
 def _one_edit_apart(a: str, b: str) -> bool:
     """One substitution, insertion, deletion or adjacent transposition apart.
@@ -502,12 +501,12 @@ def scan(paragraphs: Sequence[ParagraphRef], *, enabled: bool = True,
             for i, c in enumerate(pile):
                 if asked >= suggestion_limit:
                     break
-                if c.stem or c.suggestions:      # already carries its fix
+                if c.stem or c.suggestions:
                     continue
                 asked += 1
                 try:
                     picks = tuple(list(dic.suggest(c.word))[:3])
-                except Exception:                # a suggester that gives up
+                except Exception:
                     picks = ()
                 pile[i] = Candidate(c.word, c.para_ids, picks, c.stem)
 

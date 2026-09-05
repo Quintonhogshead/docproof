@@ -62,7 +62,6 @@ function assign(target, op, fields) {
   for (const k of fields) if (op[k] !== undefined) target[k] = clone(op[k]);
 }
 
-/* ------------------------------------------------------- the wrap remap */
 /* How close to the sheet's own edges a layer has to reach before it counts as
    BEING the sheet rather than sitting on a panel — ops.py's _FULL_SHEET_EPS,
    and the same hair of tolerance for a 1.0 that has been through JSON and a
@@ -124,7 +123,6 @@ function applySetWrap(doc, op) {
   doc.canvas = sheetSize(next);
 }
 
-/* ------------------------------------------------------------------ apply */
 export function applyOp(doc, op) {
   const layer = op.layer_id ? findLayer(doc, op.layer_id) : null;
   switch (op.op) {
@@ -215,7 +213,6 @@ export function applyOp(doc, op) {
   }
 }
 
-/* ---------------------------------------------------------------- inverse */
 function invertOp(doc, op) {
   const layer = op.layer_id ? findLayer(doc, op.layer_id) : null;
   switch (op.op) {
@@ -278,7 +275,6 @@ function invertOp(doc, op) {
   }
 }
 
-/* ------------------------------------------------------------------- diff */
 /* Ops that turn `from` into `to`. The assistant hands back a whole doc rather
    than the ops it applied to it, and an undo of that turn has to travel the
    wire as ops like everything else — so we recover them by comparison. */
@@ -359,7 +355,6 @@ export function diffDocs(from, to) {
   return ops;
 }
 
-/* ------------------------------------------------------------------ store */
 /* onChange(doc)      — re-render everything
    onStatus(state)    — 'saved' | 'saving' | 'dirty' | 'stuck', for the shelf
    send(ops)          — POST the queue; resolves to the server's {doc,...} */

@@ -68,9 +68,7 @@ class _Para:
         return "".join(r.text for r in self.runs)
 
 
-# ---------------------------------------------------------------------------
 # The public writer.
-# ---------------------------------------------------------------------------
 
 
 def write_indesign_idml(pkg, structure: Structure, plan: PrepPlan,
@@ -172,9 +170,7 @@ def _applied_style_count(story_xml: bytes, style_name: str) -> int:
     return len(re.findall(pat, xml))
 
 
-# ---------------------------------------------------------------------------
 # Reading the cleaned manuscript.
-# ---------------------------------------------------------------------------
 
 
 def _read_cleaned_body(elements: dict, structure: Structure, plan: PrepPlan,
@@ -262,9 +258,7 @@ def _is_italic(r) -> bool:
     return (i.get(VAL) or "true").lower() not in ("0", "false", "off")
 
 
-# ---------------------------------------------------------------------------
 # Writing the IDML.
-# ---------------------------------------------------------------------------
 
 
 def _emit_idml(paras: list[_Para], sheet: StyleSheet, template: Path,
@@ -423,9 +417,7 @@ def _stored_info(name: str) -> zipfile.ZipInfo:
     return info
 
 
-# ---------------------------------------------------------------------------
 # Reading an IDML story back (verification, and the corrections engine reuses it).
-# ---------------------------------------------------------------------------
 
 
 def _read_idml_story(idml_path: str | Path, body_story: str) -> list[_Para]:

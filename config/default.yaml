@@ -28,9 +28,8 @@ skip:
   sweep_only:               # deterministic sweeps run, but no model pass
     - "Heading*"            # a chapter heading: "Chapter Twenty Four" -> "Twenty-Four"
 
-# Manuscript prep: tagging a Word manuscript into a house InDesign style set.
-# Both paths are relative to this file. THE STYLE SET IS house_styles.yaml —
-# point these at another pair of files to prep for a different template.
+# Manuscript prep paths are relative to this file. Change both files to use
+# a different InDesign template and style set.
 prep:
   style_sheet: prep/house_styles.yaml
   tagging_prompt: prep/tagging.yaml
@@ -45,11 +44,9 @@ prep:
   strip_direct_formatting: true    # in the placed file only; italics always kept
   verify: true                     # refuse to ship a file whose words drifted
 
-# Promo: a teaser and a set of social posts from a finished manuscript, written
-# in one pass over the whole book. The prompt is a file — point generation_prompt
-# elsewhere, or edit config/promo/generation.yaml, to change the voice or drop in
-# the house copy specs. The model is NOT set here: promo reads api.model, so the
-# app picks it per run and any vendor works. See docs/promo.md.
+# Promo generates a teaser and social posts from the whole manuscript.
+# Edit generation_prompt to change the voice; api.model selects the model.
+# See docs/promo.md.
 promo:
   generation_prompt: promo/generation.yaml
   plan_prompt: promo/marketing_plan.yaml   # the marketing plan — promo's 3rd deliverable, its own call
@@ -60,37 +57,23 @@ promo:
   verify_claims: false             # opt-in: a 2nd call checks each claim against the book (costs a re-read)
   verify_prompt: promo/verify.yaml
 
-# The two edits made silently, outside the tracked-changes system, because
-# neither is a content change an author needs to review. Applied before ingest,
-# so every later stage measures against normalized text. Counted in the report
-# but never logged line by line. Quote curling converts only what it can
-# determine from the text and leaves the rest straight — a mark curled the
-# wrong way ships, because there is no tracked change to reject.
+# Normalize before ingest so all later stages share the same text. These
+# non-content changes are counted in the report without tracked revisions.
+# Ambiguous quote direction stays unchanged because authors cannot reject it.
 normalize:
   quotes: true
   spaces: true    # collapse runs to one; strip paragraph-trailing spaces whole
 
-# Two quoted speeches sharing one paragraph with nothing but whitespace between
-# them ("…won't go.” “You will…") are split so each speaker begins a new line —
-# a tracked change on the paragraph mark (rejecting merges the paragraphs back)
-# plus a declarative margin comment stating the change, per the head
-# proofreader's ruling on the Johnson run. Judgment cases (a second speaker
-# behind narration) stay with the speaker_change query. Whole-document runs
-# only; the cap stops the pass on a manuscript set in a convention it does not
-# understand (interviews, plays).
+# Split adjacent quoted speeches into separate paragraphs with tracked
+# paragraph-mark changes. Narration-separated speakers remain queries.
+# Whole-document only; the cap protects interviews and plays.
 speaker_split:
   enabled: true
   max_splits: 300
 
-# A dictionary scan that never corrects anything. It sorts every unknown word:
-# words written as NAMES become a do-not-flag list sent to every pass (what
-# stops a coined name being "corrected" into the word it resembles); words that
-# come apart into an ordinary word plus an ending English does not give it
-# (growed → grow, layed → lay) and words used only seldom are handed to the
-# model to look at; words merely repeated are passed on as evidence, not
-# protection — because a misspelling the author believes in repeats just as
-# faithfully as a coinage. Needs the optional `spylls` package; without it the
-# scan is skipped and the passes run as before.
+# The dictionary scan proposes candidates without correcting them. Names
+# feed a protected list; malformed and rare words reach the model for review.
+# Repetition alone does not protect a word. Without spylls the scan is skipped.
 spellcheck:
   enabled: true
   # Unset means "whatever `variant` asks for", which is almost always right.
@@ -126,19 +109,10 @@ spellcheck:
   near_duplicates: true
   near_duplicate_dominance: 5
 
-# One term written more than one way — blood-cursed against bloodcursed, safe
-# keeping against safekeeping. The rule per-paragraph review structurally
-# cannot do: a model reading chapter 4 has no idea what chapter 40 said. For
-# terms it asks and never corrects, because the same test that finds an
-# inconsistency cannot tell one from a distinction (awhile and a while differ
-# in meaning), and which form a book uses is the author's to settle.
-# Proper names get one bounded exception: a capitalized word that never
-# appears lowercased and differs from another only in its diacritics — Rian
-# against Rían — is one name, not two meanings. When one spelling clearly owns
-# the book (name_dominance times as many, name_min_count seen, never in one
-# sentence with a stray), the strays are corrected as tracked changes the
-# author can still reject; below that bar they are asked about like any term.
-# Whole-document runs only. Free: no API call.
+# Query inconsistent term spellings across the whole document. Proper names
+# that differ only by diacritics may receive tracked corrections when one
+# capitalized form meets name_dominance and name_min_count and never shares
+# a sentence with a stray; otherwise query. No API call.
 consistency:
   enabled: true
   min_length: 7             # shorter keys collide by accident
@@ -179,12 +153,9 @@ consistency:
                             # mechanical scans above even below the spell scan's
                             # own protection bar. See docproof/genre.py.
 
-# A strong model reads the whole manuscript once, before the detector passes,
-# and returns the book's proper nouns (canonical casing) + suspected
-# misspellings — including valid-word-for-valid-word errors (calvary/cavalry)
-# that a dictionary and a frequency signal both miss. Suspects become
-# adjudication candidates (ruled on in context); casing feeds a query-channel
-# drift check. One cacheable read; priced for its own (frontier) model.
+# Read the manuscript once for canonical proper nouns and suspected errors,
+# including valid-word substitutions. Suspects become adjudication candidates;
+# canonical casing supports drift queries. Cached per draft and model.
 glossary:
   enabled: true
   model: gpt-5.6-luna       # any catalog id; the app panel offers a picker.
@@ -212,22 +183,11 @@ glossary:
                             # the stray as a tracked change; otherwise it asks
   case_edit_min_count: 8
 
-# One whole-book read for REAL-WORLD factual slips — institutional names and
-# acronym expansions (the NTSB is Transportation, not Traffic), historical
-# figures and events, geography, currencies. The class the human second
-# reviewer catches in passing and a per-chunk grammar pass structurally
-# cannot. Every catch is a margin QUERY, never an edit: fiction bends the
-# world on purpose, so a fact is the author's to settle. Cached per draft and
-# priced for its own model, like the glossary. Off by default: a whole extra
-# read, opt-in until proven — flip it here or per run in the app panel.
-# The table of contents checked against the body's own structure: contents
-# wording vs the chapter/part page ("massive" in the contents, "drastic" on
-# the part page), chapter and part numbering, entries listed but absent or
-# present but unlisted. One SMALL model read over a deterministic structure
-# extract (the opening pages + a heading outline) — a few thousand tokens even
-# on a long novel, so it ships ON, unlike the fact check's whole-book read.
-# Every catch is a margin QUERY, never an edit: which copy is right is the
-# author's to settle. Cached per draft. See docproof/toccheck.py.
+# Factcheck queries real-world factual slips without changing text.
+# It is an optional whole-book read, cached per draft on its own model.
+# TOC checking instead reads a small heading/contents extract, comparing
+# wording, numbering and missing entries. Query-only, cached, on by default.
+# See docproof/toccheck.py.
 toccheck:
   enabled: true
   model: gpt-5.6-luna
@@ -275,14 +235,8 @@ genre_scans:
 flights:
   posture: lenient           # strict | lenient
 
-# The whole-book story sheet: one read that gives the detector passes the
-# narrative facts a per-paragraph check cannot know — who narrates, in what
-# person and tense, and each character's pronouns — injected into every
-# detector's system prompt (cached per document, like the vocabulary). It lets a
-# paragraph-in-isolation pass catch a pronoun, name, or tense that is wrong for
-# the STORY (his/her, I/you, a tense slip), the wrong-word errors it otherwise
-# glides over. Off by default: a whole extra read, opt-in until proven.
-# Whole-document only. See docproof/storysheet.py.
+# A cached whole-book read supplies narrative facts to detectors: narrator,
+# person, tense and character pronouns. Whole-document only; off by default.
 storysheet:
   enabled: false
   model: gpt-5.6-luna
@@ -291,13 +245,9 @@ storysheet:
   cache_dir:                # a path pins the read per draft (text+model+prompt);
                             # blank = the shared default folder, as above
 
-# Whole-book continuity read: one frontier read of the entire manuscript that
-# flags facts the book contradicts about itself — timeline slips, age/date
-# arithmetic, attribute drift, object continuity. Query-only by design: every
-# finding is a margin comment, never a tracked change (which fact is right is the
-# author's call). A deterministic date->weekday checker rides along at no API
-# cost. OFF by default until proven on a real-manuscript compare, like rewrite.
-# Whole-document only. See docproof/continuity.py.
+# Query contradictions in timelines, attributes and events across the book.
+# The date/weekday check is deterministic and free. Whole-document only;
+# off by default.
 continuity:
   enabled: false
   model: gpt-5.6-luna       # the house default, so no key beyond the reviewer's is
@@ -320,16 +270,10 @@ continuity:
   cache_dir:                # a path pins the read per draft (text+model+prompt);
                             # blank = the shared default folder, as above
 
-# Chapter-scoped continuity read: the third reading distance. The chunk detectors
-# read a paragraph at a time and the continuity read above reads the whole book at
-# once; this reads one CHAPTER at a time, for the break that closes inside a chapter
-# and is invisible to both — a character who sits down who never stood, someone who
-# leaves a room then speaks in it, a cigarette lit twice, dawn that becomes evening
-# in one scene, a reply to a question no one asked. Built on the taste judge's shape:
-# read each chapter, drop any break whose two quotes don't both land in it, let a
-# skeptical judge cull the rest, cap the volume per chapter. Query-only by design;
-# dialogue IS in scope (a contradiction spoken aloud is still one). OFF by default,
-# whole-document only. See docproof/continuity.py.
+# Read each chapter for local continuity breaks, including dialogue. Both
+# quoted passages must anchor in that chapter; a judge filters the findings
+# and a per-chapter cap limits volume. Query-only; whole-document runs,
+# off by default. See docproof/continuity.py.
 chapter_continuity:
   enabled: false
   model:                    # the chapter reader; blank = the continuity model, then api.model

@@ -126,7 +126,6 @@ class Scorecard:
     output_tokens: int = 0
     cost: float | None = None
 
-    # -- aggregates -------------------------------------------------------
     @property
     def micro(self) -> tuple[float | None, float | None, float | None]:
         tp = sum(t.tp_flags for t in self.types.values())
@@ -210,7 +209,7 @@ def score(run: EvalRun, threshold: str = "low") -> Scorecard:
             else:
                 off_span.append(f)
         ts.tp_flags += len(on_span)
-        ts.fp_flags += len(off_span)     # right type, wrong place — a false alarm
+        ts.fp_flags += len(off_span)
         if on_span:
             ts.caught += 1
             if case.correction and any(

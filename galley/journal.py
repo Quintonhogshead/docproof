@@ -87,7 +87,6 @@ def _by_para(rows: Iterable[Mapping[str, Any]]
     return out
 
 
-# --- the sources -------------------------------------------------------------
 
 @dataclass
 class JournalSources:
@@ -141,7 +140,6 @@ class JournalSources:
         )
 
 
-# --- rendering ---------------------------------------------------------------
 
 class _Doc:
     """A tiny Markdown accumulator, so the section writers read as prose."""
@@ -227,7 +225,6 @@ def _not_run(doc: _Doc, why: str) -> None:
     doc.para(f"*Not run — {why}.*")
 
 
-# --- sections ----------------------------------------------------------------
 
 def _section_summary(doc: _Doc, src: JournalSources) -> None:
     doc.heading(2, "At a glance")

@@ -66,7 +66,6 @@ class NormalizationReport:
         return self.quotes + self.spaces
 
 
-# --- the text rules ----------------------------------------------------------
 
 def _word_after(text: str, i: int) -> str:
     j = i + 1
@@ -195,7 +194,6 @@ def normalize_text(text: str, *, quotes: bool = True, spaces: bool = True,
     return "".join(out)
 
 
-# --- applying them to the package --------------------------------------------
 
 def _apply_untracked(p, edits: list[tuple[int, int, str]]) -> None:
     """Rewrite the paragraph's text elements in place, with no revision

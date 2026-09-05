@@ -115,7 +115,6 @@ class WatchRunner:
         # to "now" costs at most a slightly late first pass, never a repeat.
         self._armed_at: datetime | None = None
 
-    # -- lifecycle ------------------------------------------------------------
 
     def start(self) -> None:
         """Start the clock. Starts no pass — opening DocProof should not spend
@@ -139,7 +138,6 @@ class WatchRunner:
         with self._mutex:
             return self._running
 
-    # -- one pass -------------------------------------------------------------
 
     def run_now(self, *, mock: bool = False) -> bool:
         """Start a pass in the background. False if one is already going."""
@@ -217,7 +215,6 @@ class WatchRunner:
         return self._tick(self.home, WatchSettings.load(self.home),
                           dry_run=True)
 
-    # -- signing in -----------------------------------------------------------
 
     def begin_sign_in(self, client_id: str, client_secret: str) -> SignIn:
         """Open Google's consent page and wait for the answer, off-thread.
@@ -252,7 +249,6 @@ class WatchRunner:
         with self._mutex:
             return self._signin
 
-    # -- the clock ------------------------------------------------------------
 
     def _clock(self) -> None:
         while not self._stop.wait(CONSIDER_SECONDS):
@@ -317,7 +313,6 @@ class WatchRunner:
                     return False
         return self.run_now()
 
-    # -- what the panel reads -------------------------------------------------
 
     def state(self) -> dict:
         with self._mutex:

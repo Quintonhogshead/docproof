@@ -51,7 +51,6 @@ class GeminiProvider:
         self.max_retries = max_retries
         self.effort = effort
 
-    # -- request construction -------------------------------------------------
 
     def _config(self, *, system: str, schema: dict[str, Any],
                 max_tokens: int) -> types.GenerateContentConfig:
@@ -66,7 +65,6 @@ class GeminiProvider:
             config.thinking_config = types.ThinkingConfig(thinking_level=level)
         return config
 
-    # -- synchronous ----------------------------------------------------------
 
     def complete_structured(self, *, model: str, system: str, user: str,
                             schema: dict[str, Any], schema_name: str,
@@ -81,7 +79,6 @@ class GeminiProvider:
                                   error=f"{e.code}: {e.message}")
         return _to_result(resp)
 
-    # -- batch ----------------------------------------------------------------
 
     def submit_batch(self, *, model: str, requests: Sequence[BatchRequest],
                      max_tokens: int) -> str:

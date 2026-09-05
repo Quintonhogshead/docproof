@@ -98,7 +98,6 @@ function boxCorners(l, cw, ch) {
   ]);
 }
 
-/* --------------------------------------------------------------- shelf --- */
 export function buildShelf(ctx) {
   const bar = el('div', { class: 'shelf' });
   const btn = (label, opts = {}) => el('button', Object.assign({
@@ -263,7 +262,6 @@ export function buildShelf(ctx) {
   return { root: bar, update };
 }
 
-/* ---------------------------------------------------------- layer list --- */
 export function buildLayerRail(ctx) {
   const head = el('div', { class: 'rail-head' }, [el('span', { text: 'Layers' }), el('span', { class: 'count' })]);
   const body = el('div', { class: 'rail-body' });
@@ -339,7 +337,6 @@ export function buildLayerRail(ctx) {
   return { root, update };
 }
 
-/* --------------------------------------------------------- properties --- */
 export function buildPropsRail(ctx) {
   const head = el('div', { class: 'rail-head' }, [el('span', { text: 'Properties' })]);
   const body = el('div', { class: 'rail-body pad' });
@@ -415,7 +412,6 @@ export function buildPropsRail(ctx) {
       options.map(([v, label]) => el('option', Object.assign({ value: v, text: label }, v === value ? { selected: true } : {}))));
   }
 
-  /* --------------------------------------------------------------- frame */
   function frameGroup(l) {
     const setFrame = (patch) => ctx.store.apply(Object.assign({ op: 'set_frame', layer_id: l.id }, patch));
     return group('Frame', [
@@ -494,7 +490,6 @@ export function buildPropsRail(ctx) {
     ]);
   }
 
-  /* ---------------------------------------------------------------- text */
   function textGroup(l) {
     const setText = (patch) => ctx.store.apply(Object.assign({ op: 'set_text', layer_id: l.id }, patch));
     const area = el('textarea', { rows: 3, value: l.text || '' });
@@ -540,7 +535,6 @@ export function buildPropsRail(ctx) {
     ]);
   }
 
-  /* ----------------------------------------------------------------- art */
   function artGroup(l) {
     // A plate verb in flight on this layer: its buttons stay out until it
     // lands (one call per plate — app.js:plateCall refuses a second).
@@ -644,7 +638,6 @@ export function buildPropsRail(ctx) {
     ]);
   }
 
-  /* --------------------------------------------------------------- scrim */
   const DEFAULT_GRADIENT = { angle: 90, stops: [{ at: 0, alpha: 1 }, { at: 1, alpha: 0 }] };
 
   function scrimGroup(l) {
@@ -694,7 +687,6 @@ export function buildPropsRail(ctx) {
     ]);
   }
 
-  /* --------------------------------------------------- ornament + shape */
   function frameStyleGroup(l) {
     const setStyle = (patch) => ctx.store.apply(
       Object.assign({ op: 'set_frame_style', layer_id: l.id }, patch));

@@ -36,7 +36,6 @@ _CHANGE_VERDICTS = (
 _SEVERITIES = ("high", "medium", "low")
 
 
-# ---- contracts ---------------------------------------------------------------
 
 def residual_id(para_id: str, quote: str, problem: str = "") -> str:
     """A stable id for one residual: the paragraph and the verbatim quote (the
@@ -100,7 +99,6 @@ class ResidualFinding:
                 "suggestion": self.suggestion, "severity": self.severity}
 
 
-# ---- deterministic inputs (no model) -----------------------------------------
 
 def deliverable_docx(run_dir: str | Path) -> Path | None:
     """The manuscript deliverable in a finished run dir, or None.
@@ -199,7 +197,6 @@ def _walk_reads(accepted: dict[str, str], char_budget: int) -> list[list[tuple[s
     return reads
 
 
-# ---- schemas -----------------------------------------------------------------
 
 def _change_schema() -> tuple[dict[str, Any], str]:
     from pydantic import BaseModel
@@ -236,7 +233,6 @@ def _walk_schema() -> tuple[dict[str, Any], str]:
     return strict_json_schema(_Rows), "findings"
 
 
-# ---- prompts -----------------------------------------------------------------
 
 _CHANGE_SYSTEM = """\
 You are an adversarial change verifier on a finished book proofread. You are
@@ -360,7 +356,6 @@ def _context_block(context: str, role: str = "reader") -> str:
             f"\n\nVOICE NOTES FOR THIS BOOK:\n{body}")
 
 
-# ---- the gates ---------------------------------------------------------------
 
 # Unusable replies in order: (gate, stop_reason, error). Distinguish partial
 # coverage from a gate that read nothing, which must not report a clean result.
@@ -744,7 +739,6 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
     old_cv = _load_artifact(cv_path) if merge else {}
     old_fw = _load_artifact(fw_path) if merge else {}
 
-    # -- change verifier ------------------------------------------------------
     problems = [p.to_json() for p in changes.problems]
     unread_batches = list(UNREAD_BATCHES)
     if merge and old_cv:
@@ -772,7 +766,6 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
                                  fallback_model=model)["cost"]}
     cv.pop("settled", None)
 
-    # -- finished-text walk ---------------------------------------------------
     residuals = [r.to_json() for r in walk.residuals]
     unread = list(UNREAD)
     if merge and old_fw:
@@ -797,7 +790,6 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
                                  fallback_model=model)["cost"]}
     fw.pop("settled", None)
 
-    # -- the binding ----------------------------------------------------------
     for payload, complete in ((cv, ran_changes and not unread_batches),
                               (fw, ran_walk and not unread)):
         unverified = [p for p in (payload.get("unverified_paragraphs") or [])

@@ -52,7 +52,6 @@ class Resume:
     coverage: CoverageLedger
 
 
-# --- coverage (de)serialization ----------------------------------------------
 # finish() only writes to the coverage ledger; the report writers read it at the
 # end. Carrying it means a resumed run's summary still names the gaps and
 # degraded passes the original reads found, instead of reading falsely clean.
@@ -92,7 +91,6 @@ def _coverage_from_dict(d: dict[str, Any] | None) -> CoverageLedger:
     return cov
 
 
-# --- public API ---------------------------------------------------------------
 
 def save(out_dir: str | Path, *, findings: list, usage: Usage,
          coverage: CoverageLedger | None, fingerprint: dict[str, Any]) -> Path:

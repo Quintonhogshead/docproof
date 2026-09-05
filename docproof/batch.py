@@ -140,7 +140,6 @@ def rewrite_batched(cfg: Config) -> bool:
                                     or cfg.rewrite.model == cfg.api.model)
 
 
-# --- the chapter-continuity propose batch -------------------------------------
 #
 # Unlike the rewrite retype, the chapter reads do NOT ride the review batch: a
 # continuity-only run has no review batch to ride, and the reader is usually a
@@ -226,7 +225,6 @@ def _combine_status(statuses: list[BatchStatus]) -> BatchStatus:
                        errored=errored)
 
 
-# --- persistence --------------------------------------------------------------
 
 def save(job: Job, workspace: str | Path) -> Path:
     d = job_dir(workspace, job.job_id)
@@ -267,7 +265,6 @@ def load_all(workspace: str | Path) -> list[Job]:
     return sorted(jobs, key=lambda j: j.created_at, reverse=True)
 
 
-# --- lifecycle ----------------------------------------------------------------
 
 def submit(cfg: Config, input_path: str | Path, error_dir: str | Path,
            provider: Provider, workspace: str | Path, *,

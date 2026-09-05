@@ -76,18 +76,8 @@ except ImportError:                                        # pragma: no cover
 # both APIs instead of leaving a stale copy bound here.
 from . import cover
 
-# The editing document, inside the cover job directory it was ingested from.
-# The FIRST concept's session keeps the original name, and every other
-# concept gets its own file beside it. One session per concept, not per job:
-# a cover job holds several concepts (§8 of the designer spec) and each is a
-# different cover, so opening the second one used to hand back the first
-# one's document — the canvas.json was keyed by the job alone, and `concept`
-# was explicitly ignored the moment one existed.
-#
-# concept 0 stays `canvas.json` rather than becoming `canvas_c0.json` so
-# every session on disk today keeps working with no migration step, and so
-# the common case (one cover, one session) is still the file people expect
-# to find in a job directory.
+# Each concept has its own editing document. Concept 0 retains `canvas.json`
+# for backward compatibility; later concepts use numbered siblings.
 log = logging.getLogger("docproof.app.routes.canvas")
 
 CANVAS_FILE = "canvas.json"
@@ -103,14 +93,8 @@ EXPORT_NAME = f"{cover_pipeline.RENDERS_DIR}/canvas_export.png"
 # renders/ can see at a glance which they have.
 EXPORT_PDF_NAME = f"{cover_pipeline.RENDERS_DIR}/canvas_export.pdf"
 
-# What a FRONT-ONLY document's pixels are worth in inches when it is
-# exported as a PDF. A front-only canvas states no physical size at all —
-# it is the plate resolution the cover job was generated at (Size's own
-# docstring) — so the export has to assume one, and 300dpi is the assumption
-# the whole product already makes: it is print resolution, it is what §7
-# sizes the client composite against, and at it the composer's ebook canvas
-# is very nearly a 6x9 front cover plus bleed. A wrap document needs none of
-# this guesswork; it says its size in inches.
+# Front-only canvases lack physical dimensions; use the product's 300 dpi
+# print assumption. Wrap documents carry their own dimensions.
 PRINT_DPI = 300
 
 # What /file/ will serve out of a job directory. Plates and renders only —
@@ -139,7 +123,6 @@ def _font_files() -> dict[str, Path]:
 FONT_FILES: dict[str, Path] = _font_files()
 
 
-# -- the job store ------------------------------------------------------------
 
 def _data_root(request: Request) -> Path:
     """The cover job store's root.
@@ -276,7 +259,6 @@ def _default_concept(job_dir: Path) -> int:
     return 0
 
 
-# -- wire helpers -------------------------------------------------------------
 
 def _first_error(e: ValidationError) -> str:
     """One pydantic error as a sentence — docproof.canvas.ops._first_error's
@@ -380,7 +362,6 @@ def _spa_url(app: FastAPI, query: str) -> str:
     return f"/canvas/index.html{query}"
 
 
-# -- request bodies -----------------------------------------------------------
 # extra="forbid" throughout, the discipline docproof.canvas.model and
 # docproof.canvas.ops both keep: a stray or misspelled field from a browser
 # or a language model fails with a sentence rather than being silently
@@ -448,20 +429,8 @@ class GroundBody(PlateBody):
     instruction: str | None = None
 
 
-# One writer per job. Every mutating endpoint here reads canvas.json,
-# changes the document in memory and writes it back, which is safe exactly
-# as long as two of them are never in flight on the same job at once. They
-# used to be prevented by the CLIENT — the browser threw a modal overlay up
-# for the whole of a plate render — and the moment that overlay came down
-# (so a person can keep working while a plate paints) the server had to own
-# the rule instead. A lock per job, not one global lock: two people editing
-# two covers have nothing to say to each other.
-#
-# Held across the vendor call, not just the write, because the document a
-# verb mutates was loaded before that call: releasing early would let a
-# second request load the same document, and the later save would silently
-# drop the earlier one's plate. That makes plate calls on ONE job serial,
-# which is the honest cost of a single canvas.json.
+# One writer per job prevents read-modify-write races. The lock spans vendor
+# calls because releasing after load would let a later save discard an edit.
 _JOB_LOCKS: dict[str, asyncio.Lock] = {}
 
 
@@ -951,11 +920,8 @@ def register(app: FastAPI) -> None:
         unavailable = getattr(assistant, "AssistantUnavailable", ())
         snapshot = (_decode_b64(body.snapshot_b64, "snapshot")
                     if body.snapshot_b64 else None)
-        # A turn can roll plates and apply ops, so it is a writer like any
-        # other and holds the job's lock from its own load to its own save
-        # (see _job_lock). It is the longest writer there is, which is the
-        # price of one document: a type edit made mid-turn waits, it is
-        # never lost.
+        # A turn can create plates and apply ops, so hold the writer lock from
+        # load through save to avoid losing concurrent edits.
         async with _job_lock(job_id):
             doc = _load(job_dir, job_id, concept)
             try:
@@ -968,12 +934,7 @@ def register(app: FastAPI) -> None:
             except HTTPException:
                 raise
             except Exception as e:                          # noqa: BLE001
-                # A turn drives a CLI subprocess, an SDK and five tools, and
-                # anything in that stack can fail in a way this module has
-                # never heard of. It used to reach the browser as a bare
-                # "Something went wrong (500)", which tells the person
-                # nothing and tells whoever they report it to less — so the
-                # sentence goes to the AI box, and the traceback to the log.
+                # Show a useful error in the UI while retaining the traceback.
                 log.exception("A canvas assistant turn failed")
                 raise HTTPException(502, detail=(
                     f"The art director's turn failed: "

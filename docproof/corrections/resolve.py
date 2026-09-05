@@ -77,8 +77,6 @@ class ResolveError(RuntimeError):
     screen can show as-is. Nothing has been written when this is raised."""
 
 
-# --- the queue the run leaves behind -------------------------------------------
-
 def build_queue(stories: list[Story], apply_report: ApplyReport | None,
                 comments: Sequence[CommentDisposition] = (), scope=None,
                 book_pages: dict[int, str] | None = None) -> list[dict]:
@@ -270,8 +268,6 @@ def _targets_for(outcome: EditOutcome | None, anchor: str, options: list[dict],
     return out
 
 
-# --- applying a clicked option -------------------------------------------------
-
 def apply_option(corrected: str | Path, option: dict) -> dict:
     """Write one chosen option into the corrected IDML, in place.
 
@@ -354,7 +350,6 @@ def _rewrite_in_place(corrected: Path, changed: dict[str, bytes]) -> None:
         tmp.unlink(missing_ok=True)
 
 
-# --- reading and hand-editing one paragraph ------------------------------------
 # The manual mode: the designer opens the line itself, retypes what needs
 # retyping, bolds or italicizes a selection, adds or removes the section break
 # beside it — and the save writes exactly that into the corrected IDML. The
@@ -571,8 +566,6 @@ def apply_manual(corrected: str | Path, spec: dict) -> dict:
                        "removed_above": rm_above,
                        "removed_below": rm_below}}
 
-
-# --- applying a typed answer ---------------------------------------------------
 
 class _Answer(BaseModel):
     # apply: carry out a text edit. leave: the text is correct as set, so the
@@ -895,8 +888,6 @@ def apply_edit_to_corrected(corrected: str | Path, edit: Edit) -> dict:
             "format": edit.format}
 
 
-# --- keeping the report honest -------------------------------------------------
-
 def suggestion_instruction(item: dict) -> str:
     """The typed answer a one-click "apply the suggestion" stands for: carry out
     exactly what the earlier model advice described, nothing more. Raises when
@@ -1111,7 +1102,6 @@ def converse(item: dict, corrected: str | Path, provider: Provider, *,
             "proposal": proposal}
 
 
-# --- the run-level agent -------------------------------------------------------
 # A conversation not about one flag but about the whole book: the designer brings
 # a fresh list of desires ("make every 'grey' British-spelled", "the captain is
 # addressed as 'sir' — check that's consistent"), and the model works over the

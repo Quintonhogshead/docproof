@@ -194,8 +194,6 @@ def apply_many(doc: CanvasDoc, ops: list[dict[str, Any]]) -> None:
     doc.canvas = draft.canvas
 
 
-# -- shared plumbing ----------------------------------------------------------
-
 def _check_document(doc: CanvasDoc, what: str) -> None:
     """Re-validate the whole document after a mutation.
 
@@ -348,8 +346,6 @@ def _index(value: Any, name: str, high: int) -> int:
             f"0 to {high}")
     return value
 
-
-# -- the ops ------------------------------------------------------------------
 
 def _op_set_frame(doc: CanvasDoc, op: dict[str, Any]) -> None:
     """The box, absolutely — including `corners`, the corner pin, whose one

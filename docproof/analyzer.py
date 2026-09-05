@@ -259,7 +259,7 @@ class Analyzer:
         self.types = tuple(error_types)
         self.keys = tuple(et.key for et in self.types)
         self.label = "+".join(self.keys)
-        self.ids = finding_ids           # shared across passes → unique IDs
+        self.ids = finding_ids
         self.provider = provider
         self.examination = examination
         self.explicit_verdicts = examination_production_verdicts_enabled(cfg)
@@ -286,7 +286,6 @@ class Analyzer:
     def schema_name(self) -> str:
         return "findings"
 
-    # -- public ---------------------------------------------------------------
 
     def fetch(self, chunk: Chunk) -> ProviderResult:
         """Just the network call for one chunk — no parsing, no id assignment,
@@ -328,7 +327,6 @@ class Analyzer:
         interface the batch collector mirrors."""
         return self.process_result(self.fetch(chunk), chunk, usage)
 
-    # -- internals ------------------------------------------------------------
 
     def _unwrap(self, result: ProviderResult, chunk_id: str) -> BaseModel | None:
         if result.stop_reason == "refusal":
@@ -349,7 +347,7 @@ class Analyzer:
         try:
             return self.output_model.model_validate(result.parsed)
         except ValidationError as e:
-            # Phase 2 coverage is a shadow contract. A provider that returns a
+            # Coverage receipts are a shadow contract. A provider that returns a
             # valid legacy finding payload but omits/mangles the new receipt
             # must not erase production findings or turn a clean review into a
             # failed call. Parse the proven contract, let the receipt observer

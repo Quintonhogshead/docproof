@@ -54,7 +54,6 @@ ART_ID = "ly_art001"
 TEXT_ID = "ly_txt001"
 
 
-# -- fixtures -----------------------------------------------------------------
 
 def _png(size=(24, 36), color=(10, 20, 30, 255)) -> bytes:
     buf = io.BytesIO()

@@ -49,8 +49,6 @@ def element_map(pkg) -> dict[str, etree._Element]:
             if wp.part == BODY_PART}
 
 
-# --- paragraph properties -----------------------------------------------------
-
 def ensure_ppr(p: etree._Element) -> etree._Element:
     """The paragraph's w:pPr, created as its first child if absent — which is
     where the schema requires it."""
@@ -102,8 +100,6 @@ def strip_direct_run_formatting(p: etree._Element) -> bool:
             run.remove(rpr)
     return removed
 
-
-# --- text edges ---------------------------------------------------------------
 
 def leading_tab_count(p: etree._Element) -> int:
     """w:tab elements before the paragraph's first text.
@@ -163,8 +159,6 @@ def trim_text_edges(p: etree._Element, leading: int, trailing: int) -> None:
             break
 
 
-# --- links --------------------------------------------------------------------
-
 def link_ranges(text: str) -> list[tuple[int, int]]:
     """Character spans of every URL in a paragraph's canonical text."""
     return [(m.start(), m.end()) for m in _URL.finditer(text)]
@@ -201,8 +195,6 @@ def style_links(p: etree._Element, style_id: str) -> int:
     return len(ranges)
 
 
-# --- new paragraphs -----------------------------------------------------------
-
 def glyph_paragraph(style_id: str, glyph: str) -> etree._Element:
     """A scene-break paragraph: the house glyph, in the scene-break style."""
     p = etree.Element(P_TAG)
@@ -213,8 +205,6 @@ def glyph_paragraph(style_id: str, glyph: str) -> etree._Element:
     set_text(text, glyph)
     return p
 
-
-# --- Google Docs artifacts ----------------------------------------------------
 
 def clean_content_controls(pkg) -> int:
     """Remove empty content controls and unwrap Google's suggestion tags.

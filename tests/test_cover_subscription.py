@@ -37,7 +37,6 @@ from docproof.cover.subscription import (SubscriptionAnthropicClient,
                                          SubscriptionUnavailable)
 
 
-# -- fixtures -----------------------------------------------------------------
 
 def _brief(**overrides) -> Brief:
     data = dict(title="The Lighthouse at Gull Point", author="J. R. Vance",

@@ -153,7 +153,6 @@ def build_glossary(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
     return g
 
 
-# --- suspected misspellings -> adjudication candidates ------------------------
 
 _WORD_BOUND = r"(?<![A-Za-z’']){}(?![A-Za-z’'])"
 
@@ -180,7 +179,6 @@ def suspects_to_candidates(glossary: Glossary,
     return cands
 
 
-# --- case drift ---------------------------------------------------------------
 
 _ARTICLES = {"the", "a", "an"}
 

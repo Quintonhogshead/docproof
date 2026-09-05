@@ -16,14 +16,8 @@ const api = async (path, options) => {
   return res.json();
 };
 
-// `api`, but survives a transient blip: a dropped connection ("Failed to fetch",
-// which fetch throws with no HTTP status) or a 502/503/504 from the edge while a
-// slow model call ran. Retried a few times with growing backoff; a real error —
-// a 400 on a bad batch — carries a status and is not retried, so it still
-// surfaces at once. `onRetry(attempt, max, err)` lets the caller say it's
-// waiting rather than stuck. This is what keeps one flaky batch of a long
-// marked-PDF read from aborting the whole thing with hundreds of edits already
-// read.
+// Retries network failures and 502/503/504 responses with backoff. Other HTTP
+// errors surface immediately; onRetry lets callers display retry progress.
 const apiRetry = async (path, options, { tries = 4, onRetry } = {}) => {
   let delay = 600;
   for (let attempt = 1; ; attempt += 1) {
@@ -55,11 +49,8 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 defaultJudgeModel: null, defaultMeaningModel: null,
                 defaultFixModel: null, defaultChapterContinuityModel: null,
                 defaultContinuityModel: null,
-                // The effort tiers served by /api/presets (id → {controls,
-                // features, sapling policy}), the currently selected tier id
-                // ('light'|'standard'|'hard'|'hammer'|'custom'|null before the
-                // first apply), and whether a Sapling key is configured — the
-                // one signal that decides Hard's Sapling and the Hammer note.
+                // Server-provided tier definitions, active tier, and Sapling
+                // availability used by tier policy.
                 presets: {}, tier: null, saplingKeyed: false,
                 // The per-run pass switches, as sent by /api/features: [{id,
                 // label, blurb, group, heavy, default}]. The live on/off state
@@ -78,11 +69,7 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 // as a job file: the manuscript preflight rejects it) until the
                 // one-button "read and apply" reads it into the edit list.
                 correctionsSource: null,
-                // How many reads of that proof (or of a typed list) are in
-                // flight. A PDF is read a batch at a time and each batch fills
-                // the edit list as it lands, so a half-read list is indistin-
-                // guishable from a finished one by its contents alone: this is
-                // what keeps Apply greyed out until the model has read them all.
+                // Counted so overlapping reads cannot enable Apply early.
                 correctionsReading: 0,
                 // And whether the last read ended in an error, which leaves a
                 // part-read list behind. Apply stays locked on that too: the
@@ -107,7 +94,6 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
 let WEB = false;
 let ME = null;
 
-// ── navigation ────────────────────────────────────────────────────────────
 
 document.querySelectorAll('.tab').forEach((tab) => {
   // A tab without a data-screen is a plain link out of the panel (Covers) —
@@ -140,7 +126,6 @@ function show(name) {
   if (name === 'admin') loadAdmin();
 }
 
-// ── what we're doing with these documents ─────────────────────────────────
 
 const kind = () => document.querySelector('input[name="kind"]:checked').value;
 const prepOutput = () =>
@@ -186,13 +171,8 @@ document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
   if (typed) typed.addEventListener('input', () => { renderKind(); renderCost(); });
 })();
 
-// Reading a marked-up PDF proof, an author's redlined Word file, or a plain
-// list into the corrections textarea. Each produces a draft edit list; the model
-// (PDF and list paths) proposes, and nothing is applied here — the applied result
-// is reviewed in the corrections report. The status card reports the read as it
-// happens, prominently. `readCorrectionsSource` and `readCorrectionsList` are
-// lifted to module scope so the one-button "read and apply" flow drives the
-// same reads as the panel buttons.
+// All corrections sources fill the same draft list; applying happens later.
+// Module-scope readers let the one-button flow reuse the panel paths.
 let readCorrectionsSource = null;
 let readCorrectionsList = null;
 (() => {
@@ -219,14 +199,8 @@ let readCorrectionsList = null;
   };
   const hideProgress = () => { if (progressEl) progressEl.hidden = true; };
 
-  // Hold the Start gate for the whole of a read. Each batch of a PDF read fills
-  // the textarea as it lands, which on its own would arm Start — and label it
-  // "Apply corrections" — over a list the model is still only part way through.
-  // Counted rather than boolean so overlapping reads can't unlock it early.
-  // A read that dies partway leaves behind exactly what it had read — useful to
-  // look at, but not a list anyone should apply: the corrections after the
-  // failure would be dropped silently. So a failure locks Apply too, until the
-  // proof is read again (or the list is taken in hand under Advanced).
+  // Keep Apply locked during overlapping or partial failed reads so an
+  // incomplete corrections list cannot be submitted.
   const duringRead = async (task) => {
     state.correctionsReading += 1;
     state.correctionsReadFailed = false;
@@ -285,13 +259,8 @@ let readCorrectionsList = null;
     summarise(body.count, body.issues, '');
   };
 
-  // Reading a marked-up PDF is two-phase: the server pulls the comments
-  // (instant, free) and hands back bounded batches; we read each batch into
-  // edits in turn, filling the textarea and climbing the bar as they land. A big
-  // proof that once hung on one silent call — and, past the model's output
-  // ceiling, truncated and lost every edit — now fills in steadily and cannot
-  // truncate. A batch that fails leaves the edits read so far in place and
-  // re-raises, so a one-button apply stops rather than applying a partial read.
+  // Read PDF comments in bounded batches to avoid output truncation. Preserve
+  // partial results for inspection, but rethrow so Apply stays locked.
   const readPdfFile = async (file) => {
     const edits = [];
     const issues = [];
@@ -434,7 +403,6 @@ async function withBusy(btn, busyLabel, task) {
   finally { btn.disabled = false; btn.textContent = label; }
 }
 
-// ── the corrections review list ─────────────────────────────────────────────
 // The edit list the run is submitted with is JSON in #corrections-input, but no
 // human reviews JSON: this renders the same list as readable rows — the text to
 // change struck through, its replacement beside it, a badge for anything that
@@ -754,7 +722,6 @@ const reasonBlocked = (f) =>
    : isPrep() ? f.prep_error : f.review_error)
   || 'cannot be used for this.';
 
-// ── dropping files ────────────────────────────────────────────────────────
 
 const zone = $('dropzone');
 const input = $('file-input');
@@ -772,7 +739,6 @@ input.addEventListener('change', () => upload([...input.files]));
   zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.remove('hot'); }));
 zone.addEventListener('drop', (e) => upload([...e.dataTransfer.files]));
 
-// ── corrections: the proof rides in the same drop ──────────────────────────
 // A corrections job is an InDesign book plus a proof — a marked-up PDF or a
 // redlined Word file. The proof is not a job file (the manuscript preflight
 // refuses tracked changes and does not read PDFs at all), so a corrections drop
@@ -955,7 +921,6 @@ function hideStaging() {
   $('staging').hidden = true;
 }
 
-// ── printable report styling ───────────────────────────────────────────────
 // Shared by the compare report below and the designer-notes report further
 // down. Both build a self-contained HTML document — DocProof header, summary
 // cards, clean tables — that opens in any browser and prints to PDF. Every
@@ -1007,7 +972,6 @@ const REPORT_CSS = `
     .card,.headline{border:1px solid #ccc}}
 `;
 
-// ── compare tracked changes ────────────────────────────────────────────────
 // Two .docx in, a diff of their tracked changes out. Independent of the review
 // flow above: its own upload endpoint (/api/compare), which — unlike
 // /api/files — accepts documents that already carry tracked changes.
@@ -1213,7 +1177,6 @@ const REPORT_CSS = `
     return card;
   }
 
-  // ── the downloadable report ───────────────────────────────────────────────
   // A self-contained HTML file built from the JSON already on screen: no second
   // upload, no server round-trip. It opens in any browser and prints to PDF, and
   // it reads as a document — a titled header, summary cards, and clean tables —
@@ -1395,7 +1358,6 @@ const REPORT_CSS = `
   }
 })();
 
-// ── Sapling grammar check (test panel) ──────────────────────────────────────
 // A standalone surface for trying Sapling.ai on a passage. It is deliberately
 // apart from the review flow: paste text, one POST to /api/sapling/check, its
 // edits back. Nothing is uploaded to a reviewer, saved, or billed through
@@ -1504,7 +1466,6 @@ const REPORT_CSS = `
     return card;
   }
 
-  // ── run a whole .docx through Sapling → tracked changes ───────────────────
   const docZone = $('sap-doc-zone');
   if (docZone) {
     const docInput = $('sap-doc-input');
@@ -1661,7 +1622,6 @@ function fileSummary(f) {
   return `${f.paragraphs} paragraphs, ${sections} to review`;
 }
 
-// ── picking sections ──────────────────────────────────────────────────────
 
 function keptFor(f) {
   if (!state.selected.has(f.id)) {
@@ -1753,7 +1713,6 @@ function selectionPayload() {
   return out;
 }
 
-// ── models and cost ───────────────────────────────────────────────────────
 
 async function loadModels() {
   const ids = usableIds().join(',');
@@ -1959,7 +1918,6 @@ if ($('continuity-only')) $('continuity-only').addEventListener('change', render
 $('rounds').addEventListener('change',
   () => { syncRounds(); renderCost(); reEvaluateTier(); });
 
-// ── passes & features ─────────────────────────────────────────────────────
 // The submission panel's switches, one per togglable pass, grouped and each
 // opening at what the pipeline does today (the server sends that as `default`).
 // The catalogue is the server's — this only renders it — so the panel can never
@@ -2284,7 +2242,6 @@ function collectCategoryKnobs() {
 }
 
 
-// ── reasoning effort ──────────────────────────────────────────────────────
 // A 1-based slider over these, cheapest → deepest, mirroring EFFORT_LEVELS on
 // the server. Low is the shipped default: grammar detection is precise, so a
 // low setting is both cheaper and no less accurate.
@@ -2335,7 +2292,6 @@ $('effort').addEventListener('change', () => {
 });
 renderEffort();
 
-// ── dark-mode toggle ───────────────────────────────────────────────────────
 // The <head> already applied any saved theme before paint; here we only sync
 // the switch to what's in effect and persist the user's choice. With no saved
 // value the OS preference decides, so the switch reflects that via matchMedia.
@@ -2394,15 +2350,8 @@ function bookTokensFor(f) {
   return (f.chunks || []).reduce((n, c) => n + c.est_tokens, 0);
 }
 
-// The extra batched cost the per-category knobs add to one file, over the flat
-// per-pass base priceReview already charged. For each category the user tuned,
-// its (reads, chunk size) is compared against the shipped default and only the
-// difference is billed: extra reads resend `keptTok` input and `keptCount`
-// requests; a smaller chunk multiplies that category's requests by
-// default÷chunk (the same text, split finer). A category left at its defaults —
-// and an untouched panel ({} or undefined) — contributes 0, so the base is
-// unchanged until a knob is actually moved. `knobs` is collectCategoryKnobs()'s
-// {category_id: {passes?, token_budget?}} map.
+// Prices only each category's delta from default reads and chunk size. Extra
+// reads add input; smaller chunks add requests over the same text.
 function categoryKnobCost(knobs, keptTok, keptCount, m, effort, outFactor) {
   if (!knobs || !keptCount) return 0;
   const byId = {};
@@ -2429,20 +2378,9 @@ function categoryKnobCost(knobs, keptTok, keptCount, m, effort, outFactor) {
       * effortFactor(m, effort) * outFactor) / 1e6;
 }
 
-// The review estimate. Pure over an explicit settings bundle plus the staged
-// files, so the same arithmetic prices the live controls (via bundleFromControls)
-// and each effort-tier chip (via priceBundle) — one code path, no drift. The
-// per-chunk detector passes and the rewrite retype ride the overnight batch (its
-// discount); the whole-book reads, the confirm calls, the meaning/fix gates and
-// the between-round judge are synchronous — full price in both columns. `approx`
-// is set when a pass whose size the book decides (rewrite, LanguageTool, the
-// gates, extra rounds) is on, so the panel can say the figure is rough.
-//
-// bundle: { model:<model object>, effort, glossary_model, rounds, judge_model,
-//   meaning_model, fix_model, features:{id:bool,...}, continuity_only,
-//   min_confidence, mode }.  files: filesToRun() with each file's kept Set
-//   resolved (see stagedReviewFiles).  min_confidence is carried but never
-//   priced — confidence does not move the estimate.
+// Shared estimator for live controls and tier chips. Detector/rewrite work gets
+// batch pricing; whole-book reads and gates remain synchronous. `approx` marks
+// passes whose size depends on manuscript findings.
 function priceReview(bundle, files) {
   const m = bundle.model;
   if (!m) return { now: null, batch: null, approx: false };
@@ -2629,7 +2567,6 @@ function stagedReviewFiles() {
   return filesToRun().map((f) => ({ ...f, kept: keptFor(f) }));
 }
 
-// ── effort tiers ────────────────────────────────────────────────────────────
 // A tier is a client-side macro over the controls above: selecting one sets the
 // reviewer, effort, glossary, rounds, the judge/meaning/fix pickers and the pass
 // switches to a bundle served by /api/presets, then reprices. Any later manual
@@ -3203,7 +3140,6 @@ function correctionsHint() {
   }
 }
 
-// ── starting a review ─────────────────────────────────────────────────────
 
 $('schedule-on').addEventListener('change', () => {
   $('schedule-at').disabled = !$('schedule-on').checked;
@@ -3394,7 +3330,6 @@ function fail(message) {
   box.scrollIntoView({ block: 'nearest' });
 }
 
-// ── jobs ──────────────────────────────────────────────────────────────────
 
 // Re-judging a finished review: which gates to run, and which model reads for
 // each. It opens on the card the review is already on, because that is what it
@@ -3633,11 +3568,8 @@ const STAGE_FLOW = [
   { id: 'writing', label: 'Writing your document',
     quip: 'Folding every accepted change back in and packaging up your files.' },
 ];
-// Corrections walks its own short pipeline — no detector, no rounds — and,
-// with the two model passes switched on, the middle of it is minutes of
-// frontier reads. Same shape as the review flow so the tracker renders it
-// unchanged: ids match the stages apply_corrections emits (see CORR_STAGE in
-// app/jobs.py), `optional` ones appear only when the job asked for them.
+// Correction ids match apply_corrections stages; optional steps appear only
+// when requested, using the same tracker shape as reviews.
 const CORRECTIONS_FLOW = [
   { id: 'reading', label: 'Reading the corrections list',
     quip: 'Parsing every correction and working out exactly what each one asks '
@@ -3684,13 +3616,8 @@ const REJUDGE_FLOW = [
         + 'your meaning and whether the fix is right.' },
 ];
 
-// Which of the steps this particular job will run, in order. The always-on ones
-// stay; an optional one is kept only when the job's toggles ask for it, so the
-// tracker doesn't promise a pass that never fires. The current stage is always
-// kept, even if a toggle says otherwise, so the tracker can never lose its
-// place — and that clause alone is what admits the stages no switch backs
-// (round_judge, verify, low_confidence): they surface while running and are
-// never promised in advance.
+// Keep required and enabled optional steps. Always retain the current stage so
+// unswitched phases can surface while running without being promised early.
 function stageFlowFor(job) {
   if (job.stage === 'judging') return REJUDGE_FLOW;
   if (job.kind === 'corrections') {
@@ -3717,12 +3644,7 @@ function stageFlowFor(job) {
   });
 }
 
-// A review shows the step tracker while it is actively working through the
-// pipeline: a sync run (state "running"), the "preparing" read that comes just
-// before it (still "queued"), or a batch run collecting — collect re-walks the
-// same steps (re-ingest, fold, the whole-book passes, writing), and is the
-// stretch that used to read as one long "almost done". Prep and promo have
-// their own single-step lives and set no stage, so they never show one.
+// Track staged review/corrections work while queued, running, or collecting.
 function tracksStages(job) {
   return ['review', 'corrections'].includes(job.kind) && !!job.stage
     && stageFlowFor(job).some((s) => s.id === job.stage)
@@ -4680,19 +4602,6 @@ async function openCorrectionsReport(job) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
-// ── resolving flagged corrections in place ─────────────────────────────────
-// The fix screen: every flag the run left for a person, dealt with without
-// leaving the app. Each card offers, in order of least effort: the model's own
-// suggestion (stored advice applies in one click; any flag can ask for one and
-// accept the highlighted preview), the concrete placements the change could
-// land on (one click each), the line itself opened for hand-editing (bold,
-// italics, section breaks, the proposed change pre-applied and highlighted),
-// and a box to type a decision for the model to carry out. "Ignore" sets a
-// flag aside, recorded and reversible. The applied corrections are reviewable
-// and editable in their own section, recorded as touch-ups. Every action edits
-// the corrected IDML on the server in place; the bar at the top hands the file
-// back.
-
 $('fix-back').addEventListener('click', () => show('jobs'));
 
 const FIX_STATUS = {
@@ -4879,12 +4788,8 @@ function updateFixProgress(data) {
       : 'No flags — every correction below applied.';
 }
 
-// Swap one flag's card for a freshly-rendered one, in place — the queue entry is
-// already updated — and refresh the progress line, without tearing the whole list
-// down. This keeps the page where the editor left it (no jump to the top) and
-// lets several flags be resolved in rapid succession, each card working and
-// settling on its own without disturbing the others. Falls back to a full render
-// only when the card is no longer on the page.
+// Replace one card in place to preserve scroll position; fall back to a full
+// render if its card or queue entry is gone.
 function replaceFixCard(job, data, item, card) {
   const i = (data.queue || []).findIndex((q) => q.id === item.id);
   if (!card || !card.isConnected || i < 0) {
@@ -4916,14 +4821,8 @@ async function fixResolve(job, data, item, body, onError, card) {
   }
 }
 
-// The run-level agent: a conversation about the whole book, not one flag. The
-// designer brings a fresh request ("make every 'grey' British-spelled", "check
-// the captain is always 'sir'") and the model works it out against the book —
-// searching, proposing exact edits, raising notes. Nothing is written until the
-// designer accepts a proposal, and every accept goes through the same
-// deterministic placement a clicked option does, so the agent only ever
-// proposes. The thread, its pending proposals, and its notes live in the report,
-// so a reload picks the conversation up where it was left.
+// The run-level agent only proposes whole-book edits; accepted proposals use
+// deterministic placement. Persist the thread and proposals in the report.
 function fixAgentPanel(job, data) {
   const panel = document.createElement('details');
   panel.className = 'fix-agent';
@@ -5557,7 +5456,6 @@ function fixRedline(before, after, format) {
   return rl;
 }
 
-// ── the manual editor ──────────────────────────────────────────────────────
 // The line itself, opened in place of its card or row: edit the words
 // directly, bold or italicize a selection, tick a section break on or off,
 // and Save writes exactly that into the corrected IDML. Opened from a
@@ -6349,7 +6247,6 @@ function correctionsReportHTML(d) {
     + '</div></body></html>';
 }
 
-// ── the report ────────────────────────────────────────────────────────────
 
 $('report-back').addEventListener('click', () => show('jobs'));
 
@@ -6547,7 +6444,6 @@ function addAside(parent, title, findings, blurb) {
   parent.append(box);
 }
 
-// ── the prep notes ────────────────────────────────────────────────────────
 
 async function openPrepReport(job) {
   show('report');
@@ -6678,13 +6574,11 @@ function bodyRow(cells) {
   return tr;
 }
 
-// ── spending ──────────────────────────────────────────────────────────────
 
 const money = (v) => (typeof v !== 'number' ? '—'
   : v === 0 ? '$0.00' : v < 0.01 ? '<$0.01' : `$${v.toFixed(2)}`);
 const count = (v) => (v || 0).toLocaleString();
 
-// ── promo ───────────────────────────────────────────────────────────────────
 //
 // A new page, but the same two ideas as everywhere else: drop a manuscript and
 // watch a job, and a settings form for the automatic pipeline. The copy a run
@@ -7117,7 +7011,6 @@ async function savePlanSettings() {
   } catch (e) { status.textContent = e.message; }
 }
 
-// ── marketing plan ───────────────────────────────────────────────────────────
 //
 // The plan card on the Promo tab: the same stage-then-price-then-run shape as
 // the copy card, plus the operator-typed metadata the plan takes. The jobs it
@@ -7371,7 +7264,6 @@ function renderMonths(months) {
   });
 }
 
-// ── prompts ───────────────────────────────────────────────────────────────
 
 async function loadPrompts() {
   const list = $('prompt-list');
@@ -7467,7 +7359,6 @@ function promptCard(t) {
   return card;
 }
 
-// ── DocWatch ──────────────────────────────────────────────────────────────
 
 async function loadWatch({ quiet = false } = {}) {
   const body = await api('/api/watch');
@@ -7796,7 +7687,6 @@ function renderWatchFiles(files) {
   applyWatchFilesFilter();
 }
 
-// ── proofing (Galley) ───────────────────────────────────────────────────────
 //
 // Two read-only lists under the proofing settings, both read straight off the
 // watch status: which books an external practitioner is holding, and how the
@@ -8226,7 +8116,6 @@ $('watch-schedule-save').addEventListener('click', async () => {
   }
 });
 
-// ── settings ──────────────────────────────────────────────────────────────
 
 async function loadSettings() {
   const { settings, keys } = await api('/api/settings');
@@ -8298,7 +8187,6 @@ document.querySelectorAll('[data-test]').forEach((button) => {
   });
 });
 
-// ── a newer version is ready ──────────────────────────────────────────────
 
 // Asked once, quietly, at launch — and only when this is a packaged build,
 // because the source has nothing to install over. Failure of any kind is
@@ -8365,7 +8253,6 @@ $('update-now').addEventListener('click', async () => {
   }
 });
 
-// ── which build this is ───────────────────────────────────────────────────
 
 // A build is identified by more than its version number: two .apps can both
 // say 0.1.0 and be a month apart, and the commit is what tells them apart.
@@ -8472,7 +8359,6 @@ $('version-download').addEventListener('click', async () => {
   }
 });
 
-// ── the house style guide ─────────────────────────────────────────────────
 
 // Shown in Settings, and named on the drop screen, because which style set is
 // in force is the single most important thing about a prep run.
@@ -8716,7 +8602,6 @@ $('sheet-save').addEventListener('click', async () => {
   }
 });
 
-// ── boot ──────────────────────────────────────────────────────────────────
 
 // The drop zone advertises whatever the server can actually read, so adding a
 // format server-side never leaves the front door describing the old list.
@@ -8800,7 +8685,6 @@ async function applyDefaults() {
   setEffort(settings.effort || 'low');
 }
 
-// ── sign-in and mode (web build) ───────────────────────────────────────────
 
 async function resolveSession() {
   // /api/me is a web-only route: 200 signed in, 401 signed out, and — in the
@@ -8945,7 +8829,6 @@ async function boot() {
   startApp();
 }
 
-// ── God Mode ────────────────────────────────────────────────────────────────
 
 $('logout').addEventListener('click', async () => {
   try { await api('/api/logout', { method: 'POST' }); } catch (_) {}
@@ -9162,7 +9045,6 @@ $('admin-restore').addEventListener('click', async () => {
   }
 });
 
-// -- house style guide (prep tags manuscripts into it) ------------------------
 
 async function loadHouseStyle() {
   if (!WEB || !ME || !ME.is_admin) return;
@@ -9227,7 +9109,6 @@ $('admin-sheet-reset').addEventListener('click', async () => {
   }
 });
 
-// -- house InDesign template (prep flows manuscripts into it) -----------------
 
 async function loadHouseTemplate() {
   if (!WEB || !ME || !ME.is_admin) return;
@@ -9347,8 +9228,6 @@ async function loadAdmin() {
   loadHouseTemplate();
 }
 
-// ═══ Automations: the workflow registry ═══════════════════════════════════
-//
 // The Automations tab is a scalable list of "trigger → effect" workflows, not a
 // wall of cards: one row per workflow, a click opens its config drawer, and the
 // list stays scannable as the count grows toward dozens. Today's rows are seeded

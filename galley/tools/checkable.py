@@ -46,9 +46,6 @@ def _parse_iso(date_str: str) -> date:
         raise ValueError(f"not a real calendar date: {date_str!r} ({exc})") from exc
 
 
-# --------------------------------------------------------------------------- #
-# weekday_of
-# --------------------------------------------------------------------------- #
 
 
 @dataclass(frozen=True)
@@ -85,9 +82,6 @@ def weekday_of(date_str: str, claimed: str | None = None) -> WeekdayResult:
     return WeekdayResult(date=d.isoformat(), weekday=name, claimed=claimed, ok=ok)
 
 
-# --------------------------------------------------------------------------- #
-# age_at
-# --------------------------------------------------------------------------- #
 
 
 @dataclass(frozen=True)
@@ -124,9 +118,6 @@ def age_at(birth: str, event: str, claimed: int | None = None) -> AgeResult:
     )
 
 
-# --------------------------------------------------------------------------- #
-# sum_check
-# --------------------------------------------------------------------------- #
 
 
 @dataclass(frozen=True)
@@ -168,9 +159,6 @@ def sum_check(
     )
 
 
-# --------------------------------------------------------------------------- #
-# miles_km_check  (unit-consistency helper)
-# --------------------------------------------------------------------------- #
 
 
 @dataclass(frozen=True)
@@ -220,9 +208,6 @@ def miles_km_check(
     )
 
 
-# --------------------------------------------------------------------------- #
-# ordinal
-# --------------------------------------------------------------------------- #
 
 
 def ordinal(n: int) -> str:
@@ -243,9 +228,6 @@ def ordinal(n: int) -> str:
     return f"{n}{suffix}"
 
 
-# --------------------------------------------------------------------------- #
-# weekday_the_nth  (combined calendar + ordinal claim)
-# --------------------------------------------------------------------------- #
 
 
 @dataclass(frozen=True)
@@ -289,9 +271,6 @@ def weekday_the_nth(date_str: str, claimed_weekday: str, claimed_day: int) -> We
     )
 
 
-# --------------------------------------------------------------------------- #
-# Registry
-# --------------------------------------------------------------------------- #
 
 TOOLS: "dict[str, Callable]" = {
     "weekday_of": weekday_of,

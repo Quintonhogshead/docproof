@@ -128,7 +128,6 @@ def config_path() -> Path:
     return resource_root() / "config" / "default.yaml"
 
 
-# --- the slots ----------------------------------------------------------------
 
 def collect_finished(token: str, ws: WatchSettings, listing: list[DriveFile],
                      state: WatchState, store: JobStore, *, opener,
@@ -322,7 +321,6 @@ def _gate_hubspot(hs_token: str, ws: WatchSettings, todo: list[DriveFile],
     return eligible
 
 
-# --- promo --------------------------------------------------------------------
 
 def run_promo(token: str, home: Path, ws: WatchSettings,
               listing: list[DriveFile], state: WatchState, runner: JobRunner,
@@ -534,7 +532,6 @@ def _finish_hubspot_promo(hs_token: str | None, ws: WatchSettings,
     state.record(rec)
 
 
-# --- marketing plan -----------------------------------------------------------
 
 def run_plans(token: str, home: Path, ws: WatchSettings,
               listing: list[DriveFile], state: WatchState, runner: JobRunner,
@@ -752,7 +749,6 @@ def _finish_hubspot_plan(hs_token: str | None, ws: WatchSettings,
     state.record(rec)
 
 
-# --- proofing (Galley) --------------------------------------------------------
 # Proofing reads Book 1, runs in app or external mode, then delivers Book 2.
 # Either verdict moves the book off "Ready for Proofing"; needs_human also
 # includes the reason in the needs-a-person report.
@@ -1561,7 +1557,6 @@ def _refuse(token: str, ws: WatchSettings, file: DriveFile, job: Job, rec,
     report.failed.append((file.name, reason))
 
 
-# --- one pass -----------------------------------------------------------------
 
 def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
          mock: bool = False, opener=None, get_key=None) -> TickReport:

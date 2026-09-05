@@ -86,7 +86,6 @@ def build_info(*, runner=subprocess.run) -> dict:
     }
 
 
-# --- releases -----------------------------------------------------------------
 
 def _open_url(request: urllib.request.Request, timeout: int = 30):
     """The one place this module touches the network. Passed in by every

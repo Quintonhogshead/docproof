@@ -148,7 +148,6 @@ def register(app: FastAPI) -> None:
             raise HTTPException(404, "This run has no promo copy yet.")
         return PromoResult.model_validate(json.loads(path.read_text("utf-8")))
 
-    # --- manual runs ----------------------------------------------------------
 
     @app.post("/api/promo/run")
     def run_promo(req: PromoRunRequest,
@@ -339,7 +338,6 @@ def register(app: FastAPI) -> None:
             raise HTTPException(404, f"{name} is missing.")
         return FileResponse(path, filename=path.name)
 
-    # --- watch pipeline settings ----------------------------------------------
 
     @app.get("/api/promo/settings")
     def read_settings() -> dict:
@@ -373,7 +371,6 @@ def register(app: FastAPI) -> None:
                 "fallback_model": ws.model,
                 "hubspot_enabled": ws.hubspot_enabled}
 
-    # --- automated marketing-plan settings ------------------------------------
 
     _EFFORTS = ("low", "medium", "high", "xhigh", "max")
 

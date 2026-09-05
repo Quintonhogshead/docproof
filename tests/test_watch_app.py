@@ -248,7 +248,6 @@ def test_the_archive_can_be_set_up_from_the_panel(client):
     assert ws.archive_enabled is True
     assert ws.archive_folder_id == "ARCH1234567"   # parsed out of the address
     assert ws.archive_include_source is False
-    # And the panel reads the settings back for the page to show.
     assert body["watch"]["archive_enabled"] is True
     assert body["watch"]["archive_folder_id"] == "ARCH1234567"
 

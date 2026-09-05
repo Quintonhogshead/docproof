@@ -87,7 +87,6 @@ class Governor:
         ledger.caps = caps.to_json()
         self._recompute_from_ledger()
 
-    # ---- reconstruction ------------------------------------------------
 
     @classmethod
     def from_ledger(cls, ledger: BudgetLedger) -> "Governor":
@@ -121,7 +120,6 @@ class Governor:
                     or per_wave[c.wave] > self._caps.per_wave_usd):
                 self._overruns.append(c)
 
-    # ---- spend predicate & choke point ---------------------------------
 
     def can_spend(self, action_cost: float) -> bool:
         """Would charging ``action_cost`` stay within BOTH the per-wave and
@@ -162,7 +160,6 @@ class Governor:
         self._wave_spent += cost
         return self._ledger.charge(label, cost, wave=self._current_wave)
 
-    # ---- wave accounting -----------------------------------------------
 
     def open_wave(self) -> int:
         """Open the next wave: reset the per-wave counter, bump the wave number.
@@ -188,7 +185,6 @@ class Governor:
     def can_open_wave(self) -> bool:
         return self._waves_opened < self._caps.max_waves
 
-    # ---- panel-call accounting -----------------------------------------
 
     def can_escalate(self) -> bool:
         """Is there a panel call left under ``max_panel_calls``?"""
@@ -213,7 +209,6 @@ class Governor:
         self._panel_calls += 1
         return self.charge(cost, PANEL_LABEL_PREFIX + label)
 
-    # ---- stop rule -----------------------------------------------------
 
     def should_stop(
         self, marginal_cost_per_validated_finding: float, threshold: float
@@ -229,7 +224,6 @@ class Governor:
             return True
         return False
 
-    # ---- exposed totals ------------------------------------------------
 
     @property
     def ledger(self) -> BudgetLedger:

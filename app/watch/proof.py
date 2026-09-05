@@ -57,7 +57,6 @@ class Verdict:
         return self.outcome == "done"
 
 
-# --- reading it ---------------------------------------------------------------
 
 def budget_for(ws: WatchSettings) -> float:
     """What one book may cost: the configured budget, or its tier's default."""
@@ -138,7 +137,6 @@ def assess(job: Job, *, done_value: str,
     return Verdict(outcome.outcome, outcome.reason, path)
 
 
-# --- the hand-off names -------------------------------------------------------
 
 def hand_off_names(source_name: str) -> dict[str, str]:
     """Return artifact names by role, preserving Book 1/Book One spelling in
@@ -193,7 +191,6 @@ def _reviewed_docx(out: Path) -> Path | None:
     return None
 
 
-# --- reading a verdict back out of the folder ---------------------------------
 
 def outcome_in_folder(listing: list[DriveFile], source_name: str
                       ) -> DriveFile | None:
@@ -235,7 +232,6 @@ def read_outcome(token: str, file: DriveFile, *, opener=drive._open_url
     return Verdict(outcome, str(payload.get("reason", "")).strip())
 
 
-# --- putting it back ----------------------------------------------------------
 
 def upload_outputs(token: str, file: DriveFile, job: Job, ws: WatchSettings,
                    rec: FileRecord, state: WatchState,

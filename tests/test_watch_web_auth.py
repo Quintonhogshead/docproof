@@ -120,7 +120,6 @@ def test_the_callback_keeps_the_token_and_sends_the_browser_back(tmp_path,
     assert os.environ[GOOGLE_ENV] == "refresh-token-xyz"
     # Single-use: the pending sign-in is spent.
     assert app.state.watch_auth is None
-    # And the panel now says it is signed in.
     assert boss.get("/api/watch").json()["watch"]["signed_in"] is True
 
 

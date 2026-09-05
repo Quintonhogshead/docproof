@@ -81,7 +81,6 @@ log = logging.getLogger("docproof.flights")
 # the JSON envelope. See the module docstring for why it rides error_type.
 LANE = "copyedit"
 
-# --- lens prompts ---------------------------------------------------------
 
 LENSES = ("economy", "word_choice", "flow", "clarity", "rhythm", "repetition")
 
@@ -167,7 +166,6 @@ def lens_system(name: str) -> str:
     return f"{COMMON_HEADER}\n\n{brief}\n\n{COMMON_FOOTER}"
 
 
-# --- judge postures --------------------------------------------------------
 
 # Both postures share the same four hard vetoes — meaning/emphasis, voice,
 # deliberate fragment/rhetorical repetition, lateral-swap — because those are
@@ -248,7 +246,6 @@ DEFAULT_POSTURE = "strict"
 _CONF_RANK = {"low": 0, "medium": 1, "high": 2}
 
 
-# --- data shapes -------------------------------------------------------------
 
 @dataclass(frozen=True)
 class Proposal:
@@ -350,7 +347,6 @@ class _Props(BaseModel):
     suggestions: list[_Prop]
 
 
-# --- propose -----------------------------------------------------------------
 
 _PROPOSE_CHARS = 12_000
 _PROPOSE_MAX_PARAS = 60
@@ -401,7 +397,7 @@ def propose_flight(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
     if not windows:
         return [], 0, 0, 0
     system = lens_system(lens)
-    schema = strict_json_schema(_Props)   # deep-copies; hoist off the pool
+    schema = strict_json_schema(_Props)
 
     def fetch(window):
         body = "\n".join(f'<paragraph id="{p.para_id}">{p.text}</paragraph>'
@@ -445,28 +441,9 @@ def propose_flight(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
     return cands, dropped, len(windows), windows_failed
 
 
-# --- deterministic guards: malformed spans, editorial notes, fact changes ----
-#
-# Three production failures on Redding Book 1 (2026-09-01) are what these
-# exist for, and each one is cheap to catch deterministically and expensive to
-# catch any other way:
-#
-#   MALFORMED   quote "It made me really stop and think about how…" with
-#               replacement "stop and think about how…" — the replacement does
-#               not cover the span it quotes, so applying it deleted the start
-#               of the sentence and left a lowercase fragment. The model meant
-#               "change the head of this span"; it wrote "replace all of it".
-#   NOTE        replacement "eighteen-year-old girl (spell out and hyphenate)"
-#               — the model addressed the EDITOR inside the text, and the note
-#               shipped into the manuscript.
-#   FACT        the lenient judge accepted "one 12 minute talk" -> "one
-#               twenty-one-minute talk", "False Expectations Appearing Real" ->
-#               "False Evidence Appearing Real", "my friend's luck" -> "Ava's
-#               luck". These are not taste calls at all: a copy editor asks.
-#
-# The first two drop (or repair) BEFORE the paid judge; the third demotes an
-# accepted verdict to a query, because the judge already proved it cannot be
-# trusted to hold this line.
+# Deterministic guards reject malformed replacements and strip editorial notes
+# before the paid judge. Proposed factual changes are demoted to queries because
+# they require an editor's decision.
 
 # A replacement carrying a parenthetical instruction to the editor, or a
 # dash-led marginal note appended after the actual replacement text.
@@ -630,11 +607,11 @@ def fact_change(original: str, replacement: str) -> str | None:
         word = m.group(0)
         core = re.sub(r"['’]s$", "", word)
         if core == "I" or not core:
-            continue                       # a pronoun, not a proper noun
+            continue
         if lead_is_capital and not replacement[:m.start()].strip(_LEADING_MARKS):
-            continue                       # sentence-initial: forced capital
+            continue
         if core in original or core.lower() in o_words:
-            continue                       # present already, or merely re-cased
+            continue
         return f'proper noun "{core}" not in the original'
     return None
 
@@ -664,7 +641,6 @@ class DropCounts:
         return {"total": self.total, "reasons": dict(self.reasons),
                 "notes_stripped": self.stripped}
 
-    # -- int-alike surface (see the class docstring) --------------------------
     def __int__(self) -> int: return self.total
     def __index__(self) -> int: return self.total
     def __eq__(self, other: Any) -> bool:
@@ -744,11 +720,11 @@ def site_and_filter(raw: Sequence[tuple[str, str, str, str]],
         original = text[start:end]
         replacement, had_note = strip_editorial_note(replacement)
         if had_note:
-            if not replacement.strip():         # the note WAS the replacement
+            if not replacement.strip():
                 drop("editorial_note")
                 continue
             stripped += 1
-        if replacement == original:                 # a no-op suggestion
+        if replacement == original:
             drop("no_op")
             continue
         malformed = malformed_reason(text, start, original, replacement)
@@ -844,7 +820,6 @@ def propose_flights(paragraphs: Sequence[ParagraphRef], provider_of: Callable[[s
     return out
 
 
-# --- cluster -------------------------------------------------------------
 
 def _sentence_of(text: str, start: int, end: int) -> str:
     window, _lo, _occ = sentence_window(text, start, end)
@@ -891,7 +866,6 @@ def cluster_proposals(by_flight: dict[str, list[Proposal]],
     return clusters
 
 
-# --- judge -----------------------------------------------------------------
 
 def judge_cluster(cluster: Cluster, provider: Provider, *, model: str,
                   system: str, usage: Usage, schema: dict[str, Any],
@@ -926,7 +900,7 @@ def judge_clusters(clusters: Sequence[Cluster], provider: Provider, *,
     lane's cost, so cluster count (not model choice) is the cost knob. Results
     are returned index-aligned with `clusters`."""
     system = POSTURES.get(posture, STRICT_JUDGE_SYSTEM)
-    schema = strict_json_schema(_Verdict)   # deep-copies; hoist off the pool
+    schema = strict_json_schema(_Verdict)
     verdicts: list[_Verdict | None] = [None] * len(clusters)
     if not clusters:
         return verdicts
@@ -984,7 +958,6 @@ def accept(clusters: Sequence[Cluster], verdicts: Sequence[_Verdict | None],
     return out, counts
 
 
-# --- findings ----------------------------------------------------------------
 
 def findings_from_accepted(accepted: Sequence[tuple[Cluster, "_Verdict"]],
                            ids, *, chunk_id: str = "flights") -> list[Finding]:
@@ -1068,7 +1041,6 @@ def finding_to_json(f: Finding) -> dict[str, Any]:
     return d
 
 
-# --- cost projection -------------------------------------------------------
 
 def project_cost(words: int, flights: Sequence[FlightSpec], judge_model: str,
                  *, propose_max_tokens: int = 8000, judge_max_tokens: int = 1200,

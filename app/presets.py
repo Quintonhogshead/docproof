@@ -42,7 +42,6 @@ class TierPreset:
     name: str
     blurb: str
 
-    # --- scalar per-run controls (map 1:1 onto JobRequest fields) ---
     model: str                        # -> JobRequest.model   (the reviewer)
     effort: str                       # -> JobRequest.effort  (one of EFFORT_LEVELS)
     glossary_model: str               # -> JobRequest.glossary_model (catalog id or "off")
@@ -53,7 +52,6 @@ class TierPreset:
     meaning_model: str | None = None  # -> JobRequest.meaning_model (None => server default)
     fix_model: str | None = None      # -> JobRequest.fix_model     (None => server default)
 
-    # --- the six always-boolean pass toggles (sapling handled separately) ---
     storysheet: bool = False
     continuity: bool = False
     rewrite: bool = False
@@ -62,7 +60,6 @@ class TierPreset:
     fix_check: bool = False
     candidate_screening: bool = False
 
-    # --- the one key-dependent toggle ---
     # "off"      never runs Sapling.
     # "if_keyed" runs it only when a Sapling key is configured, and the client's
     #            estimate reflects it only then.

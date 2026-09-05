@@ -47,7 +47,6 @@ class Artifact:
     mime: str
 
 
-# --- generating it ------------------------------------------------------------
 
 def make_job(local: Path, ws: WatchSettings) -> Job:
     """A promo job for this manuscript. `approval` starts where the toggle says:
@@ -105,7 +104,6 @@ def _run_mock(runner: JobRunner, store: JobStore, job: Job) -> None:
                  verified=not outputs.unverified)
 
 
-# --- putting it back ----------------------------------------------------------
 
 def artifacts(job: Job) -> list[Artifact]:
     """The two documents that belong in the folder: the teaser and the posts.

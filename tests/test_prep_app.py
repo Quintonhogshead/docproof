@@ -136,7 +136,6 @@ def test_the_book_output_writes_the_reading_copy(client):
     assert "book_googledoc.docx" in r.headers["content-disposition"]
     # The generic "open it" button resolves to the book copy too.
     assert client.get(f"/api/jobs/{job['id']}/file/document").status_code == 200
-    # And the notes screen reports the book deliverable present.
     notes = client.get(f"/api/jobs/{job['id']}/prep").json()
     assert notes["files"]["book"] is True
 

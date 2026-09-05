@@ -241,7 +241,6 @@ def field_in_settings_file(paths: Paths, name: str) -> bool:
     return isinstance(data, dict) and name in data
 
 
-# --- API keys -----------------------------------------------------------------
 
 def get_api_key(provider: str) -> str | None:
     env = os.environ.get(ENV_VARS.get(provider, ""))

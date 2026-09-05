@@ -74,7 +74,6 @@ log = logging.getLogger("docproof.tensecheck")
 # furniture; tables are data; headings are excluded by `reviewable` already.
 _NARRATION_LOCATIONS = ("body", "footnote", "endnote", "textbox")
 
-# --- dialogue stripping ----------------------------------------------------
 #
 # Order matters: curly double pairs, then an unclosed curly opener to end of
 # paragraph, then the same two steps for straight doubles, then single-curly
@@ -96,7 +95,6 @@ def _strip_dialogue(text: str) -> str:
     return text
 
 
-# --- tense signals ---------------------------------------------------------
 #
 # Counting is done over lowercased narration tokens, so a sentence-initial
 # "Is" or "Walked" still counts — capitalization carries no tense information.

@@ -75,7 +75,6 @@ class IdmlPackage(ZipPackage):
         return self.tree(part).find(STORY)
 
 
-# --- the canonical text contract ---------------------------------------------
 
 @dataclass(frozen=True)
 class WalkedParagraph:

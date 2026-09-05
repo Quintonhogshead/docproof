@@ -173,7 +173,6 @@ class WatchState:
         os.replace(staging, self.path)
 
 
-# --- when it last looked ------------------------------------------------------
 #
 # One timestamp, in its own small file, because two clocks now ask for it: the
 # launchd agent runs whether or not the app is open, and a timer inside the app

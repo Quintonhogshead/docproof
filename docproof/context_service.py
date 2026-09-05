@@ -10,9 +10,9 @@ from .site_models import ExaminationSite
 
 _SENTENCE_END = re.compile(r"[.!?][\"'”’\)\]]*\s+")
 
-# Recipes ContextService can actually assemble today. A candidate requesting
+# Recipes ContextService can assemble. A candidate requesting
 # anything outside this set has insufficient context and must not be screened as
-# if it were fully contextualized (P3-02).
+# if it were fully contextualized.
 SUPPORTED_RECIPES = frozenset({
     "current sentence", "current paragraph", "previous paragraph",
     "next paragraph", "heading hierarchy",

@@ -20,7 +20,6 @@ from docproof.canvas.model import (DOC_VERSION, ArtLayer, CanvasDoc, Effect,
                                    Stop, TextLayer, Warp, Wrap, load_doc,
                                    new_layer_id, parse_layer, save_doc)
 
-# -- fixtures -----------------------------------------------------------------
 
 def _frame(**overrides) -> Frame:
     data = dict(x=0.5, y=0.5, w=0.8, h=0.2)

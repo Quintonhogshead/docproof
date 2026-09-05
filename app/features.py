@@ -77,7 +77,6 @@ class FeatureSpec:
 
 
 FEATURES: tuple[FeatureSpec, ...] = (
-    # -- extra reads and passes, off by default: recall for cost --------------
     FeatureSpec(
         "storysheet", "Story sheet — tense & pronoun context",
         "One whole-book read that tells the page-by-page pass the story's tense, "
@@ -208,7 +207,6 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "the clauses won't carry. Anything it won't vouch for becomes a margin "
         "question instead of a silent change.",
         "pass", ("fix_check", "enabled"), heavy=True),
-    # -- passes on by default: cheap, local-ish, here so they can be turned off -
     FeatureSpec(
         "adjudicate", "Real-word typo adjudication",
         "Finds real-word typos the plain passes glide over (a “staired” "
@@ -239,7 +237,6 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "spell-out rule ends the run applied everywhere or visibly waived, "
         "never just mostly. Free: no API call.",
         "pass", ("residuals", "enabled")),
-    # -- what the run writes ---------------------------------------------------
     FeatureSpec(
         "comments", "Explain applied edits in the margin",
         "A margin comment beside each tracked change, saying why it was made. "
@@ -290,7 +287,6 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "normalize_spaces", "Collapse double spaces",
         "Collapse runs of two or more spaces to one before the review. Silent "
         "and not tracked.", "output", ("normalize", "spaces")),
-    # -- safety nets: on, and here with a warning because off is a real risk ---
     FeatureSpec(
         "edit_guard", "Overstep guard",
         "Reject any single “fix” that rewrites too large a span or adds "

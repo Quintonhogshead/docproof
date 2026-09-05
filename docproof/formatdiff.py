@@ -49,7 +49,6 @@ STYLES_PART = "word/styles.xml"
 _FALLBACK_STYLE = "Normal"
 
 
-# --- reading the style each paragraph carries --------------------------------
 
 def _style_index(pkg: DocxPackage) -> tuple[dict[str, str], str | None]:
     """(styleId -> style name, default paragraph-style name) from styles.xml.
@@ -110,7 +109,6 @@ def extract_styles(pkg: DocxPackage) -> DocStyles:
     return DocStyles(base=base, style=style)
 
 
-# --- comparison --------------------------------------------------------------
 
 @dataclass(frozen=True)
 class ParaStyle:
@@ -197,7 +195,6 @@ def compare_files(path_a: str | Path, path_b: str | Path, *,
                           label_a=label_a, label_b=label_b)
 
 
-# --- rendering ---------------------------------------------------------------
 
 def _snippet(text: str, limit: int = 120) -> str:
     text = " ".join(text.split())

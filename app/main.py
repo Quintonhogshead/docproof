@@ -126,15 +126,8 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
     paths = Paths(root or default_root()).ensure()
     lock = FolderLock(paths.root).acquire() if start_runner else None
     settings = Settings.load(paths)
-    # One-time repair of a legacy reviewer default. Older builds shipped
-    # claude-sonnet-5; because Settings.save() persists the whole dataclass,
-    # any save under that build (even nudging the effort slider) froze
-    # model="claude-sonnet-5" into settings.json on the volume, and /api/models
-    # then serves that stale value as default_model forever — overriding the
-    # gpt-5.6-luna default this build ships. Rewrite it once and stamp
-    # settings_version so a *deliberate* Sonnet chosen afterward is never
-    # touched again. Guard on an existing file so a fresh install is left with
-    # no settings.json (the shipped default already applies).
+    # Migrate the persisted legacy default once. The version stamp protects
+    # deliberate later choices, and fresh installs need no settings file.
     if (paths.settings_file.is_file()
             and settings.settings_version < CURRENT_SETTINGS_VERSION):
         if settings.model == LEGACY_DEFAULT_MODEL:
@@ -145,21 +138,8 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
         settings.settings_version = CURRENT_SETTINGS_VERSION
         settings.save(paths)
     if web:
-        # On a server there is no user Documents folder and no durable results
-        # location off the mounted volume: finished documents written anywhere
-        # else land on the container's throwaway filesystem and vanish on the
-        # next redeploy or restart — which here is several times a day — while
-        # the job records that point at them survive on the volume, so the
-        # results tab 404s "…is missing". So the web build ALWAYS keeps results
-        # on the volume beside the job records, whatever settings.json says.
-        #
-        # Not merely "unless an administrator chose one": a persisted output_dir
-        # is the data-loss bug, not a preference. The Settings screen
-        # round-trips the field on every save, so any save made while it read
-        # the desktop default (an older build that still showed the field on the
-        # web, a direct API call) pins the ephemeral path permanently — and the
-        # old "respect a saved value" guard then stepped aside for exactly the
-        # value that loses documents. Clamp it, and say so when overriding one.
+        # Web results must stay on the mounted volume; any other persisted path
+        # points at ephemeral storage and loses documents on redeploy.
         on_volume = str(paths.results)
         if settings.output_dir != on_volume:
             if field_in_settings_file(paths, "output_dir"):

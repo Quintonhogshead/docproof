@@ -83,7 +83,6 @@ def _bump(confidence: str) -> str:
     return _CONFIDENCE_ORDER[min(i + 1, len(_CONFIDENCE_ORDER) - 1)]
 
 
-# --- siblings: findings that fix one sentence together ------------------------
 #
 # ONE FINDING PER ERROR splits a coupled repair — "2 and 3" spelled out to "two
 # and three" — into two findings, each correcting only its own half. Shown one at
@@ -279,7 +278,6 @@ def _run(cfg: Config, prepared, to_verify: list[Finding], provider: Provider,
     return verdicts
 
 
-# --- the round judge (multi-round review) ------------------------------------
 #
 # Multi-round review corrects the manuscript between rounds. A correction the
 # judge approves is applied AND becomes the text the next round reads, so a wrong

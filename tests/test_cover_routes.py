@@ -42,7 +42,6 @@ from docproof.cover.subscription import (SubscriptionAnthropicClient,
 COVER_KEY = "test-cover-key"
 
 
-# -- fixtures -------------------------------------------------------------------
 
 def _palette(**overrides) -> Palette:
     data = dict(background="#101010", primary="#f5f1e8", accent="#c9a227",

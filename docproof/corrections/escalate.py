@@ -120,8 +120,6 @@ def is_period_cap_query(note: str) -> bool:
     return bool(note and _PERIOD_CAP.search(note))
 
 
-# --- gathering the context ----------------------------------------------------
-
 def passage_around(stories: Sequence[Story], scope, page: int, *,
                    radius: int = PASSAGE_RADIUS,
                    max_chars: int = PASSAGE_CHARS) -> str:
@@ -368,8 +366,6 @@ Never invent a change the note did not ask about. Never quote a find that is not
 in the passage above. When you cannot tell, "recommend" is always available and \
 always safe."""
 
-
-# --- the tier -----------------------------------------------------------------
 
 def _resolved_edit(original: Edit, verdict: dict, passage: str) -> Edit | None:
     """The concrete edit a resolution makes, or None when it fails the guards.

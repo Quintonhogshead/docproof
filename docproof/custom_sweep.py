@@ -79,7 +79,6 @@ def load_rule(path: str | Path) -> Sweep:
     return _compile_regex_rule(_parse_data_rule(p), source=str(p))
 
 
-# --- declarative regex rules --------------------------------------------------
 
 def _parse_data_rule(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
@@ -180,7 +179,6 @@ def _check_backrefs(rx: "re.Pattern[str]", replacement: str) -> None:
                 f"does not define")
 
 
-# --- python escape hatch ------------------------------------------------------
 
 def _load_python_rule(path: Path) -> Sweep:
     """Import a ``.py`` rule and read a :class:`Sweep` out of it.

@@ -212,7 +212,6 @@ class SubagentProvider:
         self.calls = 0
         self.cost_usd = 0.0
 
-    # -- the Provider protocol ------------------------------------------------
 
     def complete_structured(self, *, model: str, system: str, user: str,
                             schema: dict[str, Any], schema_name: str,
@@ -237,7 +236,6 @@ class SubagentProvider:
     def submit_batch(self, *, model: str, requests, **kwargs):  # pragma: no cover
         raise NotImplementedError("the subagent lane has no batch mode")
 
-    # -- internals -----------------------------------------------------------
 
     @staticmethod
     def _prompt(user: str, schema: dict[str, Any], schema_name: str) -> str:

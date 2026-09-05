@@ -43,7 +43,6 @@ from PIL import Image, ImageChops, ImageOps, ImageStat
 
 from .effects import luminance_band
 
-# -- tuning (§15.10) ----------------------------------------------------------
 
 # Axis and rail snaps share one tolerance: within this fraction of canvas
 # WIDTH of the target but not exactly on it → translate onto it exactly;
@@ -176,8 +175,6 @@ def translate_x(layer: Image.Image, dx: int,
     return out
 
 
-# -- the snap pass (§15.10) ---------------------------------------------------
-
 def _axis_feature(bbox: tuple[int, int, int, int], axis: str) -> float:
     """Which x-coordinate of an ink bbox the axis compares against: the
     ink CENTER for a center axis, the leading (left) edge for a left rail,
@@ -294,8 +291,6 @@ def plan_snaps(elements: Sequence[InkElement],
     return {k: v for k, v in deltas.items() if v != 0}, lines
 
 
-# -- gap rhythm (warn only, §15.10) -------------------------------------------
-
 def gap_rhythm_warnings(text_elements: Sequence[InkElement],
                         canvas: tuple[int, int]) -> list[str]:
     """Vertical ink gaps between adjacent stacked text slots, compared
@@ -326,8 +321,6 @@ def gap_rhythm_warnings(text_elements: Sequence[InkElement],
                 f"consider equalizing.")
     return out
 
-
-# -- balance measurements (reported, never auto-fixed — §15.10) ---------------
 
 def mirror_symmetry(rgb: Image.Image) -> float:
     """Mean absolute WCAG-luminance difference between the composite and

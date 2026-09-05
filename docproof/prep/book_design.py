@@ -72,8 +72,8 @@ class Subject:
 
 @dataclass(frozen=True)
 class RunningHeads:
-    enabled: bool = True         # false leaves the head band empty
-    verso: str = "author"        # "author" | "title"
+    enabled: bool = True
+    verso: str = "author"
     recto: str = "title"
     size: float = 9
     caps: bool = True
@@ -91,8 +91,8 @@ class BookDesign:
     version: int
     name: str
     page: Page
-    fonts: dict[str, Font]                  # "body" | "heading"
-    styles: dict[str, dict]                 # house style name -> format
+    fonts: dict[str, Font]
+    styles: dict[str, dict]
     display_styles: tuple[str, ...]
     subjects: dict[str, Subject]
     default_subject: str
@@ -102,7 +102,6 @@ class BookDesign:
     drop_caps: DropCaps
     path: str
 
-    # -- lookups --------------------------------------------------------------
 
     @property
     def subject_choices(self) -> tuple[str, ...]:

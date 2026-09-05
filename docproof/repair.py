@@ -77,7 +77,6 @@ log = logging.getLogger("docproof.repair")
 _NON_TRIGGER_TYPES = frozenset({"repair"})
 
 
-# --- the repair prompt: the broken-vs-improvable contract (component 7) --------
 #
 # The sentences reaching this prompt were each flagged with several errors, so
 # the model is repairing pre-selected candidates rather than hunting. It still
@@ -189,7 +188,6 @@ class RepairCluster:
         return _net_added(self.members)
 
 
-# --- the trigger: error density per sentence (component 1) --------------------
 
 def triggered_sentences(findings: Sequence[Finding],
                         paragraphs: Sequence[ParagraphRef], *,
@@ -293,7 +291,6 @@ def _occurrence(text: str, start: int, sentence: str) -> int:
     return text.count(sentence, 0, start) + 1
 
 
-# --- repair: route each triggered sentence to the strong model ----------------
 
 def _payload(rows: Sequence[tuple[int, BrokenSite]]) -> str:
     return "\n\n".join(f"[{n}] {site.sentence}" for n, site in rows)
@@ -406,7 +403,6 @@ def _cluster_from_repair(site: BrokenSite, repaired: str, seq: list[int], *,
         reason=", ".join(site.reasons) or "multiple errors", members=members)
 
 
-# --- confirm: one verdict per cluster, then member findings -------------------
 
 def _explanation(cluster: RepairCluster, *, applied: bool) -> str:
     reason = cluster.reason or "broken sentence"
@@ -559,7 +555,6 @@ def _fold(rows: dict, window, findings: list, reject_sink, ids,
             findings.append(_query_finding(c, conf, ids, id_prefix))
 
 
-# --- atomicity enforcement (runs after the judge gates) -----------------------
 
 def enforce_cluster_atomicity(validated: list[Finding], doc) -> int:
     """Withdraw any repair cluster that did not survive whole, in place.

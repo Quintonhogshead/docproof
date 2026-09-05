@@ -86,7 +86,6 @@ def test_the_denylist_beats_protection():
     assert cands and all(c.kind == "denylist" for c in cands)
 
 
-# --- helpers ------------------------------------------------------------------
 
 def test_match_case_follows_the_source():
     assert _match_case("Staired", "stared") == "Stared"

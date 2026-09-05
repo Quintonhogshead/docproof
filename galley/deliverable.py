@@ -31,12 +31,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("galley.deliverable")
 
-# What a rebuilt findings.json envelope carries so `galley certify` can tell a
-# legitimate $0 rebuild of adjudicated findings from a run whose detectors
-# silently never billed. ``judge_model`` is the same slot ``import-judgments``
-# marks itself in; ``rebuild`` says where the paid spend actually lives —
-# the case file the orchestrator saves beside this deliverable — so certify
-# reconciles the budget against that ledger instead of this envelope's $0.
+# Marks a legitimate $0 rebuild and points certification to the case file that
+# holds the original paid spend.
 REBUILD_MARKER: dict = {
     "judge_model": "galley:rebuild",
     "rebuild": {"from": "casefile", "paid_spend_recorded_in": "casefile.json"},

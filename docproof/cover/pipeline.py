@@ -263,8 +263,6 @@ def _image_semaphore(job_id: str) -> asyncio.Semaphore:
 _LIVE_TASKS: dict[str, set[asyncio.Task]] = {}
 
 
-# -- data root ----------------------------------------------------------------
-
 def default_root() -> Path:
     """COVER_DATA_PATH if set (Fly: `/data/cover`), else `cover_jobs/` under
     cwd. The one environment read in this module — a data directory default,
@@ -278,8 +276,6 @@ def default_root() -> Path:
 def job_dir(root: str | Path, job_id: str) -> Path:
     return Path(root) / job_id
 
-
-# -- job.json persistence ------------------------------------------------------
 
 def _write_state(root: str | Path, job: JobState) -> None:
     """Atomic rewrite of job.json — the single source of truth, so a poll (or
@@ -320,8 +316,6 @@ def list_jobs(root: str | Path, limit: int = 20) -> list[JobState]:
 def total_usd(job: JobState) -> float:
     return sum(float(row.get("usd", 0.0) or 0.0) for row in job.ledger)
 
-
-# -- stale-job detection (§8) --------------------------------------------------
 
 def register_task(job_id: str, task: asyncio.Task) -> None:
     """Track a background task for one job, so check_interrupted can tell a
@@ -385,8 +379,6 @@ async def _commit_concept(root: str | Path, job_id: str, index: int,
             job.ledger.extend(ledger_rows)
         _write_state(root, job)
 
-
-# -- manuscript handling (§8.1) ------------------------------------------------
 
 def read_manuscript(path: str | Path) -> str:
     """The manuscript's full text, for the director to read.
@@ -472,8 +464,6 @@ def create_job(root: str | Path, brief: Brief, *,
     _write_state(root, job)
     return job
 
-
-# -- prompt assembly (§7.2, §8) ------------------------------------------------
 
 # One sentence per ArchetypeArt.cut_edge value, appended to that slot's
 # prompt. A template pins each plate's severed end to a KNOWN edge so its own
@@ -594,8 +584,6 @@ async def _render(spec: CoverSpec, d: Path, index: int
     return report, renders[:1]
 
 
-# -- spec diffing: "revising did nothing" made visibly impossible -------------
-#
 # Two small, pure functions (no I/O — trivial to unit-test directly), shared
 # by the auto-critique loop below and by run_revision's own human-revision
 # path: diff_spec_fields turns two CoverSpec VERSIONS into a compact,
@@ -731,8 +719,6 @@ def _dump_equal_ignoring_bookkeeping(old: CoverSpec, new: CoverSpec) -> bool:
            == new.model_dump(exclude={"version", "notes_log"}))
 
 
-# -- composition planner (§15.16, gated behind COVER_PLANNER) ------------------
-#
 # The frontier planner (docproof.cover.planner) runs per concept, after
 # direction and before any image dollar: one plan_composition call, then —
 # when the plan declares generation_order — SEQUENTIAL painting stages with
@@ -1032,28 +1018,6 @@ async def _generate_planned(plan: CompositionPlan, spec: CoverSpec,
     return rows
 
 
-# -- the atelier: one agent per concept (replaces the §6.3 critique loop) ------
-#
-# The fixed critique-and-revise loop that used to live here — a vision judge,
-# a Sonnet reviser, up to four rounds — is gone (owner, 2026-08-31). It could
-# only ever ask its questions in the order it was written to ask them, so it
-# reported defects it had no move for and spent its rounds on wall-clock
-# pressure rather than on the cover being right. docproof.cover.atelier is
-# the replacement: an agent per concept, holding the composer's own verbs,
-# planning before it spends and iterating for free until it calls finish.
-#
-# What stayed: imaging.generate and compose are still the ONLY paths to a
-# pixel and to a composite — the agent reaches them through atelier's tools,
-# which price every roll from the same tier they rolled at, exactly as
-# _generate_art_slot does for run_revision.
-#
-# What this DID orphan: the §15.16 composition planner no longer runs on a
-# new job. It was the pre-flight that made several independent generations
-# into one planned composition, and an agent that reads the archetype, argues
-# itself into a prompt and looks at what came back is doing that job with its
-# eyes open. planner.py stays for run_revision's replan path (§15.16's
-# mid-flight use), and COVER_PLANNER now gates only that.
-
 async def _build_concept(root: str | Path, job_id: str, index: int,
                          image_client: Any, sem: asyncio.Semaphore) -> None:
     """One concept's whole life: hand its assignment to an agent and record
@@ -1167,8 +1131,6 @@ def _load_assignment(root: str | Path, job_id: str, index: int):
                       "this book.")
 
 
-# -- run_job: the director reads the book, then N agents build (§8) ------------
-
 async def run_job(root: str | Path, job_id: str, providers: Providers,
                   image_client: Any, critique_client: Any = None, *,
                   manuscript: str = "") -> None:
@@ -1256,19 +1218,8 @@ async def run_job(root: str | Path, job_id: str, providers: Providers,
         "usd": result.cost or 0.0})
     _write_state(root, job)
 
-    # CONCURRENTLY, one agent per concept. This reverses the 2026-08-31
-    # "one concept at a time" decision, and the reason it is safe now is that
-    # the thing serialisation was protecting no longer exists: concepts used
-    # to interleave through one image semaphore while a shared judge loop and
-    # staged reviews waited on each other's generations. An atelier session
-    # is its own reasoning process holding its own budget, and the per-job
-    # semaphore still bounds how many generations are actually in flight —
-    # so N agents cost about as long as one, which is what the owner saw
-    # building the six Longsword covers by hand.
-    #
-    # Per-concept isolation does not depend on the fan-out: _build_concept
-    # catches everything and records the failure on its own concept, so a
-    # concept that dies still leaves its siblings to finish.
+    # The shared semaphore bounds generation concurrency; _build_concept
+    # records failures per concept so one failure does not stop its siblings.
     sem = _image_semaphore(job_id)
     await asyncio.gather(*(
         _build_concept(root, job_id, i, image_client, sem)
@@ -1279,8 +1230,6 @@ async def run_job(root: str | Path, job_id: str, providers: Providers,
         job.status = "ready"
         _write_state(root, job)
 
-
-# -- run_revision (§6.2, §8) ---------------------------------------------------
 
 async def run_revision(root: str | Path, job_id: str, concept_index: int,
                        notes: str, allow_new_art: bool, providers: Providers,

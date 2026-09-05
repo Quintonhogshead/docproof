@@ -37,7 +37,6 @@ async function loadFamilies(doc) {
   FAMILIES = [...new Set([...served, ...used, ...FALLBACK_FAMILIES])].filter(Boolean).sort();
 }
 
-/* ------------------------------------------------------------------ boot */
 function jobFromURL() {
   return new URLSearchParams(location.search).get('job') || '';
 }
@@ -149,7 +148,6 @@ async function showPicker(message) {
   loadList();
 }
 
-/* ---------------------------------------------------------------- editor */
 function buildEditor(jobId, doc) {
   root.textContent = '';
 
@@ -272,7 +270,6 @@ function buildEditor(jobId, doc) {
     refreshPanels();
   }
 
-  /* ------------------------------------------------------- shelf actions */
   Object.assign(ctx.shelf, {
     addText() {
       const layer = {
@@ -475,7 +472,6 @@ function buildEditor(jobId, doc) {
     },
   });
 
-  /* ------------------------------------------------------------ the wrap */
   const round2 = (v) => (Math.round(v * 100) / 100).toFixed(2);
   // Four decimals is a ten-thousandth of an inch: past what any press holds,
   // and short of the float tail that would make "0.55" read as 0.5500000001.
@@ -729,12 +725,10 @@ function buildEditor(jobId, doc) {
     }
   }
 
-  /* --------------------------------------------------------- AI plate ops */
   /* What one call cost, for the toast. doc.cost_usd carries the running total
      and is already in the shelf; this is the price of the click just made. */
   const money = (c) => (typeof c === 'number' ? ` — $${c.toFixed(2)}` : '');
 
-  /* ------------------------------------------------------- plate progress */
   /* One chip per plate call in flight. Not a modal: a render is tens of
      seconds and there is no reason a person cannot keep moving type, panning
      or picking layers while the picture paints. The chip is the honest
@@ -899,7 +893,6 @@ function buildEditor(jobId, doc) {
     }
   }
 
-  /* -------------------------------------------------------------- keyboard */
   const typing = () => {
     const t = document.activeElement;
     return t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
@@ -951,7 +944,6 @@ function buildEditor(jobId, doc) {
   return { store, engine, ctx, assistant };
 }
 
-/* ------------------------------------------------------------------ main */
 (async function main() {
   // The Mac shell hands its own key over in the URL FRAGMENT — the one part
   // of a URL that never reaches the server or its logs — so a person at

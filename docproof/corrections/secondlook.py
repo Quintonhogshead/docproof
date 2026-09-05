@@ -195,8 +195,6 @@ Return decision "settled" when the corrections compose cleanly; \
 same words) — never pick a winner between contradicting corrections."""
 
 
-# --- the dry run --------------------------------------------------------------
-
 def probe(stories: list[Story], edits: Sequence[Edit], scope=None
           ) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
     """What a real apply of `edits` would flag, found by running one on
@@ -216,8 +214,6 @@ def probe(stories: list[Story], edits: Sequence[Edit], scope=None
             collisions[o.edit.id] = o.collides_with
     return lost, collisions
 
-
-# --- shared machinery ---------------------------------------------------------
 
 def _page_blocks(pages: Sequence[int], book_pages: dict[int, str]) -> list[str]:
     lines = []
@@ -268,8 +264,6 @@ def _annotated(instruction: str, what: str, note: str) -> str:
     tail = f" — second look: {what}: {note}" if note else f" — second look: {what}"
     return (instruction or "").rstrip() + tail
 
-
-# --- the three repairs --------------------------------------------------------
 
 def is_query(e: Edit) -> bool:
     """Whether an edit is the kind of flag `settle_queries` exists to settle: a

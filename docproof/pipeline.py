@@ -1271,7 +1271,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     if coverage is not None:
         coverage.record_windows(window_losses)
 
-    # Phase 1B: a paid but observation-only second lane over precise candidate
+    # A paid, observation-only lane runs over precise candidate
     # sites. It runs here, where provider calls are resumable and billable, not
     # in finish(), whose only job is to assemble the proven manuscript path.
     # Its Usage is folded into the real job total, but its verdicts remain on
@@ -1334,7 +1334,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             and cfg.candidate_screening.mode == "apply"):
         try:
             findings.extend(prepared.candidate_screening.production_findings())
-            # Queries never become edits (P3-05): as force_query findings they
+            # Queries remain force_query findings and
             # ride the ordinary comment channel when comments are enabled.
             if cfg.query_comments or cfg.comments:
                 findings.extend(prepared.candidate_screening.production_queries())
@@ -2511,48 +2511,22 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
             # repair at the far site, the one thing this channel must never
             # produce. A broken sentence is repaired where it is read; if it
             # recurs verbatim, it is a broken sentence there too and the pass
-            # reads it there. (v1 decision — see docproof/repair.py.)
+            # reads it there.
             [f for f in validated if not f.cluster_id],
             [p for p in prepared.doc.paragraphs if p.para_id in covered_ids],
             dictionary=cfg.spellcheck.dictionary or prepared.variant.dictionary,
             protected=prepared.spell.lexicon,
             max_sites_per_surface=cfg.recurrence.max_sites_per_surface)
         validated += _validate(recurrences)
-    # The judge gates: the last read before the manuscript is written. They run
-    # AFTER validation on purpose — by now the survivors are exactly the changes
-    # that would reach the author, so a judge reads each one once, and never one
-    # that a later gate would have thrown away anyway.
-    #
-    # They are deliberately SUBTRACTIVE: a change a judge will not vouch for is
-    # turned into a margin question in place (validator.to_query), and nothing
-    # else in the run moves. The tempting alternative — set force_query and
-    # re-run the validator — is wrong, because a second arbitration re-opens
-    # every span: the withdrawn change frees the one it held, an edit that had
-    # been set aside as overlapping is promoted into it, and that promoted edit
-    # can in turn evict a DIFFERENT change this same gate had just approved.
-    # Turning on a safety pass must not delete a correction the safety pass
-    # itself vouched for, so the spans stay exactly as the arbitration settled
-    # them. Running gates one after another is safe for the same reason: each
-    # only ever removes, and a change the first withdrew is no longer
-    # "validated", so the second neither sees it nor is billed for it.
+    # Judge gates run after validation so they see only changes that could ship.
+    # A withheld change becomes a query in place. Revalidating would reopen span
+    # arbitration and could promote an overlapping change the judge never saw.
     judge_reports, held_count = _run_judge_gates(
         cfg, prepared, validated, usage, out_dir=out, replay=judge_held,
         on_phase=on_phase, coverage=coverage)
-    # Repair atomicity, AFTER the gates so it sees every partial failure at once:
-    # a member dropped at validation for overlapping a surer edit, and a member a
-    # judge gate just withdrew. If any member of a repair cluster is no longer a
-    # clean tracked change, the rest are withdrawn to the margin with it, so the
-    # run never writes half a broken-sentence repair. Uses the same span-
-    # preserving to_query the gates use, so nothing else in the run moves.
-    #
-    # Gated on `cfg.repair.enabled` OR a cluster_id actually present in
-    # `validated` — not on repair alone — because a cluster can arrive here
-    # without this run's OWN repair channel ever having fired: the merge desk
-    # (docproof/mergedesk.py) carries clusters over from an earlier run's
-    # findings and relies on this same enforcement to keep them atomic through
-    # a fresh, $0 arbitration where repair.enabled is off. The `any()` is a
-    # single pass over an already-in-memory list, so an ordinary run without
-    # clusters pays nothing extra for the check.
+    # Enforce repair atomicity after every gate has had a chance to remove a
+    # member. Imported merge-desk clusters also require the check when this run's
+    # repair lane is disabled.
     if (cfg.repair.enabled or any(f.cluster_id for f in validated)) \
             and prepared.whole_document:
         from .repair import enforce_cluster_atomicity

@@ -51,7 +51,6 @@ class TrackDiffError(ValueError):
     pass
 
 
-# --- opening a tracked-changes doc (without the review preflight) -------------
 
 def open_docx(path: str | Path) -> DocxPackage:
     """Open a .docx as a package. Unlike ingest.preflight, this does NOT reject
@@ -77,7 +76,6 @@ def open_docx(path: str | Path) -> DocxPackage:
     return pkg
 
 
-# --- extracting edits as anchors in reject-coordinates -----------------------
 
 def extract_paragraph_edits(p) -> tuple[str, list[Anchor]]:
     """Return (reject_text, edits) for one paragraph element.
@@ -101,7 +99,7 @@ def extract_paragraph_edits(p) -> tuple[str, list[Anchor]]:
             elif c.tag in (T_TAG, DELTEXT_TAG):
                 text = c.text or ""
                 if in_ins:
-                    raw.append(Anchor(pos, pos, "", text))     # insertion point
+                    raw.append(Anchor(pos, pos, "", text))
                 elif in_del:
                     raw.append(Anchor(pos, pos + len(text), text, ""))
                     base.append(text)
@@ -162,7 +160,7 @@ def extract_paragraph_comments(p) -> list[tuple[int, int, str]]:
                 txt = c.text or ""
                 if (in_ins or in_del) and txt:
                     dirty.update(open_ids)   # a revision lives in these comments
-                if not in_ins:               # inserted text is absent from base
+                if not in_ins:
                     pos += len(txt)
             else:
                 walk(c, in_ins, in_del)
@@ -236,12 +234,11 @@ def extract_edits(pkg: DocxPackage) -> DocEdits:
     return DocEdits(base=base, edits=edits, comments=comments)
 
 
-# --- comparison --------------------------------------------------------------
 
 def _overlaps(a: Anchor, b: Anchor) -> bool:
     a0, a1 = a.start, a.end
     b0, b1 = b.start, b.end
-    if a0 == a1:          # widen a zero-width insertion so it can touch a span
+    if a0 == a1:
         a1 = a0 + 1
     if b0 == b1:
         b1 = b0 + 1
@@ -293,9 +290,8 @@ class CompareReport:
     label_b: str
     paras: list[ParaCompare] = field(default_factory=list)
     aligned_paras: int = 0
-    unaligned: list[str] = field(default_factory=list)   # base mismatch / structure
+    unaligned: list[str] = field(default_factory=list)
 
-    # -- tallies ----------------------------------------------------------
     @property
     def agree(self) -> int:
         return sum(len(p.agree) for p in self.paras)
@@ -316,7 +312,6 @@ class CompareReport:
     def query_located(self) -> int:
         return sum(len(p.query_located) for p in self.paras)
 
-    # -- manuscript-mode score (A is ground truth) ------------------------
     @property
     def located_recall(self) -> float | None:
         found, missed = self.agree + self.diff_fix, self.only_a
@@ -439,7 +434,6 @@ def compare_files(path_a: str | Path, path_b: str | Path, *,
                          label_a=label_a, label_b=label_b)
 
 
-# --- rendering ---------------------------------------------------------------
 
 def _edit_str(base: str, a: Anchor) -> str:
     """A compact, readable rendering of one edit: what it deletes → inserts,

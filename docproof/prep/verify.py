@@ -29,7 +29,7 @@ class VerificationFailed(Exception):
 
 @dataclass(frozen=True)
 class Verification:
-    view: str            # "clean" | "accept" | "reject"
+    view: str
     ok: bool
     source_words: int
     output_words: int

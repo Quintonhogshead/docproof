@@ -137,7 +137,6 @@ class WatchSettings:
     # wrong author's folder is visible the same morning. See `notify.completion`.
     notify_on_complete: bool = False
 
-    # -- Drive output archive --------------------------------------------------
     # The durable off-box record: every finished job's produced files, pushed to
     # a Drive folder and organised Reviews|Prep|Promo -> YYYY-MM -> one folder
     # per job. Off by default, so an install that never sets it up is unchanged.
@@ -159,7 +158,6 @@ class WatchSettings:
     # originals should live only in their own folders.
     archive_include_source: bool = True
 
-    # -- HubSpot ---------------------------------------------------------------
     # All off by default: an install that has never heard of HubSpot behaves
     # exactly as it did before this existed. Turning it on gates every new
     # manuscript on a CRM record — see docs/watch.md and `_gate_hubspot`.
@@ -225,7 +223,6 @@ class WatchSettings:
     # itself done in Drive, so it is not prepared twice.
     hubspot_write_back: bool = True
 
-    # -- Proofing (Galley) -----------------------------------------------------
     # The mechanical proofread: the docproof review ladder, its sweeps, verify
     # and settle, delivered as a tracked-changes manuscript with an editorial
     # letter and a style sheet. Off by default and gated on the same status
@@ -260,7 +257,6 @@ class WatchSettings:
     proof_tier: str = "T2"
     proof_budget_usd: float = 0.0
 
-    # -- Promo -----------------------------------------------------------------
     # The third pipeline: a teaser and social posts from a finished manuscript.
     # Off by default and entirely independent of formatting — its own HubSpot
     # values, its own Drive marker, its own state — so an install that never
@@ -284,7 +280,6 @@ class WatchSettings:
     # one); set it to run promo on a stronger model without changing formatting.
     promo_model: str = ""
 
-    # -- Marketing plan --------------------------------------------------------
     # Promo's third deliverable as its own automated stage: a per-author
     # marketing plan, written from the finished book plus what the author told
     # the press, and delivered to the author's Drive folder. Off by default and
@@ -355,7 +350,6 @@ class WatchSettings:
         `plan_model` still works."""
         return self.plan_model or self.model
 
-    # -- what the rest of DocProof needs ---------------------------------------
 
     def results_dir(self, home: str | Path) -> Path:
         """Where finished files land locally.

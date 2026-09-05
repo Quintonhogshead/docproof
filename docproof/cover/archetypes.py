@@ -328,14 +328,8 @@ class ArchetypeArt(BaseModel):
     # it exists so a template can name its slots for their ROLE rather than
     # for whatever noun the first book to use it happened to put there.
     role: str = ""
-    # The one-shot contract (paired with `cut_edge` below). The plate does
-    # not exist when a template is authored, so the template cannot know
-    # which edge the generator will sever a stem on — it has to DICTATE it.
-    # This is a sentence carrying exactly one `{subject}` hole; the
-    # art-direction call fills the hole with a noun and nothing else, and
-    # pipeline._assemble_prompt expands the frame (plus the `cut_edge`
-    # clause) around it. "" keeps the pre-existing behaviour: the direction's
-    # prompt is used verbatim.
+    # A prompt frame dictates composition before the plate exists and accepts
+    # exactly one subject placeholder.
     prompt_frame: str = ""
     # Which edge of its own frame this plate's severed end must sit on, so
     # the fixed `anchor`/`offset` below can carry that cut off the canvas.
@@ -353,10 +347,7 @@ class ArchetypeArt(BaseModel):
     fit: Literal["cover", "contain"] = "cover"
     transparent: bool = False
     opacity: float = Field(default=1.0, ge=0.0, le=1.0)
-    # The FULL model.BLEND_MODES table, matching ArtSlot.blend exactly. This
-    # used to stop at soft_light, which meant a template could not declare a
-    # light-emitting layer at all — a glow or a drifting ember field had to
-    # be patched onto the built spec afterwards, outside the template.
+    # Must match model.BLEND_MODES.
     blend: Literal["normal", "multiply", "overlay", "soft_light", "screen",
                    "add", "lighten", "darken", "color_dodge"] = "normal"
     # Placement defaults for contain-fit slots (a full-canvas cutout buries
@@ -383,31 +374,17 @@ class ArchetypeArt(BaseModel):
     # it means exactly once.
     mask: ArchetypeMask | None = None
     corners: bool = False
-    # Mirrors docproof.cover.model.ArtSlot.corners_flip_vertical exactly
-    # (v2.2 wave, deliverable 1): False keeps all four corners-mirrored
-    # copies upright by default; True restores the original full-mirror
-    # (bottom copies also vertically flipped) for a genuinely symmetric
-    # ornament that wants it.
+    # Opt in to vertical mirroring for genuinely symmetric ornaments.
     corners_flip_vertical: bool = False
     scatter: int = Field(default=0)
-    # Mirrors docproof.cover.model.ArtSlot.snap exactly (v2.2 wave,
-    # deliverable 3): "" = off, "line_gap" snaps a contain-fit slot drawn
-    # immediately after a text layer into that text's own largest
-    # inter-line gap instead of a fixed anchor point.
+    # ``line_gap`` places a following ornament in the largest fitted line gap.
     snap: Literal["", "line_gap"] = ""
-    # Mirrors docproof.cover.model.ArtSlot.texture_file/texture_fit exactly
-    # (v2.2 wave, deliverable 5): names a docproof.cover.textures.TEXTURES
-    # shelf plate to draw when this slot has no generated asset.
+    # Shelf texture used when the slot has no generated asset.
     texture_file: str = ""
     texture_fit: Literal["tile", "cover"] = "cover"
-    # Mirrors docproof.cover.model.ArtSlot.notch_for exactly (v2.2 wave,
-    # deliverable 7): another art slot in this SAME archetype whose
-    # positioned bbox gets erased from this slot's own painted pixels.
+    # Another slot whose positioned bounds are erased from this layer.
     notch_for: str = ""
-    # Mirrors docproof.cover.model.ArtSlot.procedural exactly (same twelve
-    # names — the original seven plus the v2.2 wave's five frame-family
-    # entries — same "" = no-opinion default that falls back to the
-    # ORIGINAL hardcoded-by-id background/texture behavior — v2 BODY wave).
+    # Must match model.ArtSlot.procedural.
     procedural: Literal["", "gradient", "grain", "paper", "halftone",
                         "canvas", "speckle", "rule_frame", "frame_hairline",
                         "frame_thickthin", "frame_corners", "frame_deco",
@@ -573,8 +550,6 @@ class ArchetypeScrim(BaseModel):
     is not offered rather than offered-and-unused."""
     model_config = ConfigDict(extra="forbid")
 
-    # Mirrors docproof.cover.model.ScrimSpec.kind exactly — "halo" (v2.2
-    # wave, deliverable 2) added alongside the original four.
     kind: Literal["gradient_down", "gradient_up", "vignette", "panel", "halo"] = "panel"
     protects: Literal["title", "subtitle", "author", "series"] | None = None
     strength: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -588,13 +563,7 @@ class ArchetypeText(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: Literal["title", "subtitle", "author", "series"]
-    # Which of the direction's TWO fonts this slot wears. "" — the default,
-    # and every template that predates the field — keeps the original rule:
-    # the title slot gets title_font, every other slot gets author_font.
-    # Naming a role overrides that, which is the only way a template can put
-    # the author's name in the display face while the tagline and the credit
-    # line stay in the supporting one — a convention half the shelf uses and
-    # none of them could express.
+    # Empty selects the title face for titles and the author face otherwise.
     font_role: Literal["", "title", "author"] = ""
     zone: ArchetypeZone
     case: Literal["upper", "title", "as_is"] = "as_is"
@@ -607,37 +576,15 @@ class ArchetypeText(BaseModel):
     optional: bool = False
     shadow: ArchetypeShadow | None = None
     stroke: ArchetypeStroke | None = None
-    # Mirrors docproof.cover.model.TextSlot.effects exactly (§15.4): a
-    # designed layer-style stack for this slot (the thriller retrofit's
-    # stacked double title shadow). The runtime fold — legacy shadow to the
-    # stack's front, stroke to its back when this list is non-empty —
-    # happens in TextSlot's own validator once build_spec converts these,
-    # never here.
+    # TextSlot folds legacy shadow and stroke into this stack at runtime.
     effects: list[ArchetypeEffect] = Field(default_factory=list)
     # "fill" is the launch default everywhere; knockout/art_fill (§7.4a) are
     # archetype/revision territory — no Direction field sets this, so the
     # only way a concept ever gets one is an archetype that presets it.
     mode: Literal["fill", "knockout", "art_fill"] = "fill"
-    # "thing inside of thing" (v2 BODY wave): mirrors
-    # docproof.cover.model.TextSlot.mask_from exactly — an art slot id this
-    # text is clipped to, or "" = off. Checked for existence (never
-    # ordering — see Archetype._text_mask_from_exists below) at load time.
+    # Art slot whose alpha clips this text; ordering is intentionally ignored.
     mask_from: str = ""
-    # The §15.12 expressive-typography fields, mirroring
-    # docproof.cover.model.TextSlot.fit_mode/arc/rotate exactly (same
-    # ranges, same defaults, same meaning). Direction.type_move already
-    # reaches all three — but only ever on the TITLE, and only through the
-    # one-signature-move mapping. A TEMPLATE has the opposite need: a
-    # convention where the AUTHOR's name and the credit line above it both
-    # bow along one shared arc is structure, not per-concept taste, and
-    # until these existed an archetype could not express it at all.
-    #
-    # Precedence, where both reach the same slot: the direction's move
-    # wins, because it is the later and more specific decision — see
-    # build_spec, which folds `title_move` over these rather than beside
-    # them (a duplicate keyword would otherwise be a TypeError, not a
-    # policy). The defaults below are TextSlot's own, so every archetype
-    # that predates the field builds a byte-identical spec.
+    # Direction title moves override these template typography defaults.
     fit_mode: Literal["uniform", "justify_stack"] = "uniform"
     arc: float = Field(default=0.0, ge=-0.35, le=0.35)
     rotate: float = Field(default=0.0, ge=-15.0, le=15.0)
@@ -679,23 +626,10 @@ class Archetype(BaseModel):
     text: list[ArchetypeText] = Field(min_length=1)
     layers: list[str] = Field(min_length=1)
     genres: list[str] = Field(default_factory=list)
-    # Mirrors docproof.cover.model.CoverSpec.axis/axis_x exactly (§15.10;
-    # build_spec copies both verbatim): which vertical axis this template
-    # composes around, so the balance engine's snap pass knows what a
-    # near-miss is a near-miss OF. None — the default, and every shipped
-    # archetype's current state until a later wave retrofits declarations
-    # — means pre-wave behavior: no snap pass, byte-identical renders
-    # (§15.0 constraint 2). axis_x (fraction of canvas width) positions a
-    # left/right rail; None takes §15.10's conventional 0.08/0.92, and a
-    # center axis never reads it at all.
+    # None disables snapping; axis_x positions a left or right rail.
     axis: Literal["center", "left", "right"] | None = None
     axis_x: float | None = Field(default=None, ge=0.0, le=1.0)
-    # The finishing recipe this template wears BY DEFAULT (§15.6) — applied
-    # by build_spec whenever the direction stays silent (recipe=""); a
-    # direction's own non-"" pick always wins. "" (the default, and every
-    # un-retrofitted archetype's permanent state) means no default
-    # finishing at all: the no-recipe path renders byte-identical to
-    # pre-wave pixels, which is §15.0 constraint 2 for this field.
+    # The direction's non-empty recipe overrides this template default.
     recipe: str = ""
     # Scales every value the chosen recipe's own finishing layers carry —
     # adjust strengths and art-layer opacities alike. 1.0 (the default, and
@@ -712,7 +646,6 @@ class Archetype(BaseModel):
     # out of the manuscript in front of it, in the template's own words —
     # emitted by describe_archetypes() underneath the `describe` line, so the
     # model reads it at the moment it is choosing nouns.
-    #
     # Before this field, the only prose a template could send the director was
     # its one-line `describe`, which says what the cover LOOKS like and nothing
     # about how to fill it. Any template whose slots are roles rather than
@@ -721,7 +654,6 @@ class Archetype(BaseModel):
     # ever reach it — so the director filled the roles from the reference cover
     # it was shown instead of from the book it was given, and every cover built
     # from that template came out looking like the same book.
-    #
     # "" (the default, and every template that predates the field) sends
     # nothing extra and leaves describe_archetypes' output byte-identical.
     casting: str = ""
@@ -729,7 +661,6 @@ class Archetype(BaseModel):
     # may therefore be prompted photoreal with `treatment: "none"` —
     # the one exemption from direction.py's shelf-wide ban on untreated
     # photorealism (docs/cover_designer_spec.md §19.4).
-    #
     # That ban is not squeamishness: a raw, untreated photoreal plate is the
     # single biggest "AI-generated" tell, and the shelf's mitigation is
     # stylization — silhouette, duotone, posterize, or the photo_soft
@@ -738,7 +669,6 @@ class Archetype(BaseModel):
     # background->primary ramp, which across eight separately-lit plates
     # flattens a whole cover into one sepia mass — the same reason
     # romantasy_organic forbids it outright.
-    #
     # So this flag is not "this archetype likes photographs". It ASSERTS that
     # the template carries its own photoreal discipline in place of the
     # stylization it cannot use: one `composition_note` fixing the medium,
@@ -1131,34 +1061,14 @@ def describe_archetypes(genre: str | None = None) -> str:
     lines = []
     for a in archetypes:
         gen = [s for s in a.art if s.generatable]
-        # The slot ids are load-bearing prompt content: v2's free-form slugs
-        # mean the art director can no longer guess them, and a prompt for a
-        # misspelled slot is silently dropped downstream — the first live v2
-        # batch shipped every cover artless for exactly this reason.
-        #
-        # And the id ALONE is not enough. An id is a label, not a brief: told
-        # only that a template wants "luminary" and "token_near", a model
-        # fills them from the nearest cover it can remember rather than from
-        # the book in front of it — which is how a template stops being a
-        # template and becomes an impression of the one cover it was drawn
-        # from. `role` is the slot's own statement of what it is FOR, it has
-        # existed on ArchetypeArt since the v2 BODY wave, and until this it
-        # reached no prompt anywhere: it was documentation the only audience
-        # that needed it never saw. Emitting it here is what lets a template
-        # ask for "the one big light source in this book's sky" instead of
-        # hoping "luminary" means the same thing to the model as it did to
-        # whoever wrote the YAML.
+        # Exact ids keep generated prompts attached to the intended slots;
+        # roles supply meaning that a slug alone cannot carry.
         pairs = [f"{s.id} — {' '.join(s.role.split())}" if s.role else s.id
                  for s in gen]
         slots = (f" (art slots to prompt, by exact id: {'; '.join(pairs)})"
                  if gen else " (no generated art — fully procedural)")
-        # A photoreal template is the ONE exemption from the shelf-wide ban
-        # on untreated photorealism, and the exemption is worthless if the
-        # call cannot tell which templates hold it: told only "never ship an
-        # untreated photoreal prompt", a model picking this archetype either
-        # refuses its own plates or pairs them with photo_soft, which is a
-        # duotone and destroys the template. Marked here, at the point of
-        # choice, rather than left to be inferred from the describe line.
+        # State the photoreal exemption at selection time to prevent an
+        # incompatible treatment from being added later.
         mark = (" [PHOTOREAL TEMPLATE — prompt these plates photographically "
                 "and leave treatment \"none\"; see the photorealism rule]"
                 if a.photoreal else "")

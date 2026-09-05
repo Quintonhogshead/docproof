@@ -168,15 +168,8 @@ class SinglePassAdapter:
         queries = 0
         seen: set[tuple] = set()
         for f in validated:
-            # A finding the validator both anchored AND kept as a tracked
-            # change is a real correction. An anchored "query" is kept too, as
-            # confidence="query" with no replace text — its insert_text is
-            # always empty, a question not a fix — and the deliverable turns
-            # it into a margin comment. A "skipped_low_confidence" or rejected
-            # finding carries an Anchor as well (every channel gets one) but no
-            # real fix, and would hand the case file a fabricated deletion if
-            # converted. See docproof_ladder.gfindings_from_json's matching
-            # guard.
+            # Anchored queries become margin comments; other non-validated
+            # statuses may have anchors but no valid replacement to convert.
             if f.anchor is None or f.status not in ("validated", "query"):
                 dropped += 1
                 continue
@@ -188,11 +181,8 @@ class SinglePassAdapter:
                 # by identity so a second read adds only what it uniquely caught.
                 continue
             seen.add(key)
-            # Content-derived id: the orchestrator unions findings across waves
-            # by id alone, and the run-local "f-NNNN" counter restarts every
-            # call, so wave 3's "f-0007" would silently swallow wave 2's. A
-            # hash of the edit's identity makes a genuine cross-wave re-find
-            # dedupe and keeps distinct findings from ever colliding.
+            # Content-derived ids dedupe true cross-wave repeats without
+            # colliding when the run-local counter restarts.
             digest = hashlib.sha1(
                 "\x00".join(str(part) for part in key).encode("utf-8")
             ).hexdigest()[:10]

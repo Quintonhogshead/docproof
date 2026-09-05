@@ -98,7 +98,6 @@ def test_ledger_equals_recomputed_cost_sync(tmp_path):
     recomputed = (cost_of_usage(combined, fallback_model=MODEL) or 0.0) \
         + combined.sapling_cost
     assert cf.budget.spent_usd == pytest.approx(recomputed)
-    # And it is non-trivial (the pricing actually priced something).
     assert cf.budget.spent_usd > 0
 
 

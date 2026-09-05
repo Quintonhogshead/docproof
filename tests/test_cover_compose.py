@@ -777,7 +777,6 @@ def test_halo_scrim_has_no_detectable_hard_edge():
     # no edge anywhere a probe could find one — a handful of alpha levels'
     # worth of step between ADJACENT pixels is noise-floor, not an edge.
     assert max(diffs) <= 4, f"halo has a detectable edge (max step {max(diffs)})"
-    # And it genuinely darkens the middle — not a no-op.
     left, top, right, bottom = rect
     assert alphas[(left + right) // 2] > 40
 
@@ -1185,7 +1184,6 @@ def test_frame_clamp_keeps_title_ink_inside_the_rule_frame(tmp_path):
                if (x < left or x >= right or y < top or y >= bottom)
                and px[x, y] != (0, 0, 0)]
     assert outside == []
-    # And the title genuinely rendered somewhere inside.
     assert diff.getbbox() is not None
 
 
