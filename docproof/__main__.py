@@ -1453,10 +1453,12 @@ def cmd_galley(args) -> int:
 def _galley_journal(args) -> int:
     """`docproof galley journal`: render the decision log (galley/journal.py).
 
-    $0, no model, no clock: the same artifacts always render the same
-    document, so a log can be regenerated whenever someone asks how a decision
-    was made."""
+    $0 and no model: the same artifacts always render the same body, so a log
+    can be regenerated whenever someone asks how a decision was made. The
+    "generated" line is stamped from the system clock — never from a caller —
+    because DECISION_LOG.md is an audit trail."""
     from galley.journal import render_journal
+    from galley.state_machine import utc_now
 
     run = Path(args.run)
     if not run.is_dir():
@@ -1464,7 +1466,7 @@ def _galley_journal(args) -> int:
         return 2
     try:
         text = render_journal(run, workspace=args.workspace, book=args.book,
-                              generated_at=args.at)
+                              generated_at=utc_now())
     except (OSError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -3200,7 +3202,8 @@ def _galley_state(args) -> int:
                 print("  run `docproof galley settle` first.", file=sys.stderr)
                 return 7
         try:
-            rec = machine.advance(args.advance, at=args.at, by=args.by,
+            # No caller-supplied `at`: advance() stamps the system clock.
+            rec = machine.advance(args.advance, by=args.by,
                                   source_sha256=src_hash, config_sha256=cfg_hash)
         except StateError as e:
             print(f"error: {e}", file=sys.stderr)

@@ -3,13 +3,72 @@ certify checks it and the lifecycle ledger feed."""
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
+from docproof.__main__ import main
 from galley.manifest import certify_run
 from galley.state_machine import (RUN_STATES, ArtifactHash, RunStateMachine,
                                   StateError)
+
+
+# --- the clock ---------------------------------------------------------------
+
+def test_advance_stamps_the_real_clock_when_no_time_is_supplied():
+    """A record can never carry a blank or model-invented `at`: the audit trail
+    is how a stalled run is reconstructed."""
+    before = datetime.now(timezone.utc)
+    m = RunStateMachine()
+    rec = m.advance("intake")
+    after = datetime.now(timezone.utc)
+    assert rec.at, "advance() left the timestamp blank"
+    stamped = datetime.fromisoformat(rec.at)
+    assert stamped.tzinfo is not None and stamped.utcoffset().total_seconds() == 0
+    assert before <= stamped <= after
+
+
+def test_every_state_json_record_is_stamped(tmp_path):
+    m = RunStateMachine()
+    for state in ("intake", "profiled", "plan_approved"):
+        m.advance(state, by="driver")
+    path = tmp_path / "state.json"
+    m.save(path)
+    for rec in json.loads(path.read_text("utf-8"))["history"]:
+        assert rec["at"], f"{rec['state']} has no timestamp"
+
+
+def test_an_explicit_time_is_still_honoured_for_a_repair():
+    # The kwarg survives for tests and out-of-band repair; no CLI exposes it.
+    m = RunStateMachine()
+    assert m.advance("intake", at="2026-09-03T00:00:00Z").at \
+        == "2026-09-03T00:00:00Z"
+
+
+def test_the_state_verb_stamps_the_clock_and_takes_no_time_from_its_caller(
+        tmp_path, capsys):
+    """`galley state` is driven by a headless model, which will happily type a
+    time it only believes is current. It has no flag to type one into, and the
+    record it writes comes from this machine's clock."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    before = datetime.now(timezone.utc)
+    assert main(["galley", "state", str(ws), "--advance", "intake",
+                 "--by", "driver"]) == 0
+    after = datetime.now(timezone.utc)
+    capsys.readouterr()
+    rec = json.loads((ws / "state.json").read_text("utf-8"))["history"][-1]
+    assert before <= datetime.fromisoformat(rec["at"]) <= after
+    assert rec["by"] == "driver"
+
+    # The flag that let a model dictate the time is gone, not merely ignored.
+    with pytest.raises(SystemExit):
+        main(["galley", "state", str(ws), "--advance", "profiled",
+              "--at", "2026-09-06T20:10:00Z"])
+    capsys.readouterr()
+    history = json.loads((ws / "state.json").read_text("utf-8"))["history"]
+    assert len(history) == 1                     # the refused call wrote nothing
 
 
 # --- the state machine -------------------------------------------------------

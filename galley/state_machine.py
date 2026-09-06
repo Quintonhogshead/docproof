@@ -1,9 +1,12 @@
 """Persist forward-only run transitions and verify recorded inputs and
-artifacts on resume. Timestamps are supplied by callers.
+artifacts on resume. Timestamps come from the system clock, never from a
+caller's idea of the time: state.json is the audit trail a stalled run is
+reconstructed from, so a stamp has to be true.
 """
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +27,11 @@ RUN_STATES = (
     "delivered",
 )
 _ORDER = {s: i for i, s in enumerate(RUN_STATES)}
+
+
+def utc_now() -> str:
+    """The current UTC time, ISO 8601 — the one clock the run state reads."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 class ArtifactHash(BaseModel):
@@ -71,13 +79,18 @@ class RunStateMachine(BaseModel):
                 artifacts: list[ArtifactHash] | None = None) -> RunStateRecord:
         """Append a transition and return it. Allow the current state or a
         later state; reject backward and unknown transitions.
+
+        ``at`` is stamped from the system clock unless a caller passes one
+        explicitly (only a test or a repair tool should), so a record can
+        never carry a blank or invented timestamp.
         """
         target = self._index(to_state)
         if self.history and target < self._index(self.current):
             raise StateError(
                 f"cannot move backward from {self.current!r} to {to_state!r}; "
                 f"the state machine is forward-only")
-        rec = RunStateRecord(state=to_state, at=at, by=by, note=note,
+        rec = RunStateRecord(state=to_state, at=at or utc_now(), by=by,
+                             note=note,
                              source_sha256=source_sha256,
                              config_sha256=config_sha256,
                              artifacts=list(artifacts or []))
@@ -160,5 +173,5 @@ def hash_artifact(path: str | Path) -> str:
 
 __all__ = [
     "STATE_SCHEMA_VERSION", "RUN_STATES", "ArtifactHash", "RunStateRecord",
-    "RunStateMachine", "StateError", "hash_artifact",
+    "RunStateMachine", "StateError", "hash_artifact", "utc_now",
 ]

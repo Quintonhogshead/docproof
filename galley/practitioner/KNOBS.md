@@ -92,7 +92,9 @@ ESCALATION (the knob may not exist), not a reason to go read the source.
   sweep to 12); leave `--rounds` off to keep the old reach.
 - **The decision log.** `docproof galley journal RUN --workspace WS --out FILE`
   renders `DECISION_LOG.md` — every action and the reason recorded for it, from
-  the run's own artifacts. $0, no model, no clock. The driver writes it into
+  the run's own artifacts. $0 and no model; the body reads no clock, and the
+  "generated" line is stamped from the system clock when the file is written
+  (there is no timestamp flag to pass). The driver writes it into
   `deliverable/` and the hand-off; regenerate it whenever someone asks how a
   decision was made.
 - **An escalation stops an unattended run.** Anything a phase appends to
@@ -196,6 +198,8 @@ ESCALATION (the knob may not exist), not a reason to go read the source.
   config ships on) are zeroed with every other paid pass.
 - **`galley state`**: pass BOTH `--source` and `--config` on every `--advance`
   and on `--verify-resume` — the resume check is strict about a missing hash.
+  Do NOT pass a time: every record is stamped from the system clock, so
+  state.json and DECISION_LOG.md say when things actually happened.
 
 ## What changed in v0.143.0 (tense/cites verbs + serial-comma guard)
 

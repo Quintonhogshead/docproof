@@ -20,7 +20,8 @@ workspace/<book-slug>/
   PLAN.md            (written by /draft-plan, human-approved at the gate)
   approval.json      (written by `docproof galley approve` from the plan)
   state.json         (the run state machine — `galley state`, advanced with
-                      BOTH --source and --config at every stage)
+                      BOTH --source and --config at every stage; each record
+                      is timestamped from the system clock)
   runs/              (each docproof run's --out dir; *.log slices)
   runs/driver/       (the driver's per-phase logs + driver.json ledger)
   runs/outcome.json  (written by the driver when a run stops: needs_human + why)
@@ -247,8 +248,9 @@ explanation its detector recorded, every withheld row with its status, every
 author query, the verify verdicts, the settle records round by round, the
 certify checks, and the outcome with its evidence. Grouped by phase, then by
 paragraph; a phase that never ran is a one-line "not run" section. It is
-deterministic and reads no clock, so `docproof galley journal RUN --workspace
-WS --out FILE` regenerates it byte for byte at any time. The driver writes it
+deterministic, so `docproof galley journal RUN --workspace WS --out FILE`
+regenerates the same document at any time — only its "generated" line moves,
+stamped from the system clock rather than from anything a caller types. The driver writes it
 to `deliverable/DECISION_LOG.md` at hand-off — and also when a run STOPS, so a
 workspace someone picks up always says what was decided and why it stopped.
 
