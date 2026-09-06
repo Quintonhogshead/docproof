@@ -3,6 +3,7 @@ history, duplicate detection, and reconstruction from a finished run."""
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -99,6 +100,53 @@ def test_reconstruct_content_duplicate_across_findings():
     ]}
     led = reconstruct_from_findings(env)
     assert len(led.duplicates()) == 1
+
+
+def test_every_event_is_stamped_from_the_clock():
+    """The ledger is evidence: an event can carry neither a blank time nor one
+    a caller invented for it."""
+    before = datetime.now(timezone.utc)
+    led = Ledger()
+    led.record("f-1", "detected", wave=1, by="ensemble")
+    led.record("f-1", "merged", wave=2, by="merge-desk")
+    after = datetime.now(timezone.utc)
+    for event in led.history("f-1").events:
+        assert event.at, f"{event.state} has no timestamp"
+        stamped = datetime.fromisoformat(event.at)
+        assert stamped.utcoffset().total_seconds() == 0
+        assert before <= stamped <= after
+
+
+def test_an_explicit_time_is_honoured_for_a_rebuild():
+    led = Ledger()
+    led.record("f-1", "detected", at="2026-09-03T00:00:00+00:00")
+    assert led.history("f-1").events[0].at == "2026-09-03T00:00:00+00:00"
+
+
+def test_a_rebuilt_ledger_shares_one_honest_rebuild_stamp():
+    """findings.json carries no per-finding times, so the rebuild stamps its
+    own moment — once, not a drifting time per event."""
+    before = datetime.now(timezone.utc)
+    led = reconstruct_from_findings({"findings": [
+        {"finding_id": "f-1", "para_id": "b1", "original_text": "teh cat",
+         "error_type": "spelling", "status": "validated"},
+        {"finding_id": "f-2", "para_id": "b2", "original_text": "hte dog",
+         "error_type": "spelling", "status": "rejected"},
+    ]})
+    after = datetime.now(timezone.utc)
+    stamps = {e.at for fid in ("f-1", "f-2")
+              for e in led.history(fid).events}
+    assert len(stamps) == 1
+    assert before <= datetime.fromisoformat(stamps.pop()) <= after
+
+
+def test_loading_a_ledger_never_backfills_a_time():
+    # A history someone else wrote is left exactly as it was written.
+    back = Ledger.from_json({"findings": [
+        {"finding_id": "f-1", "key": "k", "state": "detected",
+         "events": [{"state": "detected", "wave": 1, "by": "d", "at": ""}]},
+    ]})
+    assert back.history("f-1").events[0].at == ""
 
 
 def test_all_states_are_known():

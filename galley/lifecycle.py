@@ -5,18 +5,25 @@ Each finding gets a content-derived stable key and append-only history of states
     detected → verified → held → promoted / rejected → queried → merged →
     delivered  (or dropped)
 
-Each transition records its wave, actor, and note. Timestamps are caller-supplied
-for deterministic reconstruction; the ledger complements the case file.
+Each transition records its wave, actor, note, and the time it was recorded —
+read from the system clock, never from a caller's idea of the time, because the
+ledger is evidence. A history loaded from disk keeps whatever it was stamped
+with; nothing here backfills a time onto a past someone else wrote.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from galley.contracts import _known
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 LEDGER_SCHEMA_VERSION = 1
 
@@ -67,7 +74,7 @@ class LifecycleEvent:
     wave: int = 0
     by: str = ""            # the lane/detector/judge that moved it
     note: str = ""
-    at: str = ""            # optional caller-supplied timestamp (never a clock)
+    at: str = ""            # when the transition was recorded (system clock)
 
     def to_json(self) -> dict[str, Any]:
         return {"state": self.state, "wave": self.wave, "by": self.by,
@@ -116,7 +123,11 @@ class Ledger:
         """Append a state transition for `finding_id`, creating its lifecycle on
         first sight. A state outside LIFECYCLE_STATES is refused (a typo must not
         become a silent new state). Recording the SAME state twice in a row is a
-        no-op, so an idempotent re-run does not bloat the history."""
+        no-op, so an idempotent re-run does not bloat the history.
+
+        ``at`` is stamped from the system clock unless a caller passes one —
+        which only a rebuild of past events, a test, or a repair tool should —
+        so an event can never carry a blank or invented time."""
         if state not in LIFECYCLE_STATES:
             raise ValueError(f"unknown lifecycle state {state!r}; expected one "
                              f"of {LIFECYCLE_STATES}")
@@ -130,7 +141,7 @@ class Ledger:
                 lc.events[-1].wave == wave:
             return
         lc.events.append(LifecycleEvent(state=state, wave=wave, by=by,
-                                        note=note, at=at))
+                                        note=note, at=at or _now()))
 
     def history(self, finding_id: str) -> FindingLifecycle | None:
         return self._by_id.get(finding_id)
@@ -187,8 +198,14 @@ def reconstruct_from_findings(envelope: dict[str, Any], *, wave: int = 1,
     ``status``/``force_query`` implies (a validated finding → merged, a query →
     queried, a rejection → rejected/dropped). The stable key groups any
     content-duplicates so ``duplicates()`` and ``by_state()`` are populated
-    immediately."""
+    immediately.
+
+    findings.json carries no per-finding times, so every event in a rebuilt
+    ledger shares ONE stamp: the moment of the rebuild. It says when the
+    history was reconstructed, which is the only thing the envelope can
+    honestly support — not when the finding was detected."""
     led = Ledger()
+    rebuilt_at = _now()
     rows = envelope.get("findings", []) if isinstance(envelope, dict) else []
     for row in rows:
         if not isinstance(row, dict):
@@ -200,16 +217,17 @@ def reconstruct_from_findings(envelope: dict[str, Any], *, wave: int = 1,
                          str(row.get("original_text", row.get("find", ""))),
                          str(row.get("error_type", "")))
         detector = by or str(row.get("detector", "") or row.get("lane", ""))
-        led.record(fid, "detected", key=key, wave=wave, by=detector)
+        led.record(fid, "detected", key=key, wave=wave, by=detector,
+                   at=rebuilt_at)
         status = str(row.get("status", "") or "")
         if row.get("force_query") and status not in ("query",):
             led.record(fid, "queried", key=key, wave=wave, by=detector,
-                       note="force_query")
+                       note="force_query", at=rebuilt_at)
             continue
         terminal = _STATUS_TO_STATE.get(status)
         if terminal and terminal != "detected":
             led.record(fid, terminal, key=key, wave=wave, by=detector,
-                       note=status)
+                       note=status, at=rebuilt_at)
     return led
 
 
