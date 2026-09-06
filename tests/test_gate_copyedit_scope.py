@@ -1,0 +1,106 @@
+"""The plan gate: what a run WILL DO beats what the plan says about it."""
+from __future__ import annotations
+
+import textwrap
+
+from galley.driver import (config_copyedit_lanes, gate_decision, read_plan)
+
+
+def _plan(tmp_path, body: str):
+    p = tmp_path / "PLAN.md"
+    p.write_text(textwrap.dedent(body), encoding="utf-8")
+    return read_plan(p)
+
+
+def _config(tmp_path, body: str):
+    p = tmp_path / "mech.yaml"
+    p.write_text(textwrap.dedent(body), encoding="utf-8")
+    return p
+
+
+def test_mechanical_rotated_reread_is_not_a_copyedit_line(tmp_path):
+    """The line that refused every book on 2026-09-06: verify's rotated
+    two-pass reread is mechanical, not the tabled copy-edit reread phase."""
+    plan = _plan(tmp_path, """
+        1. sweeps  $0.00
+        7. verify (rotated reread, 2 passes/window) + settle + certify  $0.10
+        TOTAL $1.15
+        """)
+    assert plan.copyedit_lines == []
+    assert gate_decision(plan, 10.0)[0] is True
+
+
+def test_a_bare_reread_line_is_still_refused(tmp_path):
+    """With no mechanical phase named, a re-read line is the copy-edit phase."""
+    plan = _plan(tmp_path, """
+        4. wave-2 re-read of the opening chapters  $2.00
+        TOTAL $2.00
+        """)
+    assert plan.copyedit_lines
+    approved, reason = gate_decision(plan, 10.0)
+    assert approved is False
+    assert "copy-edit lane in scope" in reason
+
+
+def test_flights_are_refused_even_beside_mechanical_words(tmp_path):
+    """Only a bare re-read claim is ambiguous. 'flights' next to 'settle' is
+    still the flight deck, and a nearby mechanical word must not excuse it."""
+    plan = _plan(tmp_path, """
+        5. flights (6 lenses) then settle  $3.00
+        TOTAL $3.00
+        """)
+    assert plan.copyedit_lines
+    assert gate_decision(plan, 10.0)[0] is False
+
+
+def test_config_refuses_a_lane_the_prose_never_mentions(tmp_path):
+    """The structural half: a plan that reads clean but a config that opens
+    the rewrite lane is refused on the config."""
+    plan = _plan(tmp_path, """
+        1. mechanical ladder  $1.00
+        TOTAL $1.00
+        """)
+    cfg = _config(tmp_path, """
+        smoothing:
+          enabled: true
+          edits: true
+        rewrite:
+          enabled: false
+        """)
+    assert config_copyedit_lanes(cfg) == ["smoothing.enabled", "smoothing.edits"]
+    approved, reason = gate_decision(plan, 10.0, config_path=cfg)
+    assert approved is False
+    assert "run config opens" in reason
+    assert "smoothing.enabled" in reason
+
+
+def test_a_locked_down_config_approves(tmp_path):
+    plan = _plan(tmp_path, """
+        1. mechanical ladder  $1.00
+        TOTAL $1.00
+        """)
+    cfg = _config(tmp_path, """
+        smoothing:
+          enabled: false
+          edits: false
+        rewrite:
+          enabled: false
+        """)
+    assert config_copyedit_lanes(cfg) == []
+    assert gate_decision(plan, 10.0, config_path=cfg)[0] is True
+
+
+def test_missing_config_is_not_fatal(tmp_path):
+    """A config is not written until the plan is drafted; absence falls back
+    to the prose scan rather than refusing."""
+    assert config_copyedit_lanes(tmp_path / "nope.yaml") == []
+
+
+def test_budget_still_outranks_everything(tmp_path):
+    plan = _plan(tmp_path, """
+        1. mechanical ladder  $99.00
+        TOTAL $99.00
+        """)
+    approved, reason = gate_decision(plan, 10.0)
+    assert approved is False
+    assert "over the $10.00 budget" in reason

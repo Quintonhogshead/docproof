@@ -688,6 +688,26 @@ _TOTAL_RE = re.compile(r"^[^\n]*\bTOTAL\b[^$\n]*\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)
 _COPYEDIT_RE = re.compile(
     r"\b(copy[- ]?edit(?:ing|s)?|flight[- ]?deck|flights?|merge[- ]?desk|"
     r"smoothing|rewrite lane|wave[- ]?2|re-?read)\b", re.IGNORECASE)
+# "reread" names two unrelated things: the copy-edit `reread` PHASE, which
+# go-live tables, and the mechanical rotated two-pass reread that verify and
+# settle have run since v0.187.0. A line that reaches for the second while
+# naming only mechanical phases is not a copy-edit line, and refusing it
+# blocked every book whose plan described verify that way.
+_MECHANICAL_CONTEXT_RE = re.compile(
+    r"\b(verify|settle|certify|sweeps?|ladder|audit|chapter sweep)\b",
+    re.IGNORECASE)
+
+
+def _is_copyedit_line(line: str) -> bool:
+    """Whether a plan line puts a copy-edit lane in scope."""
+    hits = {m.group(0).lower() for m in _COPYEDIT_RE.finditer(line)}
+    if not hits or _NEGATED_RE.search(line):
+        return False
+    # Only a bare re-read claim is ambiguous; every other term is unmistakably
+    # the copy-edit lane, so a mechanical word nearby must not excuse it.
+    if all(h.replace("-", "") == "reread" for h in hits):
+        return not _MECHANICAL_CONTEXT_RE.search(line)
+    return True
 # Allow a plan to mention excluded copyediting work.
 _NEGATED_RE = re.compile(
     r"\b(no|none|not|never|off|omitted|omit|excluded|exclude|skipped?|skip|"
@@ -723,20 +743,60 @@ def read_plan(path: str | Path) -> PlanSummary:
     totals = _TOTAL_RE.findall(text)
     total = float(totals[-1].replace(",", "")) if totals else None
     offenders = [ln.strip() for ln in text.splitlines()
-                 if _COPYEDIT_RE.search(ln) and not _NEGATED_RE.search(ln)]
+                 if _is_copyedit_line(ln)]
     return PlanSummary(total, offenders, text)
 
 
-def gate_decision(plan: PlanSummary, budget_usd: float
+# Config keys that ARE the copy-edit lanes. The stage locks all three shut;
+# a run config is the structural truth about what a wave will do, where
+# PLAN.md is only the prose describing it.
+_COPYEDIT_CONFIG_KEYS = (("smoothing", "enabled"), ("smoothing", "edits"),
+                         ("rewrite", "enabled"), ("flights", "enabled"))
+
+
+def config_copyedit_lanes(path: str | Path) -> list[str]:
+    """Which copy-edit lanes a run config actually turns on, as dotted keys.
+
+    The prose gate reads what the practitioner WROTE; this reads what the run
+    will DO. Config wins where they disagree, because the config is what
+    `docproof review` executes. A missing or unreadable config returns [] —
+    the caller decides whether that is fatal, since a config is not written
+    until the plan is drafted."""
+    try:
+        import yaml
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    on = []
+    for section, key in _COPYEDIT_CONFIG_KEYS:
+        block = data.get(section)
+        if isinstance(block, dict) and block.get(key) is True:
+            on.append(f"{section}.{key}")
+    return on
+
+
+def gate_decision(plan: PlanSummary, budget_usd: float, *,
+                  config_path: str | Path | None = None
                   ) -> tuple[bool, str]:
     """``--approve auto``'s rule: approve a plan that is priced, inside the
-    budget, and mechanical-only. Returns (approved, reason)."""
+    budget, and mechanical-only. Returns (approved, reason).
+
+    When a run config exists it is the AUTHORITY on which lanes are open —
+    it is what `docproof review` executes, while PLAN.md is prose about it.
+    The prose scan then only has to catch a plan that promises copy-edit work
+    the config has not been written for yet."""
     if plan.total_usd is None:
         return False, ("PLAN.md has no parseable TOTAL line — a plan the "
                        "driver cannot price is a plan it cannot approve")
     if plan.total_usd > budget_usd:
         return False, (f"the plan totals ${plan.total_usd:.2f}, over the "
                        f"${budget_usd:.2f} budget")
+    lanes = config_copyedit_lanes(config_path) if config_path else []
+    if lanes:
+        return False, (f"the run config opens {len(lanes)} copy-edit lane(s), "
+                       f"which go-live does not do: {', '.join(lanes)}")
     if not plan.mechanical_only:
         quoted = "; ".join(ln[:110] for ln in plan.copyedit_lines[:3])
         return False, (f"{len(plan.copyedit_lines)} plan line(s) put a "
@@ -1086,11 +1146,16 @@ class Driver:
                        f"{plan_path} and then resume with `--from approve`")
             return False
         plan = read_plan(plan_path)
-        approved, reason = gate_decision(plan, self.budget_usd)
+        config_path = self.workspace / "runs" / "mech.yaml"
+        approved, reason = gate_decision(
+            plan, self.budget_usd,
+            config_path=config_path if config_path.is_file() else None)
         result.gate = {"policy": self.approve, "approved": approved,
                        "reason": reason,
                        "total_usd": plan.total_usd,
-                       "copyedit_lines": list(plan.copyedit_lines)}
+                       "copyedit_lines": list(plan.copyedit_lines),
+                       "config_lanes": config_copyedit_lanes(config_path)
+                       if config_path.is_file() else []}
         if approved:
             record_approval(plan_path, reason, by="galley drive (auto)")
             self.log(f"plan gate: APPROVED — {reason}")
@@ -1421,7 +1486,8 @@ __all__ = [
     "REQUIRED_STATE", "SETTLE_QUIET_FLOOR", "SETTLE_QUIET_SHARE",
     "SETTLE_ROUNDS", "TIMEOUT_RC", "DriveResult", "Driver", "DriverError",
     "PhaseResult", "PhaseSpec", "PlanSummary", "build_env", "build_handoff",
-    "detect_turn_cap", "drive_token", "gate_decision", "gate_question",
+    "config_copyedit_lanes", "detect_turn_cap", "drive_token",
+    "gate_decision", "gate_question",
     "handoff_base",
     "phase_prompt", "phases_for", "read_plan", "record_approval",
     "reply_after", "seed_workspace", "select_phases", "settle_flags",
