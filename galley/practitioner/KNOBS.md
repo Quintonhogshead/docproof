@@ -312,7 +312,7 @@ no sibling dir exists, so it is self-contained wherever it lives.
 ensemble:
   detectors:
     - {model: gpt-5.6-luna, effort: low}
-    - {model: claude-haiku-4-5, effort: low}   # diverse union = recall
+    - {model: claude-sonnet-5, effort: low}    # diverse union = recall ($0: subscription lane)
   verifier_model: gpt-5.6-luna                  # precision over the disputed set
   verifier_effort: high
   verify_policy: disputed
@@ -390,7 +390,7 @@ wrongly dropped on a bad grep.)
 | `consistency.accent_loanwords` | on | Query bare loanwords the dictionary accents (Si→Sí, senor→señor); curated table, one query per word, protected names skipped. |
 | `toccheck.enabled` | on | Contents-vs-body read (Luna over a small structure extract, ~pennies): entry wording vs the chapter page, part/chapter numbering, listed-but-missing entries. Query-only, cached per draft. |
 | `style.heading_vocab_queries` | on | Query AFTERWARD/FOREWARD-class headings (standard label is AFTERWORD/FOREWORD). |
-| `ensemble` | off | Luna+Haiku union + a verifier — the recall wave-1 recipe. Ready-made as `--stage mechanical-wave` (see the ensemble block above); fires ONLY through `error_types`. |
+| `ensemble` | off | Luna+Sonnet union + a verifier — the recall wave-1 recipe. Ready-made as `--stage mechanical-wave` (see the ensemble block above); fires ONLY through `error_types`. |
 | `error_types` | full shipped list | The typed LLM passes. **OMITTING THE SECTION ZEROES EVERY PASS** and makes any `ensemble:` inert (`0 error type(s) in 0 pass(es)`). Restate the full default list to keep them; the ensemble only fires through these. |
 | `error_types[key]` | `{group,passes,token_budget}` | Per-category repeat reads. `passes:2` = union re-read (house-comma recipe); costs ~2× that category. Custom EDIT-channel replay types go here (see below). |
 | `languagetool.picky` | off | +~1 candidate/44k words; most picky rules are the filtered style class. |

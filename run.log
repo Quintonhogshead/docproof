@@ -1,0 +1,1152 @@
+2026-09-06 16:13:14,241 DEBUG   docproof.ingest: para body-0000 [body/Normal] 70 chars
+2026-09-06 16:13:14,241 DEBUG   docproof.ingest: para body-0001 [body/Normal] 68 chars
+2026-09-06 16:13:14,241 DEBUG   docproof.ingest: para body-0002 [body/Normal] 69 chars
+2026-09-06 16:13:14,241 DEBUG   docproof.ingest: para body-0003 [body/Normal] 70 chars
+2026-09-06 16:13:14,241 INFO    docproof.ingest: Ingested 4 paragraph(s) from seeded.docx: 4 for the model, 0 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:14,272 DEBUG   docproof.ingest: para body-0000 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0001 [body/Normal] 278 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0002 [body/Normal] 221 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0003 [body/Normal] 266 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0004 [body/Normal] 240 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0005 [body/Normal] 257 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0006 [body/Normal] 235 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0007 [body/Normal] 307 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0008 [body/Normal] 327 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0009 [body/Normal] 290 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0010 [body/Normal] 318 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0011 [body/Normal] 360 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0012 [body/Normal] 361 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0013 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0014 [body/Normal] 264 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0015 [body/Normal] 238 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0016 [body/Normal] 254 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0017 [body/Normal] 234 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0018 [body/Normal] 253 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0019 [body/Normal] 228 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0020 [body/Normal] 341 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0021 [body/Normal] 298 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0022 [body/Normal] 298 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0023 [body/Normal] 312 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0024 [body/Normal] 341 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0025 [body/Normal] 329 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0026 [body/Heading1] 13 chars (sweeps only: heading)
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0027 [body/Normal] 250 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0028 [body/Normal] 224 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0029 [body/Normal] 222 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0030 [body/Normal] 231 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0031 [body/Normal] 225 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0032 [body/Normal] 225 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0033 [body/Normal] 329 chars
+2026-09-06 16:13:14,273 DEBUG   docproof.ingest: para body-0034 [body/Normal] 287 chars
+2026-09-06 16:13:14,274 DEBUG   docproof.ingest: para body-0035 [body/Normal] 298 chars
+2026-09-06 16:13:14,274 DEBUG   docproof.ingest: para body-0036 [body/Normal] 330 chars
+2026-09-06 16:13:14,274 INFO    docproof.ingest: Ingested 37 paragraph(s) from tiny_novel.docx: 34 for the model, 3 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:14,348 INFO    docproof.pipeline: Proofreading as U.S. English (The Chicago Manual of Style, 17th edition; Merriam-Webster, for spelling; The Atmosphere Press House Style Guide, which overrides Chicago where they differ)
+2026-09-06 16:13:14,350 INFO    docproof.normalize: Normalized silently: 2 quote(s) curled, 0 space run(s) collapsed across 2 paragraph(s); 0 mark(s) left straight as ambiguous.
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0000 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0001 [body/Normal] 278 chars
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0002 [body/Normal] 221 chars
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0003 [body/Normal] 266 chars
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0004 [body/Normal] 240 chars
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0005 [body/Normal] 257 chars
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0006 [body/Normal] 235 chars
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0007 [body/Normal] 307 chars
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0008 [body/Normal] 327 chars
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0009 [body/Normal] 290 chars
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0010 [body/Normal] 318 chars
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0011 [body/Normal] 360 chars
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0012 [body/Normal] 361 chars
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0013 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0014 [body/Normal] 264 chars
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0015 [body/Normal] 238 chars
+2026-09-06 16:13:14,351 DEBUG   docproof.ingest: para body-0016 [body/Normal] 254 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0017 [body/Normal] 234 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0018 [body/Normal] 253 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0019 [body/Normal] 228 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0020 [body/Normal] 341 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0021 [body/Normal] 298 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0022 [body/Normal] 298 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0023 [body/Normal] 312 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0024 [body/Normal] 341 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0025 [body/Normal] 329 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0026 [body/Heading1] 13 chars (sweeps only: heading)
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0027 [body/Normal] 250 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0028 [body/Normal] 224 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0029 [body/Normal] 222 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0030 [body/Normal] 231 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0031 [body/Normal] 225 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0032 [body/Normal] 225 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0033 [body/Normal] 329 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0034 [body/Normal] 287 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0035 [body/Normal] 298 chars
+2026-09-06 16:13:14,352 DEBUG   docproof.ingest: para body-0036 [body/Normal] 330 chars
+2026-09-06 16:13:14,352 INFO    docproof.ingest: Ingested 37 paragraph(s) from tiny_novel.docx: 34 for the model, 3 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:14,352 INFO    docproof.chunker: Packed 34 of 37 paragraphs into 2 chunks (budget 2500 tokens)
+2026-09-06 16:13:14,414 INFO    docproof.pipeline: 31 error type(s) in 10 category/-ies, 10 pass(es): repeated_word+spelling+homophone_confusion+apostrophe_error+capitalization; serial_comma+complex_list_semicolon+introductory_comma+direct_address_comma+tag_question_comma; dialogue_tag+speaker_change; number_style+currency_style; ly_adverb_hyphen+title_italics+tv_show_quotes; comma_splice+run_on_sentence+compound_sentence_comma+subject_verb_agreement+that_which+that_who; tense_shift+pronoun_agreement+missing_word+preposition_error; try_and+list_intro_colon; terminal_mark; unnecessary_comma
+2026-09-06 16:13:14,415 INFO    docproof.sweeps: sweep_ellipsis: 0 flagged, 0 remaining
+2026-09-06 16:13:14,416 INFO    docproof.sweeps: sweep_dash: 0 flagged, 0 remaining
+2026-09-06 16:13:14,416 INFO    docproof.sweeps: sweep_stacked_punctuation: 0 flagged, 0 remaining
+2026-09-06 16:13:14,417 INFO    docproof.sweeps: sweep_doubled_word: 1 flagged, 0 remaining
+2026-09-06 16:13:14,418 INFO    docproof.sweeps: sweep_century: 0 flagged, 0 remaining
+2026-09-06 16:13:14,418 INFO    docproof.sweeps: sweep_compound_number: 0 flagged, 0 remaining
+2026-09-06 16:13:14,419 INFO    docproof.sweeps: sweep_dialogue_tag: 0 flagged, 0 remaining
+2026-09-06 16:13:14,420 INFO    docproof.sweeps: sweep_terminal_period: 0 flagged, 0 remaining
+2026-09-06 16:13:14,420 INFO    docproof.sweeps: sweep_quote_punctuation: 0 flagged, 0 remaining
+2026-09-06 16:13:14,421 INFO    docproof.sweeps: sweep_nested_quote: 0 flagged, 0 remaining
+2026-09-06 16:13:14,422 INFO    docproof.sweeps: sweep_time_of_day: 0 flagged, 0 remaining
+2026-09-06 16:13:14,423 INFO    docproof.sweeps: sweep_deity_capital: 0 flagged, 0 remaining
+2026-09-06 16:13:14,423 INFO    docproof.sweeps: sweep_dialogue_splice: 0 flagged, 0 remaining
+2026-09-06 16:13:14,424 INFO    docproof.sweeps: sweep_initialism: 0 flagged, 0 remaining
+2026-09-06 16:13:14,424 INFO    docproof.sweeps: sweep_decade_apostrophe: 0 flagged, 0 remaining
+2026-09-06 16:13:14,425 INFO    docproof.sweeps: sweep_trailing_space: 0 flagged, 0 remaining
+2026-09-06 16:13:15,511 INFO    docproof.spellscan: Spell scan: 1810 tokens, 618 unique, 4 unknown → 0 protected as names, 4 to look at, 0 repeated
+2026-09-06 16:13:15,528 INFO    docproof.consistency: Consistency scan: 0 term(s), 0 spelling-variant(s), 0 abbreviation(s), 0 acronym-case(s), 0 accent(s), 0 policy form(s), 0 deity-pronoun stray(s), 0 bare-hour time(s), and 0 name(s) with diacritic drift — 0 occurrence(s) to correct, 0 to ask about
+2026-09-06 16:13:15,637 INFO    docproof.adjudicate: Adjudication: 1 candidate(s) to rule on (typo=1)
+2026-09-06 16:13:15,654 INFO    docproof.examination: Examination graph shadow: generated 937 site(s), 1874 event(s)
+2026-09-06 16:13:15,655 INFO    docproof.validator: Validated 2/4 findings (query=2, validated=2)
+2026-09-06 16:13:15,656 INFO    docproof.validator: Validated 0/0 findings ()
+2026-09-06 16:13:15,657 INFO    docproof.validator: Validated 0/0 findings ()
+2026-09-06 16:13:15,658 INFO    docproof.reassembler: Applied 2 tracked change(s); 0 skipped by safety checks.
+2026-09-06 16:13:15,658 INFO    docproof.reassembler: Wrote 2 margin queries, which change nothing.
+2026-09-06 16:13:15,659 ERROR   docproof.pipeline: Examination graph shadow reporting failed; the reviewed manuscript path is unchanged.
+Traceback (most recent call last):
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/pipeline.py", line 2581, in finish
+    prepared.examination.observe_findings(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        validated, prepared.doc, applied_ids=stats.applied)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 114, in observe_findings
+    self._observe_target(site.site_id, finding, applied)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 375, in _observe_target
+    self._confirm_site(site_id, finding)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 553, in _confirm_site
+    self.ledger.transition(
+    ~~~~~~~~~~~~~~~~~~~~~~^
+        site_id, target, actor=finding.chunk_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        reason=f"legacy finding {finding.finding_id} confirmed this site",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        evidence={"finding_id": finding.finding_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                  "confidence": finding.confidence})
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/site_ledger.py", line 160, in transition
+    return self._append(site_id, state, actor, reason, evidence, verdict)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/site_ledger.py", line 234, in _append
+    event = LedgerEvent(
+        sequence=len(self._events) + 1, site_id=site_id, state=state,
+        actor=actor, reason=reason, evidence=evidence or {},
+        verdict=verdict, site=site, event_kind=event_kind)
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.venv/lib/python3.14/site-packages/pydantic/main.py", line 263, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+pydantic_core._pydantic_core.ValidationError: 1 validation error for LedgerEvent
+actor
+  String should have at least 1 character [type=string_too_short, input_value='', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.13/v/string_too_short
+2026-09-06 16:13:15,661 INFO    docproof.audit: Reject-all audit passed: 37 paragraph(s) return to their ingested text exactly.
+2026-09-06 16:13:15,662 INFO    docproof.reporting: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_run_galley_produces_every0/out/tiny_novel/.deliverable-staging/findings.json
+2026-09-06 16:13:15,663 INFO    docproof.reporting: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_run_galley_produces_every0/out/tiny_novel/.deliverable-staging/summary.md
+2026-09-06 16:13:15,698 INFO    docproof.changelog: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_run_galley_produces_every0/out/tiny_novel/.deliverable-staging/tiny_novel - Atmosphere Press Proofreader Change Log.docx
+2026-09-06 16:13:15,708 DEBUG   galley.memory.ingest: review finding is arbitration bookkeeping; ignoring: 'overlaps earlier finding g-1; routed to query'
+2026-09-06 16:13:15,708 DEBUG   galley.memory.ingest: review finding is arbitration bookkeeping; ignoring: 'overlaps earlier finding g-1; routed to query'
+2026-09-06 16:13:15,708 INFO    docproof.app.jobs: Galley memory ingest for 'tiny_novel.docx': 2 new, 0 duplicate, 0 skipped, 2 ignored
+2026-09-06 16:13:15,751 DEBUG   docproof.ingest: para body-0000 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:15,751 DEBUG   docproof.ingest: para body-0001 [body/Normal] 278 chars
+2026-09-06 16:13:15,751 DEBUG   docproof.ingest: para body-0002 [body/Normal] 221 chars
+2026-09-06 16:13:15,751 DEBUG   docproof.ingest: para body-0003 [body/Normal] 266 chars
+2026-09-06 16:13:15,751 DEBUG   docproof.ingest: para body-0004 [body/Normal] 240 chars
+2026-09-06 16:13:15,751 DEBUG   docproof.ingest: para body-0005 [body/Normal] 257 chars
+2026-09-06 16:13:15,751 DEBUG   docproof.ingest: para body-0006 [body/Normal] 235 chars
+2026-09-06 16:13:15,751 DEBUG   docproof.ingest: para body-0007 [body/Normal] 307 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0008 [body/Normal] 327 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0009 [body/Normal] 290 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0010 [body/Normal] 318 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0011 [body/Normal] 360 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0012 [body/Normal] 361 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0013 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0014 [body/Normal] 264 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0015 [body/Normal] 238 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0016 [body/Normal] 254 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0017 [body/Normal] 234 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0018 [body/Normal] 253 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0019 [body/Normal] 228 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0020 [body/Normal] 341 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0021 [body/Normal] 298 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0022 [body/Normal] 298 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0023 [body/Normal] 312 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0024 [body/Normal] 341 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0025 [body/Normal] 329 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0026 [body/Heading1] 13 chars (sweeps only: heading)
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0027 [body/Normal] 250 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0028 [body/Normal] 224 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0029 [body/Normal] 222 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0030 [body/Normal] 231 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0031 [body/Normal] 225 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0032 [body/Normal] 225 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0033 [body/Normal] 329 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0034 [body/Normal] 287 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0035 [body/Normal] 298 chars
+2026-09-06 16:13:15,752 DEBUG   docproof.ingest: para body-0036 [body/Normal] 330 chars
+2026-09-06 16:13:15,752 INFO    docproof.ingest: Ingested 37 paragraph(s) from tiny_novel.docx: 34 for the model, 3 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:15,829 INFO    docproof.pipeline: Proofreading as U.S. English (The Chicago Manual of Style, 17th edition; Merriam-Webster, for spelling; The Atmosphere Press House Style Guide, which overrides Chicago where they differ)
+2026-09-06 16:13:15,830 INFO    docproof.normalize: Normalized silently: 2 quote(s) curled, 0 space run(s) collapsed across 2 paragraph(s); 0 mark(s) left straight as ambiguous.
+2026-09-06 16:13:15,831 DEBUG   docproof.ingest: para body-0000 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:15,831 DEBUG   docproof.ingest: para body-0001 [body/Normal] 278 chars
+2026-09-06 16:13:15,831 DEBUG   docproof.ingest: para body-0002 [body/Normal] 221 chars
+2026-09-06 16:13:15,831 DEBUG   docproof.ingest: para body-0003 [body/Normal] 266 chars
+2026-09-06 16:13:15,831 DEBUG   docproof.ingest: para body-0004 [body/Normal] 240 chars
+2026-09-06 16:13:15,831 DEBUG   docproof.ingest: para body-0005 [body/Normal] 257 chars
+2026-09-06 16:13:15,831 DEBUG   docproof.ingest: para body-0006 [body/Normal] 235 chars
+2026-09-06 16:13:15,831 DEBUG   docproof.ingest: para body-0007 [body/Normal] 307 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0008 [body/Normal] 327 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0009 [body/Normal] 290 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0010 [body/Normal] 318 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0011 [body/Normal] 360 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0012 [body/Normal] 361 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0013 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0014 [body/Normal] 264 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0015 [body/Normal] 238 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0016 [body/Normal] 254 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0017 [body/Normal] 234 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0018 [body/Normal] 253 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0019 [body/Normal] 228 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0020 [body/Normal] 341 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0021 [body/Normal] 298 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0022 [body/Normal] 298 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0023 [body/Normal] 312 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0024 [body/Normal] 341 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0025 [body/Normal] 329 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0026 [body/Heading1] 13 chars (sweeps only: heading)
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0027 [body/Normal] 250 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0028 [body/Normal] 224 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0029 [body/Normal] 222 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0030 [body/Normal] 231 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0031 [body/Normal] 225 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0032 [body/Normal] 225 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0033 [body/Normal] 329 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0034 [body/Normal] 287 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0035 [body/Normal] 298 chars
+2026-09-06 16:13:15,832 DEBUG   docproof.ingest: para body-0036 [body/Normal] 330 chars
+2026-09-06 16:13:15,832 INFO    docproof.ingest: Ingested 37 paragraph(s) from tiny_novel.docx: 34 for the model, 3 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:15,833 INFO    docproof.chunker: Packed 34 of 37 paragraphs into 2 chunks (budget 2500 tokens)
+2026-09-06 16:13:15,895 INFO    docproof.pipeline: 31 error type(s) in 10 category/-ies, 10 pass(es): repeated_word+spelling+homophone_confusion+apostrophe_error+capitalization; serial_comma+complex_list_semicolon+introductory_comma+direct_address_comma+tag_question_comma; dialogue_tag+speaker_change; number_style+currency_style; ly_adverb_hyphen+title_italics+tv_show_quotes; comma_splice+run_on_sentence+compound_sentence_comma+subject_verb_agreement+that_which+that_who; tense_shift+pronoun_agreement+missing_word+preposition_error; try_and+list_intro_colon; terminal_mark; unnecessary_comma
+2026-09-06 16:13:15,895 INFO    docproof.sweeps: sweep_ellipsis: 0 flagged, 0 remaining
+2026-09-06 16:13:15,896 INFO    docproof.sweeps: sweep_dash: 0 flagged, 0 remaining
+2026-09-06 16:13:15,897 INFO    docproof.sweeps: sweep_stacked_punctuation: 0 flagged, 0 remaining
+2026-09-06 16:13:15,898 INFO    docproof.sweeps: sweep_doubled_word: 1 flagged, 0 remaining
+2026-09-06 16:13:15,898 INFO    docproof.sweeps: sweep_century: 0 flagged, 0 remaining
+2026-09-06 16:13:15,899 INFO    docproof.sweeps: sweep_compound_number: 0 flagged, 0 remaining
+2026-09-06 16:13:15,900 INFO    docproof.sweeps: sweep_dialogue_tag: 0 flagged, 0 remaining
+2026-09-06 16:13:15,900 INFO    docproof.sweeps: sweep_terminal_period: 0 flagged, 0 remaining
+2026-09-06 16:13:15,901 INFO    docproof.sweeps: sweep_quote_punctuation: 0 flagged, 0 remaining
+2026-09-06 16:13:15,901 INFO    docproof.sweeps: sweep_nested_quote: 0 flagged, 0 remaining
+2026-09-06 16:13:15,902 INFO    docproof.sweeps: sweep_time_of_day: 0 flagged, 0 remaining
+2026-09-06 16:13:15,903 INFO    docproof.sweeps: sweep_deity_capital: 0 flagged, 0 remaining
+2026-09-06 16:13:15,903 INFO    docproof.sweeps: sweep_dialogue_splice: 0 flagged, 0 remaining
+2026-09-06 16:13:15,904 INFO    docproof.sweeps: sweep_initialism: 0 flagged, 0 remaining
+2026-09-06 16:13:15,904 INFO    docproof.sweeps: sweep_decade_apostrophe: 0 flagged, 0 remaining
+2026-09-06 16:13:15,905 INFO    docproof.sweeps: sweep_trailing_space: 0 flagged, 0 remaining
+2026-09-06 16:13:16,989 INFO    docproof.spellscan: Spell scan: 1810 tokens, 618 unique, 4 unknown → 0 protected as names, 4 to look at, 0 repeated
+2026-09-06 16:13:17,005 INFO    docproof.consistency: Consistency scan: 0 term(s), 0 spelling-variant(s), 0 abbreviation(s), 0 acronym-case(s), 0 accent(s), 0 policy form(s), 0 deity-pronoun stray(s), 0 bare-hour time(s), and 0 name(s) with diacritic drift — 0 occurrence(s) to correct, 0 to ask about
+2026-09-06 16:13:17,113 INFO    docproof.adjudicate: Adjudication: 1 candidate(s) to rule on (typo=1)
+2026-09-06 16:13:17,127 INFO    docproof.examination: Examination graph shadow: generated 937 site(s), 1874 event(s)
+2026-09-06 16:13:17,128 INFO    docproof.validator: Validated 2/4 findings (query=2, validated=2)
+2026-09-06 16:13:17,129 INFO    docproof.validator: Validated 0/0 findings ()
+2026-09-06 16:13:17,130 INFO    docproof.validator: Validated 0/0 findings ()
+2026-09-06 16:13:17,131 INFO    docproof.reassembler: Applied 2 tracked change(s); 0 skipped by safety checks.
+2026-09-06 16:13:17,131 INFO    docproof.reassembler: Wrote 2 margin queries, which change nothing.
+2026-09-06 16:13:17,132 ERROR   docproof.pipeline: Examination graph shadow reporting failed; the reviewed manuscript path is unchanged.
+Traceback (most recent call last):
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/pipeline.py", line 2581, in finish
+    prepared.examination.observe_findings(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        validated, prepared.doc, applied_ids=stats.applied)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 114, in observe_findings
+    self._observe_target(site.site_id, finding, applied)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 375, in _observe_target
+    self._confirm_site(site_id, finding)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 553, in _confirm_site
+    self.ledger.transition(
+    ~~~~~~~~~~~~~~~~~~~~~~^
+        site_id, target, actor=finding.chunk_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        reason=f"legacy finding {finding.finding_id} confirmed this site",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        evidence={"finding_id": finding.finding_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                  "confidence": finding.confidence})
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/site_ledger.py", line 160, in transition
+    return self._append(site_id, state, actor, reason, evidence, verdict)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/site_ledger.py", line 234, in _append
+    event = LedgerEvent(
+        sequence=len(self._events) + 1, site_id=site_id, state=state,
+        actor=actor, reason=reason, evidence=evidence or {},
+        verdict=verdict, site=site, event_kind=event_kind)
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.venv/lib/python3.14/site-packages/pydantic/main.py", line 263, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+pydantic_core._pydantic_core.ValidationError: 1 validation error for LedgerEvent
+actor
+  String should have at least 1 character [type=string_too_short, input_value='', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.13/v/string_too_short
+2026-09-06 16:13:17,134 INFO    docproof.audit: Reject-all audit passed: 37 paragraph(s) return to their ingested text exactly.
+2026-09-06 16:13:17,135 INFO    docproof.reporting: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_one_wave_tier_does_not_bu0/out/tiny_novel/.deliverable-staging/findings.json
+2026-09-06 16:13:17,136 INFO    docproof.reporting: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_one_wave_tier_does_not_bu0/out/tiny_novel/.deliverable-staging/summary.md
+2026-09-06 16:13:17,168 INFO    docproof.changelog: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_one_wave_tier_does_not_bu0/out/tiny_novel/.deliverable-staging/tiny_novel - Atmosphere Press Proofreader Change Log.docx
+2026-09-06 16:13:17,178 DEBUG   galley.memory.ingest: review finding is arbitration bookkeeping; ignoring: 'overlaps earlier finding g-1; routed to query'
+2026-09-06 16:13:17,178 DEBUG   galley.memory.ingest: review finding is arbitration bookkeeping; ignoring: 'overlaps earlier finding g-1; routed to query'
+2026-09-06 16:13:17,178 INFO    docproof.app.jobs: Galley memory ingest for 'tiny_novel.docx': 2 new, 0 duplicate, 0 skipped, 2 ignored
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0000 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0001 [body/Normal] 278 chars
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0002 [body/Normal] 221 chars
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0003 [body/Normal] 266 chars
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0004 [body/Normal] 240 chars
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0005 [body/Normal] 257 chars
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0006 [body/Normal] 235 chars
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0007 [body/Normal] 307 chars
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0008 [body/Normal] 327 chars
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0009 [body/Normal] 290 chars
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0010 [body/Normal] 318 chars
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0011 [body/Normal] 360 chars
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0012 [body/Normal] 361 chars
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0013 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0014 [body/Normal] 264 chars
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0015 [body/Normal] 238 chars
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0016 [body/Normal] 254 chars
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0017 [body/Normal] 234 chars
+2026-09-06 16:13:17,219 DEBUG   docproof.ingest: para body-0018 [body/Normal] 253 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0019 [body/Normal] 228 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0020 [body/Normal] 341 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0021 [body/Normal] 298 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0022 [body/Normal] 298 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0023 [body/Normal] 312 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0024 [body/Normal] 341 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0025 [body/Normal] 329 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0026 [body/Heading1] 13 chars (sweeps only: heading)
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0027 [body/Normal] 250 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0028 [body/Normal] 224 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0029 [body/Normal] 222 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0030 [body/Normal] 231 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0031 [body/Normal] 225 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0032 [body/Normal] 225 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0033 [body/Normal] 329 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0034 [body/Normal] 287 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0035 [body/Normal] 298 chars
+2026-09-06 16:13:17,220 DEBUG   docproof.ingest: para body-0036 [body/Normal] 330 chars
+2026-09-06 16:13:17,220 INFO    docproof.ingest: Ingested 37 paragraph(s) from tiny_novel.docx: 34 for the model, 3 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:17,295 INFO    docproof.pipeline: Proofreading as U.S. English (The Chicago Manual of Style, 17th edition; Merriam-Webster, for spelling; The Atmosphere Press House Style Guide, which overrides Chicago where they differ)
+2026-09-06 16:13:17,297 INFO    docproof.normalize: Normalized silently: 2 quote(s) curled, 0 space run(s) collapsed across 2 paragraph(s); 0 mark(s) left straight as ambiguous.
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0000 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0001 [body/Normal] 278 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0002 [body/Normal] 221 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0003 [body/Normal] 266 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0004 [body/Normal] 240 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0005 [body/Normal] 257 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0006 [body/Normal] 235 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0007 [body/Normal] 307 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0008 [body/Normal] 327 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0009 [body/Normal] 290 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0010 [body/Normal] 318 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0011 [body/Normal] 360 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0012 [body/Normal] 361 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0013 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0014 [body/Normal] 264 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0015 [body/Normal] 238 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0016 [body/Normal] 254 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0017 [body/Normal] 234 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0018 [body/Normal] 253 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0019 [body/Normal] 228 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0020 [body/Normal] 341 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0021 [body/Normal] 298 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0022 [body/Normal] 298 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0023 [body/Normal] 312 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0024 [body/Normal] 341 chars
+2026-09-06 16:13:17,298 DEBUG   docproof.ingest: para body-0025 [body/Normal] 329 chars
+2026-09-06 16:13:17,299 DEBUG   docproof.ingest: para body-0026 [body/Heading1] 13 chars (sweeps only: heading)
+2026-09-06 16:13:17,299 DEBUG   docproof.ingest: para body-0027 [body/Normal] 250 chars
+2026-09-06 16:13:17,299 DEBUG   docproof.ingest: para body-0028 [body/Normal] 224 chars
+2026-09-06 16:13:17,299 DEBUG   docproof.ingest: para body-0029 [body/Normal] 222 chars
+2026-09-06 16:13:17,299 DEBUG   docproof.ingest: para body-0030 [body/Normal] 231 chars
+2026-09-06 16:13:17,299 DEBUG   docproof.ingest: para body-0031 [body/Normal] 225 chars
+2026-09-06 16:13:17,299 DEBUG   docproof.ingest: para body-0032 [body/Normal] 225 chars
+2026-09-06 16:13:17,299 DEBUG   docproof.ingest: para body-0033 [body/Normal] 329 chars
+2026-09-06 16:13:17,299 DEBUG   docproof.ingest: para body-0034 [body/Normal] 287 chars
+2026-09-06 16:13:17,299 DEBUG   docproof.ingest: para body-0035 [body/Normal] 298 chars
+2026-09-06 16:13:17,299 DEBUG   docproof.ingest: para body-0036 [body/Normal] 330 chars
+2026-09-06 16:13:17,299 INFO    docproof.ingest: Ingested 37 paragraph(s) from tiny_novel.docx: 34 for the model, 3 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:17,299 INFO    docproof.chunker: Packed 34 of 37 paragraphs into 2 chunks (budget 2500 tokens)
+2026-09-06 16:13:17,360 INFO    docproof.pipeline: 31 error type(s) in 10 category/-ies, 10 pass(es): repeated_word+spelling+homophone_confusion+apostrophe_error+capitalization; serial_comma+complex_list_semicolon+introductory_comma+direct_address_comma+tag_question_comma; dialogue_tag+speaker_change; number_style+currency_style; ly_adverb_hyphen+title_italics+tv_show_quotes; comma_splice+run_on_sentence+compound_sentence_comma+subject_verb_agreement+that_which+that_who; tense_shift+pronoun_agreement+missing_word+preposition_error; try_and+list_intro_colon; terminal_mark; unnecessary_comma
+2026-09-06 16:13:17,361 INFO    docproof.sweeps: sweep_ellipsis: 0 flagged, 0 remaining
+2026-09-06 16:13:17,362 INFO    docproof.sweeps: sweep_dash: 0 flagged, 0 remaining
+2026-09-06 16:13:17,362 INFO    docproof.sweeps: sweep_stacked_punctuation: 0 flagged, 0 remaining
+2026-09-06 16:13:17,363 INFO    docproof.sweeps: sweep_doubled_word: 1 flagged, 0 remaining
+2026-09-06 16:13:17,364 INFO    docproof.sweeps: sweep_century: 0 flagged, 0 remaining
+2026-09-06 16:13:17,364 INFO    docproof.sweeps: sweep_compound_number: 0 flagged, 0 remaining
+2026-09-06 16:13:17,365 INFO    docproof.sweeps: sweep_dialogue_tag: 0 flagged, 0 remaining
+2026-09-06 16:13:17,365 INFO    docproof.sweeps: sweep_terminal_period: 0 flagged, 0 remaining
+2026-09-06 16:13:17,366 INFO    docproof.sweeps: sweep_quote_punctuation: 0 flagged, 0 remaining
+2026-09-06 16:13:17,367 INFO    docproof.sweeps: sweep_nested_quote: 0 flagged, 0 remaining
+2026-09-06 16:13:17,367 INFO    docproof.sweeps: sweep_time_of_day: 0 flagged, 0 remaining
+2026-09-06 16:13:17,368 INFO    docproof.sweeps: sweep_deity_capital: 0 flagged, 0 remaining
+2026-09-06 16:13:17,369 INFO    docproof.sweeps: sweep_dialogue_splice: 0 flagged, 0 remaining
+2026-09-06 16:13:17,369 INFO    docproof.sweeps: sweep_initialism: 0 flagged, 0 remaining
+2026-09-06 16:13:17,370 INFO    docproof.sweeps: sweep_decade_apostrophe: 0 flagged, 0 remaining
+2026-09-06 16:13:17,370 INFO    docproof.sweeps: sweep_trailing_space: 0 flagged, 0 remaining
+2026-09-06 16:13:18,439 INFO    docproof.spellscan: Spell scan: 1810 tokens, 618 unique, 4 unknown → 0 protected as names, 4 to look at, 0 repeated
+2026-09-06 16:13:18,456 INFO    docproof.consistency: Consistency scan: 0 term(s), 0 spelling-variant(s), 0 abbreviation(s), 0 acronym-case(s), 0 accent(s), 0 policy form(s), 0 deity-pronoun stray(s), 0 bare-hour time(s), and 0 name(s) with diacritic drift — 0 occurrence(s) to correct, 0 to ask about
+2026-09-06 16:13:18,559 INFO    docproof.adjudicate: Adjudication: 1 candidate(s) to rule on (typo=1)
+2026-09-06 16:13:18,574 INFO    docproof.examination: Examination graph shadow: generated 937 site(s), 1874 event(s)
+2026-09-06 16:13:18,575 INFO    docproof.validator: Validated 2/4 findings (query=2, validated=2)
+2026-09-06 16:13:18,575 INFO    docproof.validator: Validated 0/0 findings ()
+2026-09-06 16:13:18,577 INFO    docproof.validator: Validated 0/0 findings ()
+2026-09-06 16:13:18,578 INFO    docproof.reassembler: Applied 2 tracked change(s); 0 skipped by safety checks.
+2026-09-06 16:13:18,578 INFO    docproof.reassembler: Wrote 2 margin queries, which change nothing.
+2026-09-06 16:13:18,578 ERROR   docproof.pipeline: Examination graph shadow reporting failed; the reviewed manuscript path is unchanged.
+Traceback (most recent call last):
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/pipeline.py", line 2581, in finish
+    prepared.examination.observe_findings(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        validated, prepared.doc, applied_ids=stats.applied)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 114, in observe_findings
+    self._observe_target(site.site_id, finding, applied)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 375, in _observe_target
+    self._confirm_site(site_id, finding)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 553, in _confirm_site
+    self.ledger.transition(
+    ~~~~~~~~~~~~~~~~~~~~~~^
+        site_id, target, actor=finding.chunk_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        reason=f"legacy finding {finding.finding_id} confirmed this site",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        evidence={"finding_id": finding.finding_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                  "confidence": finding.confidence})
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/site_ledger.py", line 160, in transition
+    return self._append(site_id, state, actor, reason, evidence, verdict)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/site_ledger.py", line 234, in _append
+    event = LedgerEvent(
+        sequence=len(self._events) + 1, site_id=site_id, state=state,
+        actor=actor, reason=reason, evidence=evidence or {},
+        verdict=verdict, site=site, event_kind=event_kind)
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.venv/lib/python3.14/site-packages/pydantic/main.py", line 263, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+pydantic_core._pydantic_core.ValidationError: 1 validation error for LedgerEvent
+actor
+  String should have at least 1 character [type=string_too_short, input_value='', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.13/v/string_too_short
+2026-09-06 16:13:18,581 INFO    docproof.audit: Reject-all audit passed: 37 paragraph(s) return to their ingested text exactly.
+2026-09-06 16:13:18,581 INFO    docproof.reporting: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_one_wave_tier_does_not_bu1/out/tiny_novel/.deliverable-staging/findings.json
+2026-09-06 16:13:18,582 INFO    docproof.reporting: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_one_wave_tier_does_not_bu1/out/tiny_novel/.deliverable-staging/summary.md
+2026-09-06 16:13:18,615 INFO    docproof.changelog: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_one_wave_tier_does_not_bu1/out/tiny_novel/.deliverable-staging/tiny_novel - Atmosphere Press Proofreader Change Log.docx
+2026-09-06 16:13:18,624 DEBUG   galley.memory.ingest: review finding is arbitration bookkeeping; ignoring: 'overlaps earlier finding g-1; routed to query'
+2026-09-06 16:13:18,624 DEBUG   galley.memory.ingest: review finding is arbitration bookkeeping; ignoring: 'overlaps earlier finding g-1; routed to query'
+2026-09-06 16:13:18,624 INFO    docproof.app.jobs: Galley memory ingest for 'tiny_novel.docx': 2 new, 0 duplicate, 0 skipped, 2 ignored
+2026-09-06 16:13:18,666 DEBUG   docproof.ingest: para body-0000 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:18,666 DEBUG   docproof.ingest: para body-0001 [body/Normal] 278 chars
+2026-09-06 16:13:18,666 DEBUG   docproof.ingest: para body-0002 [body/Normal] 221 chars
+2026-09-06 16:13:18,666 DEBUG   docproof.ingest: para body-0003 [body/Normal] 266 chars
+2026-09-06 16:13:18,666 DEBUG   docproof.ingest: para body-0004 [body/Normal] 240 chars
+2026-09-06 16:13:18,666 DEBUG   docproof.ingest: para body-0005 [body/Normal] 257 chars
+2026-09-06 16:13:18,666 DEBUG   docproof.ingest: para body-0006 [body/Normal] 235 chars
+2026-09-06 16:13:18,666 DEBUG   docproof.ingest: para body-0007 [body/Normal] 307 chars
+2026-09-06 16:13:18,666 DEBUG   docproof.ingest: para body-0008 [body/Normal] 327 chars
+2026-09-06 16:13:18,666 DEBUG   docproof.ingest: para body-0009 [body/Normal] 290 chars
+2026-09-06 16:13:18,666 DEBUG   docproof.ingest: para body-0010 [body/Normal] 318 chars
+2026-09-06 16:13:18,666 DEBUG   docproof.ingest: para body-0011 [body/Normal] 360 chars
+2026-09-06 16:13:18,666 DEBUG   docproof.ingest: para body-0012 [body/Normal] 361 chars
+2026-09-06 16:13:18,666 DEBUG   docproof.ingest: para body-0013 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:18,666 DEBUG   docproof.ingest: para body-0014 [body/Normal] 264 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0015 [body/Normal] 238 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0016 [body/Normal] 254 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0017 [body/Normal] 234 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0018 [body/Normal] 253 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0019 [body/Normal] 228 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0020 [body/Normal] 341 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0021 [body/Normal] 298 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0022 [body/Normal] 298 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0023 [body/Normal] 312 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0024 [body/Normal] 341 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0025 [body/Normal] 329 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0026 [body/Heading1] 13 chars (sweeps only: heading)
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0027 [body/Normal] 250 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0028 [body/Normal] 224 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0029 [body/Normal] 222 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0030 [body/Normal] 231 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0031 [body/Normal] 225 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0032 [body/Normal] 225 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0033 [body/Normal] 329 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0034 [body/Normal] 287 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0035 [body/Normal] 298 chars
+2026-09-06 16:13:18,667 DEBUG   docproof.ingest: para body-0036 [body/Normal] 330 chars
+2026-09-06 16:13:18,667 INFO    docproof.ingest: Ingested 37 paragraph(s) from tiny_novel.docx: 34 for the model, 3 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:18,744 INFO    docproof.pipeline: Proofreading as U.S. English (The Chicago Manual of Style, 17th edition; Merriam-Webster, for spelling; The Atmosphere Press House Style Guide, which overrides Chicago where they differ)
+2026-09-06 16:13:18,746 INFO    docproof.normalize: Normalized silently: 2 quote(s) curled, 0 space run(s) collapsed across 2 paragraph(s); 0 mark(s) left straight as ambiguous.
+2026-09-06 16:13:18,747 DEBUG   docproof.ingest: para body-0000 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:18,747 DEBUG   docproof.ingest: para body-0001 [body/Normal] 278 chars
+2026-09-06 16:13:18,747 DEBUG   docproof.ingest: para body-0002 [body/Normal] 221 chars
+2026-09-06 16:13:18,747 DEBUG   docproof.ingest: para body-0003 [body/Normal] 266 chars
+2026-09-06 16:13:18,747 DEBUG   docproof.ingest: para body-0004 [body/Normal] 240 chars
+2026-09-06 16:13:18,747 DEBUG   docproof.ingest: para body-0005 [body/Normal] 257 chars
+2026-09-06 16:13:18,747 DEBUG   docproof.ingest: para body-0006 [body/Normal] 235 chars
+2026-09-06 16:13:18,747 DEBUG   docproof.ingest: para body-0007 [body/Normal] 307 chars
+2026-09-06 16:13:18,747 DEBUG   docproof.ingest: para body-0008 [body/Normal] 327 chars
+2026-09-06 16:13:18,747 DEBUG   docproof.ingest: para body-0009 [body/Normal] 290 chars
+2026-09-06 16:13:18,747 DEBUG   docproof.ingest: para body-0010 [body/Normal] 318 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0011 [body/Normal] 360 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0012 [body/Normal] 361 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0013 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0014 [body/Normal] 264 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0015 [body/Normal] 238 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0016 [body/Normal] 254 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0017 [body/Normal] 234 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0018 [body/Normal] 253 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0019 [body/Normal] 228 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0020 [body/Normal] 341 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0021 [body/Normal] 298 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0022 [body/Normal] 298 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0023 [body/Normal] 312 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0024 [body/Normal] 341 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0025 [body/Normal] 329 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0026 [body/Heading1] 13 chars (sweeps only: heading)
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0027 [body/Normal] 250 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0028 [body/Normal] 224 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0029 [body/Normal] 222 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0030 [body/Normal] 231 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0031 [body/Normal] 225 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0032 [body/Normal] 225 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0033 [body/Normal] 329 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0034 [body/Normal] 287 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0035 [body/Normal] 298 chars
+2026-09-06 16:13:18,748 DEBUG   docproof.ingest: para body-0036 [body/Normal] 330 chars
+2026-09-06 16:13:18,748 INFO    docproof.ingest: Ingested 37 paragraph(s) from tiny_novel.docx: 34 for the model, 3 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:18,749 INFO    docproof.chunker: Packed 34 of 37 paragraphs into 2 chunks (budget 2500 tokens)
+2026-09-06 16:13:18,811 INFO    docproof.pipeline: 31 error type(s) in 10 category/-ies, 10 pass(es): repeated_word+spelling+homophone_confusion+apostrophe_error+capitalization; serial_comma+complex_list_semicolon+introductory_comma+direct_address_comma+tag_question_comma; dialogue_tag+speaker_change; number_style+currency_style; ly_adverb_hyphen+title_italics+tv_show_quotes; comma_splice+run_on_sentence+compound_sentence_comma+subject_verb_agreement+that_which+that_who; tense_shift+pronoun_agreement+missing_word+preposition_error; try_and+list_intro_colon; terminal_mark; unnecessary_comma
+2026-09-06 16:13:18,812 INFO    docproof.sweeps: sweep_ellipsis: 0 flagged, 0 remaining
+2026-09-06 16:13:18,813 INFO    docproof.sweeps: sweep_dash: 0 flagged, 0 remaining
+2026-09-06 16:13:18,813 INFO    docproof.sweeps: sweep_stacked_punctuation: 0 flagged, 0 remaining
+2026-09-06 16:13:18,814 INFO    docproof.sweeps: sweep_doubled_word: 1 flagged, 0 remaining
+2026-09-06 16:13:18,815 INFO    docproof.sweeps: sweep_century: 0 flagged, 0 remaining
+2026-09-06 16:13:18,815 INFO    docproof.sweeps: sweep_compound_number: 0 flagged, 0 remaining
+2026-09-06 16:13:18,816 INFO    docproof.sweeps: sweep_dialogue_tag: 0 flagged, 0 remaining
+2026-09-06 16:13:18,816 INFO    docproof.sweeps: sweep_terminal_period: 0 flagged, 0 remaining
+2026-09-06 16:13:18,817 INFO    docproof.sweeps: sweep_quote_punctuation: 0 flagged, 0 remaining
+2026-09-06 16:13:18,818 INFO    docproof.sweeps: sweep_nested_quote: 0 flagged, 0 remaining
+2026-09-06 16:13:18,819 INFO    docproof.sweeps: sweep_time_of_day: 0 flagged, 0 remaining
+2026-09-06 16:13:18,819 INFO    docproof.sweeps: sweep_deity_capital: 0 flagged, 0 remaining
+2026-09-06 16:13:18,820 INFO    docproof.sweeps: sweep_dialogue_splice: 0 flagged, 0 remaining
+2026-09-06 16:13:18,820 INFO    docproof.sweeps: sweep_initialism: 0 flagged, 0 remaining
+2026-09-06 16:13:18,821 INFO    docproof.sweeps: sweep_decade_apostrophe: 0 flagged, 0 remaining
+2026-09-06 16:13:18,821 INFO    docproof.sweeps: sweep_trailing_space: 0 flagged, 0 remaining
+2026-09-06 16:13:19,913 INFO    docproof.spellscan: Spell scan: 1810 tokens, 618 unique, 4 unknown → 0 protected as names, 4 to look at, 0 repeated
+2026-09-06 16:13:19,930 INFO    docproof.consistency: Consistency scan: 0 term(s), 0 spelling-variant(s), 0 abbreviation(s), 0 acronym-case(s), 0 accent(s), 0 policy form(s), 0 deity-pronoun stray(s), 0 bare-hour time(s), and 0 name(s) with diacritic drift — 0 occurrence(s) to correct, 0 to ask about
+2026-09-06 16:13:20,035 INFO    docproof.adjudicate: Adjudication: 1 candidate(s) to rule on (typo=1)
+2026-09-06 16:13:20,050 INFO    docproof.examination: Examination graph shadow: generated 937 site(s), 1874 event(s)
+2026-09-06 16:13:20,051 INFO    docproof.validator: Validated 2/4 findings (query=2, validated=2)
+2026-09-06 16:13:20,052 INFO    docproof.validator: Validated 0/0 findings ()
+2026-09-06 16:13:20,053 INFO    docproof.validator: Validated 0/0 findings ()
+2026-09-06 16:13:20,054 INFO    docproof.reassembler: Applied 2 tracked change(s); 0 skipped by safety checks.
+2026-09-06 16:13:20,054 INFO    docproof.reassembler: Wrote 2 margin queries, which change nothing.
+2026-09-06 16:13:20,055 ERROR   docproof.pipeline: Examination graph shadow reporting failed; the reviewed manuscript path is unchanged.
+Traceback (most recent call last):
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/pipeline.py", line 2581, in finish
+    prepared.examination.observe_findings(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        validated, prepared.doc, applied_ids=stats.applied)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 114, in observe_findings
+    self._observe_target(site.site_id, finding, applied)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 375, in _observe_target
+    self._confirm_site(site_id, finding)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 553, in _confirm_site
+    self.ledger.transition(
+    ~~~~~~~~~~~~~~~~~~~~~~^
+        site_id, target, actor=finding.chunk_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        reason=f"legacy finding {finding.finding_id} confirmed this site",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        evidence={"finding_id": finding.finding_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                  "confidence": finding.confidence})
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/site_ledger.py", line 160, in transition
+    return self._append(site_id, state, actor, reason, evidence, verdict)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/site_ledger.py", line 234, in _append
+    event = LedgerEvent(
+        sequence=len(self._events) + 1, site_id=site_id, state=state,
+        actor=actor, reason=reason, evidence=evidence or {},
+        verdict=verdict, site=site, event_kind=event_kind)
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.venv/lib/python3.14/site-packages/pydantic/main.py", line 263, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+pydantic_core._pydantic_core.ValidationError: 1 validation error for LedgerEvent
+actor
+  String should have at least 1 character [type=string_too_short, input_value='', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.13/v/string_too_short
+2026-09-06 16:13:20,057 INFO    docproof.audit: Reject-all audit passed: 37 paragraph(s) return to their ingested text exactly.
+2026-09-06 16:13:20,058 INFO    docproof.reporting: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_run_galley_memory_ingest_0/out/tiny_novel/.deliverable-staging/findings.json
+2026-09-06 16:13:20,059 INFO    docproof.reporting: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_run_galley_memory_ingest_0/out/tiny_novel/.deliverable-staging/summary.md
+2026-09-06 16:13:20,091 INFO    docproof.changelog: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_run_galley_memory_ingest_0/out/tiny_novel/.deliverable-staging/tiny_novel - Atmosphere Press Proofreader Change Log.docx
+2026-09-06 16:13:20,100 DEBUG   galley.memory.ingest: review finding is arbitration bookkeeping; ignoring: 'overlaps earlier finding g-1; routed to query'
+2026-09-06 16:13:20,101 DEBUG   galley.memory.ingest: review finding is arbitration bookkeeping; ignoring: 'overlaps earlier finding g-1; routed to query'
+2026-09-06 16:13:20,101 INFO    docproof.app.jobs: Galley memory ingest for 'tiny_novel.docx': 2 new, 0 duplicate, 0 skipped, 2 ignored
+2026-09-06 16:13:20,140 DEBUG   docproof.ingest: para body-0000 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:20,140 DEBUG   docproof.ingest: para body-0001 [body/Normal] 278 chars
+2026-09-06 16:13:20,140 DEBUG   docproof.ingest: para body-0002 [body/Normal] 221 chars
+2026-09-06 16:13:20,140 DEBUG   docproof.ingest: para body-0003 [body/Normal] 266 chars
+2026-09-06 16:13:20,140 DEBUG   docproof.ingest: para body-0004 [body/Normal] 240 chars
+2026-09-06 16:13:20,140 DEBUG   docproof.ingest: para body-0005 [body/Normal] 257 chars
+2026-09-06 16:13:20,140 DEBUG   docproof.ingest: para body-0006 [body/Normal] 235 chars
+2026-09-06 16:13:20,140 DEBUG   docproof.ingest: para body-0007 [body/Normal] 307 chars
+2026-09-06 16:13:20,140 DEBUG   docproof.ingest: para body-0008 [body/Normal] 327 chars
+2026-09-06 16:13:20,140 DEBUG   docproof.ingest: para body-0009 [body/Normal] 290 chars
+2026-09-06 16:13:20,140 DEBUG   docproof.ingest: para body-0010 [body/Normal] 318 chars
+2026-09-06 16:13:20,140 DEBUG   docproof.ingest: para body-0011 [body/Normal] 360 chars
+2026-09-06 16:13:20,140 DEBUG   docproof.ingest: para body-0012 [body/Normal] 361 chars
+2026-09-06 16:13:20,140 DEBUG   docproof.ingest: para body-0013 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:20,140 DEBUG   docproof.ingest: para body-0014 [body/Normal] 264 chars
+2026-09-06 16:13:20,140 DEBUG   docproof.ingest: para body-0015 [body/Normal] 238 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0016 [body/Normal] 254 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0017 [body/Normal] 234 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0018 [body/Normal] 253 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0019 [body/Normal] 228 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0020 [body/Normal] 341 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0021 [body/Normal] 298 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0022 [body/Normal] 298 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0023 [body/Normal] 312 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0024 [body/Normal] 341 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0025 [body/Normal] 329 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0026 [body/Heading1] 13 chars (sweeps only: heading)
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0027 [body/Normal] 250 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0028 [body/Normal] 224 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0029 [body/Normal] 222 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0030 [body/Normal] 231 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0031 [body/Normal] 225 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0032 [body/Normal] 225 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0033 [body/Normal] 329 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0034 [body/Normal] 287 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0035 [body/Normal] 298 chars
+2026-09-06 16:13:20,141 DEBUG   docproof.ingest: para body-0036 [body/Normal] 330 chars
+2026-09-06 16:13:20,141 INFO    docproof.ingest: Ingested 37 paragraph(s) from tiny_novel.docx: 34 for the model, 3 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:20,226 INFO    docproof.pipeline: Proofreading as U.S. English (The Chicago Manual of Style, 17th edition; Merriam-Webster, for spelling; The Atmosphere Press House Style Guide, which overrides Chicago where they differ)
+2026-09-06 16:13:20,228 INFO    docproof.normalize: Normalized silently: 2 quote(s) curled, 0 space run(s) collapsed across 2 paragraph(s); 0 mark(s) left straight as ambiguous.
+2026-09-06 16:13:20,229 DEBUG   docproof.ingest: para body-0000 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:20,229 DEBUG   docproof.ingest: para body-0001 [body/Normal] 278 chars
+2026-09-06 16:13:20,229 DEBUG   docproof.ingest: para body-0002 [body/Normal] 221 chars
+2026-09-06 16:13:20,229 DEBUG   docproof.ingest: para body-0003 [body/Normal] 266 chars
+2026-09-06 16:13:20,229 DEBUG   docproof.ingest: para body-0004 [body/Normal] 240 chars
+2026-09-06 16:13:20,229 DEBUG   docproof.ingest: para body-0005 [body/Normal] 257 chars
+2026-09-06 16:13:20,229 DEBUG   docproof.ingest: para body-0006 [body/Normal] 235 chars
+2026-09-06 16:13:20,229 DEBUG   docproof.ingest: para body-0007 [body/Normal] 307 chars
+2026-09-06 16:13:20,229 DEBUG   docproof.ingest: para body-0008 [body/Normal] 327 chars
+2026-09-06 16:13:20,229 DEBUG   docproof.ingest: para body-0009 [body/Normal] 290 chars
+2026-09-06 16:13:20,229 DEBUG   docproof.ingest: para body-0010 [body/Normal] 318 chars
+2026-09-06 16:13:20,229 DEBUG   docproof.ingest: para body-0011 [body/Normal] 360 chars
+2026-09-06 16:13:20,229 DEBUG   docproof.ingest: para body-0012 [body/Normal] 361 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0013 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0014 [body/Normal] 264 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0015 [body/Normal] 238 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0016 [body/Normal] 254 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0017 [body/Normal] 234 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0018 [body/Normal] 253 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0019 [body/Normal] 228 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0020 [body/Normal] 341 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0021 [body/Normal] 298 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0022 [body/Normal] 298 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0023 [body/Normal] 312 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0024 [body/Normal] 341 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0025 [body/Normal] 329 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0026 [body/Heading1] 13 chars (sweeps only: heading)
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0027 [body/Normal] 250 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0028 [body/Normal] 224 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0029 [body/Normal] 222 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0030 [body/Normal] 231 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0031 [body/Normal] 225 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0032 [body/Normal] 225 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0033 [body/Normal] 329 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0034 [body/Normal] 287 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0035 [body/Normal] 298 chars
+2026-09-06 16:13:20,230 DEBUG   docproof.ingest: para body-0036 [body/Normal] 330 chars
+2026-09-06 16:13:20,230 INFO    docproof.ingest: Ingested 37 paragraph(s) from tiny_novel.docx: 34 for the model, 3 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:20,231 INFO    docproof.chunker: Packed 34 of 37 paragraphs into 2 chunks (budget 2500 tokens)
+2026-09-06 16:13:20,298 INFO    docproof.pipeline: 31 error type(s) in 10 category/-ies, 10 pass(es): repeated_word+spelling+homophone_confusion+apostrophe_error+capitalization; serial_comma+complex_list_semicolon+introductory_comma+direct_address_comma+tag_question_comma; dialogue_tag+speaker_change; number_style+currency_style; ly_adverb_hyphen+title_italics+tv_show_quotes; comma_splice+run_on_sentence+compound_sentence_comma+subject_verb_agreement+that_which+that_who; tense_shift+pronoun_agreement+missing_word+preposition_error; try_and+list_intro_colon; terminal_mark; unnecessary_comma
+2026-09-06 16:13:20,299 INFO    docproof.sweeps: sweep_ellipsis: 0 flagged, 0 remaining
+2026-09-06 16:13:20,300 INFO    docproof.sweeps: sweep_dash: 0 flagged, 0 remaining
+2026-09-06 16:13:20,300 INFO    docproof.sweeps: sweep_stacked_punctuation: 0 flagged, 0 remaining
+2026-09-06 16:13:20,301 INFO    docproof.sweeps: sweep_doubled_word: 1 flagged, 0 remaining
+2026-09-06 16:13:20,301 INFO    docproof.sweeps: sweep_century: 0 flagged, 0 remaining
+2026-09-06 16:13:20,302 INFO    docproof.sweeps: sweep_compound_number: 0 flagged, 0 remaining
+2026-09-06 16:13:20,303 INFO    docproof.sweeps: sweep_dialogue_tag: 0 flagged, 0 remaining
+2026-09-06 16:13:20,303 INFO    docproof.sweeps: sweep_terminal_period: 0 flagged, 0 remaining
+2026-09-06 16:13:20,304 INFO    docproof.sweeps: sweep_quote_punctuation: 0 flagged, 0 remaining
+2026-09-06 16:13:20,305 INFO    docproof.sweeps: sweep_nested_quote: 0 flagged, 0 remaining
+2026-09-06 16:13:20,306 INFO    docproof.sweeps: sweep_time_of_day: 0 flagged, 0 remaining
+2026-09-06 16:13:20,306 INFO    docproof.sweeps: sweep_deity_capital: 0 flagged, 0 remaining
+2026-09-06 16:13:20,307 INFO    docproof.sweeps: sweep_dialogue_splice: 0 flagged, 0 remaining
+2026-09-06 16:13:20,307 INFO    docproof.sweeps: sweep_initialism: 0 flagged, 0 remaining
+2026-09-06 16:13:20,308 INFO    docproof.sweeps: sweep_decade_apostrophe: 0 flagged, 0 remaining
+2026-09-06 16:13:20,308 INFO    docproof.sweeps: sweep_trailing_space: 0 flagged, 0 remaining
+2026-09-06 16:13:21,393 INFO    docproof.spellscan: Spell scan: 1810 tokens, 618 unique, 4 unknown → 0 protected as names, 4 to look at, 0 repeated
+2026-09-06 16:13:21,410 INFO    docproof.consistency: Consistency scan: 0 term(s), 0 spelling-variant(s), 0 abbreviation(s), 0 acronym-case(s), 0 accent(s), 0 policy form(s), 0 deity-pronoun stray(s), 0 bare-hour time(s), and 0 name(s) with diacritic drift — 0 occurrence(s) to correct, 0 to ask about
+2026-09-06 16:13:21,520 INFO    docproof.adjudicate: Adjudication: 1 candidate(s) to rule on (typo=1)
+2026-09-06 16:13:21,536 INFO    docproof.examination: Examination graph shadow: generated 937 site(s), 1874 event(s)
+2026-09-06 16:13:21,537 INFO    docproof.validator: Validated 2/4 findings (query=2, validated=2)
+2026-09-06 16:13:21,538 INFO    docproof.validator: Validated 0/0 findings ()
+2026-09-06 16:13:21,539 INFO    docproof.validator: Validated 0/0 findings ()
+2026-09-06 16:13:21,540 INFO    docproof.reassembler: Applied 2 tracked change(s); 0 skipped by safety checks.
+2026-09-06 16:13:21,541 INFO    docproof.reassembler: Wrote 2 margin queries, which change nothing.
+2026-09-06 16:13:21,541 ERROR   docproof.pipeline: Examination graph shadow reporting failed; the reviewed manuscript path is unchanged.
+Traceback (most recent call last):
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/pipeline.py", line 2581, in finish
+    prepared.examination.observe_findings(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        validated, prepared.doc, applied_ids=stats.applied)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 114, in observe_findings
+    self._observe_target(site.site_id, finding, applied)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 375, in _observe_target
+    self._confirm_site(site_id, finding)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 553, in _confirm_site
+    self.ledger.transition(
+    ~~~~~~~~~~~~~~~~~~~~~~^
+        site_id, target, actor=finding.chunk_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        reason=f"legacy finding {finding.finding_id} confirmed this site",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        evidence={"finding_id": finding.finding_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                  "confidence": finding.confidence})
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/site_ledger.py", line 160, in transition
+    return self._append(site_id, state, actor, reason, evidence, verdict)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/site_ledger.py", line 234, in _append
+    event = LedgerEvent(
+        sequence=len(self._events) + 1, site_id=site_id, state=state,
+        actor=actor, reason=reason, evidence=evidence or {},
+        verdict=verdict, site=site, event_kind=event_kind)
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.venv/lib/python3.14/site-packages/pydantic/main.py", line 263, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+pydantic_core._pydantic_core.ValidationError: 1 validation error for LedgerEvent
+actor
+  String should have at least 1 character [type=string_too_short, input_value='', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.13/v/string_too_short
+2026-09-06 16:13:21,543 INFO    docproof.audit: Reject-all audit passed: 37 paragraph(s) return to their ingested text exactly.
+2026-09-06 16:13:21,544 INFO    docproof.reporting: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_run_galley_memory_ingest_0/out/tiny_novel (2)/.deliverable-staging/findings.json
+2026-09-06 16:13:21,545 INFO    docproof.reporting: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_run_galley_memory_ingest_0/out/tiny_novel (2)/.deliverable-staging/summary.md
+2026-09-06 16:13:21,578 INFO    docproof.changelog: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_run_galley_memory_ingest_0/out/tiny_novel (2)/.deliverable-staging/tiny_novel - Atmosphere Press Proofreader Change Log.docx
+2026-09-06 16:13:21,587 DEBUG   galley.memory.ingest: review finding is arbitration bookkeeping; ignoring: 'overlaps earlier finding g-1; routed to query'
+2026-09-06 16:13:21,587 DEBUG   galley.memory.ingest: review finding is arbitration bookkeeping; ignoring: 'overlaps earlier finding g-1; routed to query'
+2026-09-06 16:13:21,587 INFO    docproof.app.jobs: Galley memory ingest for 'tiny_novel.docx': 0 new, 2 duplicate, 0 skipped, 2 ignored
+2026-09-06 16:13:21,634 DEBUG   docproof.ingest: para body-0000 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:21,634 DEBUG   docproof.ingest: para body-0001 [body/Normal] 278 chars
+2026-09-06 16:13:21,634 DEBUG   docproof.ingest: para body-0002 [body/Normal] 221 chars
+2026-09-06 16:13:21,634 DEBUG   docproof.ingest: para body-0003 [body/Normal] 266 chars
+2026-09-06 16:13:21,634 DEBUG   docproof.ingest: para body-0004 [body/Normal] 240 chars
+2026-09-06 16:13:21,634 DEBUG   docproof.ingest: para body-0005 [body/Normal] 257 chars
+2026-09-06 16:13:21,634 DEBUG   docproof.ingest: para body-0006 [body/Normal] 235 chars
+2026-09-06 16:13:21,634 DEBUG   docproof.ingest: para body-0007 [body/Normal] 307 chars
+2026-09-06 16:13:21,634 DEBUG   docproof.ingest: para body-0008 [body/Normal] 327 chars
+2026-09-06 16:13:21,634 DEBUG   docproof.ingest: para body-0009 [body/Normal] 290 chars
+2026-09-06 16:13:21,634 DEBUG   docproof.ingest: para body-0010 [body/Normal] 318 chars
+2026-09-06 16:13:21,634 DEBUG   docproof.ingest: para body-0011 [body/Normal] 360 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0012 [body/Normal] 361 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0013 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0014 [body/Normal] 264 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0015 [body/Normal] 238 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0016 [body/Normal] 254 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0017 [body/Normal] 234 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0018 [body/Normal] 253 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0019 [body/Normal] 228 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0020 [body/Normal] 341 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0021 [body/Normal] 298 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0022 [body/Normal] 298 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0023 [body/Normal] 312 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0024 [body/Normal] 341 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0025 [body/Normal] 329 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0026 [body/Heading1] 13 chars (sweeps only: heading)
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0027 [body/Normal] 250 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0028 [body/Normal] 224 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0029 [body/Normal] 222 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0030 [body/Normal] 231 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0031 [body/Normal] 225 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0032 [body/Normal] 225 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0033 [body/Normal] 329 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0034 [body/Normal] 287 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0035 [body/Normal] 298 chars
+2026-09-06 16:13:21,635 DEBUG   docproof.ingest: para body-0036 [body/Normal] 330 chars
+2026-09-06 16:13:21,635 INFO    docproof.ingest: Ingested 37 paragraph(s) from tiny_novel.docx: 34 for the model, 3 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:21,638 ERROR   docproof.app.jobs: Galley deliverable build failed for job j1
+Traceback (most recent call last):
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/app/jobs.py", line 2039, in _run_galley
+    deliverable = build_manuscript_deliverable(
+        adjudication, ms, source_path=job.source_path, cfg=cfg,
+        out_dir=out)
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/tests/test_galley_jobs.py", line 185, in boom
+    raise RuntimeError("simulated deliverable failure")
+RuntimeError: simulated deliverable failure
+2026-09-06 16:13:21,642 DEBUG   galley.memory.ingest: review finding is arbitration bookkeeping; ignoring: 'overlaps earlier finding g-1; routed to query'
+2026-09-06 16:13:21,642 DEBUG   galley.memory.ingest: review finding is arbitration bookkeeping; ignoring: 'overlaps earlier finding g-1; routed to query'
+2026-09-06 16:13:21,642 INFO    docproof.app.jobs: Galley memory ingest for 'tiny_novel.docx': 2 new, 0 duplicate, 0 skipped, 2 ignored
+2026-09-06 16:13:21,674 DEBUG   docproof.ingest: para body-0000 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0001 [body/Normal] 278 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0002 [body/Normal] 221 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0003 [body/Normal] 266 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0004 [body/Normal] 240 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0005 [body/Normal] 257 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0006 [body/Normal] 235 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0007 [body/Normal] 307 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0008 [body/Normal] 327 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0009 [body/Normal] 290 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0010 [body/Normal] 318 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0011 [body/Normal] 360 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0012 [body/Normal] 361 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0013 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0014 [body/Normal] 264 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0015 [body/Normal] 238 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0016 [body/Normal] 254 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0017 [body/Normal] 234 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0018 [body/Normal] 253 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0019 [body/Normal] 228 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0020 [body/Normal] 341 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0021 [body/Normal] 298 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0022 [body/Normal] 298 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0023 [body/Normal] 312 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0024 [body/Normal] 341 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0025 [body/Normal] 329 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0026 [body/Heading1] 13 chars (sweeps only: heading)
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0027 [body/Normal] 250 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0028 [body/Normal] 224 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0029 [body/Normal] 222 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0030 [body/Normal] 231 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0031 [body/Normal] 225 chars
+2026-09-06 16:13:21,675 DEBUG   docproof.ingest: para body-0032 [body/Normal] 225 chars
+2026-09-06 16:13:21,676 DEBUG   docproof.ingest: para body-0033 [body/Normal] 329 chars
+2026-09-06 16:13:21,676 DEBUG   docproof.ingest: para body-0034 [body/Normal] 287 chars
+2026-09-06 16:13:21,676 DEBUG   docproof.ingest: para body-0035 [body/Normal] 298 chars
+2026-09-06 16:13:21,676 DEBUG   docproof.ingest: para body-0036 [body/Normal] 330 chars
+2026-09-06 16:13:21,676 INFO    docproof.ingest: Ingested 37 paragraph(s) from tiny_novel.docx: 34 for the model, 3 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:21,752 INFO    docproof.pipeline: Proofreading as U.S. English (The Chicago Manual of Style, 17th edition; Merriam-Webster, for spelling; The Atmosphere Press House Style Guide, which overrides Chicago where they differ)
+2026-09-06 16:13:21,754 INFO    docproof.normalize: Normalized silently: 2 quote(s) curled, 0 space run(s) collapsed across 2 paragraph(s); 0 mark(s) left straight as ambiguous.
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0000 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0001 [body/Normal] 278 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0002 [body/Normal] 221 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0003 [body/Normal] 266 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0004 [body/Normal] 240 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0005 [body/Normal] 257 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0006 [body/Normal] 235 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0007 [body/Normal] 307 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0008 [body/Normal] 327 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0009 [body/Normal] 290 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0010 [body/Normal] 318 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0011 [body/Normal] 360 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0012 [body/Normal] 361 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0013 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0014 [body/Normal] 264 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0015 [body/Normal] 238 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0016 [body/Normal] 254 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0017 [body/Normal] 234 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0018 [body/Normal] 253 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0019 [body/Normal] 228 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0020 [body/Normal] 341 chars
+2026-09-06 16:13:21,755 DEBUG   docproof.ingest: para body-0021 [body/Normal] 298 chars
+2026-09-06 16:13:21,756 DEBUG   docproof.ingest: para body-0022 [body/Normal] 298 chars
+2026-09-06 16:13:21,756 DEBUG   docproof.ingest: para body-0023 [body/Normal] 312 chars
+2026-09-06 16:13:21,756 DEBUG   docproof.ingest: para body-0024 [body/Normal] 341 chars
+2026-09-06 16:13:21,756 DEBUG   docproof.ingest: para body-0025 [body/Normal] 329 chars
+2026-09-06 16:13:21,756 DEBUG   docproof.ingest: para body-0026 [body/Heading1] 13 chars (sweeps only: heading)
+2026-09-06 16:13:21,756 DEBUG   docproof.ingest: para body-0027 [body/Normal] 250 chars
+2026-09-06 16:13:21,756 DEBUG   docproof.ingest: para body-0028 [body/Normal] 224 chars
+2026-09-06 16:13:21,756 DEBUG   docproof.ingest: para body-0029 [body/Normal] 222 chars
+2026-09-06 16:13:21,756 DEBUG   docproof.ingest: para body-0030 [body/Normal] 231 chars
+2026-09-06 16:13:21,756 DEBUG   docproof.ingest: para body-0031 [body/Normal] 225 chars
+2026-09-06 16:13:21,756 DEBUG   docproof.ingest: para body-0032 [body/Normal] 225 chars
+2026-09-06 16:13:21,756 DEBUG   docproof.ingest: para body-0033 [body/Normal] 329 chars
+2026-09-06 16:13:21,756 DEBUG   docproof.ingest: para body-0034 [body/Normal] 287 chars
+2026-09-06 16:13:21,756 DEBUG   docproof.ingest: para body-0035 [body/Normal] 298 chars
+2026-09-06 16:13:21,756 DEBUG   docproof.ingest: para body-0036 [body/Normal] 330 chars
+2026-09-06 16:13:21,756 INFO    docproof.ingest: Ingested 37 paragraph(s) from tiny_novel.docx: 34 for the model, 3 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:21,756 INFO    docproof.chunker: Packed 34 of 37 paragraphs into 2 chunks (budget 2500 tokens)
+2026-09-06 16:13:21,819 INFO    docproof.pipeline: 31 error type(s) in 10 category/-ies, 10 pass(es): repeated_word+spelling+homophone_confusion+apostrophe_error+capitalization; serial_comma+complex_list_semicolon+introductory_comma+direct_address_comma+tag_question_comma; dialogue_tag+speaker_change; number_style+currency_style; ly_adverb_hyphen+title_italics+tv_show_quotes; comma_splice+run_on_sentence+compound_sentence_comma+subject_verb_agreement+that_which+that_who; tense_shift+pronoun_agreement+missing_word+preposition_error; try_and+list_intro_colon; terminal_mark; unnecessary_comma
+2026-09-06 16:13:21,820 INFO    docproof.sweeps: sweep_ellipsis: 0 flagged, 0 remaining
+2026-09-06 16:13:21,820 INFO    docproof.sweeps: sweep_dash: 0 flagged, 0 remaining
+2026-09-06 16:13:21,821 INFO    docproof.sweeps: sweep_stacked_punctuation: 0 flagged, 0 remaining
+2026-09-06 16:13:21,822 INFO    docproof.sweeps: sweep_doubled_word: 1 flagged, 0 remaining
+2026-09-06 16:13:21,822 INFO    docproof.sweeps: sweep_century: 0 flagged, 0 remaining
+2026-09-06 16:13:21,823 INFO    docproof.sweeps: sweep_compound_number: 0 flagged, 0 remaining
+2026-09-06 16:13:21,824 INFO    docproof.sweeps: sweep_dialogue_tag: 0 flagged, 0 remaining
+2026-09-06 16:13:21,824 INFO    docproof.sweeps: sweep_terminal_period: 0 flagged, 0 remaining
+2026-09-06 16:13:21,825 INFO    docproof.sweeps: sweep_quote_punctuation: 0 flagged, 0 remaining
+2026-09-06 16:13:21,826 INFO    docproof.sweeps: sweep_nested_quote: 0 flagged, 0 remaining
+2026-09-06 16:13:21,826 INFO    docproof.sweeps: sweep_time_of_day: 0 flagged, 0 remaining
+2026-09-06 16:13:21,827 INFO    docproof.sweeps: sweep_deity_capital: 0 flagged, 0 remaining
+2026-09-06 16:13:21,827 INFO    docproof.sweeps: sweep_dialogue_splice: 0 flagged, 0 remaining
+2026-09-06 16:13:21,828 INFO    docproof.sweeps: sweep_initialism: 0 flagged, 0 remaining
+2026-09-06 16:13:21,829 INFO    docproof.sweeps: sweep_decade_apostrophe: 0 flagged, 0 remaining
+2026-09-06 16:13:21,829 INFO    docproof.sweeps: sweep_trailing_space: 0 flagged, 0 remaining
+2026-09-06 16:13:22,907 INFO    docproof.spellscan: Spell scan: 1810 tokens, 618 unique, 4 unknown → 0 protected as names, 4 to look at, 0 repeated
+2026-09-06 16:13:22,923 INFO    docproof.consistency: Consistency scan: 0 term(s), 0 spelling-variant(s), 0 abbreviation(s), 0 acronym-case(s), 0 accent(s), 0 policy form(s), 0 deity-pronoun stray(s), 0 bare-hour time(s), and 0 name(s) with diacritic drift — 0 occurrence(s) to correct, 0 to ask about
+2026-09-06 16:13:23,029 INFO    docproof.adjudicate: Adjudication: 1 candidate(s) to rule on (typo=1)
+2026-09-06 16:13:23,044 INFO    docproof.examination: Examination graph shadow: generated 937 site(s), 1874 event(s)
+2026-09-06 16:13:23,045 INFO    docproof.validator: Validated 2/4 findings (query=2, validated=2)
+2026-09-06 16:13:23,045 INFO    docproof.validator: Validated 0/0 findings ()
+2026-09-06 16:13:23,046 INFO    docproof.validator: Validated 0/0 findings ()
+2026-09-06 16:13:23,047 INFO    docproof.reassembler: Applied 2 tracked change(s); 0 skipped by safety checks.
+2026-09-06 16:13:23,048 INFO    docproof.reassembler: Wrote 2 margin queries, which change nothing.
+2026-09-06 16:13:23,048 ERROR   docproof.pipeline: Examination graph shadow reporting failed; the reviewed manuscript path is unchanged.
+Traceback (most recent call last):
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/pipeline.py", line 2581, in finish
+    prepared.examination.observe_findings(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        validated, prepared.doc, applied_ids=stats.applied)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 114, in observe_findings
+    self._observe_target(site.site_id, finding, applied)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 375, in _observe_target
+    self._confirm_site(site_id, finding)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 553, in _confirm_site
+    self.ledger.transition(
+    ~~~~~~~~~~~~~~~~~~~~~~^
+        site_id, target, actor=finding.chunk_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        reason=f"legacy finding {finding.finding_id} confirmed this site",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        evidence={"finding_id": finding.finding_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                  "confidence": finding.confidence})
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/site_ledger.py", line 160, in transition
+    return self._append(site_id, state, actor, reason, evidence, verdict)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/site_ledger.py", line 234, in _append
+    event = LedgerEvent(
+        sequence=len(self._events) + 1, site_id=site_id, state=state,
+        actor=actor, reason=reason, evidence=evidence or {},
+        verdict=verdict, site=site, event_kind=event_kind)
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.venv/lib/python3.14/site-packages/pydantic/main.py", line 263, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+pydantic_core._pydantic_core.ValidationError: 1 validation error for LedgerEvent
+actor
+  String should have at least 1 character [type=string_too_short, input_value='', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.13/v/string_too_short
+2026-09-06 16:13:23,050 INFO    docproof.audit: Reject-all audit passed: 37 paragraph(s) return to their ingested text exactly.
+2026-09-06 16:13:23,051 INFO    docproof.reporting: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_applied_counts_the_adjudi0/out/tiny_novel/.deliverable-staging/findings.json
+2026-09-06 16:13:23,052 INFO    docproof.reporting: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_applied_counts_the_adjudi0/out/tiny_novel/.deliverable-staging/summary.md
+2026-09-06 16:13:23,085 INFO    docproof.changelog: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_applied_counts_the_adjudi0/out/tiny_novel/.deliverable-staging/tiny_novel - Atmosphere Press Proofreader Change Log.docx
+2026-09-06 16:13:23,094 DEBUG   galley.memory.ingest: review finding is arbitration bookkeeping; ignoring: 'overlaps earlier finding g-1; routed to query'
+2026-09-06 16:13:23,094 DEBUG   galley.memory.ingest: review finding is arbitration bookkeeping; ignoring: 'overlaps earlier finding g-1; routed to query'
+2026-09-06 16:13:23,094 INFO    docproof.app.jobs: Galley memory ingest for 'tiny_novel.docx': 2 new, 0 duplicate, 0 skipped, 2 ignored
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0000 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0001 [body/Normal] 278 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0002 [body/Normal] 221 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0003 [body/Normal] 266 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0004 [body/Normal] 240 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0005 [body/Normal] 257 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0006 [body/Normal] 235 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0007 [body/Normal] 307 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0008 [body/Normal] 327 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0009 [body/Normal] 290 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0010 [body/Normal] 318 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0011 [body/Normal] 360 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0012 [body/Normal] 361 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0013 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0014 [body/Normal] 264 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0015 [body/Normal] 238 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0016 [body/Normal] 254 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0017 [body/Normal] 234 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0018 [body/Normal] 253 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0019 [body/Normal] 228 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0020 [body/Normal] 341 chars
+2026-09-06 16:13:23,134 DEBUG   docproof.ingest: para body-0021 [body/Normal] 298 chars
+2026-09-06 16:13:23,135 DEBUG   docproof.ingest: para body-0022 [body/Normal] 298 chars
+2026-09-06 16:13:23,135 DEBUG   docproof.ingest: para body-0023 [body/Normal] 312 chars
+2026-09-06 16:13:23,135 DEBUG   docproof.ingest: para body-0024 [body/Normal] 341 chars
+2026-09-06 16:13:23,135 DEBUG   docproof.ingest: para body-0025 [body/Normal] 329 chars
+2026-09-06 16:13:23,135 DEBUG   docproof.ingest: para body-0026 [body/Heading1] 13 chars (sweeps only: heading)
+2026-09-06 16:13:23,135 DEBUG   docproof.ingest: para body-0027 [body/Normal] 250 chars
+2026-09-06 16:13:23,135 DEBUG   docproof.ingest: para body-0028 [body/Normal] 224 chars
+2026-09-06 16:13:23,135 DEBUG   docproof.ingest: para body-0029 [body/Normal] 222 chars
+2026-09-06 16:13:23,135 DEBUG   docproof.ingest: para body-0030 [body/Normal] 231 chars
+2026-09-06 16:13:23,135 DEBUG   docproof.ingest: para body-0031 [body/Normal] 225 chars
+2026-09-06 16:13:23,135 DEBUG   docproof.ingest: para body-0032 [body/Normal] 225 chars
+2026-09-06 16:13:23,135 DEBUG   docproof.ingest: para body-0033 [body/Normal] 329 chars
+2026-09-06 16:13:23,135 DEBUG   docproof.ingest: para body-0034 [body/Normal] 287 chars
+2026-09-06 16:13:23,135 DEBUG   docproof.ingest: para body-0035 [body/Normal] 298 chars
+2026-09-06 16:13:23,135 DEBUG   docproof.ingest: para body-0036 [body/Normal] 330 chars
+2026-09-06 16:13:23,135 INFO    docproof.ingest: Ingested 37 paragraph(s) from tiny_novel.docx: 34 for the model, 3 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:23,211 INFO    docproof.pipeline: Proofreading as U.S. English (The Chicago Manual of Style, 17th edition; Merriam-Webster, for spelling; The Atmosphere Press House Style Guide, which overrides Chicago where they differ)
+2026-09-06 16:13:23,212 INFO    docproof.normalize: Normalized silently: 2 quote(s) curled, 0 space run(s) collapsed across 2 paragraph(s); 0 mark(s) left straight as ambiguous.
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0000 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0001 [body/Normal] 278 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0002 [body/Normal] 221 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0003 [body/Normal] 266 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0004 [body/Normal] 240 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0005 [body/Normal] 257 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0006 [body/Normal] 235 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0007 [body/Normal] 307 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0008 [body/Normal] 327 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0009 [body/Normal] 290 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0010 [body/Normal] 318 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0011 [body/Normal] 360 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0012 [body/Normal] 361 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0013 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0014 [body/Normal] 264 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0015 [body/Normal] 238 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0016 [body/Normal] 254 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0017 [body/Normal] 234 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0018 [body/Normal] 253 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0019 [body/Normal] 228 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0020 [body/Normal] 341 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0021 [body/Normal] 298 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0022 [body/Normal] 298 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0023 [body/Normal] 312 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0024 [body/Normal] 341 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0025 [body/Normal] 329 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0026 [body/Heading1] 13 chars (sweeps only: heading)
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0027 [body/Normal] 250 chars
+2026-09-06 16:13:23,214 DEBUG   docproof.ingest: para body-0028 [body/Normal] 224 chars
+2026-09-06 16:13:23,215 DEBUG   docproof.ingest: para body-0029 [body/Normal] 222 chars
+2026-09-06 16:13:23,215 DEBUG   docproof.ingest: para body-0030 [body/Normal] 231 chars
+2026-09-06 16:13:23,215 DEBUG   docproof.ingest: para body-0031 [body/Normal] 225 chars
+2026-09-06 16:13:23,215 DEBUG   docproof.ingest: para body-0032 [body/Normal] 225 chars
+2026-09-06 16:13:23,215 DEBUG   docproof.ingest: para body-0033 [body/Normal] 329 chars
+2026-09-06 16:13:23,215 DEBUG   docproof.ingest: para body-0034 [body/Normal] 287 chars
+2026-09-06 16:13:23,215 DEBUG   docproof.ingest: para body-0035 [body/Normal] 298 chars
+2026-09-06 16:13:23,215 DEBUG   docproof.ingest: para body-0036 [body/Normal] 330 chars
+2026-09-06 16:13:23,215 INFO    docproof.ingest: Ingested 37 paragraph(s) from tiny_novel.docx: 34 for the model, 3 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:23,215 INFO    docproof.chunker: Packed 34 of 37 paragraphs into 2 chunks (budget 2500 tokens)
+2026-09-06 16:13:23,296 INFO    docproof.pipeline: 31 error type(s) in 10 category/-ies, 10 pass(es): repeated_word+spelling+homophone_confusion+apostrophe_error+capitalization; serial_comma+complex_list_semicolon+introductory_comma+direct_address_comma+tag_question_comma; dialogue_tag+speaker_change; number_style+currency_style; ly_adverb_hyphen+title_italics+tv_show_quotes; comma_splice+run_on_sentence+compound_sentence_comma+subject_verb_agreement+that_which+that_who; tense_shift+pronoun_agreement+missing_word+preposition_error; try_and+list_intro_colon; terminal_mark; unnecessary_comma
+2026-09-06 16:13:23,297 INFO    docproof.sweeps: sweep_ellipsis: 0 flagged, 0 remaining
+2026-09-06 16:13:23,297 INFO    docproof.sweeps: sweep_dash: 0 flagged, 0 remaining
+2026-09-06 16:13:23,298 INFO    docproof.sweeps: sweep_stacked_punctuation: 0 flagged, 0 remaining
+2026-09-06 16:13:23,299 INFO    docproof.sweeps: sweep_doubled_word: 1 flagged, 0 remaining
+2026-09-06 16:13:23,299 INFO    docproof.sweeps: sweep_century: 0 flagged, 0 remaining
+2026-09-06 16:13:23,300 INFO    docproof.sweeps: sweep_compound_number: 0 flagged, 0 remaining
+2026-09-06 16:13:23,301 INFO    docproof.sweeps: sweep_dialogue_tag: 0 flagged, 0 remaining
+2026-09-06 16:13:23,301 INFO    docproof.sweeps: sweep_terminal_period: 0 flagged, 0 remaining
+2026-09-06 16:13:23,302 INFO    docproof.sweeps: sweep_quote_punctuation: 0 flagged, 0 remaining
+2026-09-06 16:13:23,302 INFO    docproof.sweeps: sweep_nested_quote: 0 flagged, 0 remaining
+2026-09-06 16:13:23,303 INFO    docproof.sweeps: sweep_time_of_day: 0 flagged, 0 remaining
+2026-09-06 16:13:23,304 INFO    docproof.sweeps: sweep_deity_capital: 0 flagged, 0 remaining
+2026-09-06 16:13:23,304 INFO    docproof.sweeps: sweep_dialogue_splice: 0 flagged, 0 remaining
+2026-09-06 16:13:23,305 INFO    docproof.sweeps: sweep_initialism: 0 flagged, 0 remaining
+2026-09-06 16:13:23,305 INFO    docproof.sweeps: sweep_decade_apostrophe: 0 flagged, 0 remaining
+2026-09-06 16:13:23,306 INFO    docproof.sweeps: sweep_trailing_space: 0 flagged, 0 remaining
+2026-09-06 16:13:24,361 INFO    docproof.spellscan: Spell scan: 1810 tokens, 618 unique, 4 unknown → 0 protected as names, 4 to look at, 0 repeated
+2026-09-06 16:13:24,377 INFO    docproof.consistency: Consistency scan: 0 term(s), 0 spelling-variant(s), 0 abbreviation(s), 0 acronym-case(s), 0 accent(s), 0 policy form(s), 0 deity-pronoun stray(s), 0 bare-hour time(s), and 0 name(s) with diacritic drift — 0 occurrence(s) to correct, 0 to ask about
+2026-09-06 16:13:24,481 INFO    docproof.adjudicate: Adjudication: 1 candidate(s) to rule on (typo=1)
+2026-09-06 16:13:24,496 INFO    docproof.examination: Examination graph shadow: generated 937 site(s), 1874 event(s)
+2026-09-06 16:13:24,497 INFO    docproof.validator: Validated 2/2 findings (validated=2)
+2026-09-06 16:13:24,498 INFO    docproof.validator: Validated 0/0 findings ()
+2026-09-06 16:13:24,499 INFO    docproof.validator: Validated 0/0 findings ()
+2026-09-06 16:13:24,499 INFO    docproof.reassembler: Applied 2 tracked change(s); 0 skipped by safety checks.
+2026-09-06 16:13:24,500 ERROR   docproof.pipeline: Examination graph shadow reporting failed; the reviewed manuscript path is unchanged.
+Traceback (most recent call last):
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/pipeline.py", line 2581, in finish
+    prepared.examination.observe_findings(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        validated, prepared.doc, applied_ids=stats.applied)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 114, in observe_findings
+    self._observe_target(site.site_id, finding, applied)
+    ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 375, in _observe_target
+    self._confirm_site(site_id, finding)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/examination.py", line 553, in _confirm_site
+    self.ledger.transition(
+    ~~~~~~~~~~~~~~~~~~~~~~^
+        site_id, target, actor=finding.chunk_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        reason=f"legacy finding {finding.finding_id} confirmed this site",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        evidence={"finding_id": finding.finding_id,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                  "confidence": finding.confidence})
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/site_ledger.py", line 160, in transition
+    return self._append(site_id, state, actor, reason, evidence, verdict)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/docproof/site_ledger.py", line 234, in _append
+    event = LedgerEvent(
+        sequence=len(self._events) + 1, site_id=site_id, state=state,
+        actor=actor, reason=reason, evidence=evidence or {},
+        verdict=verdict, site=site, event_kind=event_kind)
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.venv/lib/python3.14/site-packages/pydantic/main.py", line 263, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+pydantic_core._pydantic_core.ValidationError: 1 validation error for LedgerEvent
+actor
+  String should have at least 1 character [type=string_too_short, input_value='', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.13/v/string_too_short
+2026-09-06 16:13:24,502 INFO    docproof.audit: Reject-all audit passed: 37 paragraph(s) return to their ingested text exactly.
+2026-09-06 16:13:24,503 INFO    docproof.reporting: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_alarms_ride_the_warnings_0/out/tiny_novel/.deliverable-staging/findings.json
+2026-09-06 16:13:24,504 INFO    docproof.reporting: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_alarms_ride_the_warnings_0/out/tiny_novel/.deliverable-staging/summary.md
+2026-09-06 16:13:24,534 INFO    docproof.changelog: Wrote /private/var/folders/3h/j9_q6xbj1ws6pmc_24znlfcw0000gn/T/pytest-of-quintonjohnson/pytest-476/test_alarms_ride_the_warnings_0/out/tiny_novel/.deliverable-staging/tiny_novel - Atmosphere Press Proofreader Change Log.docx
+2026-09-06 16:13:24,543 INFO    docproof.app.jobs: Galley memory ingest for 'tiny_novel.docx': 1 new, 0 duplicate, 0 skipped, 0 ignored
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0000 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0001 [body/Normal] 278 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0002 [body/Normal] 221 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0003 [body/Normal] 266 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0004 [body/Normal] 240 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0005 [body/Normal] 257 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0006 [body/Normal] 235 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0007 [body/Normal] 307 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0008 [body/Normal] 327 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0009 [body/Normal] 290 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0010 [body/Normal] 318 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0011 [body/Normal] 360 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0012 [body/Normal] 361 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0013 [body/Heading1] 11 chars (sweeps only: heading)
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0014 [body/Normal] 264 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0015 [body/Normal] 238 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0016 [body/Normal] 254 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0017 [body/Normal] 234 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0018 [body/Normal] 253 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0019 [body/Normal] 228 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0020 [body/Normal] 341 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0021 [body/Normal] 298 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0022 [body/Normal] 298 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0023 [body/Normal] 312 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0024 [body/Normal] 341 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0025 [body/Normal] 329 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0026 [body/Heading1] 13 chars (sweeps only: heading)
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0027 [body/Normal] 250 chars
+2026-09-06 16:13:24,584 DEBUG   docproof.ingest: para body-0028 [body/Normal] 224 chars
+2026-09-06 16:13:24,585 DEBUG   docproof.ingest: para body-0029 [body/Normal] 222 chars
+2026-09-06 16:13:24,585 DEBUG   docproof.ingest: para body-0030 [body/Normal] 231 chars
+2026-09-06 16:13:24,585 DEBUG   docproof.ingest: para body-0031 [body/Normal] 225 chars
+2026-09-06 16:13:24,585 DEBUG   docproof.ingest: para body-0032 [body/Normal] 225 chars
+2026-09-06 16:13:24,585 DEBUG   docproof.ingest: para body-0033 [body/Normal] 329 chars
+2026-09-06 16:13:24,585 DEBUG   docproof.ingest: para body-0034 [body/Normal] 287 chars
+2026-09-06 16:13:24,585 DEBUG   docproof.ingest: para body-0035 [body/Normal] 298 chars
+2026-09-06 16:13:24,585 DEBUG   docproof.ingest: para body-0036 [body/Normal] 330 chars
+2026-09-06 16:13:24,585 INFO    docproof.ingest: Ingested 37 paragraph(s) from tiny_novel.docx: 34 for the model, 3 swept only (headings, and short lines only if a floor is set), 0 skipped entirely
+2026-09-06 16:13:24,588 ERROR   docproof.app.jobs: Galley deliverable build failed for job j1
+Traceback (most recent call last):
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/app/jobs.py", line 2039, in _run_galley
+    deliverable = build_manuscript_deliverable(
+        adjudication, ms, source_path=job.source_path, cfg=cfg,
+        out_dir=out)
+  File "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.claude/worktrees/docproof-headless-mac-afafaf/tests/test_galley_jobs.py", line 276, in write_then_raise
+    raise RuntimeError("WordCountDelta: manuscript short a sentence")
+RuntimeError: WordCountDelta: manuscript short a sentence
+2026-09-06 16:13:24,591 DEBUG   galley.memory.ingest: review finding is arbitration bookkeeping; ignoring: 'overlaps earlier finding g-1; routed to query'
+2026-09-06 16:13:24,591 DEBUG   galley.memory.ingest: review finding is arbitration bookkeeping; ignoring: 'overlaps earlier finding g-1; routed to query'
+2026-09-06 16:13:24,591 INFO    docproof.app.jobs: Galley memory ingest for 'tiny_novel.docx': 2 new, 0 duplicate, 0 skipped, 2 ignored

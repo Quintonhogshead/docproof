@@ -15,6 +15,14 @@ class APIConfig(BaseModel):
     # Which vendor serves `model`. Only consulted for models the catalog
     # doesn't recognise — a known model brings its own provider.
     provider: Literal["anthropic", "openai", "gemini", "deepinfra"] = "anthropic"
+    # Which lane serves ANTHROPIC models. "api" bills the vendor; "subagent"
+    # runs them as Claude Code session turns on the Max subscription, which is
+    # $0 in API dollars. Galley sets "subagent" (its whole economics assume
+    # Claude never bills — see config/stages/mechanical-wave.yaml); a server
+    # with no subscription to bill keeps the default. It FAILS CLOSED: if the
+    # lane is unavailable, the run stops rather than quietly spending money,
+    # which is the failure that once cost $65 in a killed driver run.
+    claude_lane: Literal["api", "subagent"] = "api"
     max_retries: int = Field(default=2, ge=0)
     max_output_tokens: int = Field(default=16000, ge=1)
     prompt_caching: bool = True
