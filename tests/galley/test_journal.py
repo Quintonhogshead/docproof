@@ -5,6 +5,8 @@ reachable as `docproof galley journal`.
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -329,12 +331,28 @@ def test_a_copyedit_run_gets_its_section(tmp_path):
 
 def test_journal_verb_writes_the_file(workspace, run_dir, tmp_path, capsys):
     out = tmp_path / "DECISION_LOG.md"
+    before = datetime.now(timezone.utc)
     rc = main(["galley", "journal", str(run_dir), "--workspace",
-               str(workspace), "--at", "2026-09-03T00:00:00Z",
-               "--out", str(out)])
+               str(workspace), "--out", str(out)])
+    after = datetime.now(timezone.utc)
     assert rc == 0
     assert "wrote" in capsys.readouterr().out
-    assert out.read_text("utf-8").startswith("# Decision log —")
+    text = out.read_text("utf-8")
+    assert text.startswith("# Decision log —")
+    # The log is an audit trail: its stamp is this machine's clock, and there
+    # is no flag for a model to dictate one.
+    stamp = re.search(r"generated (\S+)\*", text)
+    assert stamp, "the verb wrote no timestamp"
+    assert before <= datetime.fromisoformat(stamp.group(1)) <= after
+    with pytest.raises(SystemExit):
+        main(["galley", "journal", str(run_dir), "--workspace", str(workspace),
+              "--at", "2026-09-06T20:10:00Z", "--out", str(out)])
+    capsys.readouterr()
+
+
+def test_write_journal_stamps_the_clock(workspace, run_dir, tmp_path):
+    out = jr.write_journal(run_dir, tmp_path / "log.md", workspace=workspace)
+    assert re.search(r"generated \S+\*", out.read_text("utf-8"))
 
 
 def test_journal_verb_prints_to_stdout_and_refuses_a_missing_run(

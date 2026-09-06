@@ -1,12 +1,18 @@
 """Render DECISION_LOG.md from run artifacts, grouped by phase and paragraph.
-Use recorded reasons and caller-supplied timestamps for deterministic
-output; label missing phase evidence explicitly.
+Use recorded reasons for deterministic output; label missing phase evidence
+explicitly.
+
+The body reads no clock, so a log regenerates identically. The one timestamp
+the document carries — the "generated" line — comes from the system clock
+when the file is written, never from a caller's idea of the time: the log is
+an audit trail, so a stamp on it has to be true.
 """
 from __future__ import annotations
 
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -39,6 +45,10 @@ _APPROVAL_RE = re.compile(r"^\s*(?:approved|declined)\b|\b(?:approved|declined)"
 _CHECK_RE = re.compile(r"^\s*\[(PASS|FAIL|skip)\]\s*([^—]+?)(?:\s*—\s*(.*))?$")
 
 _MAX_QUOTE = 160
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _clip(text: Any, limit: int = _MAX_QUOTE) -> str:
@@ -732,9 +742,13 @@ _SECTIONS = {
 def write_journal(run_dir: str | Path, out_path: str | Path, *,
                   workspace: str | Path | None = None, book: str = "",
                   generated_at: str = "") -> Path:
-    """Render the decision log and write it. Returns the path."""
+    """Render the decision log and write it. Returns the path.
+
+    The written file always carries a real timestamp: ``generated_at`` is
+    stamped from the system clock unless a caller passes one explicitly.
+    """
     text = render_journal(run_dir, workspace=workspace, book=book,
-                          generated_at=generated_at)
+                          generated_at=generated_at or _now())
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text, encoding="utf-8")

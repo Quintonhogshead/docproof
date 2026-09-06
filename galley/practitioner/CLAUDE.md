@@ -65,7 +65,9 @@ the deliverable to DocWatch. Two things change for you inside such a session:
    after each phase and STOPS the run if the phase it just ran did not reach
    its state (`intake`, `plan_approved`, `mechanical_complete`, `audited`,
    `settled`, `certified`, `delivered`). A phase that quietly skipped the
-   advance reads exactly like a phase that did nothing.
+   advance reads exactly like a phase that did nothing. Never supply a
+   timestamp — `galley state` stamps the machine's own UTC clock, and there is
+   no flag for you to type one into.
 3. **Sessions have caps.** Every phase runs under a turn cap
    (`claude --max-turns`, 400 for settle, 250 for verify, 60-150 elsewhere) and
    a wall-clock timeout (2h, 3h for the ladder, 4h for verify/settle). Hitting
@@ -230,7 +232,7 @@ for a person. Nothing is retried around.
 | `docproof galley intent-zones` | Resolve an intent-zones file (selectors: para ids/range, terms, regex, quotes) against a manuscript and preview the protected spans + permission classes (locked / punctuation / open). Set `intent_zones_file` in the config and the sweep layer downgrades any forbidden edit to a query BEFORE it can auto-apply. | $0 |
 | `docproof galley triage-nouns` | Group a profile's proper nouns into protect/enforce/reject/suspect (near-matches like Deut/Deute flagged), and write a correction-overlay starter. `genre-pack --corrections` then seeds only the vetted names. | $0 |
 | `docproof galley ledger` | The finding lifecycle ledger: every finding's stable id + state history (detected→merged/queried/rejected/dropped) reconstructed from a run, with a duplicate report. | $0 |
-| `docproof galley state` | The resumable run state machine (intake→profiled→…→audited→settled→certified→delivered). `--advance settled --results RUN` REFUSES (exit 7) while any finding is non-terminal or any verify item is unsettled. `--advance` stamps source/config hashes — pass BOTH `--source` and `--config` at every stage; `--verify-resume` (same two flags) proves nothing changed underneath before you continue (exit 6 on drift, strict about a missing hash). | $0 |
+| `docproof galley state` | The resumable run state machine (intake→profiled→…→audited→settled→certified→delivered). `--advance settled --results RUN` REFUSES (exit 7) while any finding is non-terminal or any verify item is unsettled. `--advance` stamps the system clock plus the source/config hashes — pass BOTH `--source` and `--config` at every stage (there is no timestamp flag; do not invent one); `--verify-resume` (same two flags) proves nothing changed underneath before you continue (exit 6 on drift, strict about a missing hash). | $0 |
 | `docproof capabilities` | The whole command tree + config sections + genres + stages, as JSON. Your map of the rack — read this, not `--help`. | $0 |
 
 Verbs marked here that are missing in your checkout are still being built; do

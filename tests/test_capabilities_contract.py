@@ -5,7 +5,9 @@ a hand-maintained doc table does — but only as long as it keeps advertising th
 real flag STRINGS (not the dests), positionals as positional, and never a flag a
 verb does not have. This locks that contract, and the three specific drifts the
 Purpura beta hit: `--para-map` (not `para_map`), genre-pack's positional genre,
-and `galley state` having no `--note`.
+and `galley state` having no `--note`. It also locks the audit-trail verbs
+against advertising a timestamp flag, which a headless brain fills with a time
+it only believes is current.
 """
 from __future__ import annotations
 
@@ -60,6 +62,15 @@ def test_galley_state_has_no_note_flag(capsys):
     # --note lives on approve, where it really exists
     ap = _verb(_manifest(capsys)["commands"], "galley", "approve")
     assert "--note" in _flags(ap)
+
+
+def test_the_audit_trail_verbs_advertise_no_timestamp_flag(capsys):
+    """The brain reads this manifest as its map of the rack. `galley state` and
+    `galley journal` stamp the system clock, so neither may advertise a flag a
+    model could type a believed time into."""
+    commands = _manifest(capsys)["commands"]
+    for verb in ("state", "journal"):
+        assert "--at" not in _flags(_verb(commands, "galley", verb))
 
 
 def test_every_advertised_flag_starts_with_a_dash(capsys):

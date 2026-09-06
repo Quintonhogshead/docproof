@@ -804,8 +804,6 @@ def _galley_parser(sub) -> None:
                                       "(with --stage/--genre applied)")
     _stage_arg(gst)
     _genre_arg(gst)
-    gst.add_argument("--at", default="", help="timestamp to record (you supply "
-                                              "it; never read from a clock)")
     gst.add_argument("--by", default="", help="who is advancing the state")
     gst.add_argument("--verify-resume", action="store_true",
                      help="check the current source/config hashes still match "
@@ -939,10 +937,6 @@ def _galley_parser(sub) -> None:
                                                 "the approval or the run)")
     gjn.add_argument("--out", help="write here (default: stdout). The driver "
                                    "writes deliverable/DECISION_LOG.md")
-    gjn.add_argument("--at", default="", help="timestamp to stamp on it (you "
-                                              "supply it; never read from a "
-                                              "clock, so the render is "
-                                              "reproducible)")
 
     gag = gsub.add_parser(
         "agent",
