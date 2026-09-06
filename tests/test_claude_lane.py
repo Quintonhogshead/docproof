@@ -49,3 +49,25 @@ def test_subagent_lane_leaves_other_vendors_alone(monkeypatch):
     cfg = _cfg(model="claude-sonnet-5", claude_lane="subagent")
     provider = build_provider(cfg, api_key="k", model="gpt-5.6-luna")
     assert provider.name != "subagent"
+
+
+def test_subagent_lane_uses_its_own_concurrency_ceiling():
+    """A Claude Code turn is a process, not a socket, so the vendor's API
+    headroom is the wrong limit for it."""
+    cfg = _cfg(model="claude-sonnet-5", claude_lane="subagent",
+               concurrency=8, subagent_concurrency=3)
+    assert cfg.concurrency_for("claude-sonnet-5") == 3
+    # Luna is untouched by the subagent ceiling.
+    assert cfg.concurrency_for("gpt-5.6-luna") == 24
+
+
+def test_api_lane_ignores_the_subagent_ceiling():
+    cfg = _cfg(model="claude-sonnet-5", claude_lane="api",
+               concurrency=8, subagent_concurrency=3)
+    assert cfg.concurrency_for("claude-sonnet-5") == 8
+
+
+def test_serial_switch_still_wins_on_the_subagent_lane():
+    cfg = _cfg(model="claude-sonnet-5", claude_lane="subagent",
+               concurrency=1, subagent_concurrency=12)
+    assert cfg.concurrency_for("claude-sonnet-5") == 1
