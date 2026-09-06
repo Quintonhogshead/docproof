@@ -12,6 +12,10 @@ api:
   concurrency_by_provider:   # ...overridden per vendor, chosen by the model the
     openai: 24               # pass is about to call. Only OpenAI's headroom (2M
                              # TPM / 5K RPM) has been measured; Anthropic keeps 8
+  subagent_concurrency: 8    # Claude Code turns in flight when claude_lane is
+                             # 'subagent'. Each is a whole CLI process (~0.5 GB),
+                             # so this is bounded by RAM and cores, not by a
+                             # vendor rate limit. 8 suits a 12-core / 32 GB Mac.
 
 chunking:
   token_budget: 2500        # soft target per chunk (attention quality, not capacity)

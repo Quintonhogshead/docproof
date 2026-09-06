@@ -31,6 +31,21 @@ def build_provider(cfg, *, api_key: str | None = None,
               "prompt_caching": cfg.api.prompt_caching,
               "effort": cfg.api.effort}
     if name == "anthropic":
+        # The subscription lane, when the deployment asks for it. Every Claude
+        # call becomes a session turn billed to the Max plan instead of the
+        # vendor API. Unavailable is FATAL on purpose: falling back to the API
+        # here would spend real money under a config that promised it wouldn't.
+        if getattr(cfg.api, "claude_lane", "api") == "subagent":
+            from .subagent import SubagentProvider, availability
+            ok, why = availability()
+            if not ok:
+                raise ProviderError(
+                    f"api.claude_lane is 'subagent', so Claude models must run "
+                    f"on the subscription, but the lane is unavailable: {why}. "
+                    f"Refusing to fall back to the Anthropic API — that would "
+                    f"bill API dollars this config forbids. Fix the lane, or "
+                    f"set api.claude_lane: api to allow vendor billing.")
+            return SubagentProvider(model=model or cfg.api.model)
         from .anthropic_provider import AnthropicProvider
         return AnthropicProvider(**kwargs)
     if name == "openai":

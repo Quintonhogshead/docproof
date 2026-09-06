@@ -1,7 +1,7 @@
 # Stage preset: the mechanical wave — Chicago proofread, recall-first.
 #
 # This is the portable, known-good Wave 1 recipe (the one that used to live
-# only as prose in KNOBS.md). It runs the ensemble recall engine — Luna + Haiku
+# only as prose in KNOBS.md). It runs the ensemble recall engine — Luna + Sonnet
 # union with a Luna verifier over the disputed findings — on top of the base
 # config's full error_types and sweeps (a stage is a PATCH on a full base; it
 # never restates or drops those lists). The copy-edit lane is held shut and
@@ -15,7 +15,7 @@
 # guarantees the wave does not silently become a copy-edit.
 name: mechanical-wave
 description: >
-  The Chicago proofread wave: the Luna+Haiku ensemble with a Luna verifier over
+  The Chicago proofread wave: the Luna+Sonnet ensemble with a Luna verifier over
   the base config's full typed passes and sweeps, broken-sentence repair on, and
   the copy-edit lane (smoothing edits, rewrite) locked OFF so no genre can
   reopen it. The portable Wave 1 recall recipe.
@@ -31,10 +31,18 @@ patch:
     enabled: true
     model: gpt-5.6-luna
     effort: high
+  # Every Claude model in this stage runs as a subscription session turn, never
+  # an Anthropic API call (Quinton, 2026-09-06: "ALL Claude calls must ALWAYS
+  # go to sub. ZERO Claude API calls"). Fails closed if the lane is down.
+  api:
+    claude_lane: subagent
   ensemble:
     detectors:
       - {model: gpt-5.6-luna, effort: low}
-      - {model: claude-haiku-4-5, effort: low}
+      # Sonnet, not Haiku: Haiku 4.5 was retired from this lane on 2026-09-06 as
+      # not worth its own cost. On the subscription lane it is $0 either way, so
+      # the only question left is which model reads better, and that is Sonnet.
+      - {model: claude-sonnet-5, effort: low}
     verifier_model: gpt-5.6-luna
     verifier_effort: high
     verify_policy: disputed

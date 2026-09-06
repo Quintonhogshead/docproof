@@ -27,3 +27,6 @@ secrets.db
 cover_jobs/
 build_cover/
 covers/
+
+# Stray debug output from local runs; never source.
+run.log

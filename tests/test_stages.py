@@ -101,7 +101,7 @@ def test_mechanical_wave_locks_the_copyedit_lane_against_any_genre():
         "smoothing.enabled", "smoothing.edits", "rewrite.enabled"}
     # And the recall recipe the stage carries is materialized.
     assert [d.model for d in cfg.ensemble.detectors] == [
-        "gpt-5.6-luna", "claude-haiku-4-5"]
+        "gpt-5.6-luna", "claude-sonnet-5"]
     assert cfg.ensemble.verifier_model == "gpt-5.6-luna"
     assert cfg.repair.enabled is True
     # The chapter sweep is wave 1 line 1 on Luna (2026-09-04); the base
@@ -150,7 +150,7 @@ def test_configure_cli_applies_stage_lock_over_genre():
     assert cfg.smoothing.edits is False
     assert cfg.rewrite.enabled is False
     assert [d.model for d in cfg.ensemble.detectors] == [
-        "gpt-5.6-luna", "claude-haiku-4-5"]
+        "gpt-5.6-luna", "claude-sonnet-5"]
 
 
 def test_written_stage_config_round_trips_and_is_self_contained(tmp_path):
