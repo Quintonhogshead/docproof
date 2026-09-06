@@ -37,6 +37,28 @@ REQUIRED_STATE: dict[str, str] = {
 # API spending ceiling recorded in approval.json.
 DEFAULT_BUDGET_USD = 10.0
 DEFAULT_MODEL = "claude-fable-5-1"
+#: The cheaper, faster brain for the phases that follow a script.
+MECHANICAL_MODEL = "claude-opus-5"
+# Which brain drives each phase. Judgment phases (the plan gate, the ladder's
+# reading of its own results, audit, settle's adjudication, the copy-edit
+# flights) stay on Fable; the phases that run a fixed set of commands and read
+# their output go to Opus 5 (owner, 2026-09-06). A phase absent here runs on
+# DEFAULT_MODEL.
+PHASE_MODEL: dict[str, str] = {
+    "profile": MECHANICAL_MODEL,
+    "sweeps": MECHANICAL_MODEL,
+    "verify": MECHANICAL_MODEL,
+    "certify": MECHANICAL_MODEL,
+    "deliver": MECHANICAL_MODEL,
+}
+#: Fable phases run at high effort (owner, 2026-09-06); a phase absent here
+#: leaves the session at Claude Code's default effort.
+DEFAULT_EFFORT = "high"
+PHASE_EFFORT: dict[str, str] = {
+    phase: DEFAULT_EFFORT for phase in
+    ("approve", "ladder", "flights", "audit", "reread", "settle")
+}
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 DEFAULT_PERMISSION_MODE = "acceptEdits"
 DEFAULT_WORKSPACE_ROOT = "~/galley-workspaces"
 DEFAULT_WRAPBIN = "~/galley-bin"
@@ -924,7 +946,12 @@ class Driver:
     only_phases: Sequence[str] | None = None
     handoff_dir: Path | None = None
     drive_folder_id: str = ""
-    model: str = DEFAULT_MODEL
+    # None = the per-phase table (PHASE_MODEL / PHASE_EFFORT); a value here
+    # overrides it for every phase; the by-phase maps win over both.
+    model: str | None = None
+    model_by_phase: dict[str, str] = field(default_factory=dict)
+    effort: str | None = None
+    effort_by_phase: dict[str, str] = field(default_factory=dict)
     permission_mode: str = DEFAULT_PERMISSION_MODE
     wrapbin: Path = Path(DEFAULT_WRAPBIN)
     reply_timeout_s: float = 6 * 3600.0
@@ -974,6 +1001,30 @@ class Driver:
             return int(self.max_turns)
         return PHASE_MAX_TURNS.get(phase, DEFAULT_MAX_TURNS)
 
+    def model_for(self, phase: str) -> str:
+        if phase in self.model_by_phase:
+            return str(self.model_by_phase[phase])
+        if self.model:
+            return str(self.model)
+        return PHASE_MODEL.get(phase, DEFAULT_MODEL)
+
+    def effort_for(self, phase: str) -> str | None:
+        """The session's --effort, or None to leave Claude Code's default."""
+        if phase in self.effort_by_phase:
+            level = self.effort_by_phase[phase]
+        elif self.effort:
+            level = self.effort
+        else:
+            level = PHASE_EFFORT.get(phase)
+        if level is None:
+            return None
+        level = str(level).strip().lower()
+        if level not in EFFORT_LEVELS:
+            raise DriverError(
+                f"effort {level!r} for {phase} — expected one of "
+                f"{', '.join(EFFORT_LEVELS)}")
+        return level
+
     def timeout_for(self, phase: str) -> float:
         if phase in self.timeout_by_phase:
             return float(self.timeout_by_phase[phase])
@@ -989,9 +1040,13 @@ class Driver:
                               settle_quiet_floor=self.settle_quiet_floor,
                               settle_quiet_share=self.settle_quiet_share)
         turns = self.turns_for(phase)
-        argv = ["claude", "-p", prompt, "--model", self.model,
+        argv = ["claude", "-p", prompt, "--model", self.model_for(phase),
                 "--permission-mode", self.permission_mode,
-                "--max-turns", str(turns),
+                "--max-turns", str(turns)]
+        effort = self.effort_for(phase)
+        if effort:
+            argv += ["--effort", effort]
+        argv += [
                 # Preserve the structured completion beside the readable
                 # log.
                 "--output-format", "stream-json", "--verbose"]
@@ -1266,7 +1321,9 @@ class Driver:
             if phase == "approve" and gate_due:
                 if not self.run_gate(result):
                     return result
-            self.log(f"--- phase {phase} ---")
+            effort = self.effort_for(phase)
+            self.log(f"--- phase {phase} ({self.model_for(phase)}"
+                     f"{', effort ' + effort if effort else ''}) ---")
             spec = self._spec(phase, env)
             asked_before = self._questions_text()
             outcome = self._spawner()(spec)
@@ -1517,9 +1574,11 @@ def _default_upload(files: list[Path], folder_id: str) -> list[str]:
 
 __all__ = [
     "ALL_PHASES", "COPYEDIT_PHASES", "DECISION_LOG_NAME", "DEFAULT_BUDGET_USD",
-    "DEFAULT_MAX_TURNS", "DEFAULT_MODEL", "DEFAULT_PERMISSION_MODE",
+    "DEFAULT_EFFORT", "DEFAULT_MAX_TURNS", "DEFAULT_MODEL",
+    "DEFAULT_PERMISSION_MODE", "EFFORT_LEVELS", "MECHANICAL_MODEL",
     "DEFAULT_PHASE_TIMEOUT_S", "DEFAULT_WORKSPACE_ROOT", "DEFAULT_WRAPBIN",
-    "HANDOFF_STAGE", "MECHANICAL_PHASES", "PHASE_MAX_TURNS", "PHASE_TIMEOUT_S",
+    "HANDOFF_STAGE", "MECHANICAL_PHASES", "PHASE_EFFORT", "PHASE_MAX_TURNS",
+    "PHASE_MODEL", "PHASE_TIMEOUT_S",
     "REQUIRED_STATE", "SETTLE_QUIET_FLOOR", "SETTLE_QUIET_SHARE",
     "SETTLE_ROUNDS", "TIMEOUT_RC", "DriveResult", "Driver", "DriverError",
     "PhaseResult", "PhaseSpec", "PlanSummary", "build_env", "build_handoff",

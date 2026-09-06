@@ -43,13 +43,61 @@ def test_the_approve_prompt_freezes_the_drivers_cap_not_the_plan_total():
                                               budget_usd=4.0)
 
 
-def test_the_model_reaches_the_command_line(book, tmp_path):
+def _argv_by_phase(spawn):
+    return {call.phase: call.argv for call in spawn.calls}
+
+
+def _flag(argv, name):
+    return argv[argv.index(name) + 1] if name in argv else None
+
+
+def test_the_brains_are_split_by_phase(book, tmp_path):
+    """Owner, 2026-09-06: Opus 5 drives the scripted phases, Fable 5.1 at
+    high effort the judgment phases."""
+    assert gd.MECHANICAL_MODEL == "claude-opus-5"
     ws = _ws(book, tmp_path)
     _deliverable(ws)
     spawn = FakeSpawner(ws)
     _driver(book, tmp_path, spawn=spawn).run()
-    argv = spawn.calls[0].argv
-    assert argv[argv.index("--model") + 1] == "claude-fable-5-1"
+    argv = _argv_by_phase(spawn)
+    for phase in ("profile", "sweeps", "verify", "certify", "deliver"):
+        assert _flag(argv[phase], "--model") == "claude-opus-5", phase
+        assert _flag(argv[phase], "--effort") is None, phase
+    for phase in ("approve", "ladder", "audit", "settle"):
+        assert _flag(argv[phase], "--model") == "claude-fable-5-1", phase
+        assert _flag(argv[phase], "--effort") == "high", phase
+
+
+def test_a_global_model_or_effort_overrides_the_table(book, tmp_path):
+    ws = _ws(book, tmp_path)
+    _deliverable(ws)
+    spawn = FakeSpawner(ws)
+    _driver(book, tmp_path, spawn=spawn, model="claude-sonnet-5",
+            effort="medium").run()
+    for phase, argv in _argv_by_phase(spawn).items():
+        assert _flag(argv, "--model") == "claude-sonnet-5", phase
+        assert _flag(argv, "--effort") == "medium", phase
+
+
+def test_a_per_phase_model_or_effort_wins_over_everything(book, tmp_path):
+    ws = _ws(book, tmp_path)
+    _deliverable(ws)
+    spawn = FakeSpawner(ws)
+    _driver(book, tmp_path, spawn=spawn, model="claude-sonnet-5",
+            model_by_phase={"settle": "claude-fable-5-1"},
+            effort_by_phase={"settle": "max", "profile": "low"}).run()
+    argv = _argv_by_phase(spawn)
+    assert _flag(argv["settle"], "--model") == "claude-fable-5-1"
+    assert _flag(argv["settle"], "--effort") == "max"
+    assert _flag(argv["profile"], "--model") == "claude-sonnet-5"
+    assert _flag(argv["profile"], "--effort") == "low"
+    assert _flag(argv["sweeps"], "--effort") is None
+
+
+def test_an_unknown_effort_level_is_refused():
+    drv = gd.Driver(book=Path("B.docx"), slug="b", effort="turbo")
+    with pytest.raises(gd.DriverError, match="turbo"):
+        drv.effort_for("settle")
 
 
 def test_a_paid_verb_refusing_over_the_cap_stops_the_run(book, tmp_path):

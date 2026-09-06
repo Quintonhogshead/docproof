@@ -1612,6 +1612,20 @@ def _galley_drive(args) -> int:
         kwargs["budget_usd"] = args.budget
     if args.model:
         kwargs["model"] = args.model
+    if getattr(args, "effort", None):
+        kwargs["effort"] = args.effort
+    for name, flag in (("model_by_phase", "phase_model"),
+                       ("effort_by_phase", "phase_effort")):
+        pairs: dict = {}
+        for spec in getattr(args, flag) or []:
+            phase, _, value = str(spec).partition("=")
+            if not value.strip():
+                print(f"error: --{flag.replace('_', '-')} wants PHASE=VALUE, "
+                      f"got {spec!r}", file=sys.stderr)
+                return 2
+            pairs[phase.strip()] = value.strip()
+        if pairs:
+            kwargs[name] = pairs
     if args.permission_mode:
         kwargs["permission_mode"] = args.permission_mode
     if args.wrapbin:
@@ -1673,8 +1687,17 @@ def _galley_drive(args) -> int:
         print(f"phases: {' -> '.join(phases)}")
         print(f"gate: --approve {args.approve} at ${drv.budget_usd:.2f}"
               f"{' (mechanical only)' if mechanical_only else ''}")
+        try:
+            brains = {p: drv.model_for(p) + (f" @{drv.effort_for(p)}"
+                                             if drv.effort_for(p) else "")
+                      for p in phases}
+        except gd.DriverError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        print("brains: " + ", ".join(f"{p}={b}" for p, b in brains.items()))
         if args.json:
             print(json.dumps({"workspace": str(ws), "phases": phases,
+                              "brains": brains,
                               "approve": args.approve,
                               "budget_usd": drv.budget_usd,
                               "mechanical_only": mechanical_only},

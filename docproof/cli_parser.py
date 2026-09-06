@@ -1018,8 +1018,24 @@ def _galley_parser(sub) -> None:
                           "by default: go-live Galley is mechanical "
                           "proofreading only (owner, 2026-09-03)")
     gdr.add_argument("--model", default=None,
-                     help="the brain model for every phase session "
-                          "(default: claude-fable-5)")
+                     help="the brain model for EVERY phase session, overriding "
+                          "the per-phase table (default: Fable 5.1 for the "
+                          "judgment phases — approve, ladder, audit, settle — "
+                          "and Opus 5 for profile, sweeps, verify, certify, "
+                          "deliver)")
+    gdr.add_argument("--phase-model", action="append", default=[],
+                     metavar="PHASE=MODEL",
+                     help="the brain model for ONE phase (repeatable); wins "
+                          "over --model")
+    gdr.add_argument("--effort", default=None,
+                     choices=["low", "medium", "high", "xhigh", "max"],
+                     help="the session effort for EVERY phase (default: high "
+                          "on the Fable phases, Claude Code's own default on "
+                          "the Opus phases)")
+    gdr.add_argument("--phase-effort", action="append", default=[],
+                     metavar="PHASE=LEVEL",
+                     help="the session effort for ONE phase (repeatable); wins "
+                          "over --effort")
     gdr.add_argument("--permission-mode", default=None,
                      help="the headless session's permission mode "
                           "(default: acceptEdits)")
