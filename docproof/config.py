@@ -15,6 +15,20 @@ class APIConfig(BaseModel):
     # Which vendor serves `model`. Only consulted for models the catalog
     # doesn't recognise — a known model brings its own provider.
     provider: Literal["anthropic", "openai", "gemini", "deepinfra"] = "anthropic"
+    # Which lane serves ANTHROPIC models. "api" bills the vendor; "subagent"
+    # runs them as Claude Code session turns on the Max subscription, which is
+    # $0 in API dollars. Galley sets "subagent" (its whole economics assume
+    # Claude never bills — see config/stages/mechanical-wave.yaml); a server
+    # with no subscription to bill keeps the default. It FAILS CLOSED: if the
+    # lane is unavailable, the run stops rather than quietly spending money,
+    # which is the failure that once cost $65 in a killed driver run.
+    claude_lane: Literal["api", "subagent"] = "api"
+    # Claude Code turns in flight on the subscription lane. Not the same
+    # currency as `concurrency`: each one is a whole CLI process (~0.5 GB),
+    # so the ceiling is the machine's RAM and cores, not a vendor's rate
+    # limit. 8 suits a 12-core / 32 GB Mac; raise it on a bigger box, drop it
+    # if the machine starts swapping. `api.concurrency: 1` still forces serial.
+    subagent_concurrency: int = Field(default=8, ge=1)
     max_retries: int = Field(default=2, ge=0)
     max_output_tokens: int = Field(default=16000, ge=1)
     prompt_caching: bool = True
@@ -1950,6 +1964,11 @@ class Config(BaseModel):
             return 1
         from .providers.catalog import provider_for
         name = provider_for(model or self.api.model, self.api.provider)
+        # Under the subscription lane an Anthropic "call" is a whole Claude
+        # Code process, not a socket on a shared connection, so the vendor's
+        # API headroom is the wrong limit — `subagent_concurrency` is.
+        if name == "anthropic" and self.api.claude_lane == "subagent":
+            return max(1, self.api.subagent_concurrency)
         return max(1, self.api.concurrency_by_provider.get(
             name, self.api.concurrency))
 

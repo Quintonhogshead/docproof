@@ -21,7 +21,7 @@ this table before pricing a plan.
 | Item | Measured | Notes |
 |---|---|---|
 | Luna full ladder, 44k words | ≈ $1, ~10 min | 9 typed passes + LT + gates + smoothing |
-| Luna+Haiku ensemble w/ verifier, LT picky, repair, both gates | ≈ $4.90/44k | the Redding run-1 recipe |
+| Luna+Sonnet ensemble w/ verifier, LT picky, repair, both gates | ≈ $4.90/44k | the Redding run-1 recipe (Sonnet is $0 on the subscription lane, so the real bill is the Luna half) |
 | Luna chapter sweep, 6 windows | ≈ $1–2/book | WAVE 1 LINE 1 on every book; Fable ≈ $9–10; plus Sonnet 6 windows at $0 as session subagents |
 | Flight deck (12 flights + Fable judge) | ≈ $27 sync / $13 batch per book | judge is ~90% of cost; scales with clusters |
 | Repair channel | ≈ $0.36/book | triggered by ≥3 flags/sentence |
@@ -49,7 +49,7 @@ the skeleton's shape.
    enables it, `chapter_sweep.model: gpt-5.6-luna`) plus a six-window Sonnet
    sweep run as $0 session subagents and imported (Quinton, 2026-09-04: the
    best bang for the buck by far, so it is line 0 of every plan) — then the
-   ensemble ladder (Luna+Haiku union, Luna verifier) + LT (picky per posture)
+   ensemble ladder (Luna+Sonnet union, Luna verifier) + LT (picky per posture)
    + full sweep list + repair + low-conf confirm + both gates. **The number
    audit** is its own $0 line on every plan: the profile's extraction of every
    numeral and spelled number, reviewed for house style, consistency, and

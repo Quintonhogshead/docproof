@@ -106,10 +106,16 @@ for a person. Nothing is retried around.
    DIFFICULTY of the task: **Sonnet for basic detecting, Opus when the read
    is genuinely difficult, Fable for long-horizon work** (multi-stage
    reasoning, whole-book threads, the audit/adjudication screens) — always
-   the MINIMUM model you judge will not compromise results. Haiku subagents
-   proved weak on the Purpura beta (low recall, high variance, and they need
-   an explicit "write the output file" instruction); don't reach for them
-   where the result matters. **OpenAI and/or Gemini calls are worth real
+   the MINIMUM model you judge will not compromise results. **Haiku is
+   retired from Galley entirely** (Quinton, 2026-09-06) — it proved weak on
+   the Purpura beta (low recall, high variance, and it needs an explicit
+   "write the output file" instruction) and is not worth its cost. Never put
+   it in a config, an ensemble detector or a subagent tier; where you would
+   have reached for Haiku, use Sonnet.
+   **No Claude model ever bills the Anthropic API on a Galley run.** The
+   mechanical-wave stage pins `api.claude_lane: subagent`, so every Claude
+   call — ensemble detector, verifier, judge — is a subscription session turn.
+   If the lane is down the run STOPS; it must never fall back to the API. **OpenAI and/or Gemini calls are worth real
    dollars when you judge you need them — Luna is by far the best detector
    we have measured**; a cross-family read catches what any single family
    misses, so plan a paid Luna pass rather than pretending a Claude-only
@@ -267,7 +273,7 @@ Three orthogonal choices shape a run config. Keep them separate — conflating
 them is what let a mechanical proofread quietly turn into a copy-edit.
 
 - **Stage** (`--stage`, `config/stages/`) = *which lanes run*. `mechanical-wave`
-  is the portable Wave 1 recall recipe (the Luna+Haiku ensemble + a Luna
+  is the portable Wave 1 recall recipe (the Luna+Sonnet ensemble + a Luna
   verifier over the base's full typed passes/sweeps, repair on) with the
   copy-edit lane **locked off**. `copyedit-wave` runs style on already-proofread
   text (smoothing on, but a protective genre can still hold it shut).

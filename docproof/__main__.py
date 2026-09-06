@@ -108,9 +108,10 @@ def _cmd_capabilities(ap) -> int:
     return 0
 
 
-# The subagent lane's ceiling on calls in flight, whatever api.concurrency
-# says: each turn is a whole Claude Code CLI process, not a socket.
-SUBAGENT_MAX_INFLIGHT = 4
+# The subagent lane's ceiling on calls in flight when the config does not say:
+# each turn is a whole Claude Code CLI process, not a socket. Tune it per
+# machine with `api.subagent_concurrency`, which this only backstops.
+SUBAGENT_MAX_INFLIGHT = 8
 
 
 def _lane_concurrency(cfg, engine: str, model: str) -> int:
@@ -122,7 +123,8 @@ def _lane_concurrency(cfg, engine: str, model: str) -> int:
     if engine == "provider":
         return cfg.concurrency_for(model)
     if engine == "subagent":
-        return max(1, min(cfg.api.concurrency, SUBAGENT_MAX_INFLIGHT))
+        ceiling = getattr(cfg.api, "subagent_concurrency", SUBAGENT_MAX_INFLIGHT)
+        return 1 if cfg.api.concurrency == 1 else max(1, ceiling)
     return 1
 
 
