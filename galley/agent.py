@@ -10,7 +10,6 @@ import logging
 import os
 import plistlib
 import re
-import stat
 import subprocess
 import sys
 import time
@@ -21,10 +20,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from docproof import agent_lane
+
 log = logging.getLogger("docproof.galley.agent")
 
-# Credentials file; group/other permissions are forbidden.
-DEFAULT_ENV_FILE = "~/.galley/agent.env"
+# Credentials file; group/other permissions are forbidden. The sifter side
+# reads the same path (docproof.agent_lane) when Claude Code has not passed
+# the token down to it.
+DEFAULT_ENV_FILE = agent_lane.DEFAULT_CREDENTIALS_FILE
 #: The ledger of what this machine has claimed, finished and failed.
 LEDGER_NAME = ".agent-state.json"
 #: Where the service writes everything the agent says, on either platform.
@@ -43,7 +46,7 @@ PATH = ("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:"
 
 # Named credential keys; additional file values also pass into the driver
 # environment.
-OAUTH_KEY = "CLAUDE_CODE_OAUTH_TOKEN"
+OAUTH_KEY = agent_lane.OAUTH_TOKEN_KEY
 APP_URL_KEY = "GALLEY_APP_URL"
 AGENT_TOKEN_KEY = "GALLEY_AGENT_TOKEN"
 
@@ -74,25 +77,9 @@ class AgentEnv:
         return self.app_url.rstrip("/") + AWAITING_PATH
 
 
-_ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
-
-
-def parse_env(text: str) -> dict[str, str]:
-    """Parse KEY=value lines without shell evaluation; allow export, paired
-    quotes, and comment lines.
-    """
-    out: dict[str, str] = {}
-    for line in text.splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        match = _ENV_LINE.match(line)
-        if not match:
-            continue
-        key, raw = match.group(1), match.group(2).strip()
-        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
-            raw = raw[1:-1]
-        out[key] = raw
-    return out
+#: One implementation of the file format, in docproof.agent_lane — the sifter
+#: children read the same file for the same token and cannot import galley.
+parse_env = agent_lane.parse_env
 
 
 def read_env(path: str | Path = DEFAULT_ENV_FILE, *,
@@ -101,21 +88,17 @@ def read_env(path: str | Path = DEFAULT_ENV_FILE, *,
     values.
     """
     target = Path(str(path)).expanduser()
-    if not target.is_file():
+    try:
+        values = agent_lane.read_credentials(target, stat_fn=stat_fn)
+    except agent_lane.CredentialsError as e:
+        raise AgentError(str(e)) from e
+    if values is None:
         raise AgentError(
             f"No agent credentials at {target}. Create it with:\n"
             f"    mkdir -p {target.parent} && touch {target} && "
             f"chmod 600 {target}\n"
             f"then put {OAUTH_KEY} (from `claude setup-token`), "
             f"{APP_URL_KEY} and {AGENT_TOKEN_KEY} in it.")
-    info = (stat_fn or (lambda p: p.stat()))(target)
-    mode = stat.S_IMODE(info.st_mode)
-    if mode & (stat.S_IRWXG | stat.S_IRWXO):
-        raise AgentError(
-            f"{target} is readable by other accounts (mode {mode:04o}) and it "
-            f"holds a subscription token. Fix it with:\n"
-            f"    chmod 600 {target}")
-    values = parse_env(target.read_text(encoding="utf-8"))
     missing = [k for k in (OAUTH_KEY, APP_URL_KEY, AGENT_TOKEN_KEY)
                if not values.get(k)]
     if missing:

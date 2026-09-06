@@ -147,6 +147,28 @@ def test_build_env_refuses_without_the_subscription_token():
         gd.build_env({"PATH": "/usr/bin"})
 
 
+def test_build_env_warns_when_the_sifters_have_no_token_of_their_own(caplog,
+                                                                     tmp_path,
+                                                                     monkeypatch):
+    """The brain's token does not reach its Bash children, so a run whose
+    sifters have nothing on disk fails at the first Claude call. Say so at the
+    start of the drive instead of an hour in."""
+    monkeypatch.setenv("GALLEY_AGENT_ENV_FILE", str(tmp_path / "absent.env"))
+    with caplog.at_level("WARNING"):
+        gd.build_env({"CLAUDE_CODE_OAUTH_TOKEN": "t", "PATH": "/usr/bin"},
+                     wrapbin=tmp_path / "bin")
+    assert "absent.env" in caplog.text and "setup-token" in caplog.text
+    caplog.clear()
+    creds = tmp_path / "agent.env"
+    creds.write_text("CLAUDE_CODE_OAUTH_TOKEN=sk-file\n", encoding="utf-8")
+    creds.chmod(0o600)
+    monkeypatch.setenv("GALLEY_AGENT_ENV_FILE", str(creds))
+    with caplog.at_level("WARNING"):
+        gd.build_env({"CLAUDE_CODE_OAUTH_TOKEN": "t", "PATH": "/usr/bin"},
+                     wrapbin=tmp_path / "bin")
+    assert "setup-token" not in caplog.text
+
+
 # --- workspace seeding -------------------------------------------------------
 
 def test_seed_workspace_builds_what_launch_sh_builds(book, tmp_path):

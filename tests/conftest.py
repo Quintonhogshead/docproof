@@ -52,6 +52,19 @@ def no_whole_book_cache(monkeypatch):
     monkeypatch.setenv("DOCPROOF_CACHE_DIR", "")
 
 
+@pytest.fixture(autouse=True)
+def no_developer_galley_credentials(monkeypatch, tmp_path_factory):
+    """The suite must not find the developer's own subscription token.
+
+    docproof.agent_lane reads ~/.galley/agent.env when nothing exported a
+    token, which is the whole point on a Galley machine — and would make
+    "this machine has no login" tests pass or fail depending on whose laptop
+    ran them. Point the lookup at a path that does not exist; a test about
+    the file sets its own."""
+    monkeypatch.setenv("GALLEY_AGENT_ENV_FILE",
+                       str(tmp_path_factory.mktemp("no-galley") / "absent.env"))
+
+
 @pytest.fixture(autouse=True, scope="session")
 def no_internet():
     """Nothing in this suite may leave the machine.

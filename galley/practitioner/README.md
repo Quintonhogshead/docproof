@@ -64,6 +64,30 @@ without one (it fails loudly instead). `DOCPROOF_CANDIDATE_APPLY=1` is
 exported for this deployment only (candidate screening may apply; production
 keeps the shadow floor).
 
+### The sifter's own subscription lane
+
+`api.claude_lane: subagent` (what `mechanical-wave.yaml` pins) means a sifter's
+Claude calls are session turns on the subscription too, not API requests — and
+an unavailable lane is fatal, never a silent fall back to API billing. The
+sifter is a Bash child of the brain's Claude Code session, and **Claude Code
+does not pass its own OAuth token down to child processes**, so the sifter
+cannot inherit the token the launcher exported. It reads it from
+`~/.galley/agent.env` instead (`CLAUDE_CODE_OAUTH_TOKEN=…`, the same file
+`docproof galley agent` uses, `chmod 600` — a group- or world-readable file is
+refused rather than used). An exported `CLAUDE_CODE_OAUTH_TOKEN` still wins
+when there is one.
+
+So on a machine that runs Galley, create that file once:
+
+```sh
+mkdir -p ~/.galley && touch ~/.galley/agent.env && chmod 600 ~/.galley/agent.env
+# then put CLAUDE_CODE_OAUTH_TOKEN=<claude setup-token output> in it
+```
+
+Nothing in `~/galley-bin/docproof` has to export the token any more; a wrapper
+that already does is harmless (the environment wins). Set
+`GALLEY_AGENT_ENV_FILE` if the credentials live somewhere else.
+
 ## Nobody at the keyboard: `docproof galley agent`
 
 `galley drive` runs one book. The **agent** is the long-running process that
