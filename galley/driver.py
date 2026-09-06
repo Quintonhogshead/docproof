@@ -142,7 +142,12 @@ _PROMPTS: dict[str, str] = {
         "Write the run config from PLAN.md + "
         "KNOBS.md (config REPLACES default.yaml — restate every section). Run "
         "`docproof review … --approval approval.json` to runs/ladder/ with "
-        "output redirected to runs/ladder.log; read only the summary + counts "
+        "output redirected to runs/ladder.log. Run it in the FOREGROUND and "
+        "WAIT for it to exit — never background it, never end your turn "
+        "while it runs. Redirecting output is not backgrounding: the redirect keeps the log out of your context, and you still block on the "
+        "command. A session that ends with the read still in flight kills "
+        "it, wastes every paid call it had not checkpointed, and fails the "
+        "phase. Then read only the summary + counts "
         "+ the dollar line. Confirm findings.checkpoint.json exists before "
         "finish(). Advance the state machine (--source and --config). Report "
         "applied/query counts and spend."),
@@ -1129,6 +1134,29 @@ class Driver:
                        hubspot=hubspot_fields("needs_human"),
                        set_by="galley drive").save(runs)
 
+    def backgrounded_work(self, phase: str) -> str:
+        """What the phase session left running when it ended, if anything.
+
+        A `claude -p` session that backgrounds a long command exits 0 with the
+        work unfinished, and the child dies with the session. The stream log
+        records those tasks, so the driver can say so instead of reporting
+        only the missing state advance.
+
+        Returns a short description for the failure message, or "" when the
+        session ended cleanly."""
+        stream = self.workspace / "runs" / DRIVER_DIR / f"{phase}.stream.jsonl"
+        try:
+            tail = stream.read_text(encoding="utf-8",
+                                    errors="replace").splitlines()[-40:]
+        except OSError:
+            return ""
+        markers = [line for line in tail
+                   if '"background_tasks_changed"' in line
+                   or '"task_notification"' in line]
+        if not markers:
+            return ""
+        return f"{len(markers)} background-task event(s) in the last turns"
+
     def _write_ledger(self, result: DriveResult) -> Path:
         path = self._driver_dir() / "driver.json"
         path.write_text(json.dumps(result.to_json(), indent=2,
@@ -1275,12 +1303,21 @@ class Driver:
                     return self._stop(result, phase, unconverged)
             need = REQUIRED_STATE.get(phase) if self.state_gate else None
             if need and not self._state_reached(need):
+                # Name the cause we have actually seen, because "did not
+                # advance the ledger" describes the symptom and cost four
+                # rounds of log archaeology to trace the first time.
+                backgrounded = self.backgrounded_work(phase)
+                extra = (f" The session left work running in the background "
+                         f"({backgrounded}) and ended anyway, which kills that "
+                         f"work mid-flight: a long read must run in the "
+                         f"foreground."
+                         if backgrounded else "")
                 return self._stop(
                     result, phase,
                     f"phase {phase} exited 0 but the run state machine is at "
                     f"{self._current_state() or 'nothing'!r}, not {need!r} — "
                     f"the session did not advance the ledger, so the next "
-                    f"phase would build on an unproven one")
+                    f"phase would build on an unproven one.{extra}")
             self._write_ledger(result)
 
         if "deliver" in phases:
