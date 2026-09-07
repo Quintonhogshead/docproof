@@ -1951,11 +1951,23 @@ def _galley_outcome(args) -> int:
             return 2
         prior = assess(run, done_value=done_value,
                        needs_human_value=needs_value)
+        # Who overruled: an explicit --by, else the Galley brain when this
+        # runs inside a driver phase (the driver puts the phase in the
+        # environment), else a person at a terminal. The brain MAY overrule
+        # — owner's policy, 2026-09-07 — and the record must say it did.
+        import os
+        from galley.driver import BRAIN_PHASE_ENV
+        phase = os.environ.get(BRAIN_PHASE_ENV, "").strip()
+        by = (args.by or "").strip() or (
+            f"galley brain ({phase} phase)" if phase else "human")
         oc = Outcome(outcome=args.set, reason=args.reason,
                      evidence=prior.evidence,
                      hubspot=hubspot_fields(args.set, done_value=done_value,
                                             needs_human_value=needs_value),
-                     set_by="human")
+                     set_by=by)
+        if prior.outcome != args.set:
+            print(f"overruled: assessment said {prior.outcome}, set to "
+                  f"{args.set} by {by}")
     else:
         th = Thresholds()
         if args.rewrite_share is not None:
