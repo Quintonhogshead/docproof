@@ -52,7 +52,9 @@ mkdir -p "$(dirname "$env_file")" "$root" "$watch_home"
 chmod 600 "$env_file"
 
 # The watcher's Google client, so drive_token() finds it where docproof-watch
-# would have put it. Other settings in the file are left alone.
+# would have put it, and the notify address `docproof galley ask` emails an
+# escalation to (GALLEY_ALERT_EMAIL — without it an escalation is only a file
+# in the workspace). Other settings in the file are left alone.
 if [ -n "${GOOGLE_CLIENT_ID:-}" ] && [ -n "${GOOGLE_CLIENT_SECRET:-}" ]; then
   python3 - "$watch_home/watch.json" <<'PY'
 import json, os, sys
@@ -63,6 +65,10 @@ except (OSError, ValueError):
     data = {}
 data["client_id"] = os.environ["GOOGLE_CLIENT_ID"]
 data["client_secret"] = os.environ["GOOGLE_CLIENT_SECRET"]
+alert = (os.environ.get("GALLEY_ALERT_EMAIL") or "").strip()
+if alert:
+    data["notify_email"] = alert
+    data["notify_on_complete"] = True
 with open(path, "w", encoding="utf-8") as fh:
     json.dump(data, fh, indent=2)
 PY

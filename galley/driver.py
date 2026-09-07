@@ -330,7 +330,20 @@ def phase_prompt(phase: str, book: str, *, mechanical_only: bool = True,
         settle_rounds=settle_rounds, settle_noisy=settle_quiet_floor + 1)
     if mechanical_only:
         prompt += _MECHANICAL_NOTE.get(phase, "")
-    return prompt
+    return prompt + _UNATTENDED_NOTE
+
+
+# Appended to every phase prompt. The manual says it too (directive 6), but a
+# brain that has just read a 65k-word intake reaches for `galley ask` the way
+# a person would reach for a colleague, and unattended there is no colleague.
+_UNATTENDED_NOTE = (
+    " UNATTENDED RUN: nobody is on the other end of `docproof galley ask` — "
+    "the driver sees a new QUESTIONS.md entry and ends the run as "
+    "needs_human with your question as the reason. So do not ask; decide, "
+    "and record the decision in the decision log. Escalate only what "
+    "genuinely blocks the book: an unreadable source, a tool that fails, a "
+    "cap you would exceed. Anything a proofreader would put to the author "
+    "goes in the deliverable as a margin query, not to `galley ask`.")
 
 
 def phases_for(mechanical_only: bool = True) -> tuple[str, ...]:
