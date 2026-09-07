@@ -988,6 +988,12 @@ def _galley_parser(sub) -> None:
     gag.add_argument("--status", action="store_true",
                      help="print what this machine has claimed, finished and "
                           "failed, and exit")
+    gag.add_argument("--forget", default=None, metavar="BOOK",
+                     help="drop one book (its Drive id or file name) from the "
+                          "ledger so the next poll claims it afresh — the way "
+                          "to re-run a book this machine wrote off (e.g. over "
+                          "a dead token). DocWatch must still list it as "
+                          "awaiting: hit Run there after this")
     gag.add_argument("--install", action="store_true",
                      help="write and start the service that keeps the agent "
                           "running (a launchd LaunchAgent on macOS, a systemd "

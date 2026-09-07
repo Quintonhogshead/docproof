@@ -367,6 +367,34 @@ One-time setup:
    breaks and again when it recovers, and when a hand-off delivery is given
    up on. Without it the agent uses the watcher's notify address.
 
+**When the token dies.** A `claude setup-token` token expires or is revoked
+eventually, and Claude Code then prints `Failed to authenticate. API Error: 401
+OAuth access token is invalid` and exits on turn one. Since v0.193.12 the
+agent treats that as the machine's problem, not the book's: the driver raises
+instead of writing a `needs_human` verdict, the claimed book stays claimed and
+untouched, the agent stops claiming, emails once, and the practitioner panel
+shows **Halted · subscription token rejected**. It also checks the token at
+boot, before any book. To recover:
+
+```bash
+claude setup-token
+fly secrets set -a atmosphere-docproof GALLEY_OAUTH_TOKEN=<the new token>
+```
+
+The secret restarts the machines; the agent's first poll resumes the held
+book from the phase it was in. A book that an older agent wrote off as
+`needs_human` over a dead token is `failed` in the ledger and will not be
+retried — drop it and mark it awaiting again:
+
+```bash
+fly ssh console -a atmosphere-docproof --process-group agent \
+  -C "docproof galley agent --workspace-root /data/galley-workspaces --forget '<Surname> - Book 1.docx'"
+```
+
+then Admin → Automations → Run so DocWatch lists it as awaiting; note that
+the `needs_human` outcome.json already uploaded beside it must be removed
+from the author's folder first, or DocWatch moves the book on at its next pass.
+
 **Watching it.** The agent is not a black box:
 
 - **Admin → Automations → Proofread, "The practitioner machine"** shows the

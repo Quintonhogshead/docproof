@@ -1529,7 +1529,18 @@ def _galley_agent(args) -> int:
                      budget_usd=args.budget,
                      drive_folder_override=args.drive_folder_id,
                      poll_interval_s=args.poll_interval
-                     or ga.DEFAULT_POLL_INTERVAL_S)
+                     or ga.DEFAULT_POLL_INTERVAL_S,
+                     preflight=ga.check_credentials)
+
+    if args.forget:
+        try:
+            name = agent.forget(args.forget)
+        except ga.AgentError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        print(f"Forgot {name}: the next poll claims it afresh if DocWatch "
+              f"still lists it as awaiting (Admin → Automations → Run).")
+        return 0
 
     if args.status:
         state = agent.status()
@@ -1557,7 +1568,8 @@ def _galley_agent(args) -> int:
         report = agent.poll_once()
         print(f"Looked at {report.looked_at} awaiting book(s)."
               + (f" Ran {report.claimed}: {report.outcome}."
-                 if report.claimed else ""))
+                 if report.claimed else "")
+              + (f" HALTED — {report.halted[:200]}" if report.halted else ""))
         for skipped in report.skipped:
             print(f"  skipped {skipped}")
         if args.json:

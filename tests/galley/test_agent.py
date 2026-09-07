@@ -704,3 +704,215 @@ def test_image_installs_the_agent_sdk_the_subagent_lane_needs():
         assert "galley" in line, f"galley extra missing from: {line.strip()}"
     # The SDK drives the CLI; an image with one and not the other is the bug.
     assert "claude.ai/install.sh" in dockerfile
+
+
+# --- a rejected subscription token holds the queue -----------------------------
+
+AUTH_ERROR = ("phase profile could not sign in to Claude Code — the "
+              "subscription token (CLAUDE_CODE_OAUTH_TOKEN) is expired or "
+              "revoked; last lines of profile.log:\nFailed to authenticate. "
+              "API Error: 401 OAuth access token is invalid.")
+
+
+def _refusing_driver(**_kwargs):
+    from galley.driver import CredentialsError
+    raise CredentialsError(AUTH_ERROR)
+
+
+def test_a_rejected_token_holds_the_book_instead_of_failing_it(env, tmp_path):
+    """2026-09-07: the Fly token died and every awaiting book was written
+    off as needs_human, one per poll, with nothing read."""
+    obs = Observed()
+    uploaded = []
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([BOOK, BOOK_2]),
+                            download=_downloader(tmp_path),
+                            run_driver=_refusing_driver,
+                            upload=lambda files, folder: uploaded.extend(files))
+    report = agent.poll_once()
+
+    assert report.outcome == "held"
+    assert "401" in report.reason
+    # No verdict was written or delivered; DocWatch keeps waiting, correctly.
+    assert not uploaded
+    assert not (tmp_path / "ws" / "test-drive-1" / "runs" / "outcome.json"
+                ).exists()
+    # The claim stands, so the book resumes once the token works.
+    assert agent.ledger().state("drive-1") == ga.CLAIMED
+    assert agent.ledger().state("drive-2") == ""
+    last = obs.beats[-1]
+    assert last["state"] == "halted"
+    assert last["held_book"] == BOOK["name"]
+    assert "401" in last["credentials_error"]
+    # One alarm, and it says what to do.
+    assert len(obs.alerts) == 1
+    subject, body = obs.alerts[0]
+    assert "token rejected" in subject
+    assert "claude setup-token" in body and "GALLEY_OAUTH_TOKEN" in body
+    assert "nothing has been marked needs_human" in body
+
+
+def test_while_halted_no_further_book_is_claimed(env, tmp_path):
+    obs = Observed()
+    ran = []
+    checks = []
+
+    def preflight(values):
+        checks.append(values[ga.OAUTH_KEY])
+        return "Claude Code refused the subscription token: 401"
+
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([BOOK, BOOK_2]),
+                            download=_downloader(tmp_path),
+                            run_driver=_refusing_driver, preflight=preflight)
+    agent.poll_once()                           # claims BOOK, gets refused
+    second = agent.poll_once()
+    third = agent.poll_once()
+
+    assert second.halted and third.halted
+    assert second.claimed == "" and third.claimed == ""
+    assert agent.ledger().state("drive-2") == ""            # never touched
+    assert obs.beats[-1]["state"] == "halted"
+    assert obs.beats[-1]["awaiting"] == 2
+    assert len(obs.alerts) == 1                 # not one per poll
+    assert checks == [OAUTH, OAUTH]             # re-checked each poll
+
+
+def test_a_replaced_token_resumes_the_held_book(env_file, tmp_path):
+    env = ga.read_env(env_file)
+    obs = Observed()
+    ran = []
+    token_ok = {"value": False}
+
+    def run_driver(**kw):
+        ran.append(kw)
+        if not token_ok["value"]:
+            _refusing_driver()
+        return FakeResult(uploaded=["up-1"])
+
+    def preflight(values):
+        return "" if values[ga.OAUTH_KEY] == "sk-ant-oat-fresh" else "refused"
+
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([BOOK]),
+                            download=_downloader(tmp_path),
+                            run_driver=run_driver, preflight=preflight)
+    agent.poll_once()                           # refused
+    agent.poll_once()                           # still the old token: held
+    assert len(ran) == 1
+
+    # The operator rotates the token in the credentials file.
+    env_file.write_text(ENV_TEXT.replace(OAUTH, "sk-ant-oat-fresh"),
+                        encoding="utf-8")
+    token_ok["value"] = True
+    report = agent.poll_once()
+
+    assert not report.halted
+    assert report.outcome == "done"
+    assert len(ran) == 2
+    # The driver was handed the new token, and resumed the same claim.
+    assert ran[1]["env"][ga.OAUTH_KEY] == "sk-ant-oat-fresh"
+    assert agent.ledger().state("drive-1") == ga.FINISHED
+    assert any("signed in again" in s for s, _b in obs.alerts)
+    assert obs.beats[-1]["state"] == "idle"
+    assert not obs.beats[-1].get("credentials_error")
+
+
+def test_boot_checks_the_token_before_any_book(env, tmp_path):
+    obs = Observed()
+    ran = []
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([BOOK]),
+                            download=_downloader(tmp_path),
+                            run_driver=lambda **kw: ran.append(kw) or FakeResult(),
+                            preflight=lambda _v: "Claude Code refused the "
+                                                 "subscription token: 401")
+    agent.announce()
+    report = agent.poll_once()
+
+    assert obs.beats[-1]["state"] == "halted"
+    assert "token is rejected" in obs.alerts[0][0]
+    assert "claude setup-token" in obs.alerts[0][1]
+    assert report.halted and not ran
+    assert agent.ledger().state("drive-1") == ""
+
+
+def test_boot_with_a_working_token_is_quiet(env, tmp_path):
+    obs = Observed()
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([]),
+                            preflight=lambda _v: "")
+    agent.announce()
+    assert obs.states() == ["starting"]
+    assert "rejected" not in obs.alerts[0][0]
+
+
+# --- the sign-in check itself --------------------------------------------------
+
+class _Proc:
+    def __init__(self, rc, out="", err=""):
+        self.returncode, self.stdout, self.stderr = rc, out, err
+
+
+def test_check_credentials_runs_one_cheap_turn_on_the_token():
+    seen = {}
+
+    def runner(argv, **kw):
+        seen["argv"], seen["env"] = argv, kw["env"]
+        return _Proc(0, '{"type":"result","subtype":"success","result":"ok"}')
+
+    values = {ga.OAUTH_KEY: OAUTH, "ANTHROPIC_API_KEY": "sk-api"}
+    assert ga.check_credentials(values, runner=runner) == ""
+    assert seen["argv"][:2] == ["claude", "-p"]
+    assert "--max-turns" in seen["argv"] and "1" in seen["argv"]
+    assert seen["env"][ga.OAUTH_KEY] == OAUTH
+    assert "ANTHROPIC_API_KEY" not in seen["env"]     # signs in on the token
+
+
+def test_check_credentials_names_the_refusal():
+    runner = lambda argv, **kw: _Proc(1, "", "Failed to authenticate. API "
+                                             "Error: 401 OAuth access token "
+                                             "is invalid.")
+    error = ga.check_credentials({ga.OAUTH_KEY: OAUTH}, runner=runner)
+    assert error.startswith("Claude Code refused the subscription token")
+    assert "401" in error
+
+
+def test_check_credentials_reports_other_failures_without_blaming_the_token(
+        monkeypatch):
+    monkeypatch.delenv(ga.OAUTH_KEY, raising=False)
+    runner = lambda argv, **kw: _Proc(2, "", "some other crash")
+    error = ga.check_credentials({ga.OAUTH_KEY: OAUTH}, runner=runner)
+    assert "exited 2" in error and "some other crash" in error
+
+    def missing(argv, **kw):
+        raise FileNotFoundError("claude")
+    assert "not installed" in ga.check_credentials({ga.OAUTH_KEY: OAUTH},
+                                                   runner=missing)
+    assert "is not set" in ga.check_credentials({}, runner=runner)
+
+
+# --- forgetting a book this machine wrote off --------------------------------
+
+def test_forget_drops_the_ledger_entry_so_the_book_runs_again(env, tmp_path):
+    ran = []
+    agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
+                   download=_downloader(tmp_path),
+                   run_driver=lambda **kw: ran.append(kw) or FakeResult())
+    agent.ledger().record("drive-1", ga.FAILED, name=BOOK["name"],
+                          slug="test-drive-1", outcome="needs_human")
+    agent.poll_once()
+    assert not ran                                   # failed: never retried
+
+    assert agent.forget(BOOK["name"]) == BOOK["name"]
+    assert agent.ledger().state("drive-1") == ""
+    agent.poll_once()
+    assert len(ran) == 1                             # claimed afresh
+    assert agent.ledger().state("drive-1") == ga.FINISHED
+
+
+def test_forget_by_id_and_its_refusals(env, tmp_path):
+    agent = _agent(env, tmp_path, opener=FakeApp([]))
+    agent.ledger().record("drive-1", ga.FAILED, name="Same.docx", slug="a")
+    agent.ledger().record("drive-2", ga.FAILED, name="Same.docx", slug="b")
+    with pytest.raises(ga.AgentError, match="2 ledger entries"):
+        agent.forget("Same.docx")
+    assert agent.forget("drive-2") == "Same.docx"
+    assert agent.ledger().state("drive-1") == ga.FAILED
+    with pytest.raises(ga.AgentError, match="No book in the ledger"):
+        agent.forget("nope")
