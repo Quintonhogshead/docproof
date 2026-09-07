@@ -61,6 +61,9 @@ PHASE_EFFORT: dict[str, str] = {
 }
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 DEFAULT_PERMISSION_MODE = "acceptEdits"
+#: Set in every phase session's environment to the phase name, so verbs
+#: that record a decision can attribute it to the brain that made it.
+BRAIN_PHASE_ENV = "GALLEY_BRAIN_PHASE"
 DEFAULT_WORKSPACE_ROOT = "~/galley-workspaces"
 DEFAULT_WRAPBIN = "~/galley-bin"
 #: Where the driver leaves its own log and ledger inside the workspace.
@@ -1173,10 +1176,15 @@ class Driver:
                 # Preserve the structured completion beside the readable
                 # log.
                 "--output-format", "stream-json", "--verbose"]
+        # The phase rides in the environment so any verb the brain runs can
+        # say who ran it. `galley outcome --set` reads it: an overrule made
+        # by the deliver-phase brain is recorded as exactly that, not as
+        # "human" (the first Fly delivery's outcome.json, decision log and
+        # HubSpot value all claimed a person overruled settle; nobody had).
         return PhaseSpec(phase=phase, prompt=prompt, workspace=self.workspace,
                          log_path=self._driver_dir() / f"{phase}.log",
-                         argv=argv, env=env, max_turns=turns,
-                         timeout_s=self.timeout_for(phase))
+                         argv=argv, env={**env, BRAIN_PHASE_ENV: phase},
+                         max_turns=turns, timeout_s=self.timeout_for(phase))
 
     def _questions_text(self) -> str:
         try:

@@ -303,3 +303,55 @@ def test_the_handoff_carries_the_author_letter(tmp_path):
                             outcome_sources=[dv / "outcome.json"])
     assert any(p.name == "Test - Book Two - Author Letter.docx" for p in written)
     assert len(written) == 7
+
+
+# --- who overruled ---------------------------------------------------------------
+
+def test_every_phase_session_carries_its_phase_in_the_environment(tmp_path):
+    from galley import driver as gd
+    drv = gd.Driver(book=tmp_path / "b.docx", slug="s",
+                    workspace_root=tmp_path / "ws")
+    spec = drv._spec("deliver", {"PATH": "/usr/bin",
+                                 "CLAUDE_CODE_OAUTH_TOKEN": "tok"})
+    assert spec.env[gd.BRAIN_PHASE_ENV] == "deliver"
+    assert spec.env["PATH"] == "/usr/bin"          # the rest is untouched
+
+
+def _outcome_args(run, **kw):
+    base = dict(run=str(run), source=None, config="config/default.yaml",
+                set="done", reason="seeded test book; density is expected",
+                by="", done_value=None, needs_human_value=None,
+                rewrite_share=None, edit_density=None, json=False)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def _seed_run(tmp_path):
+    run = tmp_path / "run"; run.mkdir()
+    (run / "findings.json").write_text(json.dumps({"findings": []}), "utf-8")
+    return run
+
+
+def test_an_overrule_is_attributed_to_the_brain_that_made_it(tmp_path, monkeypatch, capsys):
+    """The brain MAY overrule needs_human (owner's policy, 2026-09-07). The
+    record must say the brain did — the first delivery's outcome.json, log
+    and HubSpot value all said "human", and nobody had."""
+    from docproof.__main__ import _galley_outcome
+    from galley.driver import BRAIN_PHASE_ENV
+    run = _seed_run(tmp_path)
+    monkeypatch.setenv(BRAIN_PHASE_ENV, "deliver")
+    assert _galley_outcome(_outcome_args(run)) == 0
+    oc = json.loads((run / "outcome.json").read_text("utf-8"))
+    assert oc["outcome"] == "done"
+    assert oc["set_by"] == "galley brain (deliver phase)"
+
+
+def test_a_person_at_a_terminal_is_still_a_person(tmp_path, monkeypatch):
+    from docproof.__main__ import _galley_outcome
+    from galley.driver import BRAIN_PHASE_ENV
+    run = _seed_run(tmp_path)
+    monkeypatch.delenv(BRAIN_PHASE_ENV, raising=False)
+    _galley_outcome(_outcome_args(run))
+    assert json.loads((run / "outcome.json").read_text("utf-8"))["set_by"] == "human"
+    _galley_outcome(_outcome_args(run, by="Quinton"))
+    assert json.loads((run / "outcome.json").read_text("utf-8"))["set_by"] == "Quinton"

@@ -928,6 +928,10 @@ def _galley_parser(sub) -> None:
                      help="overrule the assessment with this verdict "
                           "(requires --reason)")
     goc.add_argument("--reason", help="why, when overruling")
+    goc.add_argument("--by", default="",
+                     help="who is overruling (recorded as set_by). Default: "
+                          "the Galley brain and its phase when run inside a "
+                          "driver session, else 'human'")
     goc.add_argument("--rewrite-share", type=float, default=None,
                      help="needs_human threshold: share of paragraphs needing "
                           "rewrite-class work (default 0.50)")
