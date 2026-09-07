@@ -338,3 +338,16 @@ def test_the_fenced_turn_never_asks_to_bypass_permissions(monkeypatch):
     assert opts["allowed_tools"] == []
     assert opts["setting_sources"] == []
     assert opts["strict_mcp_config"] is True
+
+
+def test_the_lane_reports_its_usage_as_unbilled(monkeypatch):
+    """Real tokens, no invoice: the flag every consumer keys on."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    sdk = _fake_sdk([_Result('{"ok": true}',
+                             usage={"input_tokens": 50, "output_tokens": 900})],
+                    [])
+    result = subagent.SubagentProvider(sdk=sdk).complete_structured(
+        model="fable", system="s", user="u", schema={"type": "object"},
+        schema_name="reply", max_tokens=100)
+    assert result.usage.output_tokens == 900
+    assert result.usage.billed is False

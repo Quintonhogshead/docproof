@@ -49,6 +49,11 @@ def _cost_dict(usage: Usage | None, fallback_model: str, *,
     total = 0.0
     for model_id, tk in (getattr(usage, "by_model", None) or {}).items():
         label = model_id or fallback_model
+        if tk.get("billed", True) is False:
+            # Subscription-lane turns: listed, so the mix is visible; $0, so
+            # the total is the bill.
+            by_model[label] = by_model.get(label, 0.0)
+            continue
         c = estimate_cost(
             label,
             input_tokens=tk.get("input_tokens", 0),

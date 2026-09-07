@@ -175,6 +175,24 @@ def estimate_cost(model_id: str, *, input_tokens: int, output_tokens: int,
                    + scaled_output * info.output_per_mtok) / 1_000_000
 
 
+def subscription_value_of_usage(usage, *, fallback_model: str) -> float:
+    """What the run's subscription-lane turns WOULD have cost at API rates —
+    the number to show beside the bill, never inside it."""
+    by_model = (usage.get("by_model") if isinstance(usage, dict)
+                else getattr(usage, "by_model", None)) or {}
+    total = 0.0
+    for model_id, tk in by_model.items():
+        if tk.get("billed", True) is not False:
+            continue
+        total += estimate_cost(
+            model_id or fallback_model,
+            input_tokens=tk.get("input_tokens", 0),
+            output_tokens=tk.get("output_tokens", 0),
+            cache_read_tokens=tk.get("cache_read_input_tokens", 0),
+            cache_write_tokens=tk.get("cache_creation_input_tokens", 0)) or 0.0
+    return total
+
+
 def cost_of_usage(usage, *, fallback_model: str,
                   batch: bool = False) -> float | None:
     """Total model cost for a run, summed at each model's own rate.
@@ -193,6 +211,9 @@ def cost_of_usage(usage, *, fallback_model: str,
     if by_model:
         total, priced_any = 0.0, False
         for model_id, tk in by_model.items():
+            if tk.get("billed", True) is False:
+                priced_any = True          # priced: it costs nothing
+                continue
             c = estimate_cost(
                 model_id or fallback_model,
                 input_tokens=tk.get("input_tokens", 0),

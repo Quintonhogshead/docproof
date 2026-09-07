@@ -195,6 +195,11 @@ class Usage:
         self.api_calls += 1
         bucket = self.by_model.setdefault(model or "", {"api_calls": 0})
         bucket["api_calls"] = bucket.get("api_calls", 0) + 1
+        # A bucket is a bill if any call in it was one. The subscription lane
+        # marks its usage billed=False; a record written before the flag
+        # existed has no key and is priced as before.
+        billed = bool(getattr(resp_usage, "billed", True))
+        bucket["billed"] = bucket.get("billed", billed) or billed
         for f in ("input_tokens", "output_tokens",
                   "cache_creation_input_tokens", "cache_read_input_tokens"):
             v = getattr(resp_usage, f, 0) or 0

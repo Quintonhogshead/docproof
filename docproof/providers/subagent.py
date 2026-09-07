@@ -196,7 +196,8 @@ def _usage_of(msg: Any) -> NormalizedUsage:
     return NormalizedUsage(
         input_tokens=n("input_tokens"), output_tokens=n("output_tokens"),
         cache_creation_input_tokens=n("cache_creation_input_tokens"),
-        cache_read_input_tokens=n("cache_read_input_tokens"))
+        cache_read_input_tokens=n("cache_read_input_tokens"),
+        billed=False)
 
 
 class SubagentProvider:
@@ -301,7 +302,7 @@ class SubagentProvider:
 
         reply = ""
         last_text = ""
-        usage = NormalizedUsage()
+        usage = NormalizedUsage(billed=False)
         try:
             async for msg in sdk.query(prompt=prompt(), options=options):
                 if isinstance(msg, sdk.AssistantMessage):
