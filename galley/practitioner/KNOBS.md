@@ -76,6 +76,15 @@ ESCALATION (the knob may not exist), not a reason to go read the source.
   then adds a **mechanical only** check that FAILS on a copy-edit lane in the
   config or approval, a shipped copy-edit finding, or a `flights_findings.json`
   in the run dir.
+- **Plan ledger.** Every priced, numbered line of PLAN.md is a promise.
+  After the ladder, record each one: `docproof galley plan-line LABEL --status
+  ran --evidence PATH` (or `--status skipped --reason WHY`, `--status deferred
+  --evidence WHERE`). Certify's *plan ledger* check FAILS on a line it cannot
+  account for — a $0 subagent lane the plan lists is a line like any other —
+  and the letter tells the author what was promised and not done. Certify's
+  *comment premises* check FAILS a margin comment whose premise the settled
+  text no longer supports (a "closing quote may be missing" beside a paragraph
+  that now closes): drop the query and rebuild.
 - **Session caps.** Each phase runs `claude --max-turns N` under a wall-clock
   timeout: 400 turns / 4h for settle, 250 / 4h for verify, 100 / 3h for the
   ladder, 60-160 / 2h elsewhere. Those three — the phases whose work grows

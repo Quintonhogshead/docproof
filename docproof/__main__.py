@@ -1447,6 +1447,7 @@ def cmd_galley(args) -> int:
             "drive": _galley_drive,
             "agent": _galley_agent,
             "journal": _galley_journal,
+            "plan-line": _galley_plan_line,
             "outcome": _galley_outcome}[args.galley_cmd](args)
 
 
@@ -1905,6 +1906,39 @@ def _galley_residuals(args) -> int:
     return 0
 
 
+def _galley_plan_line(args) -> int:
+    """Record what became of one line of PLAN.md. $0."""
+    from galley.plan_ledger import LEDGER_NAME, audit, load_ledger, record
+
+    ws = Path(args.workspace or ".")
+    ledger = ws / "runs" / LEDGER_NAME
+    if args.status == "ran" and not args.evidence:
+        print("error: --status ran needs --evidence (the artifact it wrote)",
+              file=sys.stderr)
+        return 2
+    if args.status == "skipped" and not args.reason:
+        print("error: --status skipped needs --reason", file=sys.stderr)
+        return 2
+    if args.status == "deferred" and not (args.evidence or args.reason):
+        print("error: --status deferred needs --evidence (where the work "
+              "went) or --reason", file=sys.stderr)
+        return 2
+    entry = record(ledger, args.label, args.status,
+                   evidence=args.evidence or "", reason=args.reason or "")
+    print(f"plan line {args.label.lower()}: {entry['status']}"
+          + (f" — {entry['evidence']}" if entry["evidence"] else "")
+          + (f" ({entry['reason']})" if entry["reason"] else ""))
+    plan = ws / "PLAN.md"
+    if plan.is_file():
+        rows = audit(plan.read_text(encoding="utf-8"), load_ledger(ledger))
+        open_lines = [it.label for it, st, why in rows if why]
+        print(f"  {len(rows) - len(open_lines)} of {len(rows)} plan line(s) "
+              f"accounted for"
+              + (f"; still open: {', '.join(open_lines)}" if open_lines
+                 else " — certify's plan-ledger check will pass"))
+    return 0
+
+
 def _galley_outcome(args) -> int:
     from galley.outcome import (DEFAULT_DONE_VALUE, DEFAULT_NEEDS_HUMAN_VALUE,
                                 Outcome, Thresholds, assess, hubspot_fields)
@@ -1945,8 +1979,10 @@ def _galley_outcome(args) -> int:
     ev = oc.evidence
     print(f"  {ev.get('words', 0)} words, {ev.get('applied_edits', 0)} edits "
           f"({ev.get('edit_density_per_kword', 0.0):.1f}/1k), rewrite share "
-          f"{ev.get('rewrite_share', 0.0):.0%}, unresolved "
-          f"{ev.get('unresolved_queries', 0)}, damage {ev.get('edit_damage', 0)}")
+          f"{ev.get('rewrite_share', 0.0):.0%}, unresolved internal "
+          f"{ev.get('unresolved_internal', ev.get('unresolved_queries', 0))}, "
+          f"open author queries {ev.get('open_author_queries', ev.get('queries', 0))}, "
+          f"damage {ev.get('edit_damage', 0)}")
     print(f"  hubspot: {oc.hubspot.get('property')} = {oc.hubspot.get('value')!r}"
           f" (object {oc.hubspot.get('object')})")
     print(f"  {path}")
@@ -2396,8 +2432,16 @@ def _galley_letter(args) -> int:
     from galley.letter import render_verification_report, run_evidence
     evidence = run_evidence(synth_dir, getattr(args, "workspace", None)) \
         if (synth_dir / "findings.json").exists() else None
-    letter_path, style_path = render_all(cf, out, ms=ms, evidence=evidence)
-    report_path = render_verification_report(evidence, out, cf=cf) \
+    # Headed by the DELIVERED name (Book Two), never the source file (Book
+    # One): three documents titled Book One shipped under Book Two names.
+    title = None
+    if args.source:
+        from galley.driver import handoff_base
+        title = handoff_base(Path(args.source).name)
+    letter_path, style_path = render_all(cf, out, ms=ms, evidence=evidence,
+                                         title=title)
+    report_path = render_verification_report(evidence, out, cf=cf,
+                                             title=title) \
         if evidence is not None else None
     open_queries = sum(1 for v in cf.verdicts if v.ruling == "query")
     print(f"\nEditorial letter for {cf.book or '(untitled)'}: "

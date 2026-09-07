@@ -487,7 +487,57 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
     # head-to-head, 2026-09-04: a 61-comment plan delivered 153). Counted on
     # the delivered document itself when there is one.
     cert.checks.append(_certify_comment_budget(run, manifest, envelope))
+    # 13. Every priced plan line is accounted for — ran, skipped with a
+    # reason, or deferred to somewhere. A promise that quietly vanished is
+    # how a known timeline problem reached an author unqueried (2026-09-07).
+    cert.checks.append(_certify_plan_ledger(run))
+    # 14. Every surviving margin comment still describes the delivered text.
+    cert.checks.append(_certify_comment_premises(run, envelope))
     return cert
+
+
+def _workspace_of(run: Path) -> Path:
+    return run.parent.parent if run.parent.name == "runs" else run.parent
+
+
+def _certify_plan_ledger(run: Path) -> Check:
+    from galley.plan_ledger import LEDGER_NAME, check, load_ledger
+    ws = _workspace_of(run)
+    plan = ws / "PLAN.md"
+    if not plan.is_file():
+        return Check("plan ledger", "skip", "no PLAN.md beside the run")
+    ledger_path = ws / "runs" / LEDGER_NAME
+    status, detail = check(plan.read_text(encoding="utf-8"),
+                           load_ledger(ledger_path),
+                           ledger_exists=ledger_path.is_file())
+    return Check("plan ledger", status, detail)
+
+
+def _certify_comment_premises(run: Path, envelope: dict[str, Any] | None
+                              ) -> Check:
+    from galley.premises import PREMISES, stale_queries
+    if envelope is None:
+        return Check("comment premises", "skip", "no findings.json")
+    try:
+        from galley.verify import paragraph_views
+        _orig, delivered = paragraph_views(run)
+    except Exception as e:                                  # noqa: BLE001
+        return Check("comment premises", "skip",
+                     f"no delivered text to check against ({e})")
+    rows = [r for r in (envelope.get("findings") or []) if isinstance(r, dict)]
+    checkable = [r for r in rows
+                 if str(r.get("error_type") or "") in PREMISES]
+    stale = stale_queries(rows, delivered)
+    if stale:
+        return Check("comment premises", "fail",
+                     f"{len(stale)} stale comment(s) — the text was fixed "
+                     f"after the question was asked: "
+                     + "; ".join(f"{r.get('finding_id')} ({why})"
+                                 for r, why in stale[:4])
+                     + " — drop the query and rebuild")
+    return Check("comment premises", "pass",
+                 f"{len(checkable)} comment(s) with a checkable premise, "
+                 f"none stale")
 
 
 def comment_budget_for(run: Path, manifest: dict[str, Any] | None

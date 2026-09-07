@@ -503,10 +503,37 @@ def _section_confidence(
 
 
 
+def edit_shapes(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    """What the applied edits look like on the page, counted from the rows
+    rather than asserted: single-word substitutions, edits that span more
+    than one word, and paragraph marks (a speaker split). The outcome reason
+    of 2026-09-07 claimed "every change is single-token" over a delivery that
+    held two paragraph breaks and several multiword substitutions."""
+    shape = {"single_word": 0, "multiword": 0, "paragraph_marks": 0}
+    for r in rows:
+        if r.get("format"):
+            shape["paragraph_marks"] += 1
+            continue
+        a = r.get("anchor") or {}
+        before = str(a.get("delete_text") or r.get("original_text") or "")
+        after = str(a.get("insert_text") or r.get("corrected_text") or "")
+        if max(len(before.split()), len(after.split())) > 1 and (
+                before.strip() != after.strip()):
+            shape["multiword"] += 1
+        else:
+            shape["single_word"] += 1
+    return shape
+
+
 def _summary_line(src: JournalSources, cf: CaseFile) -> str:
-    edits = len(applied_rows(src))
+    rows = applied_rows(src)
+    shape = edit_shapes(rows)
+    corrections = len(rows) - shape["paragraph_marks"]
     comments = comment_count(src)
-    parts = [f"**{_n(edits)} tracked correction(s)**"]
+    parts = [f"**{_n(corrections)} tracked correction(s)**"]
+    if shape["paragraph_marks"]:
+        parts[0] += (f" and **{_n(shape['paragraph_marks'])} paragraph "
+                     f"break(s)** ({_n(len(rows))} tracked changes in all)")
     if comments is not None:
         parts.append(f"**{_n(comments)} margin comment(s)**")
     text = "The proof contains " + " and ".join(parts) + "."
@@ -538,6 +565,14 @@ def _section_choices(src: JournalSources, cf: CaseFile) -> list[str]:
                    "conversational phrasing, deliberate fragments, rhetorical "
                    "repetition, remembered speech — is the author's and was "
                    "left alone.")
+    shape = edit_shapes(applied_rows(src))
+    if any(shape.values()):
+        out.append("")
+        out.append(f"Counted from the edits themselves: {_n(shape['single_word'])} "
+                   f"single-word correction(s), {_n(shape['multiword'])} "
+                   f"spanning more than one word, and "
+                   f"{_n(shape['paragraph_marks'])} paragraph break(s). "
+                   f"No sentence was recast.")
         out.append("")
 
     fams = families(applied_rows(src))
@@ -592,20 +627,29 @@ def _section_choices(src: JournalSources, cf: CaseFile) -> list[str]:
     return out
 
 
-def _section_decisions(src: JournalSources, cf: CaseFile) -> list[str]:
-    out = ["## Decisions still needed", ""]
-    rows = query_rows(src)
-    if not rows:
-        out.append("None — every finding was decided. Nothing is waiting on "
-                   "you beyond reviewing the tracked changes.")
-        out.append("")
-        return out
-    groups = grouped_questions(rows)
-    out.append(f"Please review the {_n(len(rows))} comment(s) in Word. Each "
-               f"asks something only you can answer — a fact, an intent, an "
-               f"identity — and none changes the text until you decide. The "
-               f"distinct questions, {_n(len(groups))} in all:")
-    out.append("")
+#: Comment types that are NOTES — a statement of what the proofreader did
+#: or which rule applied — not questions. The speaker split's declarative
+#: comment is the owner's design (PR #225); a rule note is the one counted
+#: comment a collapsed sweep family keeps. Calling these "questions only you
+#: can answer" (the letter of 2026-09-07) was untrue of two of six comments.
+NOTE_TYPES: frozenset[str] = frozenset({"speaker_split"})
+
+
+def is_note(row: Mapping[str, Any]) -> bool:
+    et = str(row.get("error_type") or "")
+    return et in NOTE_TYPES or et.startswith("sweep_")
+
+
+def split_comments(rows: Sequence[Mapping[str, Any]]
+                   ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """``(questions, notes)`` among the margin comments."""
+    questions = [r for r in rows if not is_note(r)]
+    notes = [r for r in rows if is_note(r)]
+    return questions, notes
+
+
+def _comment_bullets(groups) -> list[str]:
+    out = []
     for q, span, pids, fids in groups:
         where = ", ".join(pids[:4]) + ("…" if len(pids) > 4 else "")
         site = f" ({_n(len(pids))} sites)" if len(pids) > 1 else ""
@@ -614,6 +658,55 @@ def _section_decisions(src: JournalSources, cf: CaseFile) -> list[str]:
             head += f" `{_clip(span, 70)}`"
         out.append(f"{head} — {_clip(q, 400)}"
                    + (f" [{', '.join(fids[:3])}]" if fids else ""))
+    return out
+
+
+def _section_decisions(src: JournalSources, cf: CaseFile) -> list[str]:
+    out = ["## Decisions still needed", ""]
+    rows = query_rows(src)
+    if not rows:
+        out.append("None — every finding was decided. Nothing is waiting on "
+                   "you beyond reviewing the tracked changes.")
+        out.append("")
+        return out
+    questions, notes = split_comments(rows)
+    out.append(f"The document carries {_n(len(rows))} margin comment(s): "
+               f"{_n(len(questions))} question(s) only you can answer — a "
+               f"fact, an intent, an identity — and {_n(len(notes))} note(s) "
+               f"recording what the proofreader did or which house rule "
+               f"applied. None changes the text until you decide. Internal "
+               f"review is closed; these await you.")
+    out.append("")
+    if questions:
+        groups = grouped_questions(questions)
+        out.append(f"### Questions for you ({_n(len(groups))})")
+        out.append("")
+        out.extend(_comment_bullets(groups))
+        out.append("")
+    if notes:
+        groups = grouped_questions(notes)
+        out.append(f"### Notes on what was done ({_n(len(groups))})")
+        out.append("")
+        out.extend(_comment_bullets(groups))
+        out.append("")
+    return out
+
+
+def _section_plan_ledger(src: JournalSources) -> list[str]:
+    """What the plan promised that did not run — from the ledger, never from
+    memory. Empty when every line ran or there is no plan."""
+    from galley.plan_ledger import LEDGER_NAME, load_ledger, not_done
+    if not src.plan or src.workspace is None:
+        return []
+    ledger_path = src.workspace / "runs" / LEDGER_NAME
+    ledger = load_ledger(ledger_path) if ledger_path.is_file() else None
+    rows = not_done(src.plan, ledger)
+    if not rows:
+        return []
+    out = ["## Plan lines that did not run", ""]
+    for item, status, why in rows:
+        out.append(f"- **{item.label}** {_clip(item.text, 90)} — "
+                   f"{status}: {_clip(why, 200)}")
     out.append("")
     return out
 
@@ -742,8 +835,12 @@ def render_letter(
     ms: Manuscript | None = None,
     recall: Any = None,
     evidence: JournalSources | None = None,
+    title: str | None = None,
 ) -> Path:
     """Render the editorial cover letter to ``out_dir/letter.md``; return the path.
+
+    ``title`` names the book as delivered ("Ford - Book Two"); without it the
+    letter falls back to the case file's book, which is the SOURCE filename.
 
     With ``evidence`` (see :func:`run_evidence`) the letter is the
     proofreader's letter: summary, what ran and cost, choices and reasons,
@@ -754,7 +851,7 @@ def render_letter(
     out_path.mkdir(parents=True, exist_ok=True)
 
     lines: list[str] = []
-    title = cf.book or "the manuscript"
+    title = title or cf.book or "the manuscript"
     if evidence is not None:
         lines.append(f"# Proofreading letter — {title}")
         lines.append("")
@@ -764,6 +861,7 @@ def render_letter(
         lines.extend(_section_spend(cf))
         lines.extend(_section_choices(evidence, cf))
         lines.extend(_section_decisions(evidence, cf))
+        lines.extend(_section_plan_ledger(evidence))
         # The case file's own query ledger stays — by finding id — so nothing a
         # verdict routed to the margin can hide behind the grouped list.
         lines.extend(_section_queries(cf, heading="### Query ledger (by finding id)"))
@@ -926,7 +1024,8 @@ def _derived_style_sections(src: JournalSources, cf: CaseFile) -> list[str]:
 
 
 def render_style_sheet(cf: CaseFile, out_dir: str | Path, *,
-                       evidence: JournalSources | None = None) -> Path:
+                       evidence: JournalSources | None = None,
+                       title: str | None = None) -> Path:
     """Render the per-book style sheet to ``out_dir/style-sheet.md``; return the path.
 
     With ``evidence`` the sheet is derived from the run — conventions with
@@ -938,7 +1037,7 @@ def render_style_sheet(cf: CaseFile, out_dir: str | Path, *,
     out_path.mkdir(parents=True, exist_ok=True)
 
     lines: list[str] = []
-    title = cf.book or "the manuscript"
+    title = title or cf.book or "the manuscript"
     lines.append(f"# Style sheet — {title}")
     lines.append("")
 
@@ -979,14 +1078,15 @@ def render_style_sheet(cf: CaseFile, out_dir: str | Path, *,
 
 
 def render_verification_report(evidence: JournalSources, out_dir: str | Path,
-                               *, cf: CaseFile | None = None) -> Path:
+                               *, cf: CaseFile | None = None,
+                               title: str | None = None) -> Path:
     """Render ``out_dir/verification.md`` from the run's evidence; return the
     path. Every figure is read from an artifact; a missing artifact is named,
     never estimated."""
     src = evidence
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
-    book = (cf.book if cf is not None and cf.book else "") or \
+    book = title or (cf.book if cf is not None and cf.book else "") or \
         (src.workspace.name if src.workspace is not None else src.run_dir.name)
 
     lines: list[str] = [f"# Verification report — {book}", ""]
@@ -1147,7 +1247,8 @@ def render_all(cf: CaseFile, out_dir: str | Path, **kw: Any) -> tuple[Path, Path
     """
 
     letter = render_letter(cf, out_dir, **kw)
-    style = render_style_sheet(cf, out_dir, evidence=kw.get("evidence"))
+    style = render_style_sheet(cf, out_dir, evidence=kw.get("evidence"),
+                               title=kw.get("title"))
     return letter, style
 
 

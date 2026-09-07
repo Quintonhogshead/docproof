@@ -896,6 +896,23 @@ def _galley_parser(sub) -> None:
     _genre_arg(grs)
     grs.add_argument("--json", action="store_true")
 
+    gpl = gsub.add_parser(
+        "plan-line",
+        help="record what became of one numbered line of PLAN.md — ran "
+             "(with the artifact), skipped (with the reason) or deferred "
+             "(to where) — in runs/plan_ledger.json. certify fails on any "
+             "priced plan line it cannot account for. $0")
+    gpl.add_argument("label", help="the plan line's number, e.g. 4c")
+    gpl.add_argument("--status", required=True,
+                     choices=["ran", "skipped", "deferred"])
+    gpl.add_argument("--evidence", default="",
+                     help="the artifact it produced, or where deferred work "
+                          "went (a path or a plan line)")
+    gpl.add_argument("--reason", default="", help="why, when skipped or "
+                                                  "deferred")
+    gpl.add_argument("--workspace", default=".",
+                     help="the book's workspace (holds PLAN.md and runs/)")
+
     goc = gsub.add_parser(
         "outcome",
         help="the terminal verdict: done (no more errors the loop can find or "

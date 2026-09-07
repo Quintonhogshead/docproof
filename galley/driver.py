@@ -206,8 +206,14 @@ _PROMPTS: dict[str, str] = {
         "it, wastes every paid call it had not checkpointed, and fails the "
         "phase. Then read only the summary + counts "
         "+ the dollar line. Confirm findings.checkpoint.json exists before "
-        "finish(). Advance the state machine (--source and --config). Report "
-        "applied/query counts and spend."),
+        "finish(). Advance the state machine (--source and --config). Then "
+        "keep the PLAN LEDGER: for EVERY numbered line of PLAN.md run "
+        "`docproof galley plan-line LABEL --status ran --evidence PATH` (or "
+        "`--status skipped --reason WHY`, or `--status deferred --evidence "
+        "WHERE`). A $0 subagent lane the plan lists is a line like any other: "
+        "run it and record it, or record why not — certify FAILS on a line it "
+        "cannot account for, and the letter tells the author what was "
+        "promised and not done. Report applied/query counts and spend."),
     "flights": (
         "Phase: copy-edit flights on the PROOFREAD text (never raw). Follow "
         "/flight-deck; every `galley flights` call carries --approval "
@@ -305,7 +311,9 @@ _PROMPTS: dict[str, str] = {
         "beside them (its outcome — done or needs_human — and reason go in "
         "the letter's closing paragraph). Advance the state machine to "
         "delivered (--source and --config). Report final spend, "
-        "change/comment counts, and the outcome."),
+        "change/comment counts, and the outcome. If certify's plan-ledger or "
+        "comment-premises check failed, deliver NOTHING: account for the "
+        "plan line, or drop the stale query and rebuild, then certify again."),
 }
 
 # Scope restrictions appended to the relevant phase prompts.
