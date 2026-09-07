@@ -7827,11 +7827,27 @@ function renderProofReadout(w) {
     table.innerHTML = '';
     empty.hidden = awaiting.length > 0;
     if (awaiting.length) {
-      table.append(headRow(['Book', 'Folder', 'Waiting since']));
-      awaiting.forEach((f) => table.append(bodyRow([
-        f.name || '—', f.folder || 'the watched folder',
-        proofWhen(f.updated_at),
-      ])));
+      table.append(headRow(['Book', 'Folder', 'Waiting since', '']));
+      awaiting.forEach((f) => {
+        const tr = bodyRow([
+          f.name || '—', f.folder || 'the watched folder',
+          proofWhen(f.updated_at),
+        ]);
+        // Take the book back: the agent resumes a claimed book at every boot
+        // for as long as the server lists it, so this is how a killed test
+        // stops coming back.
+        const td = document.createElement('td');
+        const btn = document.createElement('button');
+        btn.className = 'ghost small';
+        btn.textContent = 'Release';
+        btn.title = 'Take this book back from the practitioner queue. The '
+          + 'agent stops seeing it; set the HubSpot status to the ready value '
+          + 'again to re-queue it.';
+        btn.addEventListener('click', () => releaseProof(f, btn));
+        td.append(btn);
+        tr.append(td);
+        table.append(tr);
+      });
     }
   }
 
@@ -7860,6 +7876,30 @@ function renderProofReadout(w) {
     tr.append(book, verdict, why, when);
     vt.append(tr);
   });
+}
+
+async function releaseProof(f, btn) {
+  if (!confirm(`Release ${f.name} from the practitioner queue? The agent will `
+      + 'stop seeing it. To queue it again, put its HubSpot status back at the '
+      + 'ready value.')) return;
+  btn.disabled = true;
+  try {
+    const body = await api('/api/watch/proof/release', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_id: f.file_id }),
+    });
+    renderWatch(body, true);
+    if (!body.drive_marked) {
+      watchNote($('wf-proof-note'), `${f.name} released. DocWatch is not `
+        + 'signed in to Google, so only its own record changed; if the '
+        + 'HubSpot status is still at the ready value the next pass may mark '
+        + 'it awaiting again.', 'warn');
+    }
+  } catch (e) {
+    btn.disabled = false;
+    watchNote($('wf-proof-note'), e.message, 'error');
+  }
 }
 
 function renderWatchPlan(rows) {

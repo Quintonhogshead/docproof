@@ -11,8 +11,10 @@ logging.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
+from pathlib import Path
 from dataclasses import asdict
 from urllib.parse import quote
 
@@ -33,6 +35,8 @@ from ..watch import status as watchlib
 from ..watch.drive import DriveError
 from ..watch.runner import WatchRunner
 from ..watch.settings import GOOGLE_KEY, WatchSettings, folder_id_from
+
+log = logging.getLogger("docproof.app.watch")
 from ..watch.tick import NotConfigured
 
 
@@ -125,6 +129,28 @@ def agent_gate(request: Request) -> None:
     if scheme.lower() != "bearer" or not hmac.compare_digest(
             presented.strip(), expected):
         raise HTTPException(401, "Not the proofing agent.")
+
+
+class ProofRelease(BaseModel):
+    file_id: str = Field(min_length=1, max_length=200)
+
+
+def _drive_token_or_none(home) -> str | None:
+    """A Drive access token from the watcher's sign-in, or None without one."""
+    from ..watch import drive
+
+    ws = WatchSettings.load(home)
+    if not (ws.client_id and ws.client_secret):
+        return None
+    refresh = settingslib.get_api_key(GOOGLE_KEY)
+    if not refresh:
+        return None
+    try:
+        return drive.refresh_access_token(ws.client_id, ws.client_secret,
+                                          refresh)
+    except DriveError as e:
+        log.warning("Could not sign in to Google for the release (%s).", e)
+        return None
 
 
 def register(app: FastAPI) -> None:
@@ -390,6 +416,51 @@ def register(app: FastAPI) -> None:
         watch: WatchRunner = app.state.watch
         watchlib.save_agent_status(watch.home, payload)
         return {"ok": True}
+
+    @app.post("/api/watch/proof/release", dependencies=[Depends(may_manage)])
+    def release_proof(update: ProofRelease, request: Request) -> dict:
+        """Take a book back from the practitioner queue.
+
+        A book DocWatch marked `awaiting` stays on the agent's list until a
+        verdict lands beside it — and the agent resumes a claimed book at every
+        boot. This is the way out when the run should not happen (a test that
+        was killed, a file dropped by mistake): the marker moves to a terminal
+        value with the reason and who did it, so the awaiting list no longer
+        carries the book and the agent leaves it alone. Nothing is deleted;
+        moving the HubSpot record back to the ready value makes DocWatch mark
+        it awaiting again on its next pass."""
+        from ..watch import proof as prooflib
+        from ..watch.drive import DriveFile
+        from ..watch.stages import PROOF_AWAITING, PROOF_FAILED
+        from ..watch.state import STATE_FILE, WatchState
+
+        watch: WatchRunner = app.state.watch
+        state = WatchState.load(Path(watch.home) / STATE_FILE)
+        rec = state.files.get(update.file_id)
+        if rec is None or rec.proof_marked != PROOF_AWAITING:
+            raise HTTPException(
+                404, "That book is not out with the practitioner.")
+        user = getattr(request.state, "user", None)
+        who = getattr(user, "email", "") or "an administrator"
+        reason = f"released from the practitioner queue by {who}"
+        token = _drive_token_or_none(watch.home)
+        marked_drive = False
+        if token:
+            try:
+                prooflib.mark_source(
+                    token, DriveFile(id=rec.file_id, name=rec.name,
+                                     mime_type=""),
+                    rec, state, status=PROOF_FAILED, reason=reason)
+                marked_drive = True
+            except DriveError as e:
+                log.warning("Release of %s: Drive marker not written (%s); "
+                            "the watch state is released regardless.",
+                            rec.name, e)
+        if not marked_drive:
+            rec.proof_marked = PROOF_FAILED
+            state.record(rec)
+        return {"released": rec.file_id, "name": rec.name,
+                "drive_marked": marked_drive, **watch_payload()}
 
     @app.post("/api/watch/run", dependencies=[Depends(may_manage)])
     def run_watch() -> dict:
