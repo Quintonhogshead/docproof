@@ -28,11 +28,11 @@ RUN curl -fsSL https://claude.ai/install.sh | bash -s latest \
 # doesn't reinstall the world on every deploy.
 COPY pyproject.toml ./
 COPY docproof/__init__.py ./docproof/__init__.py
-RUN pip install --no-cache-dir ".[app,languagetool]" || true
+RUN pip install --no-cache-dir ".[app,languagetool,galley]" || true
 
 # Now the source, and a real install so the console scripts exist.
 COPY . .
-RUN pip install --no-cache-dir ".[app,languagetool]"
+RUN pip install --no-cache-dir ".[app,languagetool,galley]"
 
 # The Galley agent's entrypoint and the brain's sifter wrapper (first on the
 # brain's PATH; re-injects the keys the driver strips from the brain's env).

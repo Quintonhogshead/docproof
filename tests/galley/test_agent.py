@@ -672,3 +672,35 @@ def test_the_default_heartbeat_posts_to_the_app(env):
     # A dead app costs a warning, never the run.
     assert ga.post_status(env, {"state": "idle"},
                           opener=FakeApp([], status=500)) is False
+
+
+# ===========================================================================
+# Packaging: the Fly agent image can actually open the subagent lane
+# ===========================================================================
+
+def test_image_installs_the_agent_sdk_the_subagent_lane_needs():
+    """The gap that stopped Test - Book One's ladder on 2026-09-07.
+
+    claude-agent-sdk was declared only under the `canvas` extra (cover
+    generation), while the Dockerfile installed `.[app,languagetool]` — so the
+    agent image carried the Claude Code CLI but not the SDK that drives it,
+    and `api.claude_lane: subagent` refused with ModuleNotFoundError before
+    the first paid read. The extra and the image install must stay in step.
+    """
+    import tomllib
+
+    root = Path(__file__).resolve().parents[2]
+    data = tomllib.loads(
+        (root / "pyproject.toml").read_text(encoding="utf-8"))
+    extras = data["project"]["optional-dependencies"]
+    assert any(dep.startswith("claude-agent-sdk")
+               for dep in extras["galley"])
+
+    dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
+    installs = [ln for ln in dockerfile.splitlines()
+                if "pip install" in ln and ".[" in ln]
+    assert installs, "the Dockerfile no longer pip-installs an extras set"
+    for line in installs:
+        assert "galley" in line, f"galley extra missing from: {line.strip()}"
+    # The SDK drives the CLI; an image with one and not the other is the bug.
+    assert "claude.ai/install.sh" in dockerfile
