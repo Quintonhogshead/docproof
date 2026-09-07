@@ -48,6 +48,15 @@ canvas = [
     # Deployments that generate covers must install this extra.
     "claude-agent-sdk>=0.2",
 ]
+galley = [
+    # The Galley agent's subagent lane (api.claude_lane: subagent, which the
+    # mechanical-wave stage pins) drives Claude Code through the SDK, so the
+    # sifters bill the Max subscription instead of the Anthropic API. Without
+    # it the lane refuses rather than falling back — correctly, since doctrine
+    # forbids Claude billing on a Galley run — and the ladder cannot read.
+    # The Claude Code CLI the SDK drives is installed separately (Dockerfile).
+    "claude-agent-sdk>=0.2",
+]
 build = [
     "pyinstaller>=6.0",
 ]
