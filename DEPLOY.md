@@ -312,6 +312,64 @@ says so.
 
 ---
 
+### The Galley agent on Fly
+
+Galley — the unattended proofreader — needs a machine that holds a Claude Max
+subscription token, and since 2026-09-06 that machine can be a second Fly
+process group, `agent`, beside the web app (`fly.toml` `[processes]`). It runs
+`docproof galley agent`: every five minutes it asks the web app which Book 1
+files DocWatch has marked awaiting, downloads one with the watcher's Google
+sign-in, runs the driver (one Claude Code session per phase on the
+subscription, the docproof sifters on the API keys, LanguageTool locally) and
+uploads the Book 2 set. Nothing about it runs in the web process.
+
+One-time setup:
+
+1. **Its disk.** The agent's workspaces, claim ledger and LanguageTool jar live
+   on a volume of their own, mounted at `/data` on the agent machine only:
+
+   ```bash
+   fly volumes create galley_data -a atmosphere-docproof -r iad -s 10
+   ```
+
+2. **Its secrets.** Secrets are app-wide, so the subscription token is named
+   `GALLEY_OAUTH_TOKEN` — nothing in the web app reads that name — and only
+   becomes `CLAUDE_CODE_OAUTH_TOKEN` inside the agent's mode-600 credentials
+   file, which the entrypoint (`galley/practitioner/fly/galley-agent`) writes
+   from the environment at boot. The Google values are the watcher's sign-in:
+   the refresh token from the Mac keychain (or `docproof-watch auth`), the
+   client id and secret from the watcher's `watch.json`.
+
+   ```bash
+   fly secrets set -a atmosphere-docproof \
+     GALLEY_OAUTH_TOKEN=<from `claude setup-token`> \
+     GOOGLE_REFRESH_TOKEN=<the watcher's refresh token> \
+     GOOGLE_CLIENT_ID=<the watcher's client id> \
+     GOOGLE_CLIENT_SECRET=<the watcher's client secret>
+   ```
+
+   `DOCPROOF_AGENT_TOKEN`, `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are the
+   web app's existing secrets and are reused as-is: the poller presents the
+   agent token to `/api/watch/awaiting`, and the sifters get the API keys
+   through the brain's `docproof` wrapper (`galley/practitioner/galley-bin/
+   docproof`), never the brain itself.
+
+3. **Deploy.** The next push to `main` (or `fly deploy`) builds the image with
+   Claude Code in it and creates the agent machine. `fly.toml` sizes it at
+   `shared-cpu-4x` / 8 GB; raise it there if `fly logs` for the `agent`
+   process shows OOM kills.
+
+4. **Turn proofing on** under Admin → Automations → Proofread, runner
+   `external`. Until then the agent polls and finds nothing.
+
+Day to day: `fly logs -a atmosphere-docproof --process agent` is the agent's
+log; the driver's per-phase logs are under `/data/galley-workspaces/<slug>/
+runs/driver/` on the agent machine (`fly ssh console --process agent`). Every
+deploy restarts the agent machine, which kills a phase session in flight; the
+run resumes from its last completed phase on the next poll, so at worst one
+phase is repeated. The Max token is a personal seat: books proofread here
+share its quota with whatever the same account is doing in Claude Code.
+
 ## 5. Backups and restore
 
 Everything that matters lives on the volume under `/data/docproof` — the

@@ -150,6 +150,12 @@ for Proofing".
    — and the agent puts it into its own environment at startup, which is where
    `app/watch/drive.py` looks first on every platform.
 
+   **Or skip the laptop entirely:** the agent can run as the `agent` process
+   group of the Fly app — see DEPLOY.md, "The Galley agent on Fly". There the
+   credentials file is written at boot from Fly secrets by
+   `fly/galley-agent`, and the brain's `docproof` wrapper is the generic
+   `galley-bin/docproof` beside it.
+
 5. **Install the service.**
 
    ```bash

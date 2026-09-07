@@ -82,6 +82,9 @@ include = ["docproof*", "app*", "config*", "galley*"]
 [tool.setuptools.package-data]
 app = ["static/*", "static/art/*", "static/canvas/*", "static/canvas/vendor/*"]
 "galley.prompts" = ["*.md"]
+# The practitioner manual, skills and launchers: galley/driver.py seeds every
+# workspace from them, and the Fly agent runs off the installed wheel.
+"galley.practitioner" = ["*.md", "*.sh", "skills/*/*", "galley-bin/*", "fly/*"]
 config = ["*.yaml"]
 "config.error_types" = ["*.yaml"]
 "config.consistency" = ["*.tsv", "*.yaml"]

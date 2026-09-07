@@ -13,7 +13,16 @@ WORKDIR /app
 # pass, bump the machine memory (see fly.toml) — the JVM needs its own heap.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends default-jre-headless \
+       ca-certificates curl git \
     && rm -rf /var/lib/apt/lists/*
+
+# Claude Code, the Galley brain, as its native binary — used only by the
+# `agent` process group (fly.toml), which runs `docproof galley agent` and
+# spawns one `claude -p` session per phase on the Max subscription. The web
+# process never runs it.
+RUN curl -fsSL https://claude.ai/install.sh | bash -s latest \
+    && ln -sf /root/.local/bin/claude /usr/local/bin/claude \
+    && claude --version
 
 # Install dependencies first, off the packaging metadata, so a code-only change
 # doesn't reinstall the world on every deploy.
@@ -25,6 +34,11 @@ RUN pip install --no-cache-dir ".[app,languagetool]" || true
 COPY . .
 RUN pip install --no-cache-dir ".[app,languagetool]"
 
+# The Galley agent's entrypoint and the brain's sifter wrapper (first on the
+# brain's PATH; re-injects the keys the driver strips from the brain's env).
+RUN install -m 755 galley/practitioner/fly/galley-agent /usr/local/bin/galley-agent \
+    && install -D -m 755 galley/practitioner/galley-bin/docproof /root/galley-bin/docproof
+
 # Accounts, jobs and settings live on a mounted volume, not in the image, so a
 # redeploy never wipes them. The server reads DOCPROOF_HOME for all of it.
 ENV DOCPROOF_HOME=/data/docproof
@@ -33,4 +47,6 @@ EXPOSE 8000
 
 # Binds 0.0.0.0, gate on. Session secret and API key come from the environment
 # (set them as secrets on the host) — the server refuses to boot without them.
+# fly.toml's [processes] overrides this per process group: `app` runs this
+# command, `agent` runs `galley-agent`.
 CMD ["docproof-serve"]
