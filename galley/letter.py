@@ -1237,6 +1237,139 @@ def render_verification_report(evidence: JournalSources, out_dir: str | Path,
     return out_file
 
 
+AUTHOR_LETTER_NAME = "author-letter.docx"
+
+
+def _convention_lines(rows: Sequence[Mapping[str, Any]], limit: int = 10
+                      ) -> list[str]:
+    """The conventions applied, in the author's language, with counts —
+    house conventions first, then any other family the run corrected."""
+    counts = dict(families(rows))
+    out: list[str] = []
+    used: set[str] = set()
+    for name, description, types in HOUSE_CONVENTIONS:
+        n = sum(counts.get(t, 0) for t in types)
+        if n:
+            out.append(f"{name}: {description} ({_n(n)} place(s))")
+            used.update(types)
+    for et, n in families(rows):
+        if et in used or not et or n == 0:
+            continue
+        if et in ("galley_settle", "galley_read", "imported_edit",
+                  "curated_fix", "recurrence", "repair"):
+            continue                      # lanes, not conventions
+        out.append(f"{family_label(et).capitalize()} ({_n(n)} place(s))")
+    return out[:limit]
+
+
+def render_author_letter(cf: CaseFile, out_dir: str | Path, *,
+                         evidence: JournalSources,
+                         title: str | None = None) -> Path:
+    """The AUTHOR-facing letter, as ``out_dir/author-letter.docx``.
+
+    The author receives the tracked-changes file and nothing else; letter.md
+    is Atmosphere's (costs, phases, finding ids). This one says what the
+    proofread was and was not, which conventions were applied so the author
+    is not asked about them, the questions that are theirs, the things done
+    that they should know about, and anything the plan promised that did not
+    run — generated from the same rows as the document, so it cannot disagree
+    with it. No money, no ids, no internals."""
+    import docx
+
+    src = evidence
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    name = (title or cf.book or "your manuscript")
+    if name.lower().endswith(".docx"):
+        name = name[:-5]
+    applied = applied_rows(src)
+    shape = edit_shapes(applied)
+    corrections = len(applied) - shape["paragraph_marks"]
+    comments = query_rows(src)
+    questions, notes = split_comments(comments)
+    appr = src.approval if isinstance(src.approval, dict) else {}
+    mechanical = bool(appr.get("mechanical_only", True))
+
+    d = docx.Document()
+    d.add_heading("A note from your proofreader", level=0)
+    d.add_paragraph(name)
+
+    d.add_heading("What this pass was — and was not", level=1)
+    scope = ("We read the manuscript for spelling, grammar, punctuation, and "
+             "consistency with the house style.")
+    if mechanical:
+        scope += (" We did not line-edit: sentence rhythm, word choice, "
+                  "pacing and the story's continuity were left as you wrote "
+                  "them, except where a question below says otherwise.")
+    d.add_paragraph(scope)
+    d.add_paragraph(
+        f"The file carries {_n(corrections)} tracked correction(s)"
+        + (f" and {_n(shape['paragraph_marks'])} paragraph break(s)"
+           if shape["paragraph_marks"] else "")
+        + f", with {_n(len(comments))} comment(s) in the margin. "
+        f"{_n(shape['single_word'])} of the corrections change a single "
+        f"word; {_n(shape['multiword'])} touch more than one. No sentence "
+        f"was rewritten.")
+
+    d.add_heading("How to read the file", level=1)
+    d.add_paragraph("Every change is a tracked change: accept or reject each "
+                    "one in Word, or accept all if you are happy with the "
+                    "lot. A comment in the margin is either a question for "
+                    "you or a note on something we did; reply in the margin "
+                    "and we will take it from there.")
+
+    conv = _convention_lines(applied)
+    if conv:
+        d.add_heading("Conventions we applied, so you are not asked about "
+                      "them", level=1)
+        for line in conv:
+            d.add_paragraph(line, style="List Bullet")
+
+    d.add_heading(f"Questions for you ({_n(len(questions))})", level=1)
+    if questions:
+        d.add_paragraph("Only you can answer these — a fact, an intention, a "
+                        "name. Nothing changes until you decide.")
+        for q, span, pids, _fids in grouped_questions(questions):
+            where = f"Near “{_clip(span, 70)}”" if span else "In the margin"
+            sites = f" ({_n(len(pids))} places)" if len(pids) > 1 else ""
+            d.add_paragraph(f"{where}{sites}: {_clip(q, 400)}",
+                            style="List Bullet")
+    else:
+        d.add_paragraph("None. Nothing in the file waits on a decision "
+                        "from you.")
+
+    if notes:
+        d.add_heading(f"Things we did that you should know about "
+                      f"({_n(len(notes))})", level=1)
+        for q, span, pids, _fids in grouped_questions(notes):
+            where = f"Near “{_clip(span, 70)}”" if span else "In the margin"
+            sites = f" ({_n(len(pids))} places)" if len(pids) > 1 else ""
+            d.add_paragraph(f"{where}{sites}: {_clip(q, 400)}",
+                            style="List Bullet")
+
+    skipped: list[str] = []
+    if src.plan and src.workspace is not None:
+        from galley.plan_ledger import LEDGER_NAME, load_ledger, not_done
+        lp = src.workspace / "runs" / LEDGER_NAME
+        for item, status, why in not_done(
+                src.plan, load_ledger(lp) if lp.is_file() else None):
+            skipped.append(f"{_clip(item.text, 90)} — {status}"
+                           + (f": {_clip(why, 160)}" if why else ""))
+    if skipped:
+        d.add_heading("Not done in this pass", level=1)
+        d.add_paragraph("The proofreading plan also listed the following, "
+                        "which did not run this time:")
+        for line in skipped:
+            d.add_paragraph(line, style="List Bullet")
+
+    d.add_heading("In closing", level=1)
+    d.add_paragraph("Everything else is in the tracked changes. Thank you "
+                    "for trusting us with the book.")
+    path = out_path / AUTHOR_LETTER_NAME
+    d.save(str(path))
+    return path
+
+
 def render_all(cf: CaseFile, out_dir: str | Path, **kw: Any) -> tuple[Path, Path]:
     """Write the letter and the style sheet; return ``(letter_path, style_sheet_path)``.
 
@@ -1253,6 +1386,7 @@ def render_all(cf: CaseFile, out_dir: str | Path, **kw: Any) -> tuple[Path, Path
 
 
 __all__ = [
+    "AUTHOR_LETTER_NAME",
     "FAMILY_LABELS",
     "HOUSE_CONVENTIONS",
     "applied_rows",
@@ -1262,6 +1396,7 @@ __all__ = [
     "grouped_questions",
     "query_rows",
     "render_all",
+    "render_author_letter",
     "render_letter",
     "render_style_sheet",
     "render_verification_report",

@@ -249,3 +249,57 @@ def test_outcome_evidence_says_which_unresolved_is_which(tmp_path):
     assert ev["open_author_queries"] == 3
     assert ev["unresolved_internal"] == 0
     assert ev["unresolved_queries"] == ev["unresolved_internal"]
+
+
+# --- the author letter ---------------------------------------------------------
+
+def _docx_text(path):
+    import docx
+    return "\n".join(p.text for p in docx.Document(str(path)).paragraphs)
+
+
+def test_the_author_letter_says_what_the_author_needs_and_nothing_else(tmp_path):
+    from galley.casefile import CaseFile
+    from galley.letter import AUTHOR_LETTER_NAME, render_author_letter
+    ws = tmp_path / "ws"; (ws / "runs").mkdir(parents=True)
+    plan = "1. ladder $1\n4c. whole-book continuity (Opus)  $0\nTOTAL $1\n"
+    pl.record(ws / "runs" / pl.LEDGER_NAME, "1", "ran", evidence="runs/final")
+    pl.record(ws / "runs" / pl.LEDGER_NAME, "4c", "skipped",
+              reason="the session ended before it ran")
+    src = _src(tmp_path, APPLIED + COMMENTS, plan=plan, workspace=ws)
+    src.approval = {"mechanical_only": True, "max_spend_usd": 10.0}
+    path = render_author_letter(CaseFile(book="Test - Book One.docx"),
+                                tmp_path / "out", evidence=src,
+                                title="Test - Book Two.docx")
+    assert path.name == AUTHOR_LETTER_NAME
+    text = _docx_text(path)
+    assert "A note from your proofreader" in text
+    assert "Test - Book Two" in text and "Book One" not in text
+    assert "2 tracked correction(s) and 1 paragraph break(s)" in text
+    assert "We did not line-edit" in text
+    assert "Questions for you (1)" in text
+    assert "Is Marley the fourth or fifth Quinn?" in text
+    assert "Things we did that you should know about (2)" in text
+    assert "I've separated the dialogue." in text
+    assert "Not done in this pass" in text and "whole-book continuity" in text
+    # Nothing internal reaches the author.
+    assert "$" not in text and "f-1" not in text and "q-1" not in text
+    assert "body-" not in text and "p4" not in text
+
+
+def test_the_handoff_carries_the_author_letter(tmp_path):
+    import docx as _docx
+    from galley.driver import build_handoff, DriverError
+    ws = tmp_path / "ws"; dv = ws / "deliverable"; dv.mkdir(parents=True)
+    d = _docx.Document(); d.add_paragraph("x"); d.save(str(dv / "Test - Book One - Atmosphere Press Proofreader.docx"))
+    for n in ("letter.md", "style-sheet.md", "decision-log.md", "verification.md"):
+        (dv / n).write_text("# x\n", "utf-8")
+    (dv / "outcome.json").write_text("{}", "utf-8")
+    with pytest.raises(DriverError, match="author letter"):
+        build_handoff(ws, "Test - Book One.docx", tmp_path / "h",
+                      outcome_sources=[dv / "outcome.json"])
+    d2 = _docx.Document(); d2.add_paragraph("letter"); d2.save(str(dv / "author-letter.docx"))
+    written = build_handoff(ws, "Test - Book One.docx", tmp_path / "h",
+                            outcome_sources=[dv / "outcome.json"])
+    assert any(p.name == "Test - Book Two - Author Letter.docx" for p in written)
+    assert len(written) == 7

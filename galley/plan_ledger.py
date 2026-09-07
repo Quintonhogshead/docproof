@@ -28,6 +28,10 @@ STATUSES = ("ran", "skipped", "deferred")
 _ITEM_RE = re.compile(
     r"^\s*(?P<label>\d+[a-z]?)[.)]\s+(?P<text>\S.*?)\s*$")
 _PRICE_RE = re.compile(r"\$\s*\d")
+# Prices and markdown emphasis are stripped from an item's text: the text
+# reaches the author letter, which carries no money and no markup.
+_PRICE_TOKEN_RE = re.compile(r"\$\s*[\d,]+(?:\.\d+)?")
+_EMPHASIS_RE = re.compile(r"[*_`]+")
 
 
 @dataclass(frozen=True)
@@ -50,7 +54,9 @@ def plan_items(plan_text: str) -> list[PlanItem]:
         if label in seen:
             continue
         seen.add(label)
-        out.append(PlanItem(label, " ".join(m.group("text").split())))
+        text = _EMPHASIS_RE.sub("", _PRICE_TOKEN_RE.sub("", m.group("text")))
+        text = " ".join(text.replace("( )", "").split()).strip(" ·-—")
+        out.append(PlanItem(label, text))
     return out
 
 

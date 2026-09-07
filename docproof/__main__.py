@@ -2443,6 +2443,12 @@ def _galley_letter(args) -> int:
     report_path = render_verification_report(evidence, out, cf=cf,
                                              title=title) \
         if evidence is not None else None
+    author_path = None
+    if evidence is not None:
+        from galley.letter import render_author_letter
+        author_path = render_author_letter(cf, out, evidence=evidence,
+                                           title=title)
+        print(f"author letter: {author_path}")
     open_queries = sum(1 for v in cf.verdicts if v.ruling == "query")
     print(f"\nEditorial letter for {cf.book or '(untitled)'}: "
           f"{len(cf.findings)} finding(s), {len(cf.waves)} wave(s), "

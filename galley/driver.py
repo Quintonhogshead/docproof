@@ -300,7 +300,9 @@ _PROMPTS: dict[str, str] = {
         "docx from runs/<final> to deliverable/, then render the letter, the "
         "style sheet, and the verification report with `docproof galley "
         "letter runs/<final> --workspace . --source source/{book} --out "
-        "deliverable/` (letter.md, style-sheet.md, verification.md — "
+        "deliverable/` (letter.md, style-sheet.md, verification.md, and "
+        "author-letter.docx — the AUTHOR-facing letter that ships beside the "
+        "manuscript; the author sees nothing else — "
         "--workspace is what makes the letter report the REAL spend across "
         "every run, not the $0 replay build's; the verification report "
         "carries the delivered file's SHA-256, the certificate table with its "
@@ -1592,16 +1594,18 @@ _LETTER_NAMES = ("letter.md", "EDITORS_LETTER.md")
 _STYLE_NAMES = ("style-sheet.md", "STYLE_SHEET.md")
 _JOURNAL_NAMES = (DECISION_LOG_NAME, "decision-log.md")
 _VERIFICATION_NAMES = ("verification.md", "VERIFICATION.md")
+_AUTHOR_LETTER_NAMES = ("author-letter.docx",)
 
 
 def build_handoff(workspace: str | Path, source_name: str,
                   handoff_dir: str | Path, *,
                   outcome_sources: Iterable[Path] = (),
                   partial: bool = False) -> list[Path]:
-    """Copy the manuscript, letter, style sheet, decision log, verification
-    report, and outcome into the handoff directory under house names.
+    """Copy the manuscript, author letter, editor's letter, style sheet,
+    decision log, verification report, and outcome into the handoff directory
+    under house names.
 
-    A complete handoff requires all six files. With partial=True, copy
+    A complete handoff requires all seven files. With partial=True, copy
     available files and require only outcome.json.
     """
     ws = Path(workspace)
@@ -1646,8 +1650,17 @@ def build_handoff(workspace: str | Path, source_name: str,
         raise DriverError(
             f"no outcome.json for {ws} — `docproof galley settle` writes it "
             f"beside the run's findings; deliver copies it to deliverable/")
+    # The author reads Word and nothing else: the tracked-changes file and
+    # this letter are the whole delivery from their side.
+    author_letter = _first_existing(deliverable, _AUTHOR_LETTER_NAMES)
+    if author_letter is None and not partial:
+        raise DriverError(
+            f"no author letter in {deliverable} (looked for "
+            f"{', '.join(_AUTHOR_LETTER_NAMES)}) — `docproof galley letter "
+            f"RUN --workspace {ws} --source …` renders it beside the letter")
 
     pairs = ((docx, f"{base}.docx"),
+             (author_letter, f"{base} - Author Letter.docx"),
              (letter, f"{base} - letter.md"),
              (style, f"{base} - style-sheet.md"),
              (journal, f"{base} - decision-log.md"),
