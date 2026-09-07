@@ -161,3 +161,28 @@ def test_written_stage_config_round_trips_and_is_self_contained(tmp_path):
     assert reloaded.rewrite.enabled is False
     from docproof.__main__ import _resolve_error_dir
     assert _resolve_error_dir(out).is_dir()
+
+
+# ===========================================================================
+# Packaging: the presets reach the wheel
+# ===========================================================================
+
+def test_pyproject_ships_stage_and_genre_presets_as_package_data():
+    # The Fly agent runs off the installed wheel, not a checkout. Without
+    # these entries `config/stages` and `config/genres` are found as packages
+    # but ship no .yaml, and every run dies at the plan gate with "Unknown
+    # stage preset 'mechanical-wave'" — which is how Test - Book One stalled.
+    import tomllib
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    package_data = data["tool"]["setuptools"]["package-data"]
+    assert package_data["config.stages"] == ["*.yaml"]
+    assert package_data["config.genres"] == ["*.yaml"]
+    assert package_data["config.genres.prompts"] == ["*.md"]
+
+    root = pyproject.parent / "config"
+    assert sorted(p.stem for p in (root / "stages").glob("*.yaml")) == \
+        sorted(SHIPPED_STAGES)
+    assert list((root / "genres").glob("*.yaml"))
+    assert list((root / "genres" / "prompts").glob("*.md"))

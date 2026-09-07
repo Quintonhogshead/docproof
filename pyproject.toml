@@ -86,6 +86,12 @@ app = ["static/*", "static/art/*", "static/canvas/*", "static/canvas/vendor/*"]
 # workspace from them, and the Fly agent runs off the installed wheel.
 "galley.practitioner" = ["*.md", "*.sh", "skills/*/*", "galley-bin/*", "fly/*"]
 config = ["*.yaml"]
+# Stage and genre presets: `galley routes`/`--stage`/`--genre` resolve these
+# under resource_root(), so a wheel without them fails the plan gate on Fly
+# with "Unknown stage preset 'mechanical-wave'" and no book can run.
+"config.stages" = ["*.yaml"]
+"config.genres" = ["*.yaml"]
+"config.genres.prompts" = ["*.md"]
 "config.error_types" = ["*.yaml"]
 "config.consistency" = ["*.tsv", "*.yaml"]
 "config.prep" = ["*.yaml", "*.idml", "*.jsx"]
