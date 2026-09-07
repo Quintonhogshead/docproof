@@ -150,6 +150,12 @@ for Proofing".
    — and the agent puts it into its own environment at startup, which is where
    `app/watch/drive.py` looks first on every platform.
 
+   **Or skip the laptop entirely:** the agent can run as the `agent` process
+   group of the Fly app — see DEPLOY.md, "The Galley agent on Fly". There the
+   credentials file is written at boot from Fly secrets by
+   `fly/galley-agent`, and the brain's `docproof` wrapper is the generic
+   `galley-bin/docproof` beside it.
+
 5. **Install the service.**
 
    ```bash
@@ -180,6 +186,18 @@ for Proofing".
 minutes. The log and the ledger both live under `--workspace-root` (default
 `~/galley-workspaces`), beside the per-book workspaces themselves.
 
+**What it tells you while it works.** The agent posts a heartbeat to the app
+(`POST /api/watch/agent`, same bearer token) at boot, after every poll, at
+every phase boundary the driver reports, and once a minute while a book runs
+— machine, book, phase, brain, elapsed, turns so far, settle round, last
+error. The Proofread drawer under Admin → Automations shows it, red when the
+machine has been silent for 20 minutes. It emails `GALLEY_ALERT_EMAIL` from
+the credentials file (or the watcher's notify address) when it starts, when
+polling breaks and recovers, and when a hand-off delivery is abandoned. A run
+that ends `needs_human` ships `<surname> - Book 2 - diagnostics.zip` beside
+its outcome: every phase transcript, the driver ledger, the plan, the
+questions, the run state and the agent log.
+
 ## Unattended: `docproof galley drive`
 
 The whole loop with nobody watching, one book at a time — what the agent calls.
@@ -209,6 +227,8 @@ and `reread` are not run; `--copyedit` re-opens them for an experiment.
 | `--max-turns N` / `--phase-max-turns PHASE=N` | turn cap per session (default: settle 400, verify 250, ladder 100, 60-150 elsewhere) |
 | `--timeout HOURS` / `--phase-timeout PHASE=HOURS` | wall-clock cap per session (default 2h; ladder 3h, verify/settle 4h) |
 | `--settle-rounds N` / `--settle-quiet-floor N` / `--settle-quiet-share S` | the settle policy (default 3 / 4 / 0) |
+| `--model M` / `--phase-model PHASE=M` | which brain drives the sessions. Default is a **split** (owner, 2026-09-06): `claude-fable-5-1` on the judgment phases (approve, ladder, audit, settle, and the copy-edit flights/reread) and `claude-opus-5` on the scripted ones (profile, sweeps, verify, certify, deliver). `--model` forces one brain everywhere; `--phase-model` overrides one phase |
+| `--effort L` / `--phase-effort PHASE=L` | the session effort (`low`…`max`). Default: `high` on the Fable phases; the Opus phases run at Claude Code's own default. `--dry-run` prints the resolved brain per phase |
 
 **Stopping.** A phase that exits nonzero stops the driver, writes
 `runs/outcome.json` as `needs_human` naming the phase and its last log lines,

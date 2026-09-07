@@ -23,6 +23,7 @@ WS="$WORKROOT/$SLUG"
 # only (see galley-bin/docproof): the brain never sees them.
 WRAPBIN="${WRAPBIN:-$HOME/galley-bin}"
 MODEL="${MODEL:-claude-fable-5-1}"
+EFFORT="${EFFORT:-high}"
 PERM="${PERM:-acceptEdits}"
 
 # Release candidate-screening Apply for THIS deployment only. The subsystem's
@@ -89,4 +90,4 @@ exec env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY \
      claude -p "Intake: a new manuscript is at source/$(basename "$BOOK"). \
 Follow the loop in CLAUDE.md. Start with /profile, then /draft-plan, and STOP \
 at the plan gate for approval." \
-  --model "$MODEL" --permission-mode "$PERM"
+  --model "$MODEL" --effort "$EFFORT" --permission-mode "$PERM"

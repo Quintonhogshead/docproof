@@ -10,9 +10,11 @@ import logging
 import os
 import plistlib
 import re
+import socket
 import stat
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -37,6 +39,17 @@ DOWNLOAD_DIR = ".agent-downloads"
 DEFAULT_POLL_INTERVAL_S = 300.0
 #: What the server calls the read-only route this poller lives on.
 AWAITING_PATH = "/api/watch/awaiting"
+#: Where the agent reports what it is doing, so the Proofread drawer can show
+#: it — the second and last route a machine may touch, write-only.
+STATUS_PATH = "/api/watch/agent"
+#: Optional: who gets the agent's own alerts (boot, a poll that stopped
+#: working, a delivery given up on). Falls back to the watcher's notify
+#: address.
+ALERT_EMAIL_KEY = "GALLEY_ALERT_EMAIL"
+ALERT_TAGS = "[DocProof][Galley][Agent]"
+#: While a book runs, how often the drawer hears from the agent even when no
+#: phase boundary passes. 0 disables the timer (tests).
+DEFAULT_HEARTBEAT_S = 60.0
 # Service PATH defaults include the CLI and common Homebrew locations.
 PATH = ("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:"
         + str(Path.home() / ".local" / "bin"))
@@ -72,6 +85,14 @@ class AgentEnv:
     @property
     def awaiting_url(self) -> str:
         return self.app_url.rstrip("/") + AWAITING_PATH
+
+    @property
+    def status_url(self) -> str:
+        return self.app_url.rstrip("/") + STATUS_PATH
+
+    @property
+    def alert_email(self) -> str:
+        return (self.values.get(ALERT_EMAIL_KEY) or "").strip()
 
 
 _ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
@@ -169,6 +190,13 @@ def fetch_awaiting(env: AgentEnv, *, opener=_open_url) -> list[AwaitingBook]:
     """Fetch awaiting manuscripts; log request failures and return an empty
     list.
     """
+    return poll_awaiting(env, opener=opener)[0]
+
+
+def poll_awaiting(env: AgentEnv, *, opener=_open_url
+                  ) -> tuple[list[AwaitingBook], str]:
+    """The awaiting list and, when the poll failed, one line saying how — so
+    the caller can tell "nothing to do" from "could not ask"."""
     request = urllib.request.Request(
         env.awaiting_url,
         headers={"Authorization": f"Bearer {env.token}",
@@ -182,19 +210,67 @@ def fetch_awaiting(env: AgentEnv, *, opener=_open_url) -> list[AwaitingBook]:
             detail = e.read().decode("utf-8")[:300]
         except Exception:                                   # noqa: BLE001
             pass
+        error = (f"the app refused the awaiting list (HTTP {e.code})"
+                 f"{': ' + detail if detail else ''}")
         log.warning("The app refused the awaiting list (HTTP %s)%s",
                     e.code, f": {detail}" if detail else "")
-        return []
+        return [], error
     except Exception as e:                                  # noqa: BLE001
         log.warning("Could not reach %s (%s); trying again next poll.",
                     env.awaiting_url, e)
-        return []
+        return [], f"could not reach {env.awaiting_url} ({e})"
     if not isinstance(payload, dict):
         log.warning("The app answered something that is not an awaiting list.")
-        return []
+        return [], "the app answered something that is not an awaiting list"
     books = [AwaitingBook.from_json(row)
              for row in (payload.get("books") or []) if isinstance(row, dict)]
-    return [b for b in books if b.file_id and b.name]
+    return [b for b in books if b.file_id and b.name], ""
+
+
+def post_status(env: AgentEnv, payload: dict[str, Any], *,
+                opener=_open_url) -> bool:
+    """Tell the app what the agent is doing. Never raises: a heartbeat that
+    cannot land must not stop the work it reports on."""
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        env.status_url, data=body, method="POST",
+        headers={"Authorization": f"Bearer {env.token}",
+                 "Content-Type": "application/json",
+                 "Accept": "application/json"})
+    try:
+        with opener(request, 15) as response:
+            response.read()
+        return True
+    except Exception as e:                                  # noqa: BLE001
+        log.warning("Heartbeat did not land at %s (%s).", env.status_url, e)
+        return False
+
+
+def send_alert(env: AgentEnv, subject: str, body: str, *,
+               to: str = "", get_key=None, opener=None) -> bool:
+    """Email the agent's own alert over the watcher's Gmail sign-in — the
+    same token Drive uploads use. Quiet no-op without an address or a
+    sign-in; never raises."""
+    try:
+        from app.watch import notify
+        from app.watch.settings import WatchSettings, default_watch_home
+        from galley.driver import drive_token
+
+        address = to or env.alert_email
+        if not address:
+            ws = WatchSettings.load(default_watch_home())
+            address = (ws.notify_email or "").strip()
+        if not address:
+            log.info("No alert address (%s); not emailing: %s",
+                     ALERT_EMAIL_KEY, subject)
+            return False
+        token = drive_token(get_key=get_key)
+        kwargs = {"opener": opener} if opener is not None else {}
+        notify.send(token, address, f"{ALERT_TAGS} {subject}", body, **kwargs)
+        return True
+    except Exception as e:                                  # noqa: BLE001
+        log.warning("Agent alert could not be emailed (%s): %s", e, subject)
+        return False
 
 
 
@@ -313,6 +389,16 @@ class Agent:
     upload: Callable[[list[Path], str], list[str]] | None = None
     sleep: Callable[[float], None] = time.sleep
     log: Callable[[str], None] = log.info
+    #: Observability seams. `heartbeat` receives the whole status dict each
+    #: time it changes (default: POST it to the app); `alert` receives
+    #: (subject, body) for the agent's own alarms (default: email).
+    heartbeat: Callable[[dict[str, Any]], None] | None = None
+    alert: Callable[[str, str], None] | None = None
+    heartbeat_interval_s: float = DEFAULT_HEARTBEAT_S
+    host: str = field(default_factory=socket.gethostname)
+    _status: dict[str, Any] = field(default_factory=dict, repr=False)
+    _poll_error: str = field(default="", repr=False)
+    _file_id: str = field(default="", repr=False)
 
 
     @property
@@ -326,11 +412,82 @@ class Agent:
     def ledger(self) -> Ledger:
         return Ledger.load(self.ledger_path)
 
+    # --- what the drawer sees ------------------------------------------------
+
+    def _beat(self, **changes: Any) -> dict[str, Any]:
+        """Merge `changes` into the agent's status and send it. Never raises."""
+        from docproof import __version__
+
+        self._status.update({k: v for k, v in changes.items()})
+        payload = {"agent": self.host, "version": __version__, "at": _now(),
+                   "poll_interval_s": self.poll_interval_s,
+                   "app": self.env.awaiting_url, **self._status}
+        try:
+            if self.heartbeat is not None:
+                self.heartbeat(payload)
+            else:
+                post_status(self.env, payload, opener=self.opener)
+        except Exception:                                   # noqa: BLE001
+            log.warning("heartbeat failed", exc_info=True)
+        return payload
+
+    def _alarm(self, subject: str, body: str) -> None:
+        """One of the agent's own alerts. Never raises."""
+        self.log(f"ALERT {subject}")
+        try:
+            if self.alert is not None:
+                self.alert(subject, body)
+            else:
+                send_alert(self.env, subject, body)
+        except Exception:                                   # noqa: BLE001
+            log.warning("alert failed: %s", subject, exc_info=True)
+
+    def _on_progress(self, event: dict[str, Any]) -> None:
+        """The driver's phase-by-phase report, turned into a heartbeat."""
+        kind = str(event.get("event") or "")
+        now = _now()
+        if kind == "phase_start":
+            self._beat(state="running", phase=event.get("phase"),
+                       model=event.get("model"), effort=event.get("effort"),
+                       phase_started_at=now, turns=0, last_error="")
+        elif kind == "phase_end":
+            self._beat(phase_done=event.get("phase"),
+                       phase_ok=bool(event.get("ok")),
+                       last_phase_turns=event.get("num_turns"),
+                       last_phase_limit=event.get("limit"))
+        elif kind == "gate":
+            self._beat(gate=("approved" if event.get("approved")
+                             else "escalated" if event.get("approved") is None
+                             else "declined"))
+        elif kind == "stopped":
+            self._beat(state="stopping", last_outcome="needs_human",
+                       last_reason=str(event.get("reason") or "")[:600])
+        elif kind == "finished":
+            self._beat(state="finishing",
+                       last_outcome=event.get("outcome"),
+                       last_reason=str(event.get("reason") or "")[:600])
+
+    def _live_beat(self, slug: str) -> None:
+        """The timer's heartbeat: what the running phase has done so far."""
+        from galley.driver import live_progress
+
+        phase = self._status.get("phase")
+        try:
+            live = live_progress(self.root / slug, phase)
+        except Exception:                                   # noqa: BLE001
+            live = {}
+        self._beat(**live)
+
+    def _ticker(self, slug: str, stop: threading.Event) -> None:
+        while not stop.wait(self.heartbeat_interval_s):
+            self._live_beat(slug)
+
 
     def poll_once(self) -> RunReport:
         """Look once, and run at most one book."""
         report = RunReport()
-        books = fetch_awaiting(self.env, opener=self.opener)
+        books, error = poll_awaiting(self.env, opener=self.opener)
+        self._poll_health(error)
         report.looked_at = len(books)
         ledger = self.ledger()
 
@@ -347,18 +504,70 @@ class Agent:
             return report                     # one book at a time, on purpose
         if books:
             self.log(f"{len(books)} book(s) awaiting; all already handled here.")
+        self._beat(state="idle", awaiting=len(books),
+                   pending_deliveries=len(ledger.pending_deliveries()))
         return report
+
+    def _poll_health(self, error: str) -> None:
+        """Alert once when polling breaks, and once when it recovers — not on
+        every five-minute retry in between."""
+        now = _now()
+        if error:
+            first = not self._poll_error
+            self._poll_error = error
+            self._beat(last_poll_at=now, last_poll_error=error)
+            if first:
+                self._alarm(
+                    f"cannot reach DocProof from {self.host}",
+                    f"The Galley agent on {self.host} could not ask "
+                    f"{self.env.awaiting_url} for books:\n\n  {error}\n\n"
+                    f"It keeps retrying every "
+                    f"{self.poll_interval_s / 60:.0f} minutes and will say "
+                    f"when it gets through again. Until then no book is "
+                    f"picked up. Check DOCPROOF_AGENT_TOKEN on both sides, "
+                    f"and that the app is up.")
+            return
+        if self._poll_error:
+            self._alarm(f"DocProof is reachable again from {self.host}",
+                        f"The Galley agent on {self.host} is polling "
+                        f"{self.env.awaiting_url} normally again (the last "
+                        f"failure was: {self._poll_error}).")
+        self._poll_error = ""
+        self._beat(last_poll_at=now, last_poll_error="")
 
     def run_forever(self) -> None:
         self.log(f"Galley agent: polling {self.env.awaiting_url} every "
                  f"{self.poll_interval_s / 60:.0f} min.")
+        self.announce()
         while True:
             try:
                 self.poll_once()
-            except Exception:                               # noqa: BLE001
+            except Exception as e:                          # noqa: BLE001
                 # Keep polling after unexpected failures.
                 log.exception("The poll failed; trying again next interval.")
+                self._beat(state="idle", last_error=f"poll crashed: {e}"[:400])
             self.sleep(self.poll_interval_s)
+
+    def announce(self) -> None:
+        """Boot: the first heartbeat and a one-line email, so a machine that
+        came up (or came back after a deploy) is noticed."""
+        from docproof import __version__
+
+        started = _now()
+        ledger = self.ledger()
+        pending = ledger.pending()
+        self._beat(state="starting", started_at=started, awaiting=0,
+                   pending_deliveries=len(ledger.pending_deliveries()),
+                   last_error="")
+        self._alarm(
+            f"Galley agent started on {self.host}",
+            f"DocProof {__version__} on {self.host} is polling "
+            f"{self.env.awaiting_url} every {self.poll_interval_s / 60:.0f} "
+            f"minutes for books to proofread.\n"
+            f"Workspaces: {self.root}\n"
+            + (f"{len(pending)} book(s) were claimed but unfinished; the "
+               f"first poll resumes them.\n" if pending else "")
+            + "Progress shows under Admin → Automations → Proofread.")
 
 
     def run_book(self, book: AwaitingBook, ledger: Ledger, report: RunReport,
@@ -373,6 +582,11 @@ class Agent:
                       folder_id=folder)
         self.log(f"{'Resuming' if resume else 'Claiming'} {book.name} "
                  f"(workspace {slug}).")
+        self._status = {k: v for k, v in self._status.items()
+                        if k in ("started_at", "last_poll_at",
+                                 "last_poll_error")}
+        self._beat(state="running", book=book.name, slug=slug,
+                   resumed=resume, run_started_at=_now(), phase=None)
 
         try:
             local = self.fetch_book(book)
@@ -406,12 +620,19 @@ class Agent:
             # finished.
             self.owe_delivery(book, ledger, slug, folder, outcome, reason,
                               handoff, why="the driver's upload failed")
+            self._beat(state="idle", phase=None, last_outcome=outcome,
+                       last_reason=reason[:600], last_book=book.name,
+                       delivery="pending")
             return
         ledger.record(book.file_id, FINISHED if outcome == "done" else FAILED,
                       name=book.name, slug=slug, folder_id=folder,
                       outcome=outcome, reason=reason[:400],
                       uploaded=uploaded)
         self.log(f"{book.name}: {outcome} — {reason[:200]}")
+        self._beat(state="idle", phase=None, last_outcome=outcome,
+                   last_reason=reason[:600], last_book=book.name,
+                   finished_at=_now(), delivery="uploaded" if uploaded
+                   else "none")
 
     def fetch_book(self, book: AwaitingBook) -> Path:
         """The Book 1, on this Mac, as a .docx."""
@@ -442,9 +663,24 @@ class Agent:
                 kwargs["start_phase"] = start
                 self.log(f"Resuming {slug} from the {start} phase.")
         runner = self.run_driver or _run_driver
-        return runner(book=local, slug=slug, workspace_root=self.root,
-                      drive_folder_id=folder_id, source_id=self._file_id,
-                      env=self.driver_env(), upload=self.upload, **kwargs)
+        # The driver reports every phase boundary; a timer fills the minutes
+        # in between with what the running session has done so far.
+        stop = threading.Event()
+        ticker = None
+        if self.heartbeat_interval_s > 0:
+            ticker = threading.Thread(target=self._ticker, args=(slug, stop),
+                                      name=f"galley-heartbeat-{slug}",
+                                      daemon=True)
+            ticker.start()
+        try:
+            return runner(book=local, slug=slug, workspace_root=self.root,
+                          drive_folder_id=folder_id, source_id=self._file_id,
+                          env=self.driver_env(), upload=self.upload,
+                          progress=self._on_progress, **kwargs)
+        finally:
+            stop.set()
+            if ticker is not None:
+                ticker.join(timeout=5)
 
     def resume_phase(self, slug: str) -> str:
         """Choose the next phase from the recorded run state and driver phase
@@ -488,6 +724,9 @@ class Agent:
         retried without rerunning the proofread.
         """
         report.outcome, report.reason = "needs_human", reason
+        self._beat(state="idle", phase=None, last_outcome="needs_human",
+                   last_reason=reason[:600], last_book=book.name,
+                   finished_at=_now(), last_error=reason[:400])
         try:
             files = self.write_failure(slug, book.name, reason)
         except Exception as e:                              # noqa: BLE001
@@ -599,6 +838,17 @@ class Agent:
                          f"attempt(s) — put {len(files)} hand-off file(s) in "
                          f"folder {folder} by hand.")
                 report.skipped.append(f"{name} (delivery abandoned)")
+                self._alarm(
+                    f"{name}: hand-off could not be delivered",
+                    f"The proofread of {name} finished ({outcome}) but its "
+                    f"hand-off could not be uploaded to Drive folder {folder} "
+                    f"in {attempts} attempts, so the agent has stopped "
+                    f"trying. The files are on {self.host} under "
+                    f"{self.root / str(entry.get('slug') or '')}/handoff/:\n"
+                    + "".join(f"  - {f.name}\n" for f in files)
+                    + f"Last error: {entry.get('delivery_error') or '?'}\n"
+                    f"DocWatch is still waiting on this book.")
+                self._beat(last_error=f"{name}: delivery abandoned")
                 continue
             uploaded_names = dict(entry.get("uploaded_names") or {})
             if self._upload_missing(files, folder, uploaded_names):
@@ -625,7 +875,8 @@ class Agent:
                       reason: str) -> list[Path]:
         """The hand-off for a book that never ran: a verdict, and the decision
         log if there is anything to log."""
-        from galley.driver import build_handoff, handoff_base
+        from galley.driver import (build_diagnostics, build_handoff,
+                                   handoff_base)
         from galley.journal import write_journal
         from galley.outcome import Outcome, hubspot_fields
 
@@ -643,9 +894,9 @@ class Agent:
             log.warning("No decision log for %s (%s)", slug, e)
         out = ws / "handoff"
         try:
-            return build_handoff(ws, source_name, out,
-                                 outcome_sources=[runs / "outcome.json"],
-                                 partial=True)
+            files = build_handoff(ws, source_name, out,
+                                  outcome_sources=[runs / "outcome.json"],
+                                  partial=True)
         except Exception:                                   # noqa: BLE001
             # If a partial handoff cannot be built, deliver the outcome
             # alone.
@@ -653,7 +904,15 @@ class Agent:
             import shutil
             dest = out / f"{handoff_base(source_name)} - outcome.json"
             shutil.copy2(runs / "outcome.json", dest)
-            return [dest]
+            files = [dest]
+        # The evidence rides with the verdict: whatever the driver logged
+        # before it gave up, plus the agent's own log.
+        bundle = build_diagnostics(
+            ws, source_name, out,
+            extra=[(self.root / LOG_NAME, "agent.log")])
+        if bundle is not None:
+            files.append(bundle)
+        return files
 
 
     def status(self) -> dict[str, Any]:
@@ -958,6 +1217,7 @@ __all__ = ["AGENT_TOKEN_KEY", "APP_URL_KEY", "AWAITING_PATH", "CLAIMED",
            "LABEL", "LEDGER_NAME", "LOG_NAME", "OAUTH_KEY", "UNIT_NAME",
            "Agent", "AgentEnv", "AgentError", "AwaitingBook", "Ledger",
            "RunReport", "apply_env", "fetch_awaiting", "install", "installed",
+           "poll_awaiting", "post_status", "send_alert",
            "is_linux", "parse_env", "plist_content", "plist_path", "program",
            "read_env", "refresh_wrapper", "service_path", "slug_for",
            "uninstall", "unit_content", "unit_path", "units_dir"]

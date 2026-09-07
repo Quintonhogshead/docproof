@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import time
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +38,28 @@ REQUIRED_STATE: dict[str, str] = {
 # API spending ceiling recorded in approval.json.
 DEFAULT_BUDGET_USD = 10.0
 DEFAULT_MODEL = "claude-fable-5-1"
+#: The cheaper, faster brain for the phases that follow a script.
+MECHANICAL_MODEL = "claude-opus-5"
+# Which brain drives each phase. Judgment phases (the plan gate, the ladder's
+# reading of its own results, audit, settle's adjudication, the copy-edit
+# flights) stay on Fable; the phases that run a fixed set of commands and read
+# their output go to Opus 5 (owner, 2026-09-06). A phase absent here runs on
+# DEFAULT_MODEL.
+PHASE_MODEL: dict[str, str] = {
+    "profile": MECHANICAL_MODEL,
+    "sweeps": MECHANICAL_MODEL,
+    "verify": MECHANICAL_MODEL,
+    "certify": MECHANICAL_MODEL,
+    "deliver": MECHANICAL_MODEL,
+}
+#: Fable phases run at high effort (owner, 2026-09-06); a phase absent here
+#: leaves the session at Claude Code's default effort.
+DEFAULT_EFFORT = "high"
+PHASE_EFFORT: dict[str, str] = {
+    phase: DEFAULT_EFFORT for phase in
+    ("approve", "ladder", "flights", "audit", "reread", "settle")
+}
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 DEFAULT_PERMISSION_MODE = "acceptEdits"
 DEFAULT_WORKSPACE_ROOT = "~/galley-workspaces"
 DEFAULT_WRAPBIN = "~/galley-bin"
@@ -924,7 +947,12 @@ class Driver:
     only_phases: Sequence[str] | None = None
     handoff_dir: Path | None = None
     drive_folder_id: str = ""
-    model: str = DEFAULT_MODEL
+    # None = the per-phase table (PHASE_MODEL / PHASE_EFFORT); a value here
+    # overrides it for every phase; the by-phase maps win over both.
+    model: str | None = None
+    model_by_phase: dict[str, str] = field(default_factory=dict)
+    effort: str | None = None
+    effort_by_phase: dict[str, str] = field(default_factory=dict)
     permission_mode: str = DEFAULT_PERMISSION_MODE
     wrapbin: Path = Path(DEFAULT_WRAPBIN)
     reply_timeout_s: float = 6 * 3600.0
@@ -953,6 +981,10 @@ class Driver:
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
     log: Callable[[str], None] = print
+    #: Told about every step (phase start/end, the gate, the stop, the finish)
+    #: as a dict with an "event" key — the agent turns these into heartbeats.
+    #: A reporter that raises never sinks the run.
+    progress: Callable[[dict[str, Any]], None] | None = None
 
 
     @property
@@ -961,6 +993,16 @@ class Driver:
 
     def _spawner(self) -> Callable[[PhaseSpec], PhaseResult]:
         return self.spawn or spawn_claude
+
+    def _progress(self, event: str, **fields: Any) -> None:
+        if self.progress is None:
+            return
+        payload = {"event": event, "slug": self.slug, "book": self.book.name,
+                   "at": _now(), **fields}
+        try:
+            self.progress(payload)
+        except Exception:                                   # noqa: BLE001
+            log.warning("progress reporter failed on %s", event, exc_info=True)
 
     def _driver_dir(self) -> Path:
         d = self.workspace / "runs" / DRIVER_DIR
@@ -973,6 +1015,30 @@ class Driver:
         if self.max_turns is not None:
             return int(self.max_turns)
         return PHASE_MAX_TURNS.get(phase, DEFAULT_MAX_TURNS)
+
+    def model_for(self, phase: str) -> str:
+        if phase in self.model_by_phase:
+            return str(self.model_by_phase[phase])
+        if self.model:
+            return str(self.model)
+        return PHASE_MODEL.get(phase, DEFAULT_MODEL)
+
+    def effort_for(self, phase: str) -> str | None:
+        """The session's --effort, or None to leave Claude Code's default."""
+        if phase in self.effort_by_phase:
+            level = self.effort_by_phase[phase]
+        elif self.effort:
+            level = self.effort
+        else:
+            level = PHASE_EFFORT.get(phase)
+        if level is None:
+            return None
+        level = str(level).strip().lower()
+        if level not in EFFORT_LEVELS:
+            raise DriverError(
+                f"effort {level!r} for {phase} — expected one of "
+                f"{', '.join(EFFORT_LEVELS)}")
+        return level
 
     def timeout_for(self, phase: str) -> float:
         if phase in self.timeout_by_phase:
@@ -989,9 +1055,13 @@ class Driver:
                               settle_quiet_floor=self.settle_quiet_floor,
                               settle_quiet_share=self.settle_quiet_share)
         turns = self.turns_for(phase)
-        argv = ["claude", "-p", prompt, "--model", self.model,
+        argv = ["claude", "-p", prompt, "--model", self.model_for(phase),
                 "--permission-mode", self.permission_mode,
-                "--max-turns", str(turns),
+                "--max-turns", str(turns)]
+        effort = self.effort_for(phase)
+        if effort:
+            argv += ["--effort", effort]
+        argv += [
                 # Preserve the structured completion beside the readable
                 # log.
                 "--output-format", "stream-json", "--verbose"]
@@ -1079,15 +1149,17 @@ class Driver:
         # produced.
         self._stopped_handoff(result)
         self.log(f"STOPPED at {phase or 'the plan gate'}: {reason}")
+        self._progress("stopped", phase=phase, outcome="needs_human",
+                       reason=reason[:600])
         return result
 
     def _stopped_handoff(self, result: DriveResult) -> None:
         """Build and upload available artifacts after a stopped run. Log
         handoff failures without replacing the original error.
         """
+        out = Path(self.handoff_dir) if self.handoff_dir \
+            else self.workspace / "handoff"
         try:
-            out = Path(self.handoff_dir) if self.handoff_dir \
-                else self.workspace / "handoff"
             # Prefer the driver failure over an earlier settle-written done
             # verdict.
             result.handoff = build_handoff(
@@ -1097,8 +1169,14 @@ class Driver:
                 partial=True)
         except Exception as e:                              # noqa: BLE001
             self.log(f"no hand-off for the stopped run ({e})")
-            return
-        if not self.drive_folder_id:
+            result.handoff = []
+        # The evidence travels with the verdict: every phase transcript, the
+        # driver ledger and the run state, zipped beside the outcome, so a
+        # needs_human never has to be diagnosed over ssh.
+        bundle = build_diagnostics(self.workspace, self.book.name, out)
+        if bundle is not None:
+            result.handoff.append(bundle)
+        if not result.handoff or not self.drive_folder_id:
             return
         uploader = self.upload or _default_upload
         try:
@@ -1187,6 +1265,7 @@ class Driver:
         if approved:
             record_approval(plan_path, reason, by="galley drive (auto)")
             self.log(f"plan gate: APPROVED — {reason}")
+            self._progress("gate", approved=True, reason=reason[:300])
             return True
         if self.approve == "auto":
             self._stop(result, "approve", f"plan gate refused: {reason}")
@@ -1212,6 +1291,7 @@ class Driver:
         result.gate["sent"] = True
         result.gate["sent_to"] = to
         result.gate["token"] = token
+        self._progress("gate", approved=None, escalated_to=to)
         self.log(f"plan gate: escalated to {to}; waiting up to "
                  f"{self.reply_timeout_s / 3600:.1f}h for a reply in "
                  f"{questions}")
@@ -1266,11 +1346,20 @@ class Driver:
             if phase == "approve" and gate_due:
                 if not self.run_gate(result):
                     return result
-            self.log(f"--- phase {phase} ---")
+            effort = self.effort_for(phase)
+            self.log(f"--- phase {phase} ({self.model_for(phase)}"
+                     f"{', effort ' + effort if effort else ''}) ---")
             spec = self._spec(phase, env)
+            self._progress("phase_start", phase=phase,
+                           model=self.model_for(phase), effort=effort,
+                           max_turns=spec.max_turns, timeout_s=spec.timeout_s,
+                           log_path=str(spec.log_path))
             asked_before = self._questions_text()
             outcome = self._spawner()(spec)
             result.phases.append(outcome)
+            self._progress("phase_end", phase=phase, ok=outcome.ok,
+                           returncode=outcome.returncode, limit=outcome.limit,
+                           num_turns=outcome.num_turns)
             if outcome.limit == "timeout":
                 return self._stop(
                     result, phase,
@@ -1341,6 +1430,8 @@ class Driver:
                         f"{self.drive_folder_id} by hand.")
         result.outcome, result.reason = self._final_verdict(result)
         self._write_ledger(result)
+        self._progress("finished", outcome=result.outcome,
+                       reason=result.reason[:600])
         self.log(f"{result.outcome}: {result.reason}")
         return result
 
@@ -1474,7 +1565,109 @@ def _first_existing(folder: Path, names: Sequence[str]) -> Path | None:
 _MIME = {".docx": ("application/vnd.openxmlformats-officedocument"
                    ".wordprocessingml.document"),
          ".md": "text/markdown",
-         ".json": "application/json"}
+         ".json": "application/json",
+         ".zip": "application/zip"}
+
+
+DIAGNOSTICS_SUFFIX = " - diagnostics.zip"
+#: Files bigger than this stay out of the bundle (the raw stream-json of a
+#: long session can run to hundreds of MB; its readable rendering is enough).
+DIAGNOSTICS_MAX_FILE_BYTES = 25 * 1024 * 1024
+
+
+def diagnostics_sources(workspace: str | Path) -> list[tuple[Path, str]]:
+    """What a needs_human bundle carries: (path, name inside the zip)."""
+    ws = Path(workspace)
+    picks: list[tuple[Path, str]] = []
+
+    def add(path: Path) -> None:
+        if not path.is_file():
+            return
+        try:
+            if path.stat().st_size > DIAGNOSTICS_MAX_FILE_BYTES:
+                return
+        except OSError:
+            return
+        picks.append((path, path.relative_to(ws).as_posix()))
+
+    for name in ("PLAN.md", "QUESTIONS.md", "state.json", "profile.json",
+                 "approval.json"):
+        add(ws / name)
+    runs = ws / "runs"
+    add(runs / "outcome.json")
+    driver = runs / DRIVER_DIR
+    if driver.is_dir():
+        for path in sorted(driver.iterdir()):
+            # The readable transcripts and the ledger; not the raw stream.
+            if path.suffix in (".log", ".json") and \
+                    not path.name.endswith(".stream.jsonl"):
+                add(path)
+    for run in sorted(p for p in runs.glob("*") if p.is_dir()
+                      and p.name != DRIVER_DIR):
+        for name in ("outcome.json", "settlement.json", "verify.json",
+                     "certificate.json", "review.log", "run.log"):
+            add(run / name)
+    return picks
+
+
+def build_diagnostics(workspace: str | Path, source_name: str,
+                      handoff_dir: str | Path, *,
+                      extra: Iterable[tuple[Path, str]] = ()) -> Path | None:
+    """Zip the run's evidence beside the hand-off as
+    `<base> - diagnostics.zip`. Returns None when there is nothing to bundle
+    or the bundle cannot be written — a diagnostics failure never replaces the
+    verdict it accompanies."""
+    ws = Path(workspace)
+    out = Path(handoff_dir)
+    picks = diagnostics_sources(ws)
+    for path, name in extra:
+        if Path(path).is_file():
+            picks.append((Path(path), name))
+    if not picks:
+        return None
+    dest = out / f"{handoff_base(source_name)}{DIAGNOSTICS_SUFFIX}"
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
+            for path, name in picks:
+                zf.write(path, name)
+    except Exception:                                       # noqa: BLE001
+        log.warning("could not write the diagnostics bundle %s", dest,
+                    exc_info=True)
+        return None
+    return dest
+
+
+def live_progress(workspace: str | Path, phase: str | None) -> dict[str, Any]:
+    """What a running phase has done so far, read off the files the session
+    writes as it goes — the raw stream (turns, last activity) and the run's
+    settlement.json (rounds). Cheap enough to call every minute."""
+    ws = Path(workspace)
+    out: dict[str, Any] = {}
+    if phase:
+        stream = ws / "runs" / DRIVER_DIR / f"{phase}.stream.jsonl"
+        try:
+            st = stream.stat()
+            out["last_activity_at"] = datetime.fromtimestamp(
+                st.st_mtime, timezone.utc).isoformat()
+            out["stream_bytes"] = st.st_size
+            turns = 0
+            with open(stream, "rb") as fh:
+                for line in fh:
+                    if b'"type":"assistant"' in line or \
+                            b'"type": "assistant"' in line:
+                        turns += 1
+            out["turns"] = turns
+        except OSError:
+            pass
+    rounds = 0
+    for path in (ws / "runs").glob("*/settlement.json"):
+        data = _read_json(path)
+        if isinstance(data, dict):
+            rounds = max(rounds, int(data.get("rounds") or 0))
+    if rounds:
+        out["settle_rounds"] = rounds
+    return out
 
 
 def drive_token(*, get_key=None) -> str:
@@ -1517,15 +1710,18 @@ def _default_upload(files: list[Path], folder_id: str) -> list[str]:
 
 __all__ = [
     "ALL_PHASES", "COPYEDIT_PHASES", "DECISION_LOG_NAME", "DEFAULT_BUDGET_USD",
-    "DEFAULT_MAX_TURNS", "DEFAULT_MODEL", "DEFAULT_PERMISSION_MODE",
+    "DEFAULT_EFFORT", "DEFAULT_MAX_TURNS", "DEFAULT_MODEL", "DIAGNOSTICS_SUFFIX",
+    "DEFAULT_PERMISSION_MODE", "EFFORT_LEVELS", "MECHANICAL_MODEL",
     "DEFAULT_PHASE_TIMEOUT_S", "DEFAULT_WORKSPACE_ROOT", "DEFAULT_WRAPBIN",
-    "HANDOFF_STAGE", "MECHANICAL_PHASES", "PHASE_MAX_TURNS", "PHASE_TIMEOUT_S",
+    "HANDOFF_STAGE", "MECHANICAL_PHASES", "PHASE_EFFORT", "PHASE_MAX_TURNS",
+    "PHASE_MODEL", "PHASE_TIMEOUT_S",
     "REQUIRED_STATE", "SETTLE_QUIET_FLOOR", "SETTLE_QUIET_SHARE",
     "SETTLE_ROUNDS", "TIMEOUT_RC", "DriveResult", "Driver", "DriverError",
     "PhaseResult", "PhaseSpec", "PlanSummary", "build_env", "build_handoff",
     "config_copyedit_lanes", "detect_turn_cap", "drive_token",
     "gate_decision", "gate_question",
     "handoff_base",
+    "build_diagnostics", "diagnostics_sources", "live_progress",
     "phase_prompt", "phases_for", "read_plan", "record_approval",
     "reply_after", "seed_workspace", "select_phases", "settle_flags",
     "spawn_claude", "tail_of", "SourceChanged", "workspace_slug",

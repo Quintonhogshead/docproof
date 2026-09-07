@@ -10,6 +10,7 @@ logging.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from dataclasses import asdict
@@ -91,6 +92,9 @@ AGENT_TOKEN_ENV = "DOCPROOF_AGENT_TOKEN"
 #: Short secrets are guessable, and a secret set to "test" would be worse than
 #: none because it reads as configured. Refused with the fix named.
 MIN_AGENT_TOKEN = 24
+#: A heartbeat is a few hundred bytes; this is the ceiling on what a
+#: token-holder may make the server store.
+AGENT_STATUS_MAX_BYTES = 16 * 1024
 
 
 def agent_gate(request: Request) -> None:
@@ -362,6 +366,30 @@ def register(app: FastAPI) -> None:
         agent_gate(request)
         watch: WatchRunner = app.state.watch
         return {"books": watchlib.awaiting(watch.home)}
+
+    @app.post("/api/watch/agent")
+    async def agent_heartbeat(request: Request) -> dict:
+        """The practitioner agent says what it is doing.
+
+        The second and last route a machine may touch, behind the same bearer
+        gate as the awaiting list and write-only: one JSON object, kept as the
+        newest heartbeat in the watch home, read back by `/api/watch` for the
+        Proofread drawer. Bounded, because a token-holder is still a machine:
+        a body over 16 KB or not an object is refused, and nothing in it is
+        ever executed or written anywhere but that one file."""
+        agent_gate(request)
+        raw = await request.body()
+        if len(raw) > AGENT_STATUS_MAX_BYTES:
+            raise HTTPException(413, "The heartbeat is too big.")
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            raise HTTPException(400, "The heartbeat is not JSON.")
+        if not isinstance(payload, dict):
+            raise HTTPException(400, "The heartbeat must be a JSON object.")
+        watch: WatchRunner = app.state.watch
+        watchlib.save_agent_status(watch.home, payload)
+        return {"ok": True}
 
     @app.post("/api/watch/run", dependencies=[Depends(may_manage)])
     def run_watch() -> dict:

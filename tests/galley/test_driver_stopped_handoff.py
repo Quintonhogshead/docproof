@@ -180,3 +180,80 @@ def test_a_finished_handoff_demands_the_verification_report(book, tmp_path):
     with pytest.raises(gd.DriverError, match="no verification report"):
         gd.build_handoff(ws, book.name, tmp_path / "out",
                          outcome_sources=[ws / "deliverable" / "outcome.json"])
+
+
+# --- the evidence rides with the verdict ----------------------------------------
+
+def test_a_stopped_run_ships_its_transcripts_beside_the_verdict(book, tmp_path):
+    import zipfile
+
+    ws = _ws(book, tmp_path)
+    uploaded: list[str] = []
+
+    def upload(files, folder_id):
+        uploaded.extend(p.name for p in files)
+        return [f"id-{i}" for i, _ in enumerate(files)]
+
+    events: list[dict] = []
+    result = _driver(book, tmp_path, spawn=_failing(ws, "ladder"),
+                     drive_folder_id="folder-A", upload=upload,
+                     handoff_dir=tmp_path / "handoff",
+                     progress=events.append).run()
+
+    assert result.outcome == "needs_human"
+    assert "Ford - Book 2 - diagnostics.zip" in uploaded
+    bundle = tmp_path / "handoff" / "Ford - Book 2 - diagnostics.zip"
+    names = set(zipfile.ZipFile(bundle).namelist())
+    # Every phase the driver ran left a transcript, and all of them are in.
+    assert {"runs/driver/profile.log", "runs/driver/sweeps.log",
+            "runs/driver/ladder.log", "runs/outcome.json",
+            "PLAN.md"} <= names
+    assert "runs/driver/driver.json" in names
+    # Raw stream files are the transcript's source, not evidence twice over.
+    assert not any(n.endswith(".stream.jsonl") for n in names)
+
+    # …and the run narrated itself: phase boundaries, the gate, the stop.
+    kinds = [(e["event"], e.get("phase")) for e in events]
+    assert kinds[0] == ("phase_start", "profile")
+    assert ("gate", None) in kinds
+    assert ("phase_start", "ladder") in kinds
+    assert kinds[-1] == ("stopped", "ladder")
+    ended = [e for e in events if e["event"] == "phase_end"]
+    assert ended[-1]["phase"] == "ladder" and ended[-1]["ok"] is False
+    assert all(e["slug"] == "ford-book-1" and e["at"] for e in events)
+
+
+def test_a_reporter_that_raises_never_sinks_the_run(book, tmp_path):
+    ws = _ws(book, tmp_path)
+    _deliverable(ws)
+
+    def bad(_event):
+        raise RuntimeError("the drawer is down")
+
+    result = _driver(book, tmp_path, spawn=FakeSpawner(ws),
+                     progress=bad).run()
+    assert result.outcome == "done"
+
+
+def test_a_finished_run_reports_finished(book, tmp_path):
+    ws = _ws(book, tmp_path)
+    _deliverable(ws)
+    events: list[dict] = []
+    _driver(book, tmp_path, spawn=FakeSpawner(ws),
+            progress=events.append).run()
+    assert events[-1]["event"] == "finished"
+    assert events[-1]["outcome"] == "done"
+
+
+def test_the_bundle_skips_giants_and_survives_an_empty_workspace(tmp_path):
+    ws = tmp_path / "ws"
+    (ws / "runs" / "driver").mkdir(parents=True)
+    big = ws / "runs" / "driver" / "verify.log"
+    big.write_bytes(b"x" * (gd.DIAGNOSTICS_MAX_FILE_BYTES + 1))
+    (ws / "runs" / "driver" / "profile.log").write_text("ok\n")
+    out = gd.build_diagnostics(ws, "Ford - Book 1.docx", tmp_path / "h")
+    import zipfile
+    names = zipfile.ZipFile(out).namelist()
+    assert names == ["runs/driver/profile.log"]
+    assert gd.build_diagnostics(tmp_path / "empty", "X - Book 1.docx",
+                                tmp_path / "h2") is None

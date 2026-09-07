@@ -42,8 +42,10 @@ LOCAL_OWNER = "local"
 # `/api/watch/awaiting` is read by a headless machine that has no browser and
 # no cookie, so it carries its own bearer-token gate instead (see
 # app/routes/watch.py::agent_gate) and is refused outright when no agent token
-# is configured. Nothing writable belongs in this set.
-_OPEN_PATHS = {"/api/login", "/api/watch/awaiting"}
+# is configured. `/api/watch/agent` is that same machine's heartbeat — the one
+# thing it may write, and only ever one bounded JSON file in the watch home,
+# behind the same gate. Nothing else writable belongs in this set.
+_OPEN_PATHS = {"/api/login", "/api/watch/awaiting", "/api/watch/agent"}
 
 
 class Credentials(BaseModel):
