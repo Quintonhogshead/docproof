@@ -306,3 +306,30 @@ def test_stderr_capture_is_bounded(monkeypatch):
 
     assert "line 0" in message
     assert f"line {subagent._STDERR_KEEP}" not in message
+
+
+def test_the_fenced_turn_never_asks_to_bypass_permissions(monkeypatch):
+    """The blocker that stopped every paid read on Fly (2026-09-07).
+
+    bypassPermissions reaches the CLI as --dangerously-skip-permissions, which
+    it refuses as root; the Galley agent runs as uid 0, so all ten detector
+    calls on the probe chunk died with "cannot be used with root/sudo
+    privileges". The turn is fenced to no tools, so the bypass bought nothing
+    and cost the lane.
+    """
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    seen = []
+    sdk = _fake_sdk([_Result('{"ok": true}')], seen)
+    provider = subagent.SubagentProvider(sdk=sdk)
+    provider.complete_structured(
+        model="fable", system="s", user="u", schema={"type": "object"},
+        schema_name="reply", max_tokens=100)
+
+    opts = seen[0]
+    assert opts["permission_mode"] != "bypassPermissions"
+    # The fence is what makes that safe — if these ever open up, the
+    # permission mode has to be reconsidered with them.
+    assert opts["tools"] == []
+    assert opts["allowed_tools"] == []
+    assert opts["setting_sources"] == []
+    assert opts["strict_mcp_config"] is True

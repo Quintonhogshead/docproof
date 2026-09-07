@@ -261,7 +261,16 @@ class SubagentProvider:
             allowed_tools=[],
             strict_mcp_config=True,
             setting_sources=[],
-            permission_mode="bypassPermissions",
+            # NOT bypassPermissions. The CLI implements that as
+            # --dangerously-skip-permissions, which it refuses to honour as
+            # root — and the Fly agent runs as uid 0, so every call died with
+            # "cannot be used with root/sudo privileges" (2026-09-07).
+            # Nothing is given up: this turn is fenced to no tools at all
+            # (tools=[], allowed_tools=[], setting_sources=[],
+            # strict_mcp_config=True), and a turn that cannot use a tool has
+            # no permission to bypass. acceptEdits is what the driver runs its
+            # own phase sessions on, root included.
+            permission_mode="acceptEdits",
             max_turns=self.max_turns,
             cwd=str(cwd),
             env=agent_lane.child_env(),
