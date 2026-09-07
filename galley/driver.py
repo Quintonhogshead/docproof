@@ -95,6 +95,33 @@ PHASE_TIMEOUT_S: dict[str, float] = {
     "verify": 4 * 3600.0,
     "settle": 4 * 3600.0,
 }
+# The phases whose work grows with the book — ladder reads per chunk, verify
+# re-reads per applied edit, settle runs rounds per residual — carry caps sized
+# for a novel of LENGTH_BASELINE_WORDS. A longer book gets them scaled up in
+# proportion, never down (the table is the floor), and never past
+# LENGTH_SCALE_MAX: a 235k-word epic gets 4x, not 4.7x, because the wall clock
+# still has to catch a session that is looping rather than working. Every
+# other phase is fixed overhead: profile took 17 minutes on a 65k-word novel
+# and 17 minutes on a 3.6k-word story (2026-09-07). The word count comes from
+# the workspace's profile.json, so nothing scales until profile has run — and
+# profile itself never scales.
+LENGTH_SCALED_PHASES = ("ladder", "verify", "settle")
+LENGTH_BASELINE_WORDS = 50_000
+LENGTH_SCALE_MAX = 4.0
+
+
+def length_factor(words: int | float | None) -> float:
+    """How much to stretch a length-scaled phase's caps for a book this long:
+    1.0 at or under the baseline, proportional above it, capped."""
+    try:
+        w = float(words or 0)
+    except (TypeError, ValueError):
+        return 1.0
+    if w <= LENGTH_BASELINE_WORDS:
+        return 1.0
+    return min(LENGTH_SCALE_MAX, w / LENGTH_BASELINE_WORDS)
+
+
 # Fallback turn-cap detection for sessions without a structured result.
 _TURN_CAP_RE = re.compile(r"max(?:imum)?[ _-]?turns?\b|turn limit",
                           re.IGNORECASE)
@@ -1001,11 +1028,15 @@ class Driver:
     poll_interval_s: float = 30.0
     state_gate: bool = True
     question_gate: bool = True
-    # Per-phase caps take precedence over global overrides.
+    # Per-phase caps take precedence over global overrides. Either override
+    # is taken exactly as given; only the table defaults scale with length.
     max_turns: int | None = None
     max_turns_by_phase: dict[str, int] = field(default_factory=dict)
     timeout_s: float | None = None
     timeout_by_phase: dict[str, float] = field(default_factory=dict)
+    # The book's length for scaling (LENGTH_SCALED_PHASES). None reads it off
+    # the workspace's profile.json once profile has written one.
+    words: int | None = None
     # Source identity and policy for changed content: refuse or archive and
     # revise.
     source_id: str = ""
@@ -1051,12 +1082,36 @@ class Driver:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def book_words(self) -> int | None:
+        """The manuscript's word count: an explicit `words`, else the
+        workspace profile's, else None (profile has not run)."""
+        if self.words:
+            return int(self.words)
+        try:
+            prof = json.loads((self.workspace / "profile.json")
+                              .read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(prof, dict):
+            return None
+        raw = prof.get("word_count") or prof.get("words")
+        try:
+            return int(raw) if raw and float(raw) > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    def length_factor_for(self, phase: str) -> float:
+        if phase not in LENGTH_SCALED_PHASES:
+            return 1.0
+        return length_factor(self.book_words())
+
     def turns_for(self, phase: str) -> int:
         if phase in self.max_turns_by_phase:
             return int(self.max_turns_by_phase[phase])
         if self.max_turns is not None:
             return int(self.max_turns)
-        return PHASE_MAX_TURNS.get(phase, DEFAULT_MAX_TURNS)
+        base = PHASE_MAX_TURNS.get(phase, DEFAULT_MAX_TURNS)
+        return int(round(base * self.length_factor_for(phase)))
 
     def model_for(self, phase: str) -> str:
         if phase in self.model_by_phase:
@@ -1087,7 +1142,8 @@ class Driver:
             return float(self.timeout_by_phase[phase])
         if self.timeout_s is not None:
             return float(self.timeout_s)
-        return PHASE_TIMEOUT_S.get(phase, DEFAULT_PHASE_TIMEOUT_S)
+        base = PHASE_TIMEOUT_S.get(phase, DEFAULT_PHASE_TIMEOUT_S)
+        return base * self.length_factor_for(phase)
 
     def _spec(self, phase: str, env: dict[str, str]) -> PhaseSpec:
         prompt = phase_prompt(phase, self.book.name,
@@ -1389,8 +1445,11 @@ class Driver:
                 if not self.run_gate(result):
                     return result
             effort = self.effort_for(phase)
+            factor = self.length_factor_for(phase)
+            scaled = (f", x{factor:.1f} for {self.book_words():,} words"
+                      if factor > 1.0 else "")
             self.log(f"--- phase {phase} ({self.model_for(phase)}"
-                     f"{', effort ' + effort if effort else ''}) ---")
+                     f"{', effort ' + effort if effort else ''}{scaled}) ---")
             spec = self._spec(phase, env)
             self._progress("phase_start", phase=phase,
                            model=self.model_for(phase), effort=effort,

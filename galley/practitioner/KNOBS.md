@@ -78,8 +78,14 @@ ESCALATION (the knob may not exist), not a reason to go read the source.
   in the run dir.
 - **Session caps.** Each phase runs `claude --max-turns N` under a wall-clock
   timeout: 400 turns / 4h for settle, 250 / 4h for verify, 100 / 3h for the
-  ladder, 60-150 / 2h elsewhere. `--max-turns N` / `--timeout HOURS` override
-  every phase, `--phase-max-turns PHASE=N` / `--phase-timeout PHASE=HOURS` one.
+  ladder, 60-160 / 2h elsewhere. Those three — the phases whose work grows
+  with the book — are sized for a 50k-word novel and stretch in proportion
+  above it (a 100k-word book gets 2x, capped at 4x), reading the count off
+  `profile.json`; every other phase is fixed overhead and never scales. The
+  phase banner says `x1.6 for 82,000 words` when a cap was stretched.
+  `--max-turns N` / `--timeout HOURS` override every phase and are taken
+  exactly, never scaled; `--phase-max-turns PHASE=N` /
+  `--phase-timeout PHASE=HOURS` do the same for one.
   Hitting either ends the run as needs_human naming the phase and the cap.
 - **The settle policy.** The driver's settle phase runs `--until-clean --rounds
   3 --quiet-floor 4 --quiet-share 0`: at most 3 rounds, a round raising FEWER
