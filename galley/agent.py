@@ -952,6 +952,10 @@ def _run_driver(**kwargs: Any) -> Any:
 
     upload = kwargs.pop("upload", None)
     kwargs.setdefault("on_source_change", "revise")
+    # The driver's phase banners go through the logger, not print(): under a
+    # service manager stdout is block-buffered and a "--- phase settle ---"
+    # line would surface hours late, after the run.
+    kwargs.setdefault("log", lambda message: log.info("%s", message))
     driver = Driver(approve="auto", mechanical_only=True, **kwargs)
     if upload is not None:
         driver.upload = upload
