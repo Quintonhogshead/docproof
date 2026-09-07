@@ -384,6 +384,12 @@ One-time setup:
 - **The agent emails about itself** (see `GALLEY_ALERT_EMAIL`) — a boot after
   a deploy, a poll that stopped working, a delivery it gave up on. Book
   verdicts still arrive the DocWatch way, on the next pass.
+- **Taking a book back.** The agent resumes a claimed book at every boot for
+  as long as DocWatch lists it as awaiting. To stop a run for good (a killed
+  test, a file dropped by mistake): `fly machine stop <agent machine>`, then
+  click **Release** on the book's row under "Out with the practitioner", then
+  `fly machine start`. Putting the HubSpot status back at the ready value
+  queues the book again.
 - `fly logs -a atmosphere-docproof --process agent` is the live log; the
   same lines are in `/data/galley-workspaces/agent.log` on the agent machine,
   and the per-phase transcripts under `/data/galley-workspaces/<slug>/runs/

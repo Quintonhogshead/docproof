@@ -274,3 +274,47 @@ def test_the_heartbeat_is_bounded(tmp_path, monkeypatch):
     assert c.post("/api/watch/agent", json={"pad": "x" * 20000},
                   headers=auth).status_code == 413
     assert watchlib.agent_status(app.state.watch.home) is None
+
+
+# --- taking a book back --------------------------------------------------------
+
+def test_an_admin_can_release_an_awaiting_book(tmp_path, monkeypatch):
+    """A killed test run must not come back at the agent's next boot: releasing
+    the book takes it off the awaiting list the agent resumes from."""
+    monkeypatch.setenv(AGENT_TOKEN_ENV, TOKEN)
+    app = make_app(tmp_path)
+    home = app.state.watch.home
+    seed(home, [awaiting_record()])
+    boss = _boss(app)
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    assert len(TestClient(app).get("/api/watch/awaiting",
+                                   headers=auth).json()["books"]) == 1
+
+    answer = boss.post("/api/watch/proof/release", json={"file_id": "drive-1"})
+    assert answer.status_code == 200
+    body = answer.json()
+    assert body["released"] == "drive-1"
+    assert body["name"] == "Test - Book 1.docx"
+    assert body["drive_marked"] is False           # no Google sign-in here
+    # Gone from the agent's list, and from the drawer's awaiting rows.
+    assert TestClient(app).get("/api/watch/awaiting",
+                               headers=auth).json()["books"] == []
+    rows = [f for f in body["watch"]["files"] if f["file_id"] == "drive-1"]
+    assert rows and rows[0]["proof_marked"] == "failed"
+    # Releasing it twice is a 404, not a second write.
+    assert boss.post("/api/watch/proof/release",
+                     json={"file_id": "drive-1"}).status_code == 404
+    assert boss.post("/api/watch/proof/release",
+                     json={"file_id": "nope"}).status_code == 404
+
+
+def test_release_is_for_administrators_only(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    seed(app.state.watch.home, [awaiting_record()])
+    # No session at all, and the agent's bearer token is not a session either.
+    assert TestClient(app).post("/api/watch/proof/release",
+                                json={"file_id": "drive-1"}).status_code == 401
+    monkeypatch.setenv(AGENT_TOKEN_ENV, TOKEN)
+    assert TestClient(app).post(
+        "/api/watch/proof/release", json={"file_id": "drive-1"},
+        headers={"Authorization": f"Bearer {TOKEN}"}).status_code == 401
