@@ -752,7 +752,10 @@ def _is_copyedit_line(line: str) -> bool:
 # Allow a plan to mention excluded copyediting work.
 _NEGATED_RE = re.compile(
     r"\b(no|none|not|never|off|omitted|omit|excluded|exclude|skipped?|skip|"
-    r"locked|out of scope|tabled|n/?a|zero)\b", re.IGNORECASE)
+    # Every inflection of "lock": a plan that says the stage LOCKS
+    # smoothing (not "locked") is reporting the lane shut, not opening
+    # it — and only the past tense was excused, so it was refused.
+    r"lock(?:s|ed|ing)?|out of scope|tabled|n/?a|zero)\b", re.IGNORECASE)
 # Identify the current plan gate in QUESTIONS.md.
 GATE_TOKEN_PREFIX = "GALLEY-GATE"
 _APPROVED_RE = re.compile(r"^\s*(?:[-*>#\s]*)?(APPROVED|APPROVE|YES)\b",

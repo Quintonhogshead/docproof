@@ -104,3 +104,43 @@ def test_budget_still_outranks_everything(tmp_path):
     approved, reason = gate_decision(plan, 10.0)
     assert approved is False
     assert "over the $10.00 budget" in reason
+
+
+def test_stage_locks_line_is_not_a_copyedit_line(tmp_path):
+    """The line that refused Test - Book One on 2026-09-07: PLAN.md reported
+    that the mechanical-wave stage LOCKS smoothing off, and the gate read the
+    word 'smoothing' as scope. Only 'locked' was excused, never 'locks'."""
+    plan = _plan(tmp_path, """
+        1. sweeps  $0.00
+        Config: runs/mech.yaml (genre literary_memoir + stage
+        mechanical-wave; stage locks won on `smoothing.enabled`).
+        TOTAL $1.15
+        """)
+    assert plan.copyedit_lines == []
+    assert gate_decision(plan, 10.0)[0] is True
+
+
+def test_every_inflection_of_lock_excuses_the_line(tmp_path):
+    from galley.driver import _is_copyedit_line
+
+    for verb in ("lock", "locks", "locked", "locking"):
+        assert not _is_copyedit_line(f"stage {verb} smoothing.enabled"), verb
+    # "unlock" is not "lock": a plan that reopens the lane is still refused.
+    assert _is_copyedit_line("stage unlocks smoothing.enabled")
+
+
+def test_config_still_beats_a_plan_that_says_locks(tmp_path):
+    """Widening the prose escape must not weaken the structural half: a config
+    that really opens smoothing is refused however the plan describes it."""
+    plan = _plan(tmp_path, """
+        1. mechanical ladder (stage locks smoothing.enabled)  $1.00
+        TOTAL $1.00
+        """)
+    cfg = _config(tmp_path, """
+        smoothing:
+          enabled: true
+        """)
+    assert plan.copyedit_lines == []
+    approved, reason = gate_decision(plan, 10.0, config_path=cfg)
+    assert approved is False
+    assert "smoothing.enabled" in reason
