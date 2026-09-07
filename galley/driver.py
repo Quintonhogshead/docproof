@@ -69,7 +69,14 @@ DRIVER_DIR = "driver"
 # Bound each session by both turns and elapsed time.
 DEFAULT_MAX_TURNS = 100
 PHASE_MAX_TURNS: dict[str, int] = {
-    "profile": 80,      # scans + PLAN.md, no spend
+    # Raised from 80 on 2026-09-07. A from-scratch profile on a 65k-word book
+    # spent all 80 and never reached PLAN.md: the number audit, paragraph map
+    # and text extraction, then the genre pack, egress report and dry-run — and
+    # then a second pricing pass, because the naive dry-run price came back
+    # over the budget cap and a plan priced above it cannot pass the gate.
+    # Every profile that fit in 80 was resuming a workspace that already had
+    # its scans. None of this work spends; the cap is turns, not dollars.
+    "profile": 160,     # scans + PLAN.md, no spend
     "approve": 60,      # genre-pack, routes, approve — three commands
     "sweeps": 120,      # a dry-run and an apply per bespoke sweep
     "ladder": 100,      # one long review command, plus log reads
