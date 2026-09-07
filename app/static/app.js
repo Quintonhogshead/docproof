@@ -7701,11 +7701,13 @@ function applyProofRunnerHint() {
   const hint = $('proof-runner-hint');
   if (!hint) return;
   hint.textContent = $('proof-runner').value === 'app'
-    ? 'DocWatch reads the book itself and pays for it. It does not settle or '
-      + 'certify the build, and writes no decision log.'
-    : 'DocWatch only finds the book and waits. The practitioner loop on the Mac '
-      + 'reads it on a Claude Max subscription, and DocWatch picks the verdict '
-      + 'up on the next pass.';
+    ? 'DocWatch reads the book itself, once, and pays for it by the token. It '
+      + 'does not settle or certify the build and writes no decision log.'
+    : 'DocWatch only finds the book and waits. The Galley agent — the Fly '
+      + 'machine shown below, or any Mac running the agent — reads it on the '
+      + 'Claude Max subscription, settles and certifies it, and delivers the '
+      + 'Book 2 set with the decision log; DocWatch picks the verdict up on '
+      + 'its next pass.';
 }
 
 function proofWhen(iso) {
@@ -7761,8 +7763,9 @@ function renderAgentReadout(w) {
   }
   const seen = document.createElement('span');
   seen.className = a.stale ? 'wf-agent-stale' : 'wf-agent-live';
-  seen.textContent = a.stale ? `Not heard from for ${agentAgo(a.age_s)}`
-                             : `Reporting (${agentAgo(a.age_s)})`;
+  seen.textContent = a.stale
+    ? `Not heard from for ${agentAgo(a.age_s).replace(' ago', '')}`
+    : `Reporting (${agentAgo(a.age_s)})`;
   line.append(seen, document.createTextNode(
     ` · ${a.agent || 'unknown machine'}${a.version ? ' · v' + a.version : ''}`));
 
@@ -7869,7 +7872,18 @@ function renderProofReadout(w) {
     verdict.append(word);
     const why = document.createElement('td');
     why.className = 'wf-reason';
-    why.textContent = f.proof_reason || '—';
+    const reason = f.proof_reason || '—';
+    why.textContent = reason;
+    if (reason.length > 140) {
+      // A driver reason quotes the log tail; clamp it and let a click open it.
+      why.classList.add('clamped');
+      why.title = 'Click to show the whole reason';
+      why.addEventListener('click', () => {
+        why.classList.toggle('clamped');
+        why.title = why.classList.contains('clamped')
+          ? 'Click to show the whole reason' : '';
+      });
+    }
     const when = document.createElement('td');
     when.className = 'wf-when';
     when.textContent = proofWhen(f.updated_at);
