@@ -238,6 +238,11 @@ def evidence_of(run_dir: str | Path, source_paras: Mapping[str, str] | None
         else 0.0,
         "all_edits_per_kword": (len(applied) / words * 1000.0) if words
         else 0.0,
+        # `unresolved_queries` (kept for older readers) counts residuals the
+        # settle loop gave up on — internal closure. The author's open
+        # questions are a different number and were being read as zero.
+        "open_author_queries": len(queries),
+        "unresolved_internal": unresolved,
         "rewrite_paragraphs": len(rewrite_paras),
         "rewrite_share": (len(rewrite_paras) / n_paras) if n_paras else 0.0,
         "repair_cluster_paragraphs": len(cluster_paras),

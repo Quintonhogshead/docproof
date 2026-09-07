@@ -432,6 +432,7 @@ def _deliverable(ws: Path) -> None:
     (d / "style-sheet.md").write_text("# Style sheet\n", encoding="utf-8")
     (d / gd.DECISION_LOG_NAME).write_text("# Decision log\n", encoding="utf-8")
     (d / "verification.md").write_text("# Verification\n", encoding="utf-8")
+    (d / "author-letter.docx").write_bytes(FIXTURE.read_bytes())
     (d / "outcome.json").write_text(json.dumps({
         "outcome": "done", "reason": "no open items", "evidence": {},
         "hubspot": {"value": "Proofing Complete"}, "set_by": "assess"}),
@@ -462,6 +463,7 @@ def test_handoff_writes_the_contract_files(book, tmp_path):
         ws, book.name, out,
         outcome_sources=[ws / "deliverable" / "outcome.json"])
     assert sorted(p.name for p in written) == [
+        "Ford - Book 2 - Author Letter.docx",
         "Ford - Book 2 - decision-log.md",
         "Ford - Book 2 - letter.md",
         "Ford - Book 2 - outcome.json",
@@ -498,10 +500,13 @@ def test_a_full_run_hands_off_and_uploads(book, tmp_path):
                      drive_folder_id="folder-9", upload=upload,
                      handoff_dir=tmp_path / "handoff").run()
     assert result.outcome == "done"
-    assert len(result.handoff) == 6
-    assert len(result.uploaded) == 6
+    # Seven files: the manuscript, the author letter, and the five for the
+    # house.
+    assert len(result.handoff) == 7
+    assert len(result.uploaded) == 7
     assert {f for _n, f in uploaded} == {"folder-9"}
     assert ("Ford - Book 2.docx", "folder-9") in uploaded
+    assert ("Ford - Book 2 - Author Letter.docx", "folder-9") in uploaded
 
 
 def test_a_failed_upload_leaves_the_files_and_names_the_fix(book, tmp_path):

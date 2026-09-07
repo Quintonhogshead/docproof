@@ -141,11 +141,19 @@ class SettlementRecord:
     para_id: str = ""
     question: str = ""
     kind: str = "residual"
+    # The owner as a BUILD-STABLE key (editmap.row_key: paragraph, quoted
+    # text, occurrence, correction, error type). Finding ids are renumbered
+    # by every rebuild — f-0210 named body-0011 in one build and body-0019
+    # in the next — so a record that carries only the id names the wrong
+    # edit once the deliverable is rebuilt (2026-09-07). The journal resolves
+    # this key against the build it renders.
+    owner_row_key: list[Any] | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {"residual_id": self.residual_id, "round": self.round,
                 "action": self.action,
                 "owner_finding_id": self.owner_finding_id,
+                "owner_row_key": self.owner_row_key,
                 "before_replacement": self.before_replacement,
                 "after_replacement": self.after_replacement,
                 "reason": self.reason, "verified_by": self.verified_by,
@@ -164,7 +172,10 @@ class SettlementRecord:
                    verified_by=str(d.get("verified_by", "")),
                    para_id=str(d.get("para_id", "")),
                    question=str(d.get("question", "")),
-                   kind=str(d.get("kind", "residual")))
+                   kind=str(d.get("kind", "residual")),
+                   owner_row_key=(list(d["owner_row_key"])
+                                  if isinstance(d.get("owner_row_key"), list)
+                                  else None))
 
 
 @dataclass
@@ -1244,7 +1255,22 @@ def apply_decision(res: Residual, dec: Decision,
                                               dict[str, dict[str, Any]]]:
     """Mutate the working set per the decision. Returns the record, the new
     rows to append, and the rows removed (so a failed settlement can be
-    reverted)."""
+    reverted). The record carries the owner's build-stable row key, read
+    before an absorb pops the owner out of the working set."""
+    owner_row = working.get(dec.owner_key or "") if dec.owner_key else None
+    key = list(emap.row_key(owner_row)) if owner_row else None
+    rec, new_rows, removed = _apply_decision(res, dec, working, source,
+                                             round_no, verified_by=verified_by)
+    rec.owner_row_key = key
+    return rec, new_rows, removed
+
+
+def _apply_decision(res: Residual, dec: Decision,
+                    working: dict[str, dict[str, Any]],
+                    source: Mapping[str, str], round_no: int, *,
+                    verified_by: str) -> tuple[SettlementRecord,
+                                               list[dict[str, Any]],
+                                               dict[str, dict[str, Any]]]:
     removed: dict[str, dict[str, Any]] = {}
     new_rows: list[dict[str, Any]] = []
     owner_key = dec.owner_key
