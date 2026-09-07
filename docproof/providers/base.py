@@ -28,6 +28,12 @@ class NormalizedUsage:
     output_tokens: int = 0
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
+    # Whether these tokens are a vendor bill. The subagent lane runs Claude on
+    # the Max subscription: real tokens, real work, no invoice. Costing them at
+    # API rates turned a 24-cent ladder into "$4.76 spent" (2026-09-07), and
+    # that figure reaches the summary, the job card, the calibration store and
+    # the budget log. Every other provider leaves this True.
+    billed: bool = True
 
 
 @dataclass(frozen=True)

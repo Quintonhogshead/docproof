@@ -2966,9 +2966,15 @@ def _cost_line(usage: Usage, model: str) -> str:
     Sapling share, to four decimals so a sub-cent mock or replay never reads as
     the silently-didn't-run "$0.00"."""
     from .providers import cost_of_usage
+    from .providers.catalog import subscription_value_of_usage
     cost = (cost_of_usage(usage, fallback_model=model) or 0.0) \
         + (getattr(usage, "sapling_cost", 0.0) or 0.0)
-    return f"${cost:.4f} spent ({usage.api_calls} model call(s))"
+    line = f"${cost:.4f} spent ({usage.api_calls} model call(s))"
+    unbilled = subscription_value_of_usage(usage, fallback_model=model)
+    if unbilled:
+        line += (f" — plus ${unbilled:.2f} of subscription-lane turns, "
+                 f"not billed")
+    return line
 
 
 def _now_iso() -> str:
