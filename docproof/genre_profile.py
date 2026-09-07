@@ -58,6 +58,9 @@ _GLYPH_LINE = re.compile(
 # prefix-matched wholesale, so "habit" collected "habitat" and "alien"
 # collected "alienated" — votes cast by words that mean something else.
 _STEM = "*"
+#: Hits per 10,000 words the strongest genre must reach before the vocabulary
+#: vote counts at all (see _guess_genres).
+MIN_GENRE_HITS_PER_10K = 3.0
 _GENRE_VOCAB: dict[str, tuple[str, ...]] = {
     "fantasy_sf": (
         "magic*", "wizard*", "sorcer*", "dragon*", "spell", "spells",
@@ -314,6 +317,17 @@ def _guess_genres(paragraphs: Sequence[ParagraphRef],
                                  "literary_memoir", "general_fiction")}
     for genre, pattern in _GENRE_PATTERNS.items():
         scores[genre] += len(pattern.findall(text_low))
+    # Thin evidence is no evidence. A 96k-word thriller with 13 business
+    # words in it is not a business book, but 13 beats a +2 floor every time,
+    # so general_fiction could never win and every plain novel was handed
+    # whichever posture its vocabulary happened to graze. Below this density
+    # the vote is noise and only the floors below decide. Measured on ten real
+    # manuscripts (2026-09-07): genuine signal sits at 7-33 hits per 10k
+    # words, noise at 0.6-1.7 — a wide gap on both sides of 3.
+    words = sum(_word_count(p.text) for p in paragraphs) or 1
+    strongest = max(scores.values())
+    if strongest * 10_000 / words < MIN_GENRE_HITS_PER_10K:
+        scores = {g: 0.0 for g in scores}
     # Low dialogue density plus zero genre-vocabulary hits reads as non-
     # fiction prose more than a novel; nudge self_help_business up a little
     # rather than leaving every score at the vocabulary count alone.

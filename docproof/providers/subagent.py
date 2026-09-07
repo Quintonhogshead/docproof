@@ -27,6 +27,7 @@ sentence agent_lane gives.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import json
 import logging
 import os
@@ -283,11 +284,13 @@ class SubagentProvider:
         # drops it unless given a sink, which is how a failed lane reached the
         # log as "Command failed with exit code 1 / Error output: Check stderr
         # output for details" — pointing at output nobody had kept.
-        cli_stderr: list[str] = []
+        # The newest lines, not the oldest: a chatty CLI puts the fatal one
+        # at the tail.
+        cli_stderr: deque[str] = deque(maxlen=_STDERR_KEEP)
 
         def keep(line: Any) -> None:
             text = str(line).rstrip()
-            if text and len(cli_stderr) < _STDERR_KEEP:
+            if text:
                 cli_stderr.append(text)
 
         options = self._options(sdk, model, system, stderr=keep)

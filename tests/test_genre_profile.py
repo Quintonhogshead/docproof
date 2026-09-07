@@ -272,3 +272,29 @@ def test_a_fantasy_manuscript_is_not_recommended_a_memoir_posture():
 
     ranked = _guess_genres(paragraphs, dialogue_density=0.186)
     assert ranked[0].genre == "fantasy_sf", [(g.genre, g.score) for g in ranked]
+
+
+def test_thin_vocabulary_evidence_falls_back_to_the_floors():
+    """A 96k-word thriller with a dozen business words is not a business
+    book. Below MIN_GENRE_HITS_PER_10K the vote is noise, and the floors —
+    general_fiction for fiction, self_help_business for low-dialogue prose —
+    decide, which they could never do while any hit beat +2."""
+    from docproof.genre_profile import (MIN_GENRE_HITS_PER_10K,
+                                        _guess_genres)
+
+    class _P:
+        def __init__(self, text):
+            self.text = text
+
+    filler = _P("the road went on and the rain kept falling all night " * 20)
+    thin = [_P("revenue and mindset and a habit")] + [filler] * 60
+    fiction = _guess_genres(thin, dialogue_density=0.40)
+    assert fiction[0].genre == "general_fiction", fiction
+    nonfiction = _guess_genres(thin, dialogue_density=0.01)
+    assert nonfiction[0].genre == "self_help_business", nonfiction
+
+    # The same words in a short text are real evidence and still count.
+    dense = [_P("revenue and mindset and a habit")] * 3 + [filler]
+    assert _guess_genres(dense, dialogue_density=0.40)[0].genre == \
+        "self_help_business"
+    assert MIN_GENRE_HITS_PER_10K == 3.0
