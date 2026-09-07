@@ -469,3 +469,206 @@ def test_the_folder_override_wins_for_a_rehearsal(env, tmp_path):
                    run_driver=lambda **kw: ran.append(kw) or FakeResult())
     agent.poll_once()
     assert ran[0]["drive_folder_id"] == "my-test-folder"
+
+
+# --- the heartbeat and the agent's own alerts ----------------------------------
+
+class Observed:
+    """The two observability seams, recorded."""
+
+    def __init__(self):
+        self.beats: list[dict] = []
+        self.alerts: list[tuple[str, str]] = []
+
+    def beat(self, payload):
+        self.beats.append(dict(payload))
+
+    def alert(self, subject, body):
+        self.alerts.append((subject, body))
+
+    def states(self):
+        return [b.get("state") for b in self.beats]
+
+
+def _observed_agent(env, tmp_path, obs, **kw):
+    kw.setdefault("heartbeat", obs.beat)
+    kw.setdefault("alert", obs.alert)
+    kw.setdefault("heartbeat_interval_s", 0)      # no timer thread in tests
+    kw.setdefault("host", "test-box")
+    return _agent(env, tmp_path, **kw)
+
+
+def test_a_run_is_narrated_to_the_drawer(env, tmp_path):
+    obs = Observed()
+
+    def run_driver(**kwargs):
+        # The driver reports phase boundaries through the hook it was handed.
+        progress = kwargs["progress"]
+        progress({"event": "phase_start", "phase": "profile",
+                  "model": "claude-opus-5", "effort": None})
+        progress({"event": "phase_end", "phase": "profile", "ok": True,
+                  "num_turns": 12, "limit": None})
+        progress({"event": "gate", "approved": True, "reason": "inside budget"})
+        progress({"event": "phase_start", "phase": "settle",
+                  "model": "claude-fable-5-1", "effort": "high"})
+        progress({"event": "finished", "outcome": "done", "reason": ""})
+        return FakeResult(uploaded=["up-1"])
+
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([BOOK]),
+                            download=_downloader(tmp_path),
+                            run_driver=run_driver)
+    agent.poll_once()
+
+    assert obs.states()[0] is None or obs.states()[0] in ("idle", "running")
+    running = [b for b in obs.beats if b.get("state") == "running"]
+    assert running[0]["book"] == "Test - Book 1.docx"
+    assert running[0]["slug"] == "test-drive-1"
+    assert running[0]["run_started_at"]
+    phases = [b for b in running if b.get("phase")]
+    assert phases[0]["phase"] == "profile"
+    assert phases[0]["model"] == "claude-opus-5"
+    assert phases[0]["phase_started_at"]
+    assert any(b.get("gate") == "approved" for b in obs.beats)
+    settle = [b for b in obs.beats if b.get("phase") == "settle"]
+    assert settle and settle[0]["effort"] == "high"
+    last = obs.beats[-1]
+    assert last["state"] == "idle"
+    assert last["last_outcome"] == "done"
+    assert last["last_book"] == "Test - Book 1.docx"
+    assert last["delivery"] == "uploaded"
+    # Every beat says who and from where.
+    assert {b["agent"] for b in obs.beats} == {"test-box"}
+    assert all(b["at"] and b["version"] for b in obs.beats)
+
+
+def test_boot_is_announced_once_by_email_and_heartbeat(env, tmp_path):
+    obs = Observed()
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([]))
+    agent.announce()
+    assert obs.states() == ["starting"]
+    assert obs.beats[0]["started_at"]
+    assert len(obs.alerts) == 1
+    subject, body = obs.alerts[0]
+    assert "started on test-box" in subject
+    assert env.awaiting_url in body
+
+
+def test_a_broken_poll_alerts_once_and_again_on_recovery(env, tmp_path):
+    obs = Observed()
+    app = FakeApp([], status=401)
+    agent = _observed_agent(env, tmp_path, obs, opener=app)
+    agent.poll_once()
+    agent.poll_once()
+    agent.poll_once()
+    assert len(obs.alerts) == 1                    # not one per retry
+    assert "cannot reach DocProof" in obs.alerts[0][0]
+    assert "HTTP 401" in obs.alerts[0][1]
+    assert obs.beats[-1]["last_poll_error"].startswith("the app refused")
+    assert obs.beats[-1]["state"] == "idle"
+
+    app.status = None                              # the server is back
+    agent.poll_once()
+    assert len(obs.alerts) == 2
+    assert "reachable again" in obs.alerts[1][0]
+    assert obs.beats[-1]["last_poll_error"] == ""
+    agent.poll_once()
+    assert len(obs.alerts) == 2                    # quiet while healthy
+
+
+def test_a_crashed_run_beats_its_reason_and_ships_the_evidence(env, tmp_path):
+    import zipfile
+
+    obs = Observed()
+    uploaded: list[str] = []
+
+    def upload(files, folder_id):
+        uploaded.extend(p.name for p in files)
+        return [f"id-{i}" for i, _ in enumerate(files)]
+
+    def crash(**kwargs):
+        # Something the driver managed to write before dying.
+        ws = Path(kwargs["workspace_root"]) / kwargs["slug"]
+        (ws / "runs" / "driver").mkdir(parents=True, exist_ok=True)
+        (ws / "runs" / "driver" / "ladder.log").write_text(
+            "phase ladder\nboom\n", encoding="utf-8")
+        (ws / "PLAN.md").write_text("# plan\n", encoding="utf-8")
+        raise RuntimeError("the ladder died")
+
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([BOOK]),
+                            download=_downloader(tmp_path), run_driver=crash,
+                            upload=upload)
+    (tmp_path / "ws").mkdir(exist_ok=True)
+    (tmp_path / "ws" / ga.LOG_NAME).write_text("agent log line\n",
+                                                encoding="utf-8")
+    agent.poll_once()
+
+    last = obs.beats[-1]
+    assert last["state"] == "idle"
+    assert last["last_outcome"] == "needs_human"
+    assert "the ladder died" in last["last_reason"]
+    assert "Test - Book 2 - diagnostics.zip" in uploaded
+    bundle = tmp_path / "ws" / "test-drive-1" / "handoff" / \
+        "Test - Book 2 - diagnostics.zip"
+    names = set(zipfile.ZipFile(bundle).namelist())
+    assert {"runs/driver/ladder.log", "runs/outcome.json", "PLAN.md",
+            "agent.log"} <= names
+
+
+def test_an_abandoned_delivery_is_shouted_about(env, tmp_path):
+    obs = Observed()
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([]))
+    ledger = agent.ledger()
+    ledger.record("drive-9", ga.PENDING_DELIVERY, name="Nine - Book 1.docx",
+                  slug="nine-drive-9", folder_id="folder-Z", outcome="done",
+                  handoff_files=[str(tmp_path / "x.docx")],
+                  delivery_attempts=ga.MAX_DELIVERY_ATTEMPTS,
+                  next_delivery_at=0, delivery_error="Drive said no")
+    report = ga.RunReport()
+    agent.retry_deliveries(ledger, report, now=10)
+    assert report.skipped == ["Nine - Book 1.docx (delivery abandoned)"]
+    assert len(obs.alerts) == 1
+    subject, body = obs.alerts[0]
+    assert "Nine - Book 1.docx" in subject
+    assert "folder-Z" in body and "Drive said no" in body
+    assert obs.beats[-1]["last_error"].startswith("Nine - Book 1.docx")
+
+
+def test_the_live_beat_reads_the_running_session(env, tmp_path):
+    obs = Observed()
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([]))
+    ws = tmp_path / "ws" / "slug-1"
+    (ws / "runs" / "driver").mkdir(parents=True)
+    (ws / "runs" / "driver" / "settle.stream.jsonl").write_text(
+        '{"type":"system"}\n{"type":"assistant","x":1}\n'
+        '{"type":"user"}\n{"type":"assistant","x":2}\n', encoding="utf-8")
+    (ws / "runs" / "r1").mkdir()
+    (ws / "runs" / "r1" / "settlement.json").write_text(
+        json.dumps({"rounds": 2}), encoding="utf-8")
+    agent._status.update({"state": "running", "phase": "settle"})
+    agent._live_beat("slug-1")
+    beat = obs.beats[-1]
+    assert beat["turns"] == 2
+    assert beat["settle_rounds"] == 2
+    assert beat["last_activity_at"]
+    assert beat["phase"] == "settle"
+
+
+def test_the_default_heartbeat_posts_to_the_app(env):
+    posted: list = []
+
+    class Opener:
+        def __call__(self, request, timeout=30):
+            posted.append((request.full_url, request.get_method(),
+                           request.get_header("Authorization"),
+                           json.loads(request.data.decode("utf-8"))))
+            return _Response(b'{"ok": true}')
+
+    assert ga.post_status(env, {"state": "idle"}, opener=Opener()) is True
+    url, method, auth, body = posted[0]
+    assert url == env.status_url == f"{APP}/api/watch/agent"
+    assert method == "POST"
+    assert auth == f"Bearer {TOKEN}"
+    assert body == {"state": "idle"}
+    # A dead app costs a warning, never the run.
+    assert ga.post_status(env, {"state": "idle"},
+                          opener=FakeApp([], status=500)) is False

@@ -1527,6 +1527,9 @@ button.pill.setup.actionable:focus-visible { outline: 2px solid var(--warn); out
 /* The verdict word itself, coloured the way the status pills are: a clean book
    reads as done, a book needing a person reads as something to act on. */
 .wf-verdict { font-weight: 600; white-space: nowrap; }
+.wf-agent-error { color: var(--danger, #b42318); }
+.wf-agent-stale { color: var(--danger, #b42318); font-weight: 600; }
+.wf-agent-live { color: var(--ok, #067647); font-weight: 600; }
 .wf-verdict.done { color: var(--ok); }
 .wf-verdict.needs_human { color: var(--warn); }
 /* The reason behind a verdict: long, and the least important thing in the row,

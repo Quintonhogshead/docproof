@@ -7721,7 +7721,94 @@ function proofWhen(iso) {
   return stamp;
 }
 
+function agentAgo(seconds) {
+  if (seconds == null) return 'never';
+  if (seconds < 90) return `${Math.round(seconds)}s ago`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)} min ago`;
+  if (seconds < 172800) return `${Math.round(seconds / 3600)} h ago`;
+  return `${Math.round(seconds / 86400)} days ago`;
+}
+
+function agentElapsed(iso) {
+  if (!iso) return '';
+  const t = new Date(iso);
+  if (isNaN(t)) return '';
+  const mins = Math.max(0, Math.round((Date.now() - t.getTime()) / 60000));
+  if (mins < 60) return `${mins} min`;
+  return `${Math.floor(mins / 60)} h ${mins % 60} min`;
+}
+
+// What the practitioner machine is doing right now, off its last heartbeat.
+// Redrawn on the five-second poll; the machine itself reports once a minute
+// while a book runs, and at every phase boundary.
+function renderAgentReadout(w) {
+  const block = $('proof-agent-block');
+  if (!block) return;
+  const a = w.agent;
+  // Only meaningful when a machine is supposed to be reporting.
+  block.hidden = !(a || w.proof_runner === 'external');
+  if (block.hidden) return;
+  const line = $('proof-agent-line');
+  const detail = $('proof-agent-detail');
+  const error = $('proof-agent-error');
+  line.innerHTML = '';
+  detail.hidden = true;
+  error.hidden = true;
+  if (!a) {
+    line.textContent = 'No machine has reported yet. When the agent starts it '
+      + 'shows up here within a minute.';
+    return;
+  }
+  const seen = document.createElement('span');
+  seen.className = a.stale ? 'wf-agent-stale' : 'wf-agent-live';
+  seen.textContent = a.stale ? `Not heard from for ${agentAgo(a.age_s)}`
+                             : `Reporting (${agentAgo(a.age_s)})`;
+  line.append(seen, document.createTextNode(
+    ` · ${a.agent || 'unknown machine'}${a.version ? ' · v' + a.version : ''}`));
+
+  const bits = [];
+  if (a.state === 'running' || a.state === 'stopping' || a.state === 'finishing') {
+    bits.push(`Reading ${a.book || 'a book'}`);
+    if (a.phase) {
+      let phase = `phase ${a.phase}`;
+      if (a.model) phase += ` on ${a.model.replace('claude-', '')}`;
+      if (a.phase_started_at) phase += ` for ${agentElapsed(a.phase_started_at)}`;
+      bits.push(phase);
+    } else if (a.gate) {
+      bits.push(`plan gate ${a.gate}`);
+    }
+    if (a.turns) bits.push(`${a.turns} turn${a.turns === 1 ? '' : 's'}`);
+    if (a.settle_rounds) bits.push(`settle round ${a.settle_rounds}`);
+    if (a.run_started_at) bits.push(`${agentElapsed(a.run_started_at)} since claim`);
+    if (a.last_activity_at) {
+      const idle = (Date.now() - new Date(a.last_activity_at).getTime()) / 1000;
+      if (idle > 600) bits.push(`no session output for ${agentAgo(idle).replace(' ago', '')}`);
+    }
+  } else if (a.state === 'starting') {
+    bits.push('Just started; first poll pending');
+  } else {
+    bits.push(a.awaiting ? `Idle · ${a.awaiting} book(s) awaiting`
+                         : 'Idle · nothing awaiting');
+    if (a.last_book) {
+      const verdict = PROOF_VERDICT_LABEL[a.last_outcome] || a.last_outcome || '';
+      bits.push(`last: ${a.last_book}${verdict ? ' — ' + verdict : ''}`);
+    }
+    if (a.pending_deliveries) bits.push(`${a.pending_deliveries} delivery retry pending`);
+  }
+  if (a.last_poll_at) bits.push(`polled ${agentAgo((Date.now() - new Date(a.last_poll_at).getTime()) / 1000)}`);
+  detail.textContent = bits.join(' · ');
+  detail.hidden = !bits.length;
+
+  const problem = a.last_poll_error || a.last_error
+    || (a.state !== 'running' && a.last_outcome === 'needs_human' ? a.last_reason : '');
+  if (problem) {
+    error.textContent = problem;
+    error.hidden = false;
+  }
+}
+
 function renderProofReadout(w) {
+  renderAgentReadout(w);
   const files = w.files || [];
   const awaiting = files.filter((f) => f.proof_marked === 'awaiting');
   const verdicts = files.filter((f) => f.proof_outcome)

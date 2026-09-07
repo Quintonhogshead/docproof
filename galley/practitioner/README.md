@@ -186,6 +186,18 @@ for Proofing".
 minutes. The log and the ledger both live under `--workspace-root` (default
 `~/galley-workspaces`), beside the per-book workspaces themselves.
 
+**What it tells you while it works.** The agent posts a heartbeat to the app
+(`POST /api/watch/agent`, same bearer token) at boot, after every poll, at
+every phase boundary the driver reports, and once a minute while a book runs
+— machine, book, phase, brain, elapsed, turns so far, settle round, last
+error. The Proofread drawer under Admin → Automations shows it, red when the
+machine has been silent for 20 minutes. It emails `GALLEY_ALERT_EMAIL` from
+the credentials file (or the watcher's notify address) when it starts, when
+polling breaks and recovers, and when a hand-off delivery is abandoned. A run
+that ends `needs_human` ships `<surname> - Book 2 - diagnostics.zip` beside
+its outcome: every phase transcript, the driver ledger, the plan, the
+questions, the run state and the agent log.
+
 ## Unattended: `docproof galley drive`
 
 The whole loop with nobody watching, one book at a time — what the agent calls.

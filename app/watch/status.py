@@ -135,7 +135,69 @@ def status(home: str | Path, *, get_key=None,
         "times": [f"{h:02d}:{m:02d}" for h, m in times] if times else [],
         "last_tick_at": stamp.isoformat() if stamp else None,
         "files": _files(root),
+        # The practitioner agent's last heartbeat (galley/agent.py), so the
+        # Proofread drawer can say what the machine is doing right now.
+        "agent": agent_status(root),
     }
+
+
+AGENT_STATUS_FILE = "agent-status.json"
+#: A heartbeat older than this is shown as stale: the machine is down, the
+#: token changed, or it cannot reach us. Three polls plus slack.
+AGENT_STALE_AFTER_S = 20 * 60
+
+
+def save_agent_status(home: str | Path, payload: dict) -> Path:
+    """Keep the newest heartbeat, atomically, with the time we received it."""
+    import json
+    import os
+    import tempfile
+
+    root = Path(home)
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / AGENT_STATUS_FILE
+    record = dict(payload)
+    record["received_at"] = datetime.now(timezone.utc).isoformat()
+    fd, tmp = tempfile.mkstemp(prefix=".agent-status-", dir=str(root))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(record, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return target
+
+
+def agent_status(home: str | Path, *, now: datetime | None = None
+                 ) -> dict | None:
+    """The last heartbeat, with how old it is and whether that is too old."""
+    import json
+
+    path = Path(home) / AGENT_STATUS_FILE
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    moment = now or datetime.now(timezone.utc)
+    age = None
+    try:
+        seen = datetime.fromisoformat(str(record.get("received_at")))
+        if seen.tzinfo is None:
+            seen = seen.replace(tzinfo=timezone.utc)
+        age = max(0.0, (moment - seen).total_seconds())
+    except (TypeError, ValueError):
+        pass
+    interval = float(record.get("poll_interval_s") or 0) or 300.0
+    stale_after = max(AGENT_STALE_AFTER_S, 3 * interval)
+    record["age_s"] = age
+    record["stale"] = age is None or age > stale_after
+    return record
 
 
 #: What `proof_marked` says while a book is out with a practitioner.

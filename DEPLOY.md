@@ -362,13 +362,38 @@ One-time setup:
 4. **Turn proofing on** under Admin → Automations → Proofread, runner
    `external`. Until then the agent polls and finds nothing.
 
-Day to day: `fly logs -a atmosphere-docproof --process agent` is the agent's
-log; the driver's per-phase logs are under `/data/galley-workspaces/<slug>/
-runs/driver/` on the agent machine (`fly ssh console --process agent`). Every
-deploy restarts the agent machine, which kills a phase session in flight; the
-run resumes from its last completed phase on the next poll, so at worst one
-phase is repeated. The Max token is a personal seat: books proofread here
-share its quota with whatever the same account is doing in Claude Code.
+   Optionally `GALLEY_ALERT_EMAIL=<you>` too (a plain `fly secrets set`
+   value): the agent emails that address when it starts, when its polling
+   breaks and again when it recovers, and when a hand-off delivery is given
+   up on. Without it the agent uses the watcher's notify address.
+
+**Watching it.** The agent is not a black box:
+
+- **Admin → Automations → Proofread, "The practitioner machine"** shows the
+  agent's last heartbeat: which machine, whether it is still reporting (red
+  after 20 minutes of silence), which book and phase it is in, on which
+  brain, for how long, how many turns the session has taken, the settle
+  round, and the last error or verdict. The agent reports at every phase
+  boundary and once a minute while a book runs (`POST /api/watch/agent`,
+  behind the same bearer token as the awaiting list).
+- **A `needs_human` hand-off carries the evidence.** Beside the outcome and
+  the decision log the folder gets `<surname> - Book 2 - diagnostics.zip`:
+  every phase transcript, the driver ledger, `PLAN.md`, `QUESTIONS.md`, the
+  run state and settlement files, and the agent's own log. Unzip that before
+  reaching for `fly ssh console`.
+- **The agent emails about itself** (see `GALLEY_ALERT_EMAIL`) — a boot after
+  a deploy, a poll that stopped working, a delivery it gave up on. Book
+  verdicts still arrive the DocWatch way, on the next pass.
+- `fly logs -a atmosphere-docproof --process agent` is the live log; the
+  same lines are in `/data/galley-workspaces/agent.log` on the agent machine,
+  and the per-phase transcripts under `/data/galley-workspaces/<slug>/runs/
+  driver/` (`fly ssh console --process agent`).
+
+Every deploy restarts the agent machine, which kills a phase session in
+flight; the run resumes from its last completed phase on the next poll, so at
+worst one phase is repeated (the boot email says when that happened). The Max
+token is a personal seat: books proofread here share its quota with whatever
+the same account is doing in Claude Code.
 
 ## 5. Backups and restore
 
