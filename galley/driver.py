@@ -784,9 +784,28 @@ class PlanSummary:
         return not self.copyedit_lines
 
 
+# A plan's promises are its priced line items: a line that opens with an item
+# marker (`2.`, `4b.`, `-`, a table pipe) and carries a dollar amount. The rest
+# of PLAN.md is the practitioner explaining the plan — and a plan for a
+# mechanical wave explains, at length, that the copy-edit lanes are shut. Read
+# as scope, that explanation refused a clean plan four lines over on
+# 2026-09-07 ("the copy-edit-scope lines are absent from this plan", "certify
+# FAILS the delivery if any copy-edit finding appears", a caveats item whose
+# "No copy-edit lane" fell on the next line). Each refusal cost a 17-minute
+# profile session. The gate scans the promises; the config gate below is the
+# authority on what the run will actually do.
+_PLAN_ITEM_RE = re.compile(
+    r"^\s*(?:\d+[a-z]?[.)]|[-*•]|\|)\s*\S.*\$\s*\d")
+
+
+def _is_plan_item(line: str) -> bool:
+    """Whether a PLAN.md line is a priced line item — a promise, not prose."""
+    return bool(_PLAN_ITEM_RE.match(line))
+
+
 def read_plan(path: str | Path) -> PlanSummary:
     """Parse a drafted PLAN.md for the two facts the gate turns on: the priced
-    total, and whether any line puts a copy-edit lane in scope."""
+    total, and whether any priced line item puts a copy-edit lane in scope."""
     try:
         text = Path(path).read_text(encoding="utf-8")
     except OSError as e:
@@ -794,7 +813,7 @@ def read_plan(path: str | Path) -> PlanSummary:
     totals = _TOTAL_RE.findall(text)
     total = float(totals[-1].replace(",", "")) if totals else None
     offenders = [ln.strip() for ln in text.splitlines()
-                 if _is_copyedit_line(ln)]
+                 if _is_plan_item(ln) and _is_copyedit_line(ln)]
     return PlanSummary(total, offenders, text)
 
 

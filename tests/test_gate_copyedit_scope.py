@@ -144,3 +144,61 @@ def test_config_still_beats_a_plan_that_says_locks(tmp_path):
     approved, reason = gate_decision(plan, 10.0, config_path=cfg)
     assert approved is False
     assert "smoothing.enabled" in reason
+
+
+# ===========================================================================
+# The gate scans the plan's promises — priced line items — not its prose
+# ===========================================================================
+
+def test_explaining_that_copyedit_lanes_are_shut_is_not_scope(tmp_path):
+    """The four lines that refused The Lighthouse at Gull Point on 2026-09-07,
+    verbatim, around a clean priced plan. Every one describes the mechanical-
+    only doctrine; none is a line item."""
+    plan = _plan(tmp_path, """
+        ```
+        0.  chapter sweep (Luna 6 windows + Sonnet 6 windows $0)   $0.35
+        2.  mechanical ladder (Luna+Sonnet ensemble, Luna verifier) $0.91
+        7.  verify (rotated reread, 2 passes) + settle + certify   $0
+        TOTAL $2.00  ·  stop: $2/finding marginal, ONE wave
+        ```
+
+        Mechanical lanes and $0 lanes only. The copy-edit-scope lines are absent from
+        this plan by go-live scope — not recommended against, simply not here.
+
+        `--mechanical-only` records the copy-edit lanes as shut, so `certify` FAILS the
+        delivery if any copy-edit finding, lane or artifact appears. One tracked-change
+
+        3. **The book arguably wants copy-editing.** Recorded here and for the letter,
+           and nowhere else. The damage is mechanical, and the mechanical pass
+           resolves it. No copy-edit lane
+        """)
+    assert plan.copyedit_lines == [], plan.copyedit_lines
+    assert plan.total_usd == 2.00
+    assert gate_decision(plan, 5.0)[0] is True
+
+
+def test_a_priced_copyedit_item_is_still_refused_in_any_list_style(tmp_path):
+    """Scoping to line items must not open a hole: a priced promise of
+    copy-edit work is refused whether numbered, lettered, bulleted or tabled."""
+    for item in ("2a. Copy-edit flights, 6 lenses  $0.30",
+                 "5) merge desk over the ladder output  $1.10",
+                 "- wave-2 re-read of the opening chapters  $2.00",
+                 "| 6 | smoothing pass, edits mode | $0.80 |"):
+        plan = _plan(tmp_path, f"""
+            1. mechanical ladder  $1.00
+            {item}
+            TOTAL $4.00
+            """)
+        assert plan.copyedit_lines == [item], item
+        assert gate_decision(plan, 10.0)[0] is False
+
+
+def test_an_unpriced_line_is_prose_even_with_a_marker(tmp_path):
+    """A numbered caveat is discussion, not a promise. The config gate, not
+    the prose gate, is what catches a lane that is really open."""
+    from galley.driver import _is_plan_item
+
+    assert not _is_plan_item("3. **The book arguably wants copy-editing.**")
+    assert not _is_plan_item("Mechanical lanes and $0 lanes only.")
+    assert _is_plan_item("2a. Copy-edit flights, 6 lenses  $0.30")
+    assert _is_plan_item("0.  chapter sweep (Luna 6 windows $0)   $0.35")
