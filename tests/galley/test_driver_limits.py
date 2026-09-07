@@ -322,3 +322,17 @@ def test_a_finished_run_ships_a_decision_log(book, tmp_path):
     assert text.startswith("# Decision log — Ford - Book 1.docx")
     assert "**Plan gate (auto): approved**" in text
     assert (tmp_path / "handoff" / "Ford - Book 2 - decision-log.md").is_file()
+
+
+def test_profile_has_room_for_a_from_scratch_run():
+    """Raised from 80 on 2026-09-07: a clean-workspace profile on a 65k-word
+    book spent all 80 turns on the scans, the genre pack, the egress report
+    and two pricing passes, and never reached PLAN.md — so the cap threw away
+    every bit of it. The phases that fit in 80 were resuming workspaces whose
+    scans already existed."""
+    from galley.driver import PHASE_MAX_TURNS
+
+    assert PHASE_MAX_TURNS["profile"] >= 160
+    # It writes the plan the whole run is gated on; it should not be the
+    # tightest budget on the board.
+    assert PHASE_MAX_TURNS["profile"] > PHASE_MAX_TURNS["approve"]

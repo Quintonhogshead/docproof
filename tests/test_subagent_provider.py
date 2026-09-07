@@ -304,8 +304,11 @@ def test_stderr_capture_is_bounded(monkeypatch):
     else:                                                # pragma: no cover
         raise AssertionError("the dead session did not raise")
 
-    assert "line 0" in message
-    assert f"line {subagent._STDERR_KEEP}" not in message
+    # The tail survives, the head does not: the fatal line is the last one.
+    assert "line 499" in message
+    assert "line 0\n" not in message and "line 0)" not in message
+    assert f"line {500 - subagent._STDERR_KEEP}" in message
+    assert f"line {500 - subagent._STDERR_KEEP - 1}\n" not in message
 
 
 def test_the_fenced_turn_never_asks_to_bypass_permissions(monkeypatch):
@@ -326,7 +329,9 @@ def test_the_fenced_turn_never_asks_to_bypass_permissions(monkeypatch):
         schema_name="reply", max_tokens=100)
 
     opts = seen[0]
-    assert opts["permission_mode"] != "bypassPermissions"
+    # Pinned to the mode the driver already runs its own sessions on as root,
+    # not merely "anything but bypass".
+    assert opts["permission_mode"] == "acceptEdits"
     # The fence is what makes that safe — if these ever open up, the
     # permission mode has to be reconsidered with them.
     assert opts["tools"] == []
