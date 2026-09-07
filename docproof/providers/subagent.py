@@ -45,6 +45,10 @@ MODEL_ENV = "DOCPROOF_SUBAGENT_MODEL"
 # A structured reply is one turn: the prompt asks a question, the answer is the
 # JSON. More turns would be a conversation nobody is holding.
 MAX_TURNS = 1
+#: How many CLI stderr lines to keep for a failure message. Enough to
+#: carry a stack or a refusal; bounded so a chatty CLI cannot grow the
+#: exception without limit.
+_STDERR_KEEP = 40
 
 _SUBJECT = "The Galley subagent lane"
 _REMEDY = "run the verb again"
@@ -245,7 +249,8 @@ class SubagentProvider:
                 f"or after, no markdown fence:\n"
                 f"{json.dumps(schema, ensure_ascii=False)}")
 
-    def _options(self, sdk: Any, model: str, system: str) -> Any:
+    def _options(self, sdk: Any, model: str, system: str,
+                 stderr: Any = None) -> Any:
         cwd = self._cwd
         if cwd is None:
             cwd = Path(tempfile.mkdtemp(prefix="docproof-subagent-"))
@@ -260,11 +265,23 @@ class SubagentProvider:
             max_turns=self.max_turns,
             cwd=str(cwd),
             env=agent_lane.child_env(),
+            stderr=stderr,
         )
 
     async def _turn(self, sdk: Any, model: str, system: str,
                     prompt_text: str) -> ProviderResult:
-        options = self._options(sdk, model, system)
+        # The CLI's stderr is the only account of why a session died. The SDK
+        # drops it unless given a sink, which is how a failed lane reached the
+        # log as "Command failed with exit code 1 / Error output: Check stderr
+        # output for details" — pointing at output nobody had kept.
+        cli_stderr: list[str] = []
+
+        def keep(line: Any) -> None:
+            text = str(line).rstrip()
+            if text and len(cli_stderr) < _STDERR_KEEP:
+                cli_stderr.append(text)
+
+        options = self._options(sdk, model, system, stderr=keep)
 
         async def prompt():
             yield {"type": "user",
@@ -313,12 +330,21 @@ class SubagentProvider:
             log.error("subagent lane: Claude Code CLI not found (%s)", e)
             raise agent_lane.AgentLaneUnavailable(_CLI_HINT) from e
         except (sdk.ProcessError, sdk.ResultError) as e:
-            log.error("subagent lane: the CLI session failed: %s: %s",
-                      type(e).__name__, e)
+            said = "\n".join(cli_stderr)
+            log.error("subagent lane: the CLI session failed: %s: %s%s",
+                      type(e).__name__, e,
+                      f"\nCLI stderr:\n{said}" if said else
+                      " (the CLI wrote nothing to stderr)")
+            # Only guess at a cause when the CLI left no account of its own.
+            # It usually has one, and the old unconditional "sign this machine
+            # in" sent every failure to the wrong place.
+            detail = (f" The CLI wrote:\n{said}" if said else
+                      f" The CLI wrote nothing to stderr. If this machine is "
+                      f"not signed in, run `claude setup-token` and set "
+                      f"CLAUDE_CODE_OAUTH_TOKEN.")
             raise agent_lane.AgentLaneUnavailable(
-                f"{_SUBJECT} could not hold a Claude session ({e}). Sign this "
-                f"machine in once with `claude setup-token` or `claude /login`, "
-                f"then {_REMEDY}.") from e
+                f"{_SUBJECT} could not hold a Claude session ({e}).{detail}\n"
+                f"Then {_REMEDY}.") from e
         except Exception as e:                              # noqa: BLE001
             self.calls += 1
             log.warning("subagent turn on %s raised %s: %s", model,
