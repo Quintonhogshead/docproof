@@ -30,6 +30,8 @@ primary_region = "iad"        # pick one near your users: fly platform regions
   # (on its own volume — see [[mounts]]).
   GALLEY_APP_URL = "https://atmosphere-docproof.fly.dev"
   GALLEY_WORKSPACE_ROOT = "/data/galley-workspaces"
+  # Log lines reach `fly logs` as they happen, not when a buffer fills.
+  PYTHONUNBUFFERED = "1"
   # A monthly spend ceiling, in USD, for every ordinary account without one of
   # its own. Admins are never capped. Remove to leave ordinary users uncapped.
   DOCPROOF_DEFAULT_CAP = "20"
