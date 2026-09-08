@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
 from app.watch.naming import CLEAN_SUFFIX, PROOF_STAGE as HANDOFF_STAGE
+from docproof import agent_lane
 from galley.journal import JOURNAL_NAME as DECISION_LOG_NAME
 from galley.phases import ALL_PHASES, COPYEDIT_PHASES, MECHANICAL_PHASES
 
@@ -578,6 +579,13 @@ def build_env(base: dict[str, str] | None = None, *,
               wrapbin: str | Path = DEFAULT_WRAPBIN) -> dict[str, str]:
     """Require the subscription token, strip API keys, and prepend the docproof
     wrapper to PATH.
+
+    The token set here reaches the BRAIN only: Claude Code does not pass its
+    own OAuth token down to the Bash children the brain spawns, so a sifter
+    running `api.claude_lane: subagent` finds its subscription in
+    `~/.galley/agent.env` instead (docproof.agent_lane). Warn when that file
+    holds no token — otherwise the ladder gets all the way to its first Claude
+    call before failing closed, which is what the 2026-09-06 run did.
     """
     env = dict(os.environ if base is None else base)
     token = "".join((env.get("CLAUDE_CODE_OAUTH_TOKEN") or "").split())
@@ -595,6 +603,13 @@ def build_env(base: dict[str, str] | None = None, *,
     # Enable applying screened candidates only in this deployment; see
     # launch.sh.
     env["DOCPROOF_CANDIDATE_APPLY"] = "1"
+    if not agent_lane.file_token():
+        log.warning(
+            "%s holds no %s — the docproof sifters cannot inherit this "
+            "session's token, so a phase running api.claude_lane: subagent "
+            "will refuse rather than bill the API. Put the `claude "
+            "setup-token` value in that file (chmod 600).",
+            agent_lane.credentials_path(), agent_lane.OAUTH_TOKEN_KEY)
     return env
 
 

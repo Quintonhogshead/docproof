@@ -157,7 +157,15 @@ def availability() -> tuple[bool, str]:
     whose session had lapsed, `--engine auto` chose this lane and the first
     turn failed "Not logged in". `agent_lane.probe_login` asks `claude auth
     status` once per process; an inconclusive probe (no CLI on PATH, a
-    timeout) defers to the file check rather than refusing."""
+    timeout) defers to the file check rather than refusing.
+
+    All three read the login through `agent_lane`, which falls back to the
+    agent credentials file (`~/.galley/agent.env`) when nothing exported
+    CLAUDE_CODE_OAUTH_TOKEN — the case a sifter spawned by the Galley brain
+    is always in, since Claude Code does not hand its own token down to its
+    Bash children. The fallback lands in `child_env`, so `probe_login`'s
+    subprocess and the session turn in `complete_structured` see the same
+    credential: the probe and the call cannot disagree about the lane."""
     try:
         agent_lane.sdk(_INSTALL_HINT)
         agent_lane.require_login(_LOGIN_HINT)
