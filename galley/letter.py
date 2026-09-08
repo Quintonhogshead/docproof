@@ -1267,8 +1267,8 @@ def render_author_letter(cf: CaseFile, out_dir: str | Path, *,
                          title: str | None = None) -> Path:
     """The AUTHOR-facing letter, as ``out_dir/author-letter.docx``.
 
-    The author receives the tracked-changes file and nothing else; letter.md
-    is Atmosphere's (costs, phases, finding ids). This one says what the
+    The author receives the tracked-changes file, its clean reading copy
+    and this letter; letter.md is Atmosphere's (costs, phases, finding ids). This one says what the
     proofread was and was not, which conventions were applied so the author
     is not asked about them, the questions that are theirs, the things done
     that they should know about, and anything the plan promised that did not
@@ -1317,6 +1317,11 @@ def render_author_letter(cf: CaseFile, out_dir: str | Path, *,
                     "lot. A comment in the margin is either a question for "
                     "you or a note on something we did; reply in the margin "
                     "and we will take it from there.")
+    d.add_paragraph("Beside it is a clean copy (the file ending in "
+                    "\u201c- clean\u201d) with every change already accepted and "
+                    "no comments, for reading straight through. The "
+                    "tracked-changes file is the one to answer in; the clean "
+                    "copy is how the book reads if you say yes to all of it.")
 
     conv = _convention_lines(applied)
     if conv:

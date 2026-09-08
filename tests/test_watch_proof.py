@@ -43,12 +43,13 @@ MANUSCRIPT = (FIXTURES / "googledoc.docx").read_bytes()
 ORIGINAL = "Johnson - Book Original.docx"
 BOOK = "Johnson - Book 1.docx"
 DELIVERABLE = "Johnson - Book 2.docx"
+CLEAN = "Johnson - Book 2 - clean.docx"
 LETTER = "Johnson - Book 2 - letter.md"
 STYLE_SHEET = "Johnson - Book 2 - style-sheet.md"
 DECISION_LOG = "Johnson - Book 2 - decision-log.md"
 VERIFICATION = "Johnson - Book 2 - verification.md"
 OUTCOME = "Johnson - Book 2 - outcome.json"
-HAND_OFF = {DELIVERABLE, LETTER, STYLE_SHEET, OUTCOME}
+HAND_OFF = {DELIVERABLE, CLEAN, LETTER, STYLE_SHEET, OUTCOME}
 
 
 # --- the watcher --------------------------------------------------------------
@@ -161,7 +162,9 @@ def galley(monkeypatch):
         out = Path(runner.results_dir(job))
         out.mkdir(parents=True, exist_ok=True)
         stem = Path(job.filename).stem
-        (out / f"{stem} - Atmosphere Press Proofreader.docx").write_bytes(b"dx")
+        # A real .docx: the clean copy is derived from it at hand-off.
+        (out / f"{stem} - Atmosphere Press Proofreader.docx").write_bytes(
+            MANUSCRIPT)
         (out / f"{stem} - Atmosphere Press Proofreader Change Log.docx"
          ).write_bytes(b"log")
         (out / "letter.md").write_text("# Editorial letter\n", encoding="utf-8")
@@ -203,7 +206,9 @@ def app_needs_human_job(monkeypatch):
         out = Path(runner.results_dir(job))
         out.mkdir(parents=True, exist_ok=True)
         stem = Path(job.filename).stem
-        (out / f"{stem} - Atmosphere Press Proofreader.docx").write_bytes(b"dx")
+        # A real .docx: the clean copy is derived from it at hand-off.
+        (out / f"{stem} - Atmosphere Press Proofreader.docx").write_bytes(
+            MANUSCRIPT)
         (out / "letter.md").write_text("# Editorial letter\n", encoding="utf-8")
         (out / "style-sheet.md").write_text("# Style sheet\n", encoding="utf-8")
         store.save(job)
@@ -286,7 +291,7 @@ def _file(entry: dict, file_id: str):
 
 def test_a_book_ready_for_proofing_is_read_and_flipped(tmp_path, galley):
     """The whole stage in one pass: discovered at "Ready for Proofing", read,
-    the four files delivered, and the record moved to "Proofing Complete"."""
+    the hand-off delivered, and the record moved to "Proofing Complete"."""
     ws = proof_ws()
     opener = fake_drive(folder(f_1=drive_entry(BOOK)), docx=MANUSCRIPT,
                         hubspot={"Johnson": ready_to_proof()})
@@ -460,7 +465,8 @@ def test_discovery_reaches_every_author_folder_and_only_the_ready_one_is_read(
     assert report.ok and report.proofed == ["Okafor - Book 1.docx"]
     assert len(galley) == 1                        # one book read, not five
     placed = uploads_in(opener)
-    assert set(placed) == {"Okafor - Book 2.docx", "Okafor - Book 2 - letter.md",
+    assert set(placed) == {"Okafor - Book 2.docx", "Okafor - Book 2 - clean.docx",
+                           "Okafor - Book 2 - letter.md",
                            "Okafor - Book 2 - style-sheet.md",
                            "Okafor - Book 2 - outcome.json"}
     for entry in placed.values():
@@ -522,7 +528,8 @@ def test_a_flat_folder_reads_only_the_ready_authors_book(tmp_path, galley):
 
     assert report.proofed == ["Smith - Book 1.docx"] and len(galley) == 1
     assert set(uploads_in(opener)) == {
-        "Smith - Book 2.docx", "Smith - Book 2 - letter.md",
+        "Smith - Book 2.docx", "Smith - Book 2 - clean.docx",
+        "Smith - Book 2 - letter.md",
         "Smith - Book 2 - style-sheet.md", "Smith - Book 2 - outcome.json"}
     assert hs_props(opener, "Smith")["docproof"] == "Proofing Complete"
     for other in ("f-1", "f-3"):
@@ -907,7 +914,7 @@ def test_the_hand_off_names_are_the_agreed_set():
     from galley.driver import handoff_base
 
     assert prooflib.hand_off_names(BOOK) == {
-        "manuscript": DELIVERABLE, "letter": LETTER,
+        "manuscript": DELIVERABLE, "clean": CLEAN, "letter": LETTER,
         "style_sheet": STYLE_SHEET, "decision_log": DECISION_LOG,
         "verification": VERIFICATION, "outcome": OUTCOME}
     assert handoff_base(BOOK) == "Johnson - Book 2"
@@ -980,7 +987,8 @@ def test_a_spelled_out_book_one_is_proofread_into_a_book_two(tmp_path, galley):
 
     assert report.ok and report.proofed == ["Johnson - Book One.docx"]
     assert set(uploads_in(opener)) == {
-        "Johnson - Book Two.docx", "Johnson - Book Two - letter.md",
+        "Johnson - Book Two.docx", "Johnson - Book Two - clean.docx",
+        "Johnson - Book Two - letter.md",
         "Johnson - Book Two - style-sheet.md",
         "Johnson - Book Two - outcome.json"}
     assert hs_props(opener)["docproof"] == "Proofing Complete"

@@ -302,7 +302,8 @@ def test_the_handoff_carries_the_author_letter(tmp_path):
     written = build_handoff(ws, "Test - Book One.docx", tmp_path / "h",
                             outcome_sources=[dv / "outcome.json"])
     assert any(p.name == "Test - Book Two - Author Letter.docx" for p in written)
-    assert len(written) == 7
+    assert any(p.name == "Test - Book Two - clean.docx" for p in written)
+    assert len(written) == 8
 
 
 # --- who overruled ---------------------------------------------------------------
