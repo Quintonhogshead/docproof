@@ -805,6 +805,13 @@ details.sections > summary {
 .table th { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
 .table td:first-child { white-space: normal; }
 .table td:last-child, .table th:last-child { text-align: right; padding-right: 0; }
+/* The DocWatch History table wraps its long cells — what happened, and the
+   put-back files one per line — so every column stays inside the card. A
+   no-wrap row that lists five outputs pushed the Cost and Try-again columns
+   past the card's edge behind a scrollbar macOS does not draw. */
+#watch-files td:nth-child(2) { white-space: normal; }
+#watch-files td:nth-child(3) { white-space: pre-line; }
+#watch-files td:last-child { white-space: nowrap; }
 /* The model the picker has chosen, in the promo cost comparison. */
 .table tr.chosen td { color: var(--accent); font-weight: 600; }
 
