@@ -20,11 +20,12 @@ from app.watch import cli
 from app.watch import schedule as schedulelib
 from app.watch import tick as ticklib
 from app.watch.settings import WatchSettings
-from app.watch.stages import FORMATTED, STATE_PROP
+from app.watch.stages import (AT_PROP, FAILED, FORMATTED, JOB_PROP,
+                              REASON_PROP, STATE_PROP)
 from app.watch.state import FileRecord, WatchState
 
 from .conftest import FIXTURES
-from .fakes import TaggingProvider, drive_entry, fake_drive
+from .fakes import TaggingProvider, drive_entry, fake_drive, http_error
 
 FOLDER = "1AbCdEfGhIjKlMnOp"
 MANUSCRIPT = (FIXTURES / "googledoc.docx").read_bytes()
@@ -276,6 +277,129 @@ def test_status_lists_what_has_been_prepared(home, capsys, monkeypatch):
     assert "Wolves.docx" in out
     assert "formatted" in out
     assert "tagged_Wolves.docx" in out
+
+
+# --- clearing a failed marker ------------------------------------------------
+
+def failed_in_drive(name="Wolves.docx", file_id="f-1", **kw):
+    """A manuscript DocWatch already said no to, as Drive and state.json hold
+    it: the four properties `mark_source` writes, and the record beside them."""
+    props = {STATE_PROP: FAILED, JOB_PROP: "j-1",
+             AT_PROP: "2026-09-01T10:00:00+00:00",
+             REASON_PROP: "verification: paragraph 12 changed"}
+    return fake_drive({file_id: drive_entry(name, props=props)},
+                      docx=MANUSCRIPT, **kw)
+
+
+def test_clear_takes_the_failed_marker_off_and_says_so(home, capsys,
+                                                       monkeypatch):
+    configured(home)
+    signed_in(monkeypatch)
+    opener = failed_in_drive()
+    drive(monkeypatch, opener)
+    state = WatchState(home / "state.json")
+    state.record(FileRecord(file_id="f-1", name="Wolves.docx", job_id="j-1",
+                            marked=FAILED, attempts=2))
+
+    assert run(home, "clear", "Wolves.docx") == cli.OK
+
+    out = capsys.readouterr().out
+    assert "Cleared the failed marker on Wolves.docx" in out
+    assert "f-1" in out
+    # All four properties are gone from the file, not set to null.
+    props = opener.files["f-1"]["appProperties"]
+    for prop in (STATE_PROP, JOB_PROP, AT_PROP, REASON_PROP):
+        assert prop not in props
+    rec = WatchState.load(home / "state.json").files["f-1"]
+    assert rec.marked == ""
+    assert rec.attempts == 0
+    # The next pass sees a fresh manuscript again.
+    from app.watch.drive import DriveFile
+    from app.watch.stages import Stage, classify
+    assert classify(DriveFile.from_api(opener.files["f-1"])) == \
+        Stage.NEW_MANUSCRIPT
+
+
+def test_clear_accepts_the_drive_id_and_a_case_blind_fragment(home, capsys,
+                                                              monkeypatch):
+    configured(home)
+    signed_in(monkeypatch)
+    state = WatchState(home / "state.json")
+    state.record(FileRecord(file_id="f-1", name="Wolves.docx", marked=FAILED))
+    state.record(FileRecord(file_id="f-2", name="Bears.docx", marked=FAILED))
+
+    drive(monkeypatch, failed_in_drive())
+    assert run(home, "clear", "f-1") == cli.OK
+    drive(monkeypatch, failed_in_drive("Bears.docx", "f-2"))
+    assert run(home, "clear", "bears") == cli.OK
+    assert all(r.marked == "" for r in
+               WatchState.load(home / "state.json").files.values())
+
+
+def test_clear_refuses_a_name_it_does_not_know(home, capsys, monkeypatch):
+    configured(home)
+    signed_in(monkeypatch)
+    state = WatchState(home / "state.json")
+    state.record(FileRecord(file_id="f-1", name="Wolves.docx", marked=FAILED))
+    state.record(FileRecord(file_id="f-2", name="Wolves 2.docx",
+                            marked=FAILED))
+
+    assert run(home, "clear", "Foxes.docx") == cli.UNUSABLE
+    err = capsys.readouterr().err
+    assert "no manuscript called 'Foxes.docx'" in err
+    assert "docproof-watch status" in err
+    # A fragment that fits two books is refused rather than guessed.
+    assert run(home, "clear", "wolves") == cli.UNUSABLE
+    assert all(r.marked == FAILED for r in
+               WatchState.load(home / "state.json").files.values())
+
+
+def test_clear_will_not_touch_a_formatted_marker(home, capsys, monkeypatch):
+    """Taking a formatted marker off would have the next pass prepare — and
+    pay for — the book again. That is not what "try again" means."""
+    configured(home)
+    signed_in(monkeypatch)
+    opener = fake_drive({"f-1": drive_entry(
+        "Wolves.docx", props={STATE_PROP: FORMATTED})}, docx=MANUSCRIPT)
+    drive(monkeypatch, opener)
+    state = WatchState(home / "state.json")
+    state.record(FileRecord(file_id="f-1", name="Wolves.docx",
+                            marked=FORMATTED))
+
+    assert run(home, "clear", "Wolves.docx") == cli.UNUSABLE
+    err = capsys.readouterr().err
+    assert "not failed" in err
+    assert "pay for" in err
+    assert opener.files["f-1"]["appProperties"][STATE_PROP] == FORMATTED
+    assert WatchState.load(home / "state.json").files["f-1"].marked == FORMATTED
+
+
+def test_clear_without_a_sign_in_says_to_sign_in(home, capsys):
+    configured(home)
+    state = WatchState(home / "state.json")
+    state.record(FileRecord(file_id="f-1", name="Wolves.docx", marked=FAILED))
+
+    assert run(home, "clear", "Wolves.docx") == cli.UNUSABLE
+    assert "docproof-watch auth" in capsys.readouterr().err
+    assert WatchState.load(home / "state.json").files["f-1"].marked == FAILED
+
+
+def test_clear_leaves_the_record_alone_when_drive_refuses(home, capsys,
+                                                          monkeypatch):
+    """Drive first, state second: a marker Drive would not remove is still
+    the marker, and the record must keep saying so."""
+    configured(home)
+    signed_in(monkeypatch)
+    opener = failed_in_drive(fail={"patch": http_error(403, "forbidden")})
+    drive(monkeypatch, opener)
+    state = WatchState(home / "state.json")
+    state.record(FileRecord(file_id="f-1", name="Wolves.docx", marked=FAILED,
+                            attempts=2))
+
+    assert run(home, "clear", "Wolves.docx") == cli.UNUSABLE
+    assert "could not clear the marker" in capsys.readouterr().err
+    rec = WatchState.load(home / "state.json").files["f-1"]
+    assert rec.marked == FAILED and rec.attempts == 2
 
 
 def test_status_does_not_need_the_folder_lock(home, capsys, monkeypatch):

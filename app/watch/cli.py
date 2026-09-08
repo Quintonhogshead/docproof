@@ -1,8 +1,9 @@
 """`docproof-watch` — set the watcher up, and run one pass.
 
-Five commands, in the order somebody meets them: `auth` to sign in to Google,
+Six commands, in the order somebody meets them: `auth` to sign in to Google,
 `init` to say which folder, `once` to do a pass, `status` to see what has
-happened, and `schedule` to stop having to run `once` by hand.
+happened, `clear` to let a pass try a failed manuscript again, and `schedule`
+to stop having to run `once` by hand.
 
 `once` is the whole program, really. Everything else exists so that the thing
 launchd runs twice a day needs no arguments and no attention.
@@ -188,6 +189,13 @@ def main(argv=None) -> int:
 
     sub.add_parser("status", help="what the watcher has done lately")
 
+    cl = sub.add_parser("clear",
+                        help="take the failed marker off a manuscript so the "
+                             "next pass tries it again")
+    cl.add_argument("ref", metavar="NAME-OR-FILE-ID",
+                    help="the manuscript, as `status` names it, or its Drive "
+                         "file id")
+
     sch = sub.add_parser("schedule",
                          help="have macOS run a pass a few times a day")
     sch.add_argument("--times", default=",".join(schedulelib.DEFAULT_TIMES),
@@ -200,8 +208,8 @@ def main(argv=None) -> int:
     home = Path(args.home).expanduser() if args.home else default_watch_home()
     _logging(home, verbose=args.verbose)
     return {"auth": cmd_auth, "init": cmd_init, "once": cmd_once,
-            "status": cmd_status, "schedule": cmd_schedule,
-            "unschedule": cmd_unschedule,
+            "status": cmd_status, "clear": cmd_clear,
+            "schedule": cmd_schedule, "unschedule": cmd_unschedule,
             "hubspot-token": cmd_hubspot_token}[args.cmd](args, home)
 
 
@@ -583,6 +591,67 @@ def cmd_once(args, home: Path) -> int:
     except (ticklib.NotConfigured, DriveError) as e:
         print(f"error: {e}", file=sys.stderr)
         return UNUSABLE
+
+
+def cmd_clear(args, home: Path) -> int:
+    """Take the failed marker off one manuscript.
+
+    The needs-human report says "fix the file and clear the marker to try
+    again"; this is the second half. Only a *failed* marker comes off: a
+    formatted one is what stops a finished book being prepared and paid for
+    twice, and taking that off by hand is a different, costlier decision than
+    this command makes. Drive is written first and the local record second,
+    for the reason `prep.clear_marker` gives."""
+    from . import drive as drivelib
+    from .settings import GOOGLE_KEY
+    from .stages import FAILED
+    from .state import STATE_FILE, WatchState
+    from . import prep as preplib
+
+    ws = WatchSettings.load(home)
+    state = WatchState.load(home / STATE_FILE)
+    rec = state.find(args.ref)
+    if rec is None:
+        print(f"error: no manuscript called '{args.ref}' in this watcher's "
+              f"records. `docproof-watch status` lists the names it knows; "
+              f"a Drive file id works too.", file=sys.stderr)
+        return UNUSABLE
+    if rec.marked != FAILED:
+        said = rec.marked or "not marked at all"
+        print(f"error: {rec.name or rec.file_id} is {said}, not failed, so "
+              f"there is no failed marker to clear. Only a failed manuscript "
+              f"is cleared: taking a formatted marker off would have the next "
+              f"pass prepare — and pay for — the book a second time.",
+              file=sys.stderr)
+        return UNUSABLE
+    if not (ws.client_id and ws.client_secret):
+        print("error: DocWatch is not signed in to Google, and the marker "
+              "lives on the file in Drive. Run `docproof-watch auth` first.",
+              file=sys.stderr)
+        return UNUSABLE
+    refresh = get_api_key(GOOGLE_KEY)
+    if not refresh:
+        print("error: DocWatch is not signed in to Google, and the marker "
+              "lives on the file in Drive. Run `docproof-watch auth` first.",
+              file=sys.stderr)
+        return UNUSABLE
+    try:
+        token = drivelib.refresh_access_token(ws.client_id, ws.client_secret,
+                                              refresh,
+                                              opener=drivelib._open_url)
+        removed = preplib.clear_marker(token, rec, state,
+                                       opener=drivelib._open_url)
+    except AuthExpired as e:
+        print(f"error: {e}", file=sys.stderr)
+        return UNUSABLE
+    except DriveError as e:
+        print(f"error: could not clear the marker on "
+              f"{rec.name or rec.file_id}: {e}", file=sys.stderr)
+        return UNUSABLE
+    print(f"Cleared the failed marker on {rec.name or rec.file_id} "
+          f"({rec.file_id}): removed {', '.join(removed)}; attempts reset. "
+          f"The next pass will try it again.")
+    return OK
 
 
 def _report(report: ticklib.TickReport) -> int:

@@ -1392,7 +1392,9 @@ def _report_failed_intake(author: str, file: DriveFile, *,
     dated = f" on {when}" if when else ""
     reason = (f"flagged '{stage.ready_value}' but its '{file.name}' was "
               f"already tried{dated} and marked failed: {why}. Fix the file "
-              f"and clear the marker to try again, or move the status on.")
+              f"and clear the marker to try again (`docproof-watch clear "
+              f"\"{file.name}\"`, or Try again in the DocWatch History tab), "
+              f"or move the status on.")
     log.warning("Needs a person: %s is flagged ready but '%s' is marked "
                 "failed%s (%s).", author, file.name, dated, why)
     report.needs_human.append((author, reason))

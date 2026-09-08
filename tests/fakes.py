@@ -328,7 +328,15 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
             file_id = path.rsplit("/", 1)[-1]
             entry = store.setdefault(file_id, {"id": file_id})
             props = entry.setdefault("appProperties", {})
-            props.update(json.loads(request.data).get("appProperties") or {})
+            # Drive removes a property whose value is null; the fake does the
+            # same, so a test of `clear_marker` sees the key go, not stay as
+            # None.
+            for key, value in (json.loads(request.data).get("appProperties")
+                               or {}).items():
+                if value is None:
+                    props.pop(key, None)
+                else:
+                    props[key] = value
             return Response(json.dumps({"id": file_id}).encode())
 
         if path.endswith("/export"):

@@ -7682,12 +7682,50 @@ function renderWatchFiles(files) {
   $('watch-files-empty').hidden = files.length > 0;
   if (!files.length) return;
 
-  table.append(headRow(['Manuscript', 'What happened', 'Put back', 'Cost']));
+  table.append(headRow(['Manuscript', 'What happened', 'Put back', 'Cost',
+                        '']));
   files.forEach((f) => {
-    table.append(bodyRow([f.name, f.plain_state,
-                          f.uploaded.join(', ') || '—', money(f.cost)]));
+    const tr = bodyRow([f.name, f.plain_state,
+                        f.uploaded.join(', ') || '—', money(f.cost)]);
+    const td = document.createElement('td');
+    if (f.marked === 'failed') {
+      // "Needs attention" is a marker on the file in Drive, and the marker is
+      // what stops every later pass from touching it. The alert email says
+      // "fix the file and clear the marker to try again"; this is the
+      // clearing. Only a failed row gets the button — a formatted marker is
+      // what stops a finished book being prepared and paid for twice.
+      const btn = document.createElement('button');
+      btn.className = 'ghost small';
+      btn.textContent = 'Try again';
+      btn.title = 'Clear the failed marker so the next pass tries this '
+        + 'manuscript again. Fix the file first if it needs fixing.';
+      btn.addEventListener('click', () => retryFailed(f, btn));
+      td.append(btn);
+    }
+    tr.append(td);
+    table.append(tr);
   });
   applyWatchFilesFilter();
+}
+
+async function retryFailed(f, btn) {
+  if (!confirm(`Clear the failed marker on ${f.name}? The next pass will `
+      + 'download and prepare it again. If the file itself needs fixing, fix '
+      + 'it first.')) return;
+  btn.disabled = true;
+  try {
+    const body = await api('/api/watch/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_id: f.file_id }),
+    });
+    renderWatch(body, true);
+    watchNote($('watch-files-note'), `${body.name} will be tried again on the `
+      + 'next pass.', 'ok');
+  } catch (e) {
+    btn.disabled = false;
+    watchNote($('watch-files-note'), e.message, 'error');
+  }
 }
 
 //
