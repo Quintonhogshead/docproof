@@ -135,6 +135,10 @@ class ProofRelease(BaseModel):
     file_id: str = Field(min_length=1, max_length=200)
 
 
+class ClearMarker(BaseModel):
+    file_id: str = Field(min_length=1, max_length=200)
+
+
 def _drive_token_or_none(home) -> str | None:
     """A Drive access token from the watcher's sign-in, or None without one."""
     from ..watch import drive
@@ -461,6 +465,48 @@ def register(app: FastAPI) -> None:
             state.record(rec)
         return {"released": rec.file_id, "name": rec.name,
                 "drive_marked": marked_drive, **watch_payload()}
+
+    @app.post("/api/watch/clear", dependencies=[Depends(may_manage)])
+    def clear_marker(update: ClearMarker, request: Request) -> dict:
+        """The "Try again" button: take the failed marker off a manuscript.
+
+        The needs-human report tells the owner to fix the file and clear the
+        marker; this is the clearing, from the History table's "Needs
+        attention" row. Only a failed marker comes off — a formatted one is
+        what stops a finished book being prepared twice, so that is a 404 here
+        rather than a costlier button. Unlike `release_proof` there is no
+        "state only" fallback: the marker in Drive is the whole reason the
+        pass skips the file, and resetting the local record without it would
+        change nothing the next pass could see, so a missing sign-in is a
+        refusal that says so."""
+        from ..watch import prep as preplib
+        from ..watch.stages import FAILED
+        from ..watch.state import STATE_FILE, WatchState
+
+        watch: WatchRunner = app.state.watch
+        state = WatchState.load(Path(watch.home) / STATE_FILE)
+        rec = state.files.get(update.file_id)
+        if rec is None or rec.marked != FAILED:
+            raise HTTPException(
+                404, "That manuscript is not marked failed, so there is "
+                     "nothing to clear.")
+        token = _drive_token_or_none(watch.home)
+        if not token:
+            raise HTTPException(
+                400, "Sign in to Google first — the marker lives on the file "
+                     "in Drive, and it is the first card on this screen.")
+        user = getattr(request.state, "user", None)
+        who = getattr(user, "email", "") or "an administrator"
+        try:
+            removed = preplib.clear_marker(token, rec, state)
+        except DriveError as e:
+            raise HTTPException(
+                502, f"Google Drive would not clear the marker on {rec.name}: "
+                     f"{e}") from e
+        log.info("%s cleared the failed marker on %s (%s) from the panel.",
+                 who, rec.name, rec.file_id)
+        return {"cleared": rec.file_id, "name": rec.name, "removed": removed,
+                **watch_payload()}
 
     @app.post("/api/watch/run", dependencies=[Depends(may_manage)])
     def run_watch() -> dict:

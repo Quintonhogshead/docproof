@@ -318,3 +318,82 @@ def test_release_is_for_administrators_only(tmp_path, monkeypatch):
     assert TestClient(app).post(
         "/api/watch/proof/release", json={"file_id": "drive-1"},
         headers={"Authorization": f"Bearer {TOKEN}"}).status_code == 401
+
+
+# --- trying a failed manuscript again -------------------------------------------
+
+def failed_record(file_id="drive-9", name="Test - Book Original.docx", **kw):
+    return FileRecord(file_id=file_id, name=name, marked="failed", attempts=2,
+                      job_id="j-9", **kw)
+
+
+def test_an_admin_can_clear_a_failed_marker(tmp_path, monkeypatch):
+    """The "Try again" button: the four marker properties leave the file in
+    Drive and the record goes back to untried, so the next pass looks at it."""
+    from app.watch.stages import AT_PROP, JOB_PROP, REASON_PROP, STATE_PROP
+    from tests.fakes import drive_entry, fake_drive
+
+    app = make_app(tmp_path)
+    home = app.state.watch.home
+    seed(home, [failed_record()])
+    opener = fake_drive({"drive-9": drive_entry(
+        "Test - Book Original.docx",
+        props={STATE_PROP: "failed", JOB_PROP: "j-9", AT_PROP: "2026-09-01",
+               REASON_PROP: "verification failed"})})
+    monkeypatch.setattr("app.watch.drive._open_url", opener)
+    monkeypatch.setattr("app.routes.watch._drive_token_or_none",
+                        lambda home: "access-1")
+    boss = _boss(app)
+
+    answer = boss.post("/api/watch/clear", json={"file_id": "drive-9"})
+    assert answer.status_code == 200, answer.text
+    body = answer.json()
+    assert body["cleared"] == "drive-9"
+    assert body["name"] == "Test - Book Original.docx"
+    assert set(body["removed"]) == {STATE_PROP, JOB_PROP, AT_PROP, REASON_PROP}
+    assert opener.files["drive-9"]["appProperties"] == {}
+    rows = [f for f in body["watch"]["files"] if f["file_id"] == "drive-9"]
+    assert rows and rows[0]["marked"] == "" and rows[0]["attempts"] == 0
+    # Cleared already, so a second click is a 404, not a second write.
+    assert boss.post("/api/watch/clear",
+                     json={"file_id": "drive-9"}).status_code == 404
+    assert boss.post("/api/watch/clear",
+                     json={"file_id": "nope"}).status_code == 404
+
+
+def test_clear_needs_a_google_sign_in(tmp_path, monkeypatch):
+    """No "state only" fallback here: the marker in Drive is what the pass
+    reads, so a clear that cannot reach Drive changes nothing and says so."""
+    app = make_app(tmp_path)
+    home = app.state.watch.home
+    seed(home, [failed_record()])
+    monkeypatch.setattr("app.routes.watch._drive_token_or_none",
+                        lambda home: None)
+    answer = _boss(app).post("/api/watch/clear", json={"file_id": "drive-9"})
+    assert answer.status_code == 400
+    assert "Sign in to Google" in answer.json()["detail"]
+    assert WatchState.load(home / STATE_FILE).files["drive-9"].marked == "failed"
+
+
+def test_clear_will_not_touch_a_formatted_book(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    home = app.state.watch.home
+    seed(home, [FileRecord(file_id="drive-9", name="Done.docx",
+                           marked="formatted")])
+    monkeypatch.setattr("app.routes.watch._drive_token_or_none",
+                        lambda home: "access-1")
+    assert _boss(app).post("/api/watch/clear",
+                           json={"file_id": "drive-9"}).status_code == 404
+    assert WatchState.load(home / STATE_FILE).files["drive-9"].marked == \
+        "formatted"
+
+
+def test_clear_is_for_administrators_only(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    seed(app.state.watch.home, [failed_record()])
+    assert TestClient(app).post("/api/watch/clear",
+                                json={"file_id": "drive-9"}).status_code == 401
+    monkeypatch.setenv(AGENT_TOKEN_ENV, TOKEN)
+    assert TestClient(app).post(
+        "/api/watch/clear", json={"file_id": "drive-9"},
+        headers={"Authorization": f"Bearer {TOKEN}"}).status_code == 401

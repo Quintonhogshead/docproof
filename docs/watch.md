@@ -745,6 +745,22 @@ say so — with the recorded reason and date — rather than calling the author
 "waiting" or "missing its Book Original". Fix the file and clear the marker to
 have it tried again, or move the status on.
 
+**Clearing the marker.** Once the file is fixed, take the `failed` marker off
+and the next pass treats the manuscript as new:
+
+```
+docproof-watch clear "Johnson - Book Original.docx"
+```
+
+The name is the one `status` prints (case does not matter, and an unambiguous
+fragment will do); a Drive file id works too. In the app, the **History** tab
+shows the same row as *Needs attention* with a **Try again** button that does
+the same thing. Either way all four marker properties come off the file —
+state, reason, date and job — and the attempt count goes back to zero, so a
+second failure is dated and explained afresh. Only a `failed` marker is
+cleared: a `formatted` one is what stops a finished book being prepared and
+paid for twice, and the command refuses to touch it.
+
 **Everything else is tried again.** A model that would not answer, a folder
 that would not list, a network that was not there: the file is left unmarked
 and the next pass has another go — resuming from the checkpoint, so the
