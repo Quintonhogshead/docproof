@@ -93,6 +93,12 @@ STYLE_SHEET_SUFFIX = " - style-sheet"
 DECISION_LOG_SUFFIX = " - decision-log"
 VERIFICATION_SUFFIX = " - verification"
 OUTCOME_SUFFIX = " - outcome"
+# The reading copy of the proofread: the tracked-changes file with every
+# change accepted and every comment removed, derived at hand-off from the
+# certified file (see `docproof/cleancopy.py`). Proofing's primary stays the
+# redline — the record the author accepts or rejects — so this is the
+# companion, the mirror of prep's `- tracked changes` beside a clean primary.
+CLEAN_SUFFIX = " - clean"
 
 # The dashes a " - " separator turns up as in the wild: a plain hyphen-minus,
 # the hyphen and non-breaking hyphen, the figure/en/em dashes, the horizontal
@@ -339,7 +345,8 @@ def is_output_name(name: str) -> bool:
                for pattern in _TOKEN[stage])
 
 
-__all__ = ["DECISION_LOG_SUFFIX", "INDESIGN_SUFFIX", "LETTER_SUFFIX",
+__all__ = ["CLEAN_SUFFIX", "DECISION_LOG_SUFFIX", "INDESIGN_SUFFIX",
+           "LETTER_SUFFIX",
            "NOTES_SUFFIX", "OUTCOME_SUFFIX", "OUTPUT_STAGE", "OUTPUT_STAGES",
            "PROOF_SOURCE_STAGE", "PROOF_STAGE", "SOURCE_STAGE", "SPELLINGS",
            "STAGE_TOKENS", "STYLE_SHEET_SUFFIX", "TRACKED_SUFFIX",

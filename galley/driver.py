@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
-from app.watch.naming import PROOF_STAGE as HANDOFF_STAGE
+from app.watch.naming import CLEAN_SUFFIX, PROOF_STAGE as HANDOFF_STAGE
 from galley.journal import JOURNAL_NAME as DECISION_LOG_NAME
 from galley.phases import ALL_PHASES, COPYEDIT_PHASES, MECHANICAL_PHASES
 
@@ -1654,9 +1654,11 @@ def build_handoff(workspace: str | Path, source_name: str,
                   partial: bool = False) -> list[Path]:
     """Copy the manuscript, author letter, editor's letter, style sheet,
     decision log, verification report, and outcome into the handoff directory
-    under house names.
+    under house names — and derive the clean copy (`<base> - clean.docx`:
+    every change accepted, every comment removed) from the manuscript beside
+    it, so the folder holds both the record and the reading text.
 
-    A complete handoff requires all seven files. With partial=True, copy
+    A complete handoff requires all eight files. With partial=True, copy
     available files and require only outcome.json.
     """
     ws = Path(workspace)
@@ -1724,7 +1726,30 @@ def build_handoff(workspace: str | Path, source_name: str,
         dest = out / name
         shutil.copy2(src, dest)
         written.append(dest)
+        if src is docx:
+            clean = _clean_copy(dest, out / f"{base}{CLEAN_SUFFIX}.docx",
+                                partial=partial)
+            if clean is not None:
+                written.append(clean)
     return written
+
+
+def _clean_copy(tracked: Path, dest: Path, *, partial: bool) -> Path | None:
+    """The accepted-changes reading copy, derived from the hand-off's own
+    tracked-changes file. A complete hand-off cannot ship without it — the
+    folder would be missing the file the next reader opens first — but a
+    partial one (a stopped run's evidence) carries whatever it can."""
+    from docproof.cleancopy import CleanCopyError, write_clean_copy
+    try:
+        return write_clean_copy(tracked, dest)
+    except CleanCopyError as e:
+        if partial:
+            log.warning("no clean copy for the partial hand-off (%s)", e)
+            return None
+        raise DriverError(
+            f"could not derive the clean copy from {tracked.name} ({e}) — "
+            f"the hand-off needs both the tracked-changes file and its "
+            f"accepted-changes reading copy") from e
 
 
 def _first_existing(folder: Path, names: Sequence[str]) -> Path | None:

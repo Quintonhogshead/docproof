@@ -291,16 +291,24 @@ no `book zero`.
 The guard against a stage claiming a neighbour's name is exact: `Book 12` and
 `Book Twelve` are neither a `Book 1` nor a `Book 2`, in any spelling.
 
-**What comes back.** Five files, in the folder the book was found in (the
-author's own subfolder, in subfolder mode), under the `Book 2` base:
+**What comes back.** The hand-off set, in the folder the book was found in
+(the author's own subfolder, in subfolder mode), under the `Book 2` base:
 
 ```
-Johnson - Book 2.docx                  the tracked-changes proofread
+Johnson - Book 2.docx                  the tracked-changes proofread — the record
+Johnson - Book 2 - clean.docx          the same text with every change accepted
+                                       and no comments — the reading copy
+Johnson - Book 2 - Author Letter.docx  the author's letter (Galley runs)
 Johnson - Book 2 - letter.md           the editorial letter
 Johnson - Book 2 - style-sheet.md      the style sheet
 Johnson - Book 2 - decision-log.md     every action taken, and why
+Johnson - Book 2 - verification.md     the certificate and what it checked
 Johnson - Book 2 - outcome.json        the verdict, and the numbers behind it
 ```
+
+The clean copy is never built separately: it is derived at hand-off from the
+certified tracked-changes file (`docproof/cleancopy.py` accepts every revision
+and strips every comment), so it cannot disagree with the redline beside it.
 
 A file carrying a `book 0` or `Book 2`/`Book Two` token is recognised as
 something DocProof wrote and is never picked up to work on again — by name, not
