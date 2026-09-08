@@ -227,8 +227,12 @@ def finish(prepared: PreparedPrep, tags: list[Tag], usage: Usage, cfg: Config,
         path = out / f"{_prefix(kind)}{stem}{_EXTENSIONS[kind]}"
         # A fresh package per file: the writers mutate in place, and the
         # tracked file has to start from the manuscript, not from the clean
-        # one.
-        pkg = DocxPackage(Path(prepared.structure.source_path))
+        # one. It has to be the manuscript prepare() read, though: a file that
+        # arrived with tracked changes was accepted before its structure was
+        # built, and paragraph ids are positional, so writing into the raw
+        # file would put every plan line after the first joined paragraph on
+        # the wrong element — and drop prose where a blank line was.
+        pkg = prep_ingest.open_accepted(prepared.structure.source_path)
 
         # The InDesign output is an IDML, written from a copy of the house
         # template rather than saved as a .docx — but built by running the same

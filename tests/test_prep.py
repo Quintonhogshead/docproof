@@ -405,6 +405,46 @@ def test_a_deleted_paragraph_mark_joins_the_paragraphs(tmp_path):
     assert structure.accepted_revisions == ((BODY_PART, 4),)
 
 
+_TRACKED_BLANKS_DOC = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Chapter One</w:t></w:r></w:p>
+    <w:p>
+      <w:pPr><w:rPr><w:del w:id="1" w:author="A" w:date="2026-01-01T00:00:00Z"/></w:rPr></w:pPr>
+      <w:r><w:t xml:space="preserve">The first half </w:t></w:r>
+    </w:p>
+    <w:p><w:r><w:t>and the second half.</w:t></w:r></w:p>
+    <w:p/>
+    <w:p><w:r><w:t>Fast forward a year and everything changed.</w:t></w:r></w:p>
+    <w:p/>
+    <w:p><w:r><w:t>Anesthesiologists came and went.</w:t></w:r></w:p>
+    <w:p><w:r><w:t>The end.</w:t></w:r></w:p>
+    <w:sectPr/>
+  </w:body>
+</w:document>"""
+
+
+@pytest.mark.parametrize("outputs", [("book",), ("tracked",), ("indesign",)])
+def test_tracked_input_is_written_from_the_accepted_view(cfg, tmp_path, outputs):
+    """The writers open the manuscript afresh. When it arrived with tracked
+    changes they must open the accepted view prepare() read, not the raw file:
+    paragraph ids are positional, and a joined paragraph shifts every id after
+    it — writing into the raw file dropped a prose paragraph for every blank
+    line that followed the join (the Giannotti failure, 2026-09-08)."""
+    src = _write_docx(tmp_path / "blanks.docx", _TRACKED_BLANKS_DOC)
+    prepared = preplib.prepare(cfg, src, config_dir=CONFIG_DIR)
+    tags, usage = preplib.run_mock(prepared)
+    out = preplib.finish(prepared, tags, usage, cfg, out_dir=tmp_path / "out",
+                         source_path=src, outputs=list(outputs))
+    assert set(out.documents) == set(outputs)
+    assert all(v.ok for v in out.verifications)
+    if "book" in outputs:
+        body = DocxPackage(out.documents["book"]).tree("word/document.xml")
+        texts = [paragraph_text(p) for p in body.iter(qn("w:p"))]
+        assert "Fast forward a year and everything changed." in texts
+        assert not any(el.tag == qn("w:del") for el in body.iter())
+
+
 def test_a_cell_revision_is_still_refused(tmp_path):
     doc = _TRACKED_MARKS_DOC.replace(
         "<w:sectPr/>",
