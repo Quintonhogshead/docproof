@@ -19,6 +19,7 @@ from ..utils.xml_helpers import (DocxPackage, RPR_TAG, TEXTBOX_LOCATION,
                                  iter_text_elements, paragraph_text, qn,
                                  walk_package)
 from .model import Structure, StructureParagraph
+from .nontext import has_math, protected_content
 
 log = logging.getLogger("docproof.prep.ingest")
 
@@ -148,15 +149,17 @@ def build_structure(pkg: DocxPackage) -> Structure:
         # calling it blank would route it to the blank-line drop and delete the
         # image from the formatted document.
         has_image = _has_image(wp.element)
+        math = has_math(wp.element)
         paragraphs.append(StructureParagraph(
             para_id=wp.para_id, part=wp.part, index=len(paragraphs),
             location=wp.location, text=text, style=style,
-            is_blank=(not text.strip()) and not has_image,
+            is_blank=(not text.strip()) and not has_image and not math,
             leading_ws=len(text) - len(text.lstrip(WS)),
             trailing_ws=len(text) - len(text.rstrip(WS)) if stripped else 0,
             has_italics=_has_italics(wp.element),
             has_link=_has_link(wp.element, text),
             has_image=has_image,
+            has_math=math,
             is_list=wp.element.find(f"{qn('w:pPr')}/{qn('w:numPr')}") is not None,
             is_toc=_is_toc(wp.element, style),
         ))
@@ -168,7 +171,8 @@ def build_structure(pkg: DocxPackage) -> Structure:
     return Structure(source_path=str(pkg.path), paragraphs=tuple(paragraphs),
                      untouched=tuple(untouched),
                      accepted_revisions=tuple(
-                         sorted(getattr(pkg, "accepted_revisions", {}).items())))
+                         sorted(getattr(pkg, "accepted_revisions", {}).items())),
+                     protected_content=protected_content(pkg.tree(BODY_PART)))
 
 
 def _is_toc(p: etree._Element, style: str) -> bool:

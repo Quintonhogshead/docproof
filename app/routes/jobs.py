@@ -283,7 +283,7 @@ class RejudgeRequest(BaseModel):
 
 # The states a job stays in for good: it has stopped, so it can be removed from
 # the results list. Everything else is still moving and must be aborted first.
-_TERMINAL = ("done", "failed", "cancelled")
+_TERMINAL = ("done", "needs_human", "failed", "cancelled")
 
 
 def _result_name(job: Job, which: str) -> str | None:
@@ -703,6 +703,10 @@ def register(app: FastAPI) -> None:
             return _create_corrections(req, owner, paths, runner, effort=effort)
         if req.kind == "galley":
             return _create_galley(req, owner, paths, runner)
+        if req.kind == "prep":
+            # A cached/shared proofing form cannot attach a story-sheet read
+            # to formatting, either in the stored job or its displayed extras.
+            req.features = {**(req.features or {}), "storysheet": False}
         if req.prep_output not in ("book", "indesign", "tracked", "both", "all"):
             raise HTTPException(
                 400, "prep_output must be 'book', 'indesign', 'tracked', "

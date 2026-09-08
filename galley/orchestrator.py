@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from docproof.models import Usage
+from docproof.pipeline import JobCancelled
 
 from galley.adapters import DetectorAdapter, Scope
 from galley.casefile import CaseFile, append_wave
@@ -56,6 +57,43 @@ Auditor = Callable[[CaseFile, Manuscript], list[Hypothesis]]
 Planner = Callable[[list[Hypothesis], Governor, CaseFile], list[Dispatch]]
 Clock = Callable[[], str]
 Notify = Callable[[str, dict[str, Any]], None]
+ShouldCancel = Callable[[], bool]
+
+
+def _check_cancel(should_cancel: ShouldCancel | None,
+                  persist: Callable[[], None] | None = None) -> None:
+    if should_cancel is not None and should_cancel():
+        if persist is not None:
+            persist()
+        raise JobCancelled()
+
+
+def _usage_cost(usage: Usage) -> float:
+    from docproof.providers import cost_of_usage
+    return (cost_of_usage(usage, fallback_model="") or 0.0) + usage.sapling_cost
+
+
+def _charge_adapter(gov: Governor, adapter: DetectorAdapter, label: str,
+                    reported_cost: float) -> tuple[float, bool]:
+    """Charge checkpoint receipts once; other work remains incremental."""
+    receipts = getattr(adapter, "checkpoint_cost_receipts", {})
+    charged = 0.0
+    over_cap = False
+    for receipt, cumulative in receipts.items():
+        receipt_label = f"{label}:receipt:{receipt}"
+        prior = sum(c.cost_usd for c in gov.ledger.charges
+                    if c.label == receipt_label)
+        due = max(0.0, cumulative - prior)
+        if due:
+            entry = gov.charge(due, receipt_label, allow_over_cap=True)
+            charged += due
+            over_cap |= entry in gov.overruns
+    incremental = max(0.0, reported_cost - sum(receipts.values()))
+    if incremental:
+        entry = gov.charge(incremental, label, allow_over_cap=True)
+        charged += incremental
+        over_cap |= entry in gov.overruns
+    return charged, over_cap
 
 
 def _no_audit(cf: CaseFile, ms: Manuscript) -> list[Hypothesis]:
@@ -134,6 +172,7 @@ def _run_wave(
     clock: Clock,
     persist: Callable[[], None] | None = None,
     workspace: Path | None = None,
+    should_cancel: ShouldCancel | None = None,
 ) -> WaveRecord:
     """Run dispatches and append new finding ids and actual charges.
 
@@ -146,9 +185,14 @@ def _run_wave(
     known_ids = {f.id for f in cf.findings}
     actions: list[dict[str, Any]] = []
     added = 0
-    wave_cost = 0.0
+    # A resumed wave's history includes its cancelled attempt. Individual
+    # actions below still report only what this attempt newly charged.
+    wave_cost = sum(c.cost_usd for c in gov.ledger.charges
+                    if c.wave == wave_index
+                    and c.label.startswith(f"wave{wave_index}:"))
 
     for d in dispatches:
+        _check_cancel(should_cancel, persist)
         budget = min(gov.wave_remaining_usd, gov.remaining_usd)
         if budget <= 0:
             actions.append({"adapter": d.adapter, "skipped": "budget exhausted"})
@@ -175,9 +219,21 @@ def _run_wave(
         if (workspace is not None and hasattr(adapter, "workspace")
                 and getattr(adapter, "workspace") is None):
             adapter.workspace = workspace
+        if should_cancel is not None and hasattr(adapter, "should_cancel"):
+            adapter.should_cancel = should_cancel
 
+        prior_cost = _usage_cost(usage)
+        _check_cancel(should_cancel, persist)
         try:
             result = adapter.run(ms, d.scope, budget, usage)
+        except JobCancelled:
+            # Cancellable adapters fold completed calls into shared usage
+            # before raising. Those calls remain billed even without a result.
+            incurred = max(0.0, _usage_cost(usage) - prior_cost)
+            _charge_adapter(gov, adapter, f"wave{wave_index}:{d.adapter}", incurred)
+            if persist is not None:
+                persist()
+            raise
         except Exception:
             # Persist earlier dispatches before surfacing the interruption.
             actions.append(
@@ -188,13 +244,9 @@ def _run_wave(
                 persist()
             raise
 
-        over_cap = False
-        if result.cost_usd > 0:
-            charge = gov.charge(
-                result.cost_usd, f"wave{wave_index}:{d.adapter}",
-                allow_over_cap=True)
-            over_cap = charge in gov.overruns
-            wave_cost += result.cost_usd
+        actual_cost, over_cap = _charge_adapter(
+            gov, adapter, f"wave{wave_index}:{d.adapter}", result.cost_usd)
+        wave_cost += actual_cost
 
         new_here = 0
         for f in result.findings:
@@ -208,16 +260,19 @@ def _run_wave(
         notes = list(result.coverage_notes)
         if over_cap:
             notes.append(
-                f"{d.adapter}: billed ${result.cost_usd:.2f}, overrunning the "
+                f"{d.adapter}: billed ${actual_cost:.2f}, overrunning the "
                 f"budget cap by ${gov.overrun_usd:.2f} (charged; findings kept)"
             )
         action: dict[str, Any] = {
             "adapter": d.adapter,
             "scope": _scope_json(d.scope),
-            "cost_usd": result.cost_usd,
+            "cost_usd": actual_cost,
             "findings_added": new_here,
             "coverage_notes": notes,
         }
+        replayed_cost = max(0.0, result.cost_usd - actual_cost)
+        if replayed_cost:
+            action["replayed_cost_usd"] = replayed_cost
         if estimate is not None:
             action["estimate_usd"] = estimate
         if over_cap:
@@ -227,6 +282,7 @@ def _run_wave(
         # Persist findings and charges before the next dispatch.
         if persist is not None:
             persist()
+        _check_cancel(should_cancel, persist)
 
     return WaveRecord(
         index=wave_index,
@@ -262,13 +318,15 @@ def run_galley(
     clock: Clock = _utc_now,
     casefile_path: str | Path | None = None,
     free_adapters: frozenset[str] = FREE_ADAPTERS,
+    should_cancel: ShouldCancel | None = None,
 ) -> CaseFile:
     """Run detector waves until the planner stops or a budget limit is reached.
 
     Resume completed waves from the case file. Continue an interrupted
     charged wave under its existing index so adapter checkpoints can replay
     paid reads. The providers argument is retained for compatibility; supply
-    detectors through adapters.
+    detectors through adapters. Cancellation preserves findings and charges
+    before raising JobCancelled; cancellable adapters receive the callback.
     """
 
     adapters = adapters or {}
@@ -318,6 +376,7 @@ def run_galley(
         notify("wave", _wave_digest(cf, rec))
 
     # Wave one: the full ladder. Skipped on resume (cf.waves already populated).
+    _check_cancel(should_cancel, _save)
     if not cf.waves:
         wave_index = _open_wave()  # wave 1
         rec = _run_wave(
@@ -331,6 +390,7 @@ def run_galley(
             clock=clock,
             persist=_save,
             workspace=cf_path.parent,
+            should_cancel=should_cancel,
         )
         append_wave(cf, rec)
         _save()
@@ -340,14 +400,22 @@ def run_galley(
         last = cf.waves[-1]
 
     # Audit, plan, and dispatch until a stop condition is reached.
-    while not gov.should_stop(_marginal(last), stop_threshold):
-        hyps = _call_audit(audit, cf, ms, gov)
+    while interrupted is not None or not gov.should_stop(
+            _marginal(last), stop_threshold):
+        _check_cancel(should_cancel, _save)
+        try:
+            hyps = _call_audit(audit, cf, ms, gov)
+        except JobCancelled:
+            _save()
+            raise
         # Persist audit charges even when no hypotheses are returned.
         if hyps:
             cf.hypotheses.extend(hyps)
         _save()
 
+        _check_cancel(should_cancel, _save)
         dispatches = plan_wave(hyps, gov, cf)
+        _check_cancel(should_cancel, _save)
         if not dispatches:
             break
 
@@ -367,12 +435,14 @@ def run_galley(
             clock=clock,
             persist=_save,
             workspace=cf_path.parent,
+            should_cancel=should_cancel,
         )
         append_wave(cf, rec)
         _save()
         _after_wave(rec)
         last = rec
 
+    _check_cancel(should_cancel, _save)
     _save()
     return cf
 
@@ -419,6 +489,7 @@ def _wave_alarms(
         ran = "skipped" not in action and "error" not in action
         adapter = action.get("adapter", "")
         if (ran and action.get("cost_usd") == 0.0
+                and not action.get("replayed_cost_usd")
                 and adapter not in free_adapters):
             zero_cost.append(adapter)
 

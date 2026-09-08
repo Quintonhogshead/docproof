@@ -17,7 +17,7 @@ from pathlib import Path
 import yaml
 from lxml import etree
 
-from ..utils.xml_helpers import CT_NS, PR_NS, W_NS, qn
+from ..utils.xml_helpers import CT_NS, PR_NS, W_NS, qn, walk_package
 
 log = logging.getLogger("docproof.prep.styles")
 
@@ -335,8 +335,8 @@ def install_style_sheet(pkg, sheet: StyleSheet, *, replace: bool = True,
     """Put the house styles into the document, registering the part if it never
     had one (a bare Google Docs export sometimes doesn't).
 
-    `replace` writes one clean style sheet and nothing else — what the file
-    placed into InDesign should be. The tracked-changes file merges instead:
+    `replace` writes the house sheet plus source styles still referenced by
+    retained content. The tracked-changes file merges instead:
     every retagged paragraph carries its previous style inside a `w:pPrChange`,
     and rejecting that change has to land back on a style that still exists."""
     built = build_styles_xml(sheet, defaults=defaults)
@@ -348,11 +348,10 @@ def install_style_sheet(pkg, sheet: StyleSheet, *, replace: bool = True,
     root = pkg.tree(STYLES_PART)
     pkg.mark_modified(STYLES_PART)
     if replace:
-        # Tables are left exactly as the author built them, and a table's
-        # borders and shading often live in a `w:type="table"` style the table
-        # references by id — replacing the sheet without carrying those over
-        # would strip every styled table bare.
-        kept = _document_table_styles(root, sheet)
+        # Kept rStyle/pStyle references still need their original definitions:
+        # Emphasis, for example, supplies italics through a character style.
+        # Table styles and all inherited dependencies also travel with them.
+        kept = _document_preserved_styles(pkg, root, sheet)
         root.clear()
         for key, value in built.attrib.items():
             root.set(key, value)
@@ -362,7 +361,7 @@ def install_style_sheet(pkg, sheet: StyleSheet, *, replace: bool = True,
             root.append(style_el)
         log.info("Installed the '%s' style sheet: %d paragraph styles%s.",
                  sheet.name, len(sheet.styles),
-                 f", keeping {len(kept)} table style(s)" if kept else "")
+                 f", keeping {len(kept)} referenced source style(s)" if kept else "")
         return
 
     ours_ids = {s.id for s in sheet.styles} | {s.id for s in sheet.character_styles}
@@ -381,28 +380,34 @@ def install_style_sheet(pkg, sheet: StyleSheet, *, replace: bool = True,
              len(sheet.styles) + len(sheet.character_styles))
 
 
-def _document_table_styles(root: etree._Element,
-                           sheet: StyleSheet) -> list[etree._Element]:
-    """The document's own table styles, copied out before the sheet replaces
-    everything. Only `w:type="table"` entries qualify — that set includes
-    Word's TableNormal default and covers every `w:tblStyle` a table can
-    reference. A collision with a house id or name is skipped rather than
-    carried: the house sheet defines no table styles, so one can only mean a
-    malformed document, and the house definition wins."""
-    ours_ids = {s.id for s in sheet.styles} | {s.id
-                                              for s in sheet.character_styles}
-    ours_names = {s.name for s in sheet.styles} | {s.name
-                                                   for s in sheet.character_styles}
-    kept: list[etree._Element] = []
-    for existing in root.findall(qn("w:style")):
-        if existing.get(qn("w:type")) != "table":
+def _document_preserved_styles(pkg, root: etree._Element,
+                               sheet: StyleSheet) -> list[etree._Element]:
+    """Keep styles referenced by untouched content, with their dependencies.
+
+    Paragraphs already restyled by the writer point at the house set. Runs,
+    table cells, textboxes, and notes can still point at source styles. Walking
+    those references also avoids keeping hundreds of unused Word styles.
+    """
+    ours_ids = {"Normal"} | {s.id for s in sheet.styles + sheet.character_styles}
+    originals = {s.get(qn("w:styleId")): s
+                 for s in root.findall(qn("w:style"))}
+    needed = {sid for sid, style in originals.items()
+              if style.get(qn("w:type")) == "table"}
+    reference_tags = {qn("w:rStyle"), qn("w:pStyle")}
+    for wp in walk_package(pkg):
+        needed.update(node.get(qn("w:val")) for node in wp.element.iter()
+                      if node.tag in reference_tags)
+    kept: set[str] = set()
+    while needed:
+        sid = needed.pop()
+        if sid in kept or sid in ours_ids or sid not in originals:
             continue
-        name_el = existing.find(qn("w:name"))
-        name = name_el.get(qn("w:val")) if name_el is not None else None
-        if existing.get(qn("w:styleId")) in ours_ids or name in ours_names:
-            continue
-        kept.append(copy.deepcopy(existing))
-    return kept
+        kept.add(sid)
+        for tag in ("w:basedOn", "w:link", "w:next"):
+            dependency = originals[sid].find(qn(tag))
+            if dependency is not None:
+                needed.add(dependency.get(qn("w:val")))
+    return [copy.deepcopy(style) for sid, style in originals.items() if sid in kept]
 
 
 def _register_part(pkg) -> None:

@@ -202,6 +202,66 @@ def test_italics_turned_explicitly_off_still_counts_as_not_italic():
     assert _is_set(rpr, "w:i")
 
 
+@pytest.mark.parametrize("value", ["0", "false", "off"])
+def test_explicitly_disabled_italics_are_enabled_and_rejectable(tmp_path, value):
+    from docproof.ingest import accept_all_revisions
+
+    def build(d):
+        r = d.add_paragraph().add_run(GATSBY)
+        r.italic = False
+        r._r.find(qn("w:rPr")).find(qn("w:i")).set(qn("w:val"), value)
+
+    out = _run(tmp_path, build, MOCK_GATSBY)
+    assert out.applied == 1
+    pkg = DocxPackage(out.reviewed_path)
+    p = next(walk_package(pkg)).element
+    rpr = p.find(qn("w:r")).find(qn("w:rPr"))
+    assert [c.tag for c in rpr] == [qn("w:i"), qn("w:iCs"), qn("w:rPrChange")]
+    assert rpr.find(qn("w:i")).get(qn("w:val")) is None
+    old = rpr.find(qn("w:rPrChange")).find(qn("w:rPr"))
+    assert old.find(qn("w:i")).get(qn("w:val")) == value
+    accept_all_revisions(pkg)
+    accepted = tmp_path / "accepted.docx"
+    pkg.save(accepted)
+    assert docx.Document(accepted).paragraphs[0].runs[0].italic is True
+
+
+@pytest.mark.parametrize("title", ["The Great Gatsy", "The Great Gatsbi",
+                                  "The Great Gattsby", "he Great Gatsby"])
+def test_title_format_and_overlapping_text_correction_both_apply(tmp_path, title):
+    from docproof.config import Config
+    from docproof.ingest import accept_all_revisions, build_document_model, preflight
+    from docproof.reassembler import apply_tracked_changes
+
+    text = f"He read {title} yesterday."
+    corrected = "He read The Great Gatsby yesterday."
+    d = docx.Document()
+    d.add_paragraph(text)
+    source = tmp_path / "overlap.docx"
+    d.save(source)
+    cfg = Config(comments=True)
+    pkg = preflight(source, "abort")
+    model = build_document_model(pkg, cfg)
+    findings = validate_findings([
+        _finding(original_text=text, corrected_text=title),
+        _finding(finding_id="spelling", error_type="spelling",
+                 original_text=text, corrected_text=corrected),
+    ], model, "medium", format_types=FORMAT)
+    assert [f.status for f in findings] == ["validated", "validated"]
+    stats = apply_tracked_changes(pkg, model, findings, cfg)
+    assert set(stats.applied) == {"f-0001", "spelling"}
+    assert not stats.skipped
+    p = next(walk_package(pkg)).element
+    assert paragraph_view_text(p, "reject") == text
+    assert paragraph_view_text(p, "accept") == corrected
+    accept_all_revisions(pkg)
+    accepted = tmp_path / "accepted.docx"
+    pkg.save(accepted)
+    runs = docx.Document(accepted).paragraphs[0].runs
+    assert "".join(r.text for r in runs if r.italic) == "The Great Gatsby"
+    assert "".join(r.text for r in runs if not r.italic) == "He read  yesterday."
+
+
 def test_the_audit_still_passes_over_a_formatting_change(tmp_path):
     out = _run(tmp_path, lambda d: d.add_paragraph(GATSBY), MOCK_GATSBY)
     import json

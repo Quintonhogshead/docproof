@@ -425,6 +425,11 @@ def agent(tmp_path, monkeypatch):
     def run(command, **kwargs):
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
+    install, uninstall = schedulelib.install, schedulelib.uninstall
+    monkeypatch.setattr(schedulelib, "install",
+                        lambda times, home: install(times, home, run=run, path=path))
+    monkeypatch.setattr(schedulelib, "uninstall",
+                        lambda: uninstall(run=run, path=path))
     monkeypatch.setattr("app.watch.schedule.plist_path", lambda: path)
     monkeypatch.setattr("app.watch.schedule.subprocess.run", run)
     monkeypatch.setattr("app.watch.schedule.executable",

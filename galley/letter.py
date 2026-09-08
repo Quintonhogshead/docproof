@@ -367,9 +367,16 @@ def _section_spend(cf: CaseFile) -> list[str]:
     if cf.budget.charges:
         out.append("")
         out.append("Ledger charges:")
+        displayed_charges: dict[tuple[int, str], float] = {}
         for charge in cf.budget.charges:
+            # Receipt identities support resume accounting, but readers need
+            # the total for each adapter rather than its per-chunk receipts.
+            label = charge.label.partition(":receipt:")[0]
+            key = (charge.wave, label)
+            displayed_charges[key] = displayed_charges.get(key, 0.0) + charge.cost_usd
+        for (wave, label), cost_usd in displayed_charges.items():
             out.append(
-                f"- wave {charge.wave}: {charge.label} — {_money(charge.cost_usd)}"
+                f"- wave {wave}: {label} — {_money(cost_usd)}"
             )
     out.append("")
     return out

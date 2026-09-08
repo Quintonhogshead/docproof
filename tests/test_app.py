@@ -1485,6 +1485,27 @@ def test_deleting_one_finished_job_leaves_the_others(client):
     assert second["id"] in ids
 
 
+@pytest.mark.parametrize("operation", ["delete", "clear"])
+def test_galley_needing_human_review_can_be_removed(client, tmp_path, operation):
+    store = client.app_state.store
+    results = Path(client.app_state.settings.output_dir) / "galley-human"
+    results.mkdir(parents=True)
+    (results / "letter.md").write_text("Needs review.")
+    store.save(Job(id="human-galley", filename="book.docx", source_path="x",
+                   model="", mode="now", kind="galley", state="needs_human",
+                   results_dir=str(results)))
+    store.save(Job(id="active-galley", filename="other.docx", source_path="x",
+                   model="", mode="now", kind="galley", state="running"))
+
+    response = (client.delete("/api/jobs/human-galley") if operation == "delete"
+                else client.post("/api/jobs/clear"))
+
+    assert response.status_code == 200, response.text
+    assert store.get("human-galley") is None
+    assert store.get("active-galley").state == "running"
+    assert not results.exists()
+
+
 def test_deleting_an_active_job_is_refused(client):
     store: JobStore = client.app_state.store
     store.save(Job(id="act1", filename="simple.docx", source_path="x",

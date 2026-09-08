@@ -85,6 +85,73 @@ class _AlwaysRefuse:
         return ProviderResult(stop_reason="refusal", error="no", usage=_U)
 
 
+def test_ladder_cancellation_reaches_pipeline_and_retains_usage(tmp_path, monkeypatch):
+    from docproof.pipeline import JobCancelled
+    import galley.adapters.docproof_ladder as module
+
+    stop = lambda: False
+    adapter = DocproofLadderAdapter(FIXTURE, _lean_cfg(), _CorrectTeh(),
+                                   workspace=tmp_path, should_cancel=stop)
+    monkeypatch.setattr(module, "prepare", lambda *a, **k: object())
+    monkeypatch.setattr(adapter, "_checkpoint", lambda *a: object())
+
+    def cancelled_run(*args, **kwargs):
+        assert kwargs["should_cancel"] is stop
+        raise JobCancelled(usage=Usage(input_tokens=20, output_tokens=8, api_calls=1))
+
+    monkeypatch.setattr(module, "run_sync", cancelled_run)
+    usage = Usage()
+    with pytest.raises(JobCancelled):
+        adapter.run(make_manuscript("ignored"), Scope(), 100, usage)
+    assert usage.input_tokens == 20 and usage.api_calls == 1
+
+
+def test_ladder_phase_cancellation_keeps_completed_detector_usage(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from docproof.pipeline import JobCancelled
+    import docproof.pipeline as pipeline
+    import galley.adapters.docproof_ladder as module
+
+    cancelled = False
+    cfg = _lean_cfg()
+    cfg.glossary.enabled = True
+    chunk = SimpleNamespace(chunk_id="chunk-000")
+    prepared = SimpleNamespace(
+        pass_types=[], vocabulary="", conventions="", story_sheet="",
+        examination=None, effective_pass_plan=[SimpleNamespace(index=0, chunks=[chunk])],
+        request_count=1, whole_document=True)
+
+    class Detector:
+        label = "spelling"
+
+        def fetch(self, chunk):
+            return ProviderResult(parsed={"findings": []}, usage=_U)
+
+        def process_result(self, result, chunk, usage, **kwargs):
+            usage.add(result.usage, model=cfg.api.model)
+            return [], True
+
+    monkeypatch.setattr(pipeline, "build_analyzers", lambda *a, **k: [Detector()])
+    monkeypatch.setattr(module, "prepare", lambda *a, **k: prepared)
+    adapter = DocproofLadderAdapter(FIXTURE, cfg, _CorrectTeh(), workspace=tmp_path,
+                                   should_cancel=lambda: cancelled)
+
+    def phase_callback(phase=""):
+        nonlocal cancelled
+        if phase == "glossary":
+            cancelled = True
+        if cancelled:
+            raise JobCancelled()
+
+    monkeypatch.setattr(adapter, "_check_cancel", phase_callback)
+    monkeypatch.setattr(adapter, "_checkpoint", lambda *a: None)
+    usage = Usage()
+    with pytest.raises(JobCancelled) as stopped:
+        adapter.run(make_manuscript("ignored"), Scope(), 100, usage)
+    assert stopped.value.usage is not None
+    assert usage.api_calls == 1 and usage.input_tokens == _U.input_tokens
+
+
 @pytest.mark.skipif(not FIXTURE.exists(), reason="fixture book missing")
 def test_ladder_runs_and_finds_the_planted_typo(tmp_path):
     adapter = DocproofLadderAdapter(

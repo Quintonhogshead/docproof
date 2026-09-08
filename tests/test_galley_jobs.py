@@ -78,6 +78,16 @@ def _fake_adapters():
     return {"docproof_ladder": ladder, "single_pass": single}
 
 
+def test_galley_without_model_override_keeps_configured_model(runner):
+    from docproof.config import load_config
+
+    store, r = runner
+    job = _job(store)
+    assert r.config_for(job).api.model == load_config(CONFIG).api.model
+    job.model = "claude-opus-5"
+    assert r.config_for(job).api.model == "claude-opus-5"
+
+
 def test_run_galley_produces_every_deliverable(runner, monkeypatch):
     store, r = runner
     monkeypatch.setattr(r, "_galley_adapters",
@@ -150,6 +160,71 @@ def test_one_wave_tier_does_not_build_the_paid_brain(runner, monkeypatch, tier):
     r.run_one("j1")
 
     assert store.get("j1").state == "needs_human"
+
+
+def test_cancel_during_galley_setup_prevents_detector_calls(runner, monkeypatch):
+    store, r = runner
+    adapters = _fake_adapters()
+
+    def cancel_during_setup(job, cfg):
+        r.request_cancel(job.id)
+        return adapters
+
+    monkeypatch.setattr(r, "_galley_adapters", cancel_during_setup)
+    _job(store)
+    r.run_one("j1")
+
+    assert store.get("j1").state == "cancelled"
+    assert not adapters["docproof_ladder"].calls
+    assert not list(Path(r.settings.output_dir).rglob("*.docx"))
+
+
+def test_cancel_after_galley_detector_keeps_charge_and_stops_delivery(
+        runner, monkeypatch):
+    store, r = runner
+
+    class CancellingDetector(FakeDetector):
+        def run(self, *args):
+            result = super().run(*args)
+            r.request_cancel("j1")
+            return result
+
+    detector = CancellingDetector(name="docproof_ladder", cost_usd=0.5)
+    monkeypatch.setattr(r, "_galley_adapters",
+                        lambda job, cfg: {"docproof_ladder": detector})
+    _job(store)
+    r.run_one("j1")
+
+    job = store.get("j1")
+    assert job.state == "cancelled"
+    assert len(detector.calls) == 1 and job.cost == pytest.approx(0.5)
+    assert not list(Path(job.results_dir).glob("*.docx"))
+
+
+def test_cancel_during_galley_adjudication_keeps_screen_cost(runner, monkeypatch):
+    from docproof.pipeline import JobCancelled
+    from docproof.providers import NormalizedUsage, cost_of_usage
+    import galley.adjudicate as module
+
+    store, r = runner
+    monkeypatch.setattr(r, "_galley_adapters", lambda job, cfg: _fake_adapters())
+    expected = []
+
+    def cancelled_screen(*args, model, usage, should_cancel):
+        usage.add(NormalizedUsage(input_tokens=1000, output_tokens=100), model=model)
+        expected.append(cost_of_usage(usage, fallback_model=model))
+        r.request_cancel("j1")
+        assert should_cancel()
+        raise JobCancelled(usage=usage)
+
+    monkeypatch.setattr(module, "adjudicate", cancelled_screen)
+    _job(store, model="claude-haiku-4-5")
+    r.run_one("j1")
+
+    job = store.get("j1")
+    assert job.state == "cancelled"
+    assert expected[0] > 0 and job.cost == pytest.approx(expected[0])
+    assert not list(Path(job.results_dir).glob("*.docx"))
 
 
 def test_run_galley_memory_ingest_is_idempotent_across_runs(runner, monkeypatch):

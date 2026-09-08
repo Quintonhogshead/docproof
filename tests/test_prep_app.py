@@ -106,6 +106,23 @@ def test_prep_produces_a_tagged_file_and_its_notes(client):
     assert not (results / "tracked_googledoc.docx").exists()
 
 
+def test_formatting_drops_a_proofing_storysheet_request(client, provider, monkeypatch):
+    def forbidden_storysheet(*args, **kwargs):
+        raise AssertionError("formatting must not build a proofreading story sheet")
+
+    monkeypatch.setattr("docproof.storysheet.build_storysheet", forbidden_storysheet)
+    job = start_prep(client, upload(client)["id"], output="book",
+                     features={"storysheet": True})
+    assert job["state"] == "done", job.get("error")
+    assert job["features"]["storysheet"] is False
+    stored = client.app_state.store.get(job["id"])
+    assert stored.features["storysheet"] is False
+    assert client.app_state.runner.config_for(stored).storysheet.enabled is False
+    assert provider.calls
+    assert {call["schema_name"] for call in provider.calls} == {"paragraph_styles"}
+    assert (Path(job["results_dir"]) / "book_googledoc.docx").is_file()
+
+
 def test_the_output_toggle_decides_which_files_are_written(client):
     both = start_prep(client, upload(client)["id"], output="both")
     results = Path(both["results_dir"])
