@@ -290,6 +290,43 @@ def mark_source(token: str, file: DriveFile, job: Job, rec: FileRecord,
     state.record(rec)
 
 
+# What `mark_source` writes when a manuscript fails, and therefore what
+# `clear_marker` takes away. Kept as one tuple so the two cannot drift: a
+# property added to the failed marker is removed by the next clear.
+MARKER_PROPS = (STATE_PROP, REASON_PROP, AT_PROP, JOB_PROP)
+
+
+def clear_marker(token: str, rec: FileRecord, state: WatchState, *,
+                 opener=None) -> list[str]:
+    """Take the failed marker off a manuscript so the next pass tries it again.
+
+    The needs-human report says "fix the file and clear the marker"; this is
+    the clearing. Drive first, then the local record, in that order: the
+    marker on the file is what makes it invisible to a pass, so a crash between
+    the two leaves a file the next pass will look at and a record that still
+    says failed — which `_one` overwrites — rather than the reverse, a record
+    that says try again and a marker that still says no.
+
+    A property set to None is how Drive removes it (see
+    `drive.set_app_properties`). All four go, reason and date included, so the
+    next failure — if there is one — is dated and explained afresh rather than
+    reading an old reason beside a new state. Says what it removed, for the
+    log and for whoever typed the command."""
+    drive.set_app_properties(token, rec.file_id,
+                             {prop: None for prop in MARKER_PROPS},
+                             opener=opener or drive._open_url)
+    was = rec.marked
+    rec.marked = ""
+    rec.attempts = 0
+    state.record(rec)
+    removed = list(MARKER_PROPS)
+    log.info("Cleared the '%s' marker on %s (%s): removed %s; attempts reset "
+             "to 0. The next pass will try it again.",
+             was or "failed", rec.name or rec.file_id, rec.file_id,
+             ", ".join(removed))
+    return removed
+
+
 def failure_note(job: Job, file: DriveFile, reason: str) -> Path | None:
     """A short note saying nothing was changed, for publishers who would
     rather the folder said so than said nothing."""

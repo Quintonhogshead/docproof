@@ -167,6 +167,29 @@ class WatchState:
         """This file's record, empty if it has none. Not saved until asked."""
         return self.files.get(file_id) or FileRecord(file_id=file_id)
 
+    def find(self, ref: str) -> FileRecord | None:
+        """The record a person meant by `ref`: a Drive id, or the manuscript's
+        name as `status` prints it.
+
+        An id wins outright. Failing that the name is matched without regard
+        to case, whole first and then as a fragment, and a fragment that
+        matches more than one book is no match at all — a command that clears
+        a marker must never guess between two manuscripts. None when nothing
+        fits; the caller says so in its own words."""
+        ref = (ref or "").strip()
+        if not ref:
+            return None
+        if ref in self.files:
+            return self.files[ref]
+        wanted = ref.lower()
+        whole = [r for r in self.files.values() if r.name.lower() == wanted]
+        if len(whole) == 1:
+            return whole[0]
+        if whole:
+            return None
+        partial = [r for r in self.files.values() if wanted in r.name.lower()]
+        return partial[0] if len(partial) == 1 else None
+
     def record(self, rec: FileRecord) -> None:
         rec.updated_at = datetime.now(timezone.utc).isoformat()
         self.files[rec.file_id] = rec
