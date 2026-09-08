@@ -221,6 +221,7 @@ _EXPECTED_GENRES = {
                     "mystery_thriller", "young_readers"],
     "uplit_vigil": ["fantasy", "romance", "horror"],
     "gilded_cartouche": ["fantasy", "romance", "historical", "horror"],
+    "burning_cartouche": ["fantasy", "romance", "horror"],
 }
 
 
@@ -1395,3 +1396,149 @@ def test_uplit_vigil_dictates_no_pose():
     assert "full-length" in frame
     assert "one large simple pale shape" in frame
     assert "below" in frame            # the light direction, rule 1
+
+
+# -- Archetype Twelve (burning_cartouche): the two laws §24 paid for -----------
+
+def test_burning_cartouche_places_every_contain_slot_by_its_ink():
+    # Same reasoning as pale_reliquary's rule 0 (§15.25): every contain-fit
+    # slot here is anchored on a severed edge or clamped whole, and the frame
+    # measurement can honour neither — it flushes the model's arbitrary
+    # transparent margin to the trim instead of the subject.
+    a = ARCHETYPES["burning_cartouche"]
+    contain = [s for s in a.art if s.fit == "contain"]
+    assert contain
+    assert all(s.place_by == "ink" for s in contain), [
+        s.id for s in contain if s.place_by != "ink"]
+
+
+def test_burning_cartouche_border_is_two_trim_pinned_columns_not_a_ring():
+    """§24.1. The border was ONE cover-fit plate asked for "a ring with a large
+    empty hole through the centre"; the generator filled the hole twice, the
+    second time while honouring every other clause in the frame, and buried the
+    field, the floor, the chain and the title's ground under one reef texture.
+
+    A plate pinned to a side trim cannot fill the middle whatever comes back,
+    so the hole is geometry now instead of a request. Guard the geometry: two
+    columns, opposite trims, both cut on the edge they are anchored to."""
+    by_id = {s.id: s for s in ARCHETYPES["burning_cartouche"].art}
+    assert "bower" not in by_id, "the full-frame ring is the bug, not the design"
+    left, right = by_id["bower_left"], by_id["bower_right"]
+    assert (left.cut_edge, left.anchor[0]) == ("left", 0.0)
+    assert (right.cut_edge, right.anchor[0]) == ("right", 1.0)
+    # ...and the surplus width leaves through the trim (§24.2's visible-width
+    # law): the offset pushes OUT, it does not pull the column inboard.
+    assert left.offset[0] < 0 and right.offset[0] > 0
+    # Rule 1: the organic half is asymmetric BY KIND as well as by placement.
+    assert left.scale != right.scale
+    assert left.anchor[1] != right.anchor[1]
+
+
+def test_burning_cartouche_metal_is_symmetric_and_the_organic_is_not():
+    """Rule 1, the whole design. `filigree` is one ornament kaleidoscoped into
+    four byte-identical corners; nothing organic may wear `corners`."""
+    by_id = {s.id: s for s in ARCHETYPES["burning_cartouche"].art}
+    assert by_id["filigree"].corners
+    assert by_id["filigree"].corners_flip_vertical, (
+        "a rocaille scroll is top/bottom symmetric and wants the full mirror")
+    for sid in ("bower_left", "bower_right", "bough", "floor"):
+        assert not by_id[sid].corners, f"{sid} is the irregular half of rule 1"
+
+
+def test_burning_cartouche_blaze_is_the_whole_occlusion_budget():
+    """Rule 6. Exactly one plate is drawn after the title, it is on `screen`
+    (which can only ADD light, so it glows over the byline instead of eating
+    it), and §24.1's gradient mask fades its top out whatever shape the
+    generator returns."""
+    a = ARCHETYPES["burning_cartouche"]
+    after_title = a.layers[a.layers.index("title") + 1:]
+    art_ids = {s.id for s in a.art}
+    crossing = [ref for ref in after_title if ref in art_ids]
+    assert crossing == ["blaze"], crossing
+    blaze = {s.id: s for s in a.art}["blaze"]
+    assert blaze.blend == "screen"
+    assert blaze.mask is not None and blaze.mask.gradient is not None
+
+
+def test_burning_cartouche_hides_the_chains_cut_behind_the_relic():
+    """§24.3. `pendant`'s severed end leaves through no trim — the relic's own
+    body covers it — which only works if the chain is drawn FIRST. This
+    ordering looks wrong in the layers list and is right on the page, so it
+    gets a guard rather than a comment."""
+    layers = ARCHETYPES["burning_cartouche"].layers
+    assert layers.index("pendant") < layers.index("relic")
+
+
+def test_burning_cartouche_puts_nothing_but_the_relic_on_the_altar():
+    """Rule 3. An earlier draft carried a `strewn` slot — loose fragments of
+    the border material come to rest around the relic's foot — and it was cut
+    on owner note, for the same reason romantasy_enclosure's cabinet of
+    curiosities and crossed_relics' second scatter were cut: made of the same
+    stuff as the border, the fragments read as the border leaking into the
+    middle, which is the one place this template defends. Every tuning it
+    needed was a rule invented to stop it doing damage.
+
+    The floor between the relic and the type is meant to be EMPTY, so guard
+    the emptiness rather than trusting the comment."""
+    a = ARCHETYPES["burning_cartouche"]
+    assert "strewn" not in {s.id for s in a.art}
+    # What is left on the centre axis below the border tier: the chain and the
+    # relic, and nothing else.
+    between = a.layers[a.layers.index("finial") + 1:a.layers.index("scrim:3")]
+    assert between == ["pendant", "relic"], between
+    # The relic rests rather than grows, hangs or spans, so it may not be
+    # trim-cut (§15.25).
+    assert {s.id: s for s in a.art}["relic"].keep_whole
+
+
+def test_burning_cartouche_grounds_its_type_before_drawing_it():
+    """§24.4. `foot_wash` sat AFTER the title for four tunings. That was
+    harmless while its ramp started below the type and became the whole problem
+    the moment the ramp was moved up to darken the title's ground: a wash over
+    the type is a VEIL, and it dims the ink in exact proportion to how much it
+    was supposed to be helping. The render read as a title fading out down a
+    ramp — an ink fault it was not, so three successive tunings of the ink moved
+    it essentially not at all. Fixing the order alone took title contrast from
+    4.58 to 15.02.
+
+    A wash is a ground only if it is drawn first."""
+    a = ARCHETYPES["burning_cartouche"]
+    wash = a.layers.index("foot_wash")
+    for slot in ("subtitle", "title", "author"):
+        assert wash < a.layers.index(slot), (
+            f"foot_wash is drawn after {slot!r}, which veils it rather than "
+            f"grounding it")
+    # `series` is the exception and deliberately so: it lives in the crest's
+    # medallion at the very top, nowhere near this wash's ramp.
+    assert wash > a.layers.index("series")
+
+
+def test_burning_cartouche_title_is_a_three_line_stack_in_a_tall_zone():
+    """The uniform fit sizes every line to whatever the LONGEST line can carry,
+    so the extra break is what buys the size: three lines throttled by
+    "DROWNING" instead of two throttled by "DROWNING BELL", +27% on the fitted
+    size. The tall zone is half of that decision — without the height the fit
+    just re-throttles on the zone instead of the measure."""
+    title = {t.id: t for t in ARCHETYPES["burning_cartouche"].text}["title"]
+    assert title.max_lines >= 3
+    assert title.zone.h >= 0.20
+    # justify_stack was tried and is the trap here (§15.24's known gap): it
+    # shrinks the block to the zone height and clamps short lines at size_max,
+    # which returned a two-line title at 0.047 — smaller than the uniform fit's
+    # 0.063 — under a giant "THE".
+    assert title.fit_mode == "uniform"
+
+
+def test_burning_cartouche_relic_is_loud_by_light_not_by_edge():
+    """Rule 3, restated. Against a border of hundreds of small crisp objects a
+    hard-edged, hard-lit focal plate is just one more hard thing; the relic
+    wins by being the soft, lit, simple mass. The prompt says so and
+    `relic_soften` backs it up in the engine, so the read does not depend on
+    one generation coming back tender."""
+    a = ARCHETYPES["burning_cartouche"]
+    soften = {j.id: j for j in a.adjust}["relic_soften"]
+    assert soften.op == "blur"
+    assert soften.mask is not None and soften.mask.from_layer == "relic"
+    assert a.layers.index("relic") < a.layers.index("relic_soften")
+    frame = {s.id: s for s in a.art}["relic"].prompt_frame
+    assert "soft" in frame.lower() and "no hard specular" in frame.lower()
