@@ -180,7 +180,7 @@ _DASHES = re.compile(r"(?P<pre>[ \t\u00a0]*)(?P<run>-{2,}|–|—|-)(?P<post>[ \
 # "the explosions- none") is a typed sentence break, a broken compound, or a
 # stray — a sweep cannot tell which, and a sweep that fires wrongly is the
 # more expensive mistake. Left alone for a reader.
-from .adjudicate import FUNCTION_WORDS as _FUNCTION_WORDS  # noqa: E402
+from .function_words import FUNCTION_WORDS as _FUNCTION_WORDS  # noqa: E402
 
 _WORD_BEFORE = re.compile(r"[A-Za-z][A-Za-z'’]*$")
 _WORD_AFTER = re.compile(r"[\"“‘']?([A-Za-z][A-Za-z'’]*)")
