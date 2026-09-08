@@ -7685,8 +7685,12 @@ function renderWatchFiles(files) {
   table.append(headRow(['Manuscript', 'What happened', 'Put back', 'Cost',
                         '']));
   files.forEach((f) => {
+    // One put-back file per line. Joined with commas on one no-wrap line, a
+    // book that got all of its outputs made this column wider than the card,
+    // and the Cost and Try-again columns scrolled off the right edge behind a
+    // scrollbar macOS does not draw — "I don't see the button".
     const tr = bodyRow([f.name, f.plain_state,
-                        f.uploaded.join(', ') || '—', money(f.cost)]);
+                        f.uploaded.join('\n') || '—', money(f.cost)]);
     const td = document.createElement('td');
     if (f.marked === 'failed') {
       // "Needs attention" is a marker on the file in Drive, and the marker is
