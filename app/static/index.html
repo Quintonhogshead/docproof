@@ -1117,10 +1117,8 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                 <label class="field">
                   <span>Who reads the book</span>
                   <select id="proof-runner">
-                    <option value="external">Mac practitioner — settled +
-                      certified + decision log (recommended)</option>
-                    <option value="app">In the app — unsettled, no decision
-                      log</option>
+                    <option value="external">The Galley agent (recommended)</option>
+                    <option value="app">DocWatch itself</option>
                   </select>
                   <small class="muted" id="proof-runner-hint"></small>
                 </label>
@@ -1151,6 +1149,13 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                   <button id="wf-proof-save" class="primary">Save</button>
                 </div>
                 <p id="wf-proof-note" class="action-note" hidden></p>
+
+                <div class="wf-readout" id="proof-agent-block" hidden>
+                  <h4>The practitioner machine</h4>
+                  <p id="proof-agent-line" class="small"></p>
+                  <p id="proof-agent-detail" class="muted small" hidden></p>
+                  <p id="proof-agent-error" class="small wf-agent-error" hidden></p>
+                </div>
 
                 <div class="wf-readout" id="proof-awaiting-block" hidden>
                   <h4>Out with the practitioner</h4>

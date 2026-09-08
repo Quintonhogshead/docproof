@@ -312,6 +312,123 @@ says so.
 
 ---
 
+### The Galley agent on Fly
+
+Galley — the unattended proofreader — needs a machine that holds a Claude Max
+subscription token, and since 2026-09-06 that machine can be a second Fly
+process group, `agent`, beside the web app (`fly.toml` `[processes]`). It runs
+`docproof galley agent`: every five minutes it asks the web app which Book 1
+files DocWatch has marked awaiting, downloads one with the watcher's Google
+sign-in, runs the driver (one Claude Code session per phase on the
+subscription, the docproof sifters on the API keys, LanguageTool locally) and
+uploads the Book 2 set. Nothing about it runs in the web process.
+
+One-time setup:
+
+1. **Its disk.** The agent's workspaces, claim ledger and LanguageTool jar live
+   on a volume of their own, mounted at `/data` on the agent machine only:
+
+   ```bash
+   fly volumes create galley_data -a atmosphere-docproof -r iad -s 10
+   ```
+
+2. **Its secrets.** Secrets are app-wide, so the subscription token is named
+   `GALLEY_OAUTH_TOKEN` — nothing in the web app reads that name — and only
+   becomes `CLAUDE_CODE_OAUTH_TOKEN` inside the agent's mode-600 credentials
+   file, which the entrypoint (`galley/practitioner/fly/galley-agent`) writes
+   from the environment at boot. The Google values are the watcher's sign-in:
+   the refresh token from the Mac keychain (or `docproof-watch auth`), the
+   client id and secret from the watcher's `watch.json`.
+
+   ```bash
+   fly secrets set -a atmosphere-docproof \
+     GALLEY_OAUTH_TOKEN=<from `claude setup-token`> \
+     GOOGLE_REFRESH_TOKEN=<the watcher's refresh token> \
+     GOOGLE_CLIENT_ID=<the watcher's client id> \
+     GOOGLE_CLIENT_SECRET=<the watcher's client secret>
+   ```
+
+   `DOCPROOF_AGENT_TOKEN`, `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are the
+   web app's existing secrets and are reused as-is: the poller presents the
+   agent token to `/api/watch/awaiting`, and the sifters get the API keys
+   through the brain's `docproof` wrapper (`galley/practitioner/galley-bin/
+   docproof`), never the brain itself.
+
+3. **Deploy.** The next push to `main` (or `fly deploy`) builds the image with
+   Claude Code in it and creates the agent machine. `fly.toml` sizes it at
+   `shared-cpu-4x` / 8 GB; raise it there if `fly logs` for the `agent`
+   process shows OOM kills.
+
+4. **Turn proofing on** under Admin → Automations → Proofread, runner
+   `external`. Until then the agent polls and finds nothing.
+
+   Optionally `GALLEY_ALERT_EMAIL=<you>` too (a plain `fly secrets set`
+   value): the agent emails that address when it starts, when its polling
+   breaks and again when it recovers, and when a hand-off delivery is given
+   up on. Without it the agent uses the watcher's notify address.
+
+**When the token dies.** A `claude setup-token` token expires or is revoked
+eventually, and Claude Code then prints `Failed to authenticate. API Error: 401
+OAuth access token is invalid` and exits on turn one. Since v0.193.12 the
+agent treats that as the machine's problem, not the book's: the driver raises
+instead of writing a `needs_human` verdict, the claimed book stays claimed and
+untouched, the agent stops claiming, emails once, and the practitioner panel
+shows **Halted · subscription token rejected**. It also checks the token at
+boot, before any book. To recover:
+
+```bash
+claude setup-token
+fly secrets set -a atmosphere-docproof GALLEY_OAUTH_TOKEN=<the new token>
+```
+
+The secret restarts the machines; the agent's first poll resumes the held
+book from the phase it was in. A book that an older agent wrote off as
+`needs_human` over a dead token is `failed` in the ledger and will not be
+retried — drop it and mark it awaiting again:
+
+```bash
+fly ssh console -a atmosphere-docproof --process-group agent \
+  -C "docproof galley agent --workspace-root /data/galley-workspaces --forget '<Surname> - Book 1.docx'"
+```
+
+then Admin → Automations → Run so DocWatch lists it as awaiting; note that
+the `needs_human` outcome.json already uploaded beside it must be removed
+from the author's folder first, or DocWatch moves the book on at its next pass.
+
+**Watching it.** The agent is not a black box:
+
+- **Admin → Automations → Proofread, "The practitioner machine"** shows the
+  agent's last heartbeat: which machine, whether it is still reporting (red
+  after 20 minutes of silence), which book and phase it is in, on which
+  brain, for how long, how many turns the session has taken, the settle
+  round, and the last error or verdict. The agent reports at every phase
+  boundary and once a minute while a book runs (`POST /api/watch/agent`,
+  behind the same bearer token as the awaiting list).
+- **A `needs_human` hand-off carries the evidence.** Beside the outcome and
+  the decision log the folder gets `<surname> - Book 2 - diagnostics.zip`:
+  every phase transcript, the driver ledger, `PLAN.md`, `QUESTIONS.md`, the
+  run state and settlement files, and the agent's own log. Unzip that before
+  reaching for `fly ssh console`.
+- **The agent emails about itself** (see `GALLEY_ALERT_EMAIL`) — a boot after
+  a deploy, a poll that stopped working, a delivery it gave up on. Book
+  verdicts still arrive the DocWatch way, on the next pass.
+- **Taking a book back.** The agent resumes a claimed book at every boot for
+  as long as DocWatch lists it as awaiting. To stop a run for good (a killed
+  test, a file dropped by mistake): `fly machine stop <agent machine>`, then
+  click **Release** on the book's row under "Out with the practitioner", then
+  `fly machine start`. Putting the HubSpot status back at the ready value
+  queues the book again.
+- `fly logs -a atmosphere-docproof --process agent` is the live log; the
+  same lines are in `/data/galley-workspaces/agent.log` on the agent machine,
+  and the per-phase transcripts under `/data/galley-workspaces/<slug>/runs/
+  driver/` (`fly ssh console --process agent`).
+
+Every deploy restarts the agent machine, which kills a phase session in
+flight; the run resumes from its last completed phase on the next poll, so at
+worst one phase is repeated (the boot email says when that happened). The Max
+token is a personal seat: books proofread here share its quota with whatever
+the same account is doing in Claude Code.
+
 ## 5. Backups and restore
 
 Everything that matters lives on the volume under `/data/docproof` — the

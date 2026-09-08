@@ -50,8 +50,14 @@ def test_galley_letter_runs_on_a_bare_run_directory(tmp_path):
     rc = main(["galley", "letter", str(tmp_path)])
     assert rc == 0
     letter = (tmp_path / "letter.md").read_text(encoding="utf-8")
-    assert "Editorial letter — My Book" in letter
+    # v0.187.0: the CLI always renders the proofreader's letter (run evidence),
+    # so the heading is "Proofreading letter" and the tracked-edit/comment
+    # counts come from the synthesized case file.
+    assert letter.startswith("# Proofreading letter — My Book\n")
+    assert "**1 tracked correction(s)**" in letter
+    assert "**1 margin comment(s)**" in letter
     assert (tmp_path / "style-sheet.md").exists()
+    assert (tmp_path / "verification.md").exists()
 
 
 def test_galley_letter_errors_without_findings_or_casefile(tmp_path, capsys):

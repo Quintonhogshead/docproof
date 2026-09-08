@@ -1447,6 +1447,7 @@ def cmd_galley(args) -> int:
             "drive": _galley_drive,
             "agent": _galley_agent,
             "journal": _galley_journal,
+            "plan-line": _galley_plan_line,
             "outcome": _galley_outcome}[args.galley_cmd](args)
 
 
@@ -1528,7 +1529,18 @@ def _galley_agent(args) -> int:
                      budget_usd=args.budget,
                      drive_folder_override=args.drive_folder_id,
                      poll_interval_s=args.poll_interval
-                     or ga.DEFAULT_POLL_INTERVAL_S)
+                     or ga.DEFAULT_POLL_INTERVAL_S,
+                     preflight=ga.check_credentials)
+
+    if args.forget:
+        try:
+            name = agent.forget(args.forget)
+        except ga.AgentError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        print(f"Forgot {name}: the next poll claims it afresh if DocWatch "
+              f"still lists it as awaiting (Admin → Automations → Run).")
+        return 0
 
     if args.status:
         state = agent.status()
@@ -1556,7 +1568,8 @@ def _galley_agent(args) -> int:
         report = agent.poll_once()
         print(f"Looked at {report.looked_at} awaiting book(s)."
               + (f" Ran {report.claimed}: {report.outcome}."
-                 if report.claimed else ""))
+                 if report.claimed else "")
+              + (f" HALTED — {report.halted[:200]}" if report.halted else ""))
         for skipped in report.skipped:
             print(f"  skipped {skipped}")
         if args.json:
@@ -1612,6 +1625,20 @@ def _galley_drive(args) -> int:
         kwargs["budget_usd"] = args.budget
     if args.model:
         kwargs["model"] = args.model
+    if getattr(args, "effort", None):
+        kwargs["effort"] = args.effort
+    for name, flag in (("model_by_phase", "phase_model"),
+                       ("effort_by_phase", "phase_effort")):
+        pairs: dict = {}
+        for spec in getattr(args, flag) or []:
+            phase, _, value = str(spec).partition("=")
+            if not value.strip():
+                print(f"error: --{flag.replace('_', '-')} wants PHASE=VALUE, "
+                      f"got {spec!r}", file=sys.stderr)
+                return 2
+            pairs[phase.strip()] = value.strip()
+        if pairs:
+            kwargs[name] = pairs
     if args.permission_mode:
         kwargs["permission_mode"] = args.permission_mode
     if args.wrapbin:
@@ -1673,8 +1700,17 @@ def _galley_drive(args) -> int:
         print(f"phases: {' -> '.join(phases)}")
         print(f"gate: --approve {args.approve} at ${drv.budget_usd:.2f}"
               f"{' (mechanical only)' if mechanical_only else ''}")
+        try:
+            brains = {p: drv.model_for(p) + (f" @{drv.effort_for(p)}"
+                                             if drv.effort_for(p) else "")
+                      for p in phases}
+        except gd.DriverError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        print("brains: " + ", ".join(f"{p}={b}" for p, b in brains.items()))
         if args.json:
             print(json.dumps({"workspace": str(ws), "phases": phases,
+                              "brains": brains,
                               "approve": args.approve,
                               "budget_usd": drv.budget_usd,
                               "mechanical_only": mechanical_only},
@@ -1882,6 +1918,39 @@ def _galley_residuals(args) -> int:
     return 0
 
 
+def _galley_plan_line(args) -> int:
+    """Record what became of one line of PLAN.md. $0."""
+    from galley.plan_ledger import LEDGER_NAME, audit, load_ledger, record
+
+    ws = Path(args.workspace or ".")
+    ledger = ws / "runs" / LEDGER_NAME
+    if args.status == "ran" and not args.evidence:
+        print("error: --status ran needs --evidence (the artifact it wrote)",
+              file=sys.stderr)
+        return 2
+    if args.status == "skipped" and not args.reason:
+        print("error: --status skipped needs --reason", file=sys.stderr)
+        return 2
+    if args.status == "deferred" and not (args.evidence or args.reason):
+        print("error: --status deferred needs --evidence (where the work "
+              "went) or --reason", file=sys.stderr)
+        return 2
+    entry = record(ledger, args.label, args.status,
+                   evidence=args.evidence or "", reason=args.reason or "")
+    print(f"plan line {args.label.lower()}: {entry['status']}"
+          + (f" — {entry['evidence']}" if entry["evidence"] else "")
+          + (f" ({entry['reason']})" if entry["reason"] else ""))
+    plan = ws / "PLAN.md"
+    if plan.is_file():
+        rows = audit(plan.read_text(encoding="utf-8"), load_ledger(ledger))
+        open_lines = [it.label for it, st, why in rows if why]
+        print(f"  {len(rows) - len(open_lines)} of {len(rows)} plan line(s) "
+              f"accounted for"
+              + (f"; still open: {', '.join(open_lines)}" if open_lines
+                 else " — certify's plan-ledger check will pass"))
+    return 0
+
+
 def _galley_outcome(args) -> int:
     from galley.outcome import (DEFAULT_DONE_VALUE, DEFAULT_NEEDS_HUMAN_VALUE,
                                 Outcome, Thresholds, assess, hubspot_fields)
@@ -1894,11 +1963,23 @@ def _galley_outcome(args) -> int:
             return 2
         prior = assess(run, done_value=done_value,
                        needs_human_value=needs_value)
+        # Who overruled: an explicit --by, else the Galley brain when this
+        # runs inside a driver phase (the driver puts the phase in the
+        # environment), else a person at a terminal. The brain MAY overrule
+        # — owner's policy, 2026-09-07 — and the record must say it did.
+        import os
+        from galley.driver import BRAIN_PHASE_ENV
+        phase = os.environ.get(BRAIN_PHASE_ENV, "").strip()
+        by = (args.by or "").strip() or (
+            f"galley brain ({phase} phase)" if phase else "human")
         oc = Outcome(outcome=args.set, reason=args.reason,
                      evidence=prior.evidence,
                      hubspot=hubspot_fields(args.set, done_value=done_value,
                                             needs_human_value=needs_value),
-                     set_by="human")
+                     set_by=by)
+        if prior.outcome != args.set:
+            print(f"overruled: assessment said {prior.outcome}, set to "
+                  f"{args.set} by {by}")
     else:
         th = Thresholds()
         if args.rewrite_share is not None:
@@ -1922,8 +2003,10 @@ def _galley_outcome(args) -> int:
     ev = oc.evidence
     print(f"  {ev.get('words', 0)} words, {ev.get('applied_edits', 0)} edits "
           f"({ev.get('edit_density_per_kword', 0.0):.1f}/1k), rewrite share "
-          f"{ev.get('rewrite_share', 0.0):.0%}, unresolved "
-          f"{ev.get('unresolved_queries', 0)}, damage {ev.get('edit_damage', 0)}")
+          f"{ev.get('rewrite_share', 0.0):.0%}, unresolved internal "
+          f"{ev.get('unresolved_internal', ev.get('unresolved_queries', 0))}, "
+          f"open author queries {ev.get('open_author_queries', ev.get('queries', 0))}, "
+          f"damage {ev.get('edit_damage', 0)}")
     print(f"  hubspot: {oc.hubspot.get('property')} = {oc.hubspot.get('value')!r}"
           f" (object {oc.hubspot.get('object')})")
     print(f"  {path}")
@@ -2373,9 +2456,23 @@ def _galley_letter(args) -> int:
     from galley.letter import render_verification_report, run_evidence
     evidence = run_evidence(synth_dir, getattr(args, "workspace", None)) \
         if (synth_dir / "findings.json").exists() else None
-    letter_path, style_path = render_all(cf, out, ms=ms, evidence=evidence)
-    report_path = render_verification_report(evidence, out, cf=cf) \
+    # Headed by the DELIVERED name (Book Two), never the source file (Book
+    # One): three documents titled Book One shipped under Book Two names.
+    title = None
+    if args.source:
+        from galley.driver import handoff_base
+        title = handoff_base(Path(args.source).name)
+    letter_path, style_path = render_all(cf, out, ms=ms, evidence=evidence,
+                                         title=title)
+    report_path = render_verification_report(evidence, out, cf=cf,
+                                             title=title) \
         if evidence is not None else None
+    author_path = None
+    if evidence is not None:
+        from galley.letter import render_author_letter
+        author_path = render_author_letter(cf, out, evidence=evidence,
+                                           title=title)
+        print(f"author letter: {author_path}")
     open_queries = sum(1 for v in cf.verdicts if v.ruling == "query")
     print(f"\nEditorial letter for {cf.book or '(untitled)'}: "
           f"{len(cf.findings)} finding(s), {len(cf.waves)} wave(s), "
@@ -2943,9 +3040,15 @@ def _cost_line(usage: Usage, model: str) -> str:
     Sapling share, to four decimals so a sub-cent mock or replay never reads as
     the silently-didn't-run "$0.00"."""
     from .providers import cost_of_usage
+    from .providers.catalog import subscription_value_of_usage
     cost = (cost_of_usage(usage, fallback_model=model) or 0.0) \
         + (getattr(usage, "sapling_cost", 0.0) or 0.0)
-    return f"${cost:.4f} spent ({usage.api_calls} model call(s))"
+    line = f"${cost:.4f} spent ({usage.api_calls} model call(s))"
+    unbilled = subscription_value_of_usage(usage, fallback_model=model)
+    if unbilled:
+        line += (f" — plus ${unbilled:.2f} of subscription-lane turns, "
+                 f"not billed")
+    return line
 
 
 def _now_iso() -> str:

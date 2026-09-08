@@ -48,24 +48,54 @@ _GLYPH_LINE = re.compile(
     r"[\s*•❖❥❧◆◇❀※~#=_-]*)\s*$")
 
 # A very small, deliberately blunt genre-vocabulary heuristic: each hit is one
-# vote, case-insensitive whole-word. Ties break toward "general_fiction" (see
-# _guess_genres). Not a classifier — a starting recommendation an editor can
-# override, exactly like every other heuristic in this module.
+# vote. Ties break toward "general_fiction" (see _guess_genres). Not a
+# classifier — a starting recommendation an editor can override, exactly like
+# every other heuristic in this module.
+#
+# A bare entry matches as a WHOLE WORD. An entry ending in "*" matches as a
+# prefix, for stems whose inflections all carry the same signal ("sorcer*" for
+# sorcerer/sorcery). The distinction is load-bearing: the terms used to be
+# prefix-matched wholesale, so "habit" collected "habitat" and "alien"
+# collected "alienated" — votes cast by words that mean something else.
+_STEM = "*"
+#: Hits per 10,000 words the strongest genre must reach before the vocabulary
+#: vote counts at all (see _guess_genres).
+MIN_GENRE_HITS_PER_10K = 3.0
 _GENRE_VOCAB: dict[str, tuple[str, ...]] = {
     "fantasy_sf": (
-        "magic", "wizard", "sorcer", "dragon", "spell", "kingdom", "sword",
-        "throne", "elf", "elves", "prophecy", "starship", "spaceship",
-        "galaxy", "android", "alien", "warp", "planet", "empire", "rebellion",
+        "magic*", "wizard*", "sorcer*", "dragon*", "spell", "spells",
+        "kingdom*", "sword*", "throne*", "elf", "elves", "prophecy",
+        "prophecies", "starship*", "spaceship*", "galaxy", "galaxies",
+        "android*", "alien", "aliens", "warp", "planet*", "empire*",
+        "rebellion*",
     ),
     "self_help_business": (
-        "strategy", "leadership", "productivity", "mindset", "habit",
-        "workplace", "entrepreneur", "customer", "revenue", "principle",
-        "framework", "actionable", "takeaway",
+        "strategy", "strategies", "leadership", "productivity", "mindset*",
+        "habit", "habits", "workplace*", "entrepreneur*", "customer*",
+        "revenue*", "principle*", "framework*", "actionable", "takeaway*",
     ),
     "literary_memoir": (
-        "memoir", "childhood", "grief", "remember", "my mother", "my father",
-        "diary", "recollect", "years later", "looking back",
+        # NOT "remember". It is the commonest verb in narrative prose and
+        # carries no genre signal at all — on a 65k-word fantasy novel it
+        # scored 32, out-voting "magic" (24) and every other fantasy term, and
+        # handed the book a literary_memoir posture (2026-09-07).
+        "memoir*", "childhood*", "grief", "my mother", "my father",
+        "diary", "diaries", "recollect*", "years later", "looking back",
     ),
+}
+
+
+def _vocab_re(word: str) -> str:
+    """One vocabulary entry as a regex: a stem matches by prefix, anything
+    else matches whole-word."""
+    if word.endswith(_STEM):
+        return r"\b" + re.escape(word[:-len(_STEM)])
+    return r"\b" + re.escape(word) + r"\b"
+
+
+_GENRE_PATTERNS: dict[str, re.Pattern[str]] = {
+    genre: re.compile("|".join(_vocab_re(w) for w in words))
+    for genre, words in _GENRE_VOCAB.items()
 }
 
 
@@ -285,9 +315,19 @@ def _guess_genres(paragraphs: Sequence[ParagraphRef],
     scores: dict[str, float] = {g: 0.0 for g in
                                 ("fantasy_sf", "self_help_business",
                                  "literary_memoir", "general_fiction")}
-    for genre, words in _GENRE_VOCAB.items():
-        for w in words:
-            scores[genre] += len(re.findall(r"\b" + re.escape(w), text_low))
+    for genre, pattern in _GENRE_PATTERNS.items():
+        scores[genre] += len(pattern.findall(text_low))
+    # Thin evidence is no evidence. A 96k-word thriller with 13 business
+    # words in it is not a business book, but 13 beats a +2 floor every time,
+    # so general_fiction could never win and every plain novel was handed
+    # whichever posture its vocabulary happened to graze. Below this density
+    # the vote is noise and only the floors below decide. Measured on ten real
+    # manuscripts (2026-09-07): genuine signal sits at 7-33 hits per 10k
+    # words, noise at 0.6-1.7 — a wide gap on both sides of 3.
+    words = sum(_word_count(p.text) for p in paragraphs) or 1
+    strongest = max(scores.values())
+    if strongest * 10_000 / words < MIN_GENRE_HITS_PER_10K:
+        scores = {g: 0.0 for g in scores}
     # Low dialogue density plus zero genre-vocabulary hits reads as non-
     # fiction prose more than a novel; nudge self_help_business up a little
     # rather than leaving every score at the vocabulary count alone.

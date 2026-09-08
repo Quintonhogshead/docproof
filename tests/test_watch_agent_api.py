@@ -204,3 +204,117 @@ def test_the_status_rows_carry_the_folder_ids_too(tmp_path):
     assert row["subfolder_id"] == "folder-A"
     assert row["author_last"] == "Test"
     assert row["proof_marked"] == "awaiting"
+
+
+# --- the heartbeat -------------------------------------------------------------
+
+def _boss(app):
+    c = TestClient(app)
+    assert c.post("/api/login", json={"email": "boss@press.com",
+                                      "password": "password1"}).status_code == 200
+    return c
+
+
+def test_the_agent_can_report_and_the_drawer_reads_it_back(tmp_path, monkeypatch):
+    monkeypatch.setenv(AGENT_TOKEN_ENV, TOKEN)
+    app = make_app(tmp_path)
+    beat = {"agent": "fly-agent-1", "state": "running", "book": "Test - Book 1.docx",
+            "phase": "settle", "poll_interval_s": 300}
+    answer = TestClient(app).post("/api/watch/agent", json=beat,
+                                  headers={"Authorization": f"Bearer {TOKEN}"})
+    assert answer.status_code == 200
+    assert answer.json() == {"ok": True}
+
+    seen = _boss(app).get("/api/watch").json()["watch"]["agent"]
+    assert seen["agent"] == "fly-agent-1"
+    assert seen["phase"] == "settle"
+    assert seen["received_at"]
+    assert seen["stale"] is False
+    assert seen["age_s"] < 60
+
+
+def test_a_silent_agent_shows_as_stale(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setenv(AGENT_TOKEN_ENV, TOKEN)
+    app = make_app(tmp_path)
+    watchlib.save_agent_status(app.state.watch.home,
+                               {"agent": "old", "poll_interval_s": 300})
+    later = datetime.now(timezone.utc) + timedelta(hours=1)
+    seen = watchlib.agent_status(app.state.watch.home, now=later)
+    assert seen["stale"] is True
+    assert seen["age_s"] > 3500
+    # Nothing reported at all is simply absent, not an error.
+    assert watchlib.agent_status(tmp_path / "nowhere") is None
+
+
+def test_the_heartbeat_needs_the_agent_token(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    # No server token: refused, and nothing is written.
+    assert TestClient(app).post("/api/watch/agent", json={"a": 1}).status_code == 403
+    monkeypatch.setenv(AGENT_TOKEN_ENV, TOKEN)
+    assert TestClient(app).post(
+        "/api/watch/agent", json={"a": 1},
+        headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert watchlib.agent_status(app.state.watch.home) is None
+    # A browser session is not the agent either.
+    assert _boss(app).post("/api/watch/agent", json={"a": 1}).status_code == 401
+
+
+def test_the_heartbeat_is_bounded(tmp_path, monkeypatch):
+    monkeypatch.setenv(AGENT_TOKEN_ENV, TOKEN)
+    app = make_app(tmp_path)
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    c = TestClient(app)
+    assert c.post("/api/watch/agent", json=["not", "an", "object"],
+                  headers=auth).status_code == 400
+    assert c.post("/api/watch/agent", content=b"{not json",
+                  headers={**auth, "Content-Type": "application/json"}
+                  ).status_code == 400
+    assert c.post("/api/watch/agent", json={"pad": "x" * 20000},
+                  headers=auth).status_code == 413
+    assert watchlib.agent_status(app.state.watch.home) is None
+
+
+# --- taking a book back --------------------------------------------------------
+
+def test_an_admin_can_release_an_awaiting_book(tmp_path, monkeypatch):
+    """A killed test run must not come back at the agent's next boot: releasing
+    the book takes it off the awaiting list the agent resumes from."""
+    monkeypatch.setenv(AGENT_TOKEN_ENV, TOKEN)
+    app = make_app(tmp_path)
+    home = app.state.watch.home
+    seed(home, [awaiting_record()])
+    boss = _boss(app)
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    assert len(TestClient(app).get("/api/watch/awaiting",
+                                   headers=auth).json()["books"]) == 1
+
+    answer = boss.post("/api/watch/proof/release", json={"file_id": "drive-1"})
+    assert answer.status_code == 200
+    body = answer.json()
+    assert body["released"] == "drive-1"
+    assert body["name"] == "Test - Book 1.docx"
+    assert body["drive_marked"] is False           # no Google sign-in here
+    # Gone from the agent's list, and from the drawer's awaiting rows.
+    assert TestClient(app).get("/api/watch/awaiting",
+                               headers=auth).json()["books"] == []
+    rows = [f for f in body["watch"]["files"] if f["file_id"] == "drive-1"]
+    assert rows and rows[0]["proof_marked"] == "failed"
+    # Releasing it twice is a 404, not a second write.
+    assert boss.post("/api/watch/proof/release",
+                     json={"file_id": "drive-1"}).status_code == 404
+    assert boss.post("/api/watch/proof/release",
+                     json={"file_id": "nope"}).status_code == 404
+
+
+def test_release_is_for_administrators_only(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    seed(app.state.watch.home, [awaiting_record()])
+    # No session at all, and the agent's bearer token is not a session either.
+    assert TestClient(app).post("/api/watch/proof/release",
+                                json={"file_id": "drive-1"}).status_code == 401
+    monkeypatch.setenv(AGENT_TOKEN_ENV, TOKEN)
+    assert TestClient(app).post(
+        "/api/watch/proof/release", json={"file_id": "drive-1"},
+        headers={"Authorization": f"Bearer {TOKEN}"}).status_code == 401

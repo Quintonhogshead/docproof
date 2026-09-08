@@ -217,3 +217,137 @@ def test_a_not_logged_in_turn_names_setup_token(monkeypatch, tmp_path):
         prov.complete_structured(model="opus", system="s", user="u",
                                  schema={}, schema_name="x", max_tokens=1)
     assert "claude setup-token" in str(ei.value)
+
+
+# ===========================================================================
+# A dead session must say why
+# ===========================================================================
+
+def _failing_sdk(seen, stderr_lines):
+    """A fake whose query() writes to the stderr sink, then dies the way the
+    real CLI did on Fly: ProcessError with no detail of its own."""
+    sdk = _fake_sdk([], seen)
+
+    async def query(*, prompt, options):
+        async for _ in prompt:
+            pass
+        sink = options.get("stderr")
+        for line in stderr_lines:
+            sink(line)
+        raise sdk.ProcessError(
+            "Command failed with exit code 1 (exit code: 1)\n"
+            "Error output: Check stderr output for details")
+        yield  # pragma: no cover - never reached, keeps this a generator
+    sdk.query = query
+    return sdk
+
+
+def test_a_dead_session_reports_what_the_cli_actually_wrote(monkeypatch):
+    """The Fly failure of 2026-09-07: the lane raised 'Command failed with
+    exit code 1 / Error output: Check stderr output for details' and told the
+    operator to sign in — on a machine that was signed in. The CLI's own
+    account is the thing worth having."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    seen = []
+    sdk = _failing_sdk(seen, ["Error: ENOSPC: no space left on device",
+                              "    at Object.mkdirSync (node:fs:1394:26)"])
+    provider = subagent.SubagentProvider(sdk=sdk)
+
+    try:
+        provider.complete_structured(
+            model="fable", system="s", user="u", schema={"type": "object"},
+            schema_name="reply", max_tokens=100)
+    except agent_lane.AgentLaneUnavailable as e:
+        message = str(e)
+    else:                                                # pragma: no cover
+        raise AssertionError("the dead session did not raise")
+
+    assert "ENOSPC: no space left on device" in message
+    assert "mkdirSync" in message
+    # It must NOT blame a login when the CLI said something else.
+    assert "setup-token" not in message
+    assert seen and seen[0]["stderr"] is not None
+
+
+def test_a_silent_death_still_suggests_the_login(monkeypatch):
+    """With nothing on stderr there is no evidence, so the old guess is the
+    best available — but only then."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    sdk = _failing_sdk([], [])
+    provider = subagent.SubagentProvider(sdk=sdk)
+
+    try:
+        provider.complete_structured(
+            model="fable", system="s", user="u", schema={"type": "object"},
+            schema_name="reply", max_tokens=100)
+    except agent_lane.AgentLaneUnavailable as e:
+        message = str(e)
+    else:                                                # pragma: no cover
+        raise AssertionError("the dead session did not raise")
+
+    assert "nothing to stderr" in message
+    assert "setup-token" in message
+
+
+def test_stderr_capture_is_bounded(monkeypatch):
+    """A chatty CLI must not grow the exception without limit."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    sdk = _failing_sdk([], [f"line {n}" for n in range(500)])
+    provider = subagent.SubagentProvider(sdk=sdk)
+
+    try:
+        provider.complete_structured(
+            model="fable", system="s", user="u", schema={"type": "object"},
+            schema_name="reply", max_tokens=100)
+    except agent_lane.AgentLaneUnavailable as e:
+        message = str(e)
+    else:                                                # pragma: no cover
+        raise AssertionError("the dead session did not raise")
+
+    # The tail survives, the head does not: the fatal line is the last one.
+    assert "line 499" in message
+    assert "line 0\n" not in message and "line 0)" not in message
+    assert f"line {500 - subagent._STDERR_KEEP}" in message
+    assert f"line {500 - subagent._STDERR_KEEP - 1}\n" not in message
+
+
+def test_the_fenced_turn_never_asks_to_bypass_permissions(monkeypatch):
+    """The blocker that stopped every paid read on Fly (2026-09-07).
+
+    bypassPermissions reaches the CLI as --dangerously-skip-permissions, which
+    it refuses as root; the Galley agent runs as uid 0, so all ten detector
+    calls on the probe chunk died with "cannot be used with root/sudo
+    privileges". The turn is fenced to no tools, so the bypass bought nothing
+    and cost the lane.
+    """
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    seen = []
+    sdk = _fake_sdk([_Result('{"ok": true}')], seen)
+    provider = subagent.SubagentProvider(sdk=sdk)
+    provider.complete_structured(
+        model="fable", system="s", user="u", schema={"type": "object"},
+        schema_name="reply", max_tokens=100)
+
+    opts = seen[0]
+    # Pinned to the mode the driver already runs its own sessions on as root,
+    # not merely "anything but bypass".
+    assert opts["permission_mode"] == "acceptEdits"
+    # The fence is what makes that safe — if these ever open up, the
+    # permission mode has to be reconsidered with them.
+    assert opts["tools"] == []
+    assert opts["allowed_tools"] == []
+    assert opts["setting_sources"] == []
+    assert opts["strict_mcp_config"] is True
+
+
+def test_the_lane_reports_its_usage_as_unbilled(monkeypatch):
+    """Real tokens, no invoice: the flag every consumer keys on."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    sdk = _fake_sdk([_Result('{"ok": true}',
+                             usage={"input_tokens": 50, "output_tokens": 900})],
+                    [])
+    result = subagent.SubagentProvider(sdk=sdk).complete_structured(
+        model="fable", system="s", user="u", schema={"type": "object"},
+        schema_name="reply", max_tokens=100)
+    assert result.usage.output_tokens == 900
+    assert result.usage.billed is False

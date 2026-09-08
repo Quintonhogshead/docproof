@@ -211,3 +211,90 @@ def test_confirm_with_model_falls_back_cleanly_with_no_provider_available(
     assert result.model_confirmed is False
     assert result.word_count == profile.word_count
     assert result.recommended_preset == profile.recommended_preset
+
+
+# ===========================================================================
+# Vocabulary matching: whole words, and stems only where meant
+# ===========================================================================
+
+def test_remember_is_not_a_memoir_vote():
+    """The word that mis-posture'd a fantasy novel (2026-09-07). It scored 32
+    on a 65k-word manuscript — out-voting 'magic' (24) and every other fantasy
+    term — because it is the commonest verb in narrative prose, not because
+    the book was a memoir."""
+    from docproof.genre_profile import _GENRE_PATTERNS
+
+    memoir = _GENRE_PATTERNS["literary_memoir"]
+    assert memoir.findall("I remember. I remembered. She remembers.") == []
+
+
+def test_bare_entries_match_whole_words_only():
+    """Prefix-matching every term is how 'habit' collected 'habitat' and
+    'alien' collected 'alienated' — votes cast by unrelated words."""
+    from docproof.genre_profile import _GENRE_PATTERNS
+
+    business = _GENRE_PATTERNS["self_help_business"]
+    fantasy = _GENRE_PATTERNS["fantasy_sf"]
+    assert business.findall("a habitat in the marsh") == []
+    assert business.findall("small habits, one habit") == ["habits", "habit"]
+    assert fantasy.findall("she felt alienated") == []
+    assert fantasy.findall("the alien and the aliens") == ["alien", "aliens"]
+    # "spelled" is not a magic spell.
+    assert fantasy.findall("he spelled it out") == []
+    assert fantasy.findall("a spell, two spells") == ["spell", "spells"]
+
+
+def test_starred_entries_still_match_their_inflections():
+    """Stems are kept where every inflection carries the same signal."""
+    from docproof.genre_profile import _GENRE_PATTERNS
+
+    fantasy = _GENRE_PATTERNS["fantasy_sf"]
+    for word in ("sorcery", "sorcerer", "magical", "magician", "dragons",
+                 "kingdoms", "swords"):
+        assert fantasy.findall(word), word
+
+
+def test_a_fantasy_manuscript_is_not_recommended_a_memoir_posture():
+    """End to end on the shape that failed: fantasy vocabulary present,
+    ordinary narrative recollection present, dialogue throughout."""
+    from docproof.genre_profile import _guess_genres
+
+    class _P:
+        def __init__(self, text):
+            self.text = text
+
+    paragraphs = [_P(
+        "I remember the day the dragon came. I remembered it for years, "
+        "and my mother remembered it too. My father said nothing.")] * 8
+    paragraphs += [_P(
+        "The sorcerer raised his sword. Magic broke over the kingdom, and "
+        "the wizard's spell lit the throne room.")] * 8
+
+    ranked = _guess_genres(paragraphs, dialogue_density=0.186)
+    assert ranked[0].genre == "fantasy_sf", [(g.genre, g.score) for g in ranked]
+
+
+def test_thin_vocabulary_evidence_falls_back_to_the_floors():
+    """A 96k-word thriller with a dozen business words is not a business
+    book. Below MIN_GENRE_HITS_PER_10K the vote is noise, and the floors —
+    general_fiction for fiction, self_help_business for low-dialogue prose —
+    decide, which they could never do while any hit beat +2."""
+    from docproof.genre_profile import (MIN_GENRE_HITS_PER_10K,
+                                        _guess_genres)
+
+    class _P:
+        def __init__(self, text):
+            self.text = text
+
+    filler = _P("the road went on and the rain kept falling all night " * 20)
+    thin = [_P("revenue and mindset and a habit")] + [filler] * 60
+    fiction = _guess_genres(thin, dialogue_density=0.40)
+    assert fiction[0].genre == "general_fiction", fiction
+    nonfiction = _guess_genres(thin, dialogue_density=0.01)
+    assert nonfiction[0].genre == "self_help_business", nonfiction
+
+    # The same words in a short text are real evidence and still count.
+    dense = [_P("revenue and mindset and a habit")] * 3 + [filler]
+    assert _guess_genres(dense, dialogue_density=0.40)[0].genre == \
+        "self_help_business"
+    assert MIN_GENRE_HITS_PER_10K == 3.0

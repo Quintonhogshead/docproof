@@ -186,6 +186,31 @@ class _Doc:
         return "\n".join(out).rstrip() + "\n"
 
 
+def _rows_by_key(rows) -> dict[tuple, str]:
+    """editmap.row_key -> the finding id it has IN THIS BUILD."""
+    from docproof.editmap import base_id, row_key
+    out: dict[tuple, str] = {}
+    for r in rows:
+        if isinstance(r, dict) and r.get("finding_id"):
+            out.setdefault(row_key(r), base_id(str(r["finding_id"])))
+    return out
+
+
+def owner_label(rec, rows_by_key: dict[tuple, str]) -> str:
+    """The owner as the current build names it. A record carrying a row key
+    resolves against THIS build's rows; an older record, or a key no row
+    matches, falls back to the id it stored — marked, because ids are
+    renumbered by every rebuild and a stale one names the wrong edit."""
+    key = rec.get("owner_row_key")
+    stored = rec.get("owner_finding_id") or "-"
+    if isinstance(key, list):
+        fid = rows_by_key.get(tuple(key))
+        if fid:
+            return fid
+        return f"{stored} (id from an earlier build)"
+    return stored
+
+
 def render_journal(run_dir: str | Path, *, workspace: str | Path | None = None,
                    book: str = "", generated_at: str = "",
                    sources: JournalSources | None = None) -> str:
@@ -620,6 +645,7 @@ def _residual_bullets(doc: _Doc, items: Sequence[Mapping[str, Any]]) -> None:
 
 
 def _section_settle(doc: _Doc, src: JournalSources) -> None:
+    rows_by_key = _rows_by_key(_rows(src.envelope))
     settlement = src.settlement
     if not isinstance(settlement, dict):
         _not_run(doc, "no `settlement.json` in the run — nothing was settled")
@@ -657,7 +683,7 @@ def _section_settle(doc: _Doc, src: JournalSources) -> None:
             doc.line(f"**{pid}**")
             doc.line("")
             for rec in items:
-                owner = rec.get("owner_finding_id") or "-"
+                owner = owner_label(rec, rows_by_key)
                 doc.bullet(
                     f"`{rec.get('residual_id', '?')}` → **{rec.get('action')}** "
                     f"(owner `{owner}`) — "

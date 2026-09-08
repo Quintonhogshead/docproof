@@ -10,8 +10,11 @@ logging.
 """
 from __future__ import annotations
 
+import json
+import logging
 import os
 import sys
+from pathlib import Path
 from dataclasses import asdict
 from urllib.parse import quote
 
@@ -32,6 +35,8 @@ from ..watch import status as watchlib
 from ..watch.drive import DriveError
 from ..watch.runner import WatchRunner
 from ..watch.settings import GOOGLE_KEY, WatchSettings, folder_id_from
+
+log = logging.getLogger("docproof.app.watch")
 from ..watch.tick import NotConfigured
 
 
@@ -91,6 +96,9 @@ AGENT_TOKEN_ENV = "DOCPROOF_AGENT_TOKEN"
 #: Short secrets are guessable, and a secret set to "test" would be worse than
 #: none because it reads as configured. Refused with the fix named.
 MIN_AGENT_TOKEN = 24
+#: A heartbeat is a few hundred bytes; this is the ceiling on what a
+#: token-holder may make the server store.
+AGENT_STATUS_MAX_BYTES = 16 * 1024
 
 
 def agent_gate(request: Request) -> None:
@@ -121,6 +129,28 @@ def agent_gate(request: Request) -> None:
     if scheme.lower() != "bearer" or not hmac.compare_digest(
             presented.strip(), expected):
         raise HTTPException(401, "Not the proofing agent.")
+
+
+class ProofRelease(BaseModel):
+    file_id: str = Field(min_length=1, max_length=200)
+
+
+def _drive_token_or_none(home) -> str | None:
+    """A Drive access token from the watcher's sign-in, or None without one."""
+    from ..watch import drive
+
+    ws = WatchSettings.load(home)
+    if not (ws.client_id and ws.client_secret):
+        return None
+    refresh = settingslib.get_api_key(GOOGLE_KEY)
+    if not refresh:
+        return None
+    try:
+        return drive.refresh_access_token(ws.client_id, ws.client_secret,
+                                          refresh)
+    except DriveError as e:
+        log.warning("Could not sign in to Google for the release (%s).", e)
+        return None
 
 
 def register(app: FastAPI) -> None:
@@ -363,6 +393,75 @@ def register(app: FastAPI) -> None:
         watch: WatchRunner = app.state.watch
         return {"books": watchlib.awaiting(watch.home)}
 
+    @app.post("/api/watch/agent")
+    async def agent_heartbeat(request: Request) -> dict:
+        """The practitioner agent says what it is doing.
+
+        The second and last route a machine may touch, behind the same bearer
+        gate as the awaiting list and write-only: one JSON object, kept as the
+        newest heartbeat in the watch home, read back by `/api/watch` for the
+        Proofread drawer. Bounded, because a token-holder is still a machine:
+        a body over 16 KB or not an object is refused, and nothing in it is
+        ever executed or written anywhere but that one file."""
+        agent_gate(request)
+        raw = await request.body()
+        if len(raw) > AGENT_STATUS_MAX_BYTES:
+            raise HTTPException(413, "The heartbeat is too big.")
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            raise HTTPException(400, "The heartbeat is not JSON.")
+        if not isinstance(payload, dict):
+            raise HTTPException(400, "The heartbeat must be a JSON object.")
+        watch: WatchRunner = app.state.watch
+        watchlib.save_agent_status(watch.home, payload)
+        return {"ok": True}
+
+    @app.post("/api/watch/proof/release", dependencies=[Depends(may_manage)])
+    def release_proof(update: ProofRelease, request: Request) -> dict:
+        """Take a book back from the practitioner queue.
+
+        A book DocWatch marked `awaiting` stays on the agent's list until a
+        verdict lands beside it — and the agent resumes a claimed book at every
+        boot. This is the way out when the run should not happen (a test that
+        was killed, a file dropped by mistake): the marker moves to a terminal
+        value with the reason and who did it, so the awaiting list no longer
+        carries the book and the agent leaves it alone. Nothing is deleted;
+        moving the HubSpot record back to the ready value makes DocWatch mark
+        it awaiting again on its next pass."""
+        from ..watch import proof as prooflib
+        from ..watch.drive import DriveFile
+        from ..watch.stages import PROOF_AWAITING, PROOF_FAILED
+        from ..watch.state import STATE_FILE, WatchState
+
+        watch: WatchRunner = app.state.watch
+        state = WatchState.load(Path(watch.home) / STATE_FILE)
+        rec = state.files.get(update.file_id)
+        if rec is None or rec.proof_marked != PROOF_AWAITING:
+            raise HTTPException(
+                404, "That book is not out with the practitioner.")
+        user = getattr(request.state, "user", None)
+        who = getattr(user, "email", "") or "an administrator"
+        reason = f"released from the practitioner queue by {who}"
+        token = _drive_token_or_none(watch.home)
+        marked_drive = False
+        if token:
+            try:
+                prooflib.mark_source(
+                    token, DriveFile(id=rec.file_id, name=rec.name,
+                                     mime_type=""),
+                    rec, state, status=PROOF_FAILED, reason=reason)
+                marked_drive = True
+            except DriveError as e:
+                log.warning("Release of %s: Drive marker not written (%s); "
+                            "the watch state is released regardless.",
+                            rec.name, e)
+        if not marked_drive:
+            rec.proof_marked = PROOF_FAILED
+            state.record(rec)
+        return {"released": rec.file_id, "name": rec.name,
+                "drive_marked": marked_drive, **watch_payload()}
+
     @app.post("/api/watch/run", dependencies=[Depends(may_manage)])
     def run_watch() -> dict:
         watch: WatchRunner = app.state.watch
@@ -413,6 +512,9 @@ def register(app: FastAPI) -> None:
 
         return {
             "listed": report.listed,
+            # Files a pass would leave alone. Counted, not listed: the table
+            # holds only what a pass would do.
+            "left_alone": report.left_alone,
             "new": report.new,
             "proof": counted("proof"),
             "promo": counted("promo"),

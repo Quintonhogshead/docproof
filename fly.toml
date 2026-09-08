@@ -11,9 +11,27 @@ primary_region = "iad"        # pick one near your users: fly platform regions
 [build]
   dockerfile = "Dockerfile"
 
+# Two process groups, one machine each:
+#   app    the web build (DocWatch, the portal, the batch ticker)
+#   agent  the Galley poller — `docproof galley agent` — which claims books
+#          DocWatch marks awaiting, runs the driver (Claude Code sessions on the
+#          Max subscription + the docproof sifters, LanguageTool included) and
+#          uploads the Book 2 set. Its secrets: see galley/practitioner/fly/
+#          galley-agent and DEPLOY.md. Every deploy restarts it; a run in
+#          flight resumes from its last completed phase on the next poll.
+[processes]
+  app = "docproof-serve"
+  agent = "galley-agent"
+
 [env]
   DOCPROOF_HOME = "/data/docproof"
   PORT = "8000"
+  # The agent process: where it polls, and where its per-book workspaces live
+  # (on its own volume — see [[mounts]]).
+  GALLEY_APP_URL = "https://atmosphere-docproof.fly.dev"
+  GALLEY_WORKSPACE_ROOT = "/data/galley-workspaces"
+  # Log lines reach `fly logs` as they happen, not when a buffer fills.
+  PYTHONUNBUFFERED = "1"
   # A monthly spend ceiling, in USD, for every ordinary account without one of
   # its own. Admins are never capped. Remove to leave ordinary users uncapped.
   DOCPROOF_DEFAULT_CAP = "20"
@@ -29,6 +47,7 @@ primary_region = "iad"        # pick one near your users: fly platform regions
   LTP_PATH = "/data/languagetool"
 
 [http_service]
+  processes = ["app"]
   internal_port = 8000
   force_https = true
   # The machine must stay up: the batch ticker polls the vendor for overnight
@@ -41,8 +60,18 @@ primary_region = "iad"        # pick one near your users: fly platform regions
 [[mounts]]
   source = "docproof_data"
   destination = "/data"
+  processes = ["app"]
+
+# The agent's workspaces, claim ledger, log and LanguageTool jar. Create it
+# once before the first deploy that carries the agent group:
+#   fly volumes create galley_data -a atmosphere-docproof -r iad -s 10
+[[mounts]]
+  source = "galley_data"
+  destination = "/data"
+  processes = ["agent"]
 
 [[vm]]
+  processes = ["app"]
   # 2 cores so the LanguageTool scan parallelizes: it is CPU-bound (one paragraph
   # check pins one core), so on a single core it ran serial — ~27 min on a 6 MB
   # book. The scan pool caps itself at the core count, so 2x roughly halves it;
@@ -54,3 +83,11 @@ primary_region = "iad"        # pick one near your users: fly platform regions
   # swap — the memory pressure that helped tip the engine into a freeze. 4gb is
   # cheap headroom so a busy batch never runs the machine that close to the edge.
   memory = "4gb"
+
+[[vm]]
+  # The agent machine: a Claude Code session, the docproof sifters and the
+  # LanguageTool JVM all run here at once, so it gets its own headroom. Size it
+  # up here if the driver's log shows OOM kills; the web machine is untouched.
+  processes = ["agent"]
+  size = "shared-cpu-4x"
+  memory = "8gb"

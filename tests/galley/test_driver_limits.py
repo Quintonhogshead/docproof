@@ -43,13 +43,61 @@ def test_the_approve_prompt_freezes_the_drivers_cap_not_the_plan_total():
                                               budget_usd=4.0)
 
 
-def test_the_model_reaches_the_command_line(book, tmp_path):
+def _argv_by_phase(spawn):
+    return {call.phase: call.argv for call in spawn.calls}
+
+
+def _flag(argv, name):
+    return argv[argv.index(name) + 1] if name in argv else None
+
+
+def test_the_brains_are_split_by_phase(book, tmp_path):
+    """Owner, 2026-09-06: Opus 5 drives the scripted phases, Fable 5.1 at
+    high effort the judgment phases."""
+    assert gd.MECHANICAL_MODEL == "claude-opus-5"
     ws = _ws(book, tmp_path)
     _deliverable(ws)
     spawn = FakeSpawner(ws)
     _driver(book, tmp_path, spawn=spawn).run()
-    argv = spawn.calls[0].argv
-    assert argv[argv.index("--model") + 1] == "claude-fable-5-1"
+    argv = _argv_by_phase(spawn)
+    for phase in ("profile", "sweeps", "verify", "certify", "deliver"):
+        assert _flag(argv[phase], "--model") == "claude-opus-5", phase
+        assert _flag(argv[phase], "--effort") is None, phase
+    for phase in ("approve", "ladder", "audit", "settle"):
+        assert _flag(argv[phase], "--model") == "claude-fable-5-1", phase
+        assert _flag(argv[phase], "--effort") == "high", phase
+
+
+def test_a_global_model_or_effort_overrides_the_table(book, tmp_path):
+    ws = _ws(book, tmp_path)
+    _deliverable(ws)
+    spawn = FakeSpawner(ws)
+    _driver(book, tmp_path, spawn=spawn, model="claude-sonnet-5",
+            effort="medium").run()
+    for phase, argv in _argv_by_phase(spawn).items():
+        assert _flag(argv, "--model") == "claude-sonnet-5", phase
+        assert _flag(argv, "--effort") == "medium", phase
+
+
+def test_a_per_phase_model_or_effort_wins_over_everything(book, tmp_path):
+    ws = _ws(book, tmp_path)
+    _deliverable(ws)
+    spawn = FakeSpawner(ws)
+    _driver(book, tmp_path, spawn=spawn, model="claude-sonnet-5",
+            model_by_phase={"settle": "claude-fable-5-1"},
+            effort_by_phase={"settle": "max", "profile": "low"}).run()
+    argv = _argv_by_phase(spawn)
+    assert _flag(argv["settle"], "--model") == "claude-fable-5-1"
+    assert _flag(argv["settle"], "--effort") == "max"
+    assert _flag(argv["profile"], "--model") == "claude-sonnet-5"
+    assert _flag(argv["profile"], "--effort") == "low"
+    assert _flag(argv["sweeps"], "--effort") is None
+
+
+def test_an_unknown_effort_level_is_refused():
+    drv = gd.Driver(book=Path("B.docx"), slug="b", effort="turbo")
+    with pytest.raises(gd.DriverError, match="turbo"):
+        drv.effort_for("settle")
 
 
 def test_a_paid_verb_refusing_over_the_cap_stops_the_run(book, tmp_path):
@@ -274,3 +322,76 @@ def test_a_finished_run_ships_a_decision_log(book, tmp_path):
     assert text.startswith("# Decision log — Ford - Book 1.docx")
     assert "**Plan gate (auto): approved**" in text
     assert (tmp_path / "handoff" / "Ford - Book 2 - decision-log.md").is_file()
+
+
+def test_profile_has_room_for_a_from_scratch_run():
+    """Raised from 80 on 2026-09-07: a clean-workspace profile on a 65k-word
+    book spent all 80 turns on the scans, the genre pack, the egress report
+    and two pricing passes, and never reached PLAN.md — so the cap threw away
+    every bit of it. The phases that fit in 80 were resuming workspaces whose
+    scans already existed."""
+    from galley.driver import PHASE_MAX_TURNS
+
+    assert PHASE_MAX_TURNS["profile"] >= 160
+    # It writes the plan the whole run is gated on; it should not be the
+    # tightest budget on the board.
+    assert PHASE_MAX_TURNS["profile"] > PHASE_MAX_TURNS["approve"]
+
+
+# --- caps that grow with the book ------------------------------------------
+
+def _drv(tmp_path, **kw):
+    return gd.Driver(book=tmp_path / "b.docx", slug="s",
+                     workspace_root=tmp_path / "ws", **kw)
+
+
+def test_length_factor_floors_at_one_and_caps_at_four():
+    assert gd.length_factor(None) == 1.0
+    assert gd.length_factor(0) == 1.0
+    assert gd.length_factor(3_614) == 1.0            # the Gull Point story
+    assert gd.length_factor(gd.LENGTH_BASELINE_WORDS) == 1.0
+    assert gd.length_factor(65_000) == pytest.approx(1.3)
+    assert gd.length_factor(100_000) == pytest.approx(2.0)
+    assert gd.length_factor(235_898) == gd.LENGTH_SCALE_MAX   # Reaves, not 4.7
+    assert gd.length_factor("garbage") == 1.0
+
+
+def test_only_the_phases_whose_work_grows_with_the_book_scale(tmp_path):
+    drv = _drv(tmp_path, words=100_000)
+    for phase in gd.LENGTH_SCALED_PHASES:
+        assert drv.turns_for(phase) == gd.PHASE_MAX_TURNS[phase] * 2, phase
+        assert drv.timeout_for(phase) == gd.PHASE_TIMEOUT_S[phase] * 2, phase
+    # Fixed-overhead phases: profile took 17 minutes on 65k words and on 3.6k.
+    for phase in ("profile", "approve", "sweeps", "audit", "certify", "deliver"):
+        assert drv.turns_for(phase) == gd.PHASE_MAX_TURNS[phase], phase
+        assert drv.timeout_for(phase) == gd.PHASE_TIMEOUT_S.get(
+            phase, gd.DEFAULT_PHASE_TIMEOUT_S), phase
+
+
+def test_the_word_count_comes_off_the_workspace_profile(tmp_path):
+    drv = _drv(tmp_path)
+    assert drv.book_words() is None                  # profile has not run
+    assert drv.timeout_for("verify") == gd.PHASE_TIMEOUT_S["verify"]
+    drv.workspace.mkdir(parents=True)
+    (drv.workspace / "profile.json").write_text(
+        '{"word_count": 150000, "comment_budget": 150}', encoding="utf-8")
+    assert drv.book_words() == 150_000
+    assert drv.timeout_for("verify") == gd.PHASE_TIMEOUT_S["verify"] * 3
+    assert drv.turns_for("settle") == gd.PHASE_MAX_TURNS["settle"] * 3
+    # An explicit figure wins over the file.
+    drv.words = 10_000
+    assert drv.timeout_for("verify") == gd.PHASE_TIMEOUT_S["verify"]
+
+
+def test_an_explicit_cap_is_taken_exactly_never_scaled(tmp_path):
+    drv = _drv(tmp_path, words=200_000, timeout_s=3600.0,
+               max_turns_by_phase={"verify": 30})
+    assert drv.timeout_for("verify") == 3600.0
+    assert drv.turns_for("verify") == 30
+    assert drv.turns_for("settle") == gd.PHASE_MAX_TURNS["settle"] * 4
+
+
+def test_the_banner_says_when_and_why_a_phase_was_stretched(tmp_path):
+    drv = _drv(tmp_path, words=82_000)
+    assert drv.length_factor_for("verify") == pytest.approx(1.64)
+    assert drv.length_factor_for("profile") == 1.0

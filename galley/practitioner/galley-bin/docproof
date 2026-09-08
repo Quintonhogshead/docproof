@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# `docproof` wrapper for the Galley brain — the generic copy the Fly image
+# installs at ~/galley-bin/docproof (a Mac keeps its own hand-made one).
+#
+# The brain (a `claude -p` session) authenticates on the Claude Max
+# subscription and is started with ANTHROPIC_API_KEY / OPENAI_API_KEY stripped
+# from its environment (galley/driver.py build_env). The docproof sifters it
+# spawns DO need those keys, and — because Claude Code hands its own OAuth
+# token to no child process — the subscription token too. This wrapper is first
+# on the brain's PATH: it sources the machine's credential files and execs the
+# real `docproof` further down PATH.
+set -euo pipefail
+
+for f in "$HOME/.docproof-eval.env" "${GALLEY_AGENT_ENV_FILE:-$HOME/.galley/agent.env}"; do
+  [ -f "$f" ] || continue
+  set -a
+  # shellcheck disable=SC1090
+  . "$f"
+  set +a
+done
+
+self="$(cd "$(dirname "$0")" && pwd -P)"
+IFS=: read -ra dirs <<< "${PATH:-}"
+for d in "${dirs[@]}"; do
+  [ -n "$d" ] || continue
+  [ "$(cd "$d" 2>/dev/null && pwd -P)" = "$self" ] && continue
+  if [ -x "$d/docproof" ]; then
+    exec "$d/docproof" "$@"
+  fi
+done
+echo "galley-bin/docproof: no real docproof found on PATH after $self" >&2
+exit 127

@@ -145,6 +145,7 @@ def hand_off_names(source_name: str) -> dict[str, str]:
     base = naming.proof_base(Path(source_name).stem or "manuscript")
     return {
         "manuscript": f"{base}.docx",
+        "clean": f"{base}{naming.CLEAN_SUFFIX}.docx",
         "letter": f"{base}{naming.LETTER_SUFFIX}.md",
         "style_sheet": f"{base}{naming.STYLE_SHEET_SUFFIX}.md",
         "decision_log": f"{base}{naming.DECISION_LOG_SUFFIX}.md",
@@ -166,6 +167,9 @@ def artifacts(job: Job, source_name: str) -> list[Artifact]:
     reviewed = _reviewed_docx(out)
     if reviewed is not None:
         found.append(Artifact(reviewed, names["manuscript"], DOCX_MIME))
+        clean = _clean_copy(reviewed, out)
+        if clean is not None:
+            found.append(Artifact(clean, names["clean"], DOCX_MIME))
     for role, filename in (("letter", "letter.md"),
                            ("style_sheet", "style-sheet.md"),
                            ("decision_log", "DECISION_LOG.md"),
@@ -177,6 +181,24 @@ def artifacts(job: Job, source_name: str) -> list[Artifact]:
     if outcome.is_file():
         found.append(Artifact(outcome, names["outcome"], JSON_MIME))
     return found
+
+
+def _clean_copy(reviewed: Path, out: Path) -> Path | None:
+    """The reading copy — every change accepted, every comment removed —
+    derived from the reviewed manuscript into `out/clean/`, a subfolder so
+    `_reviewed_docx`'s glob over `out` never mistakes it for the redline.
+    Rebuilt only when missing or older than its source, so a delivery retry
+    lists the same file. A copy that cannot be derived is logged and left
+    out: the redline still ships, and the log says why it shipped alone."""
+    from docproof.cleancopy import CleanCopyError, write_clean_copy
+    dest = out / "clean" / reviewed.name
+    try:
+        if dest.is_file() and dest.stat().st_mtime >= reviewed.stat().st_mtime:
+            return dest
+        return write_clean_copy(reviewed, dest)
+    except (CleanCopyError, OSError) as e:
+        log.warning("No clean copy beside %s (%s)", reviewed.name, e)
+        return None
 
 
 def _reviewed_docx(out: Path) -> Path | None:

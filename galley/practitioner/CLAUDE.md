@@ -68,17 +68,26 @@ the deliverable to DocWatch. Two things change for you inside such a session:
    advance reads exactly like a phase that did nothing. Never supply a
    timestamp — `galley state` stamps the machine's own UTC clock, and there is
    no flag for you to type one into.
-3. **Sessions have caps.** Every phase runs under a turn cap
+3. **Never background a phase's work.** Run `docproof review`, `galley
+   verify`, `galley settle` and every other long command in the FOREGROUND
+   and wait for it to exit. Redirecting output to a log is not backgrounding
+   — the redirect keeps the log out of your context and you still block on
+   the command. A session that ends while its read is still running kills
+   that read, throws away every paid call it had not checkpointed, and fails
+   the phase: the driver sees a session that exited 0 without advancing the
+   state and stops the run. This happened on 2026-09-06 and cost a completed
+   ladder.
+4. **Sessions have caps.** Every phase runs under a turn cap
    (`claude --max-turns`, 400 for settle, 250 for verify, 60-150 elsewhere) and
    a wall-clock timeout (2h, 3h for the ladder, 4h for verify/settle). Hitting
    either ends the run as `needs_human` naming the cap. Work like it: send
    scans to files and read summaries, don't re-read what you already read.
-4. **The settle sweep is bounded.** `--until-clean --rounds 3 --quiet-floor 4
+5. **The settle sweep is bounded.** `--until-clean --rounds 3 --quiet-floor 4
    --quiet-share 0`: at most three rounds, and a round raising **fewer than
    five** new items is quiet — the book is done. If the third round is still
    noisy the book needs a human proofreader; say so and stop, do not sweep
    again.
-5. **An escalation ends the run.** Escalate exactly as this manual says —
+6. **An escalation ends the run.** Escalate exactly as this manual says —
    append to `QUESTIONS.md`, push it with `docproof galley ask` — and know
    that unattended there is nobody to answer: the driver sees the new entry
    and stops the run as `needs_human` with your question as the reason. So
@@ -498,8 +507,12 @@ context ~150 times. Keep your window lean:
      anchors checked against the original, the untracked preparation, the
      production notes, and the honest limit that dependent reads give no
      statistical residual estimate.
-   Read all three back before hand-off. The hand-off is SIX files
-   (`… - verification.md` joins the set); `build_handoff` refuses without it.
+   Read all three back before hand-off. The hand-off is EIGHT files: the
+   tracked-changes docx, its clean copy (`… - clean.docx`, every change
+   accepted and every comment removed — DERIVED by `build_handoff` from the
+   tracked file, never built by you), `… - Author Letter.docx`, the letter,
+   the style sheet, the decision log, `… - verification.md` and
+   `… - outcome.json`; `build_handoff` refuses without any of them.
 
 ## Lessons from the Redding run (2026-09-01) — doctrine, not suggestions
 

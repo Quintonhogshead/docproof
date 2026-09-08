@@ -469,3 +469,450 @@ def test_the_folder_override_wins_for_a_rehearsal(env, tmp_path):
                    run_driver=lambda **kw: ran.append(kw) or FakeResult())
     agent.poll_once()
     assert ran[0]["drive_folder_id"] == "my-test-folder"
+
+
+# --- the heartbeat and the agent's own alerts ----------------------------------
+
+class Observed:
+    """The two observability seams, recorded."""
+
+    def __init__(self):
+        self.beats: list[dict] = []
+        self.alerts: list[tuple[str, str]] = []
+
+    def beat(self, payload):
+        self.beats.append(dict(payload))
+
+    def alert(self, subject, body):
+        self.alerts.append((subject, body))
+
+    def states(self):
+        return [b.get("state") for b in self.beats]
+
+
+def _observed_agent(env, tmp_path, obs, **kw):
+    kw.setdefault("heartbeat", obs.beat)
+    kw.setdefault("alert", obs.alert)
+    kw.setdefault("heartbeat_interval_s", 0)      # no timer thread in tests
+    kw.setdefault("host", "test-box")
+    return _agent(env, tmp_path, **kw)
+
+
+def test_a_run_is_narrated_to_the_drawer(env, tmp_path):
+    obs = Observed()
+
+    def run_driver(**kwargs):
+        # The driver reports phase boundaries through the hook it was handed.
+        progress = kwargs["progress"]
+        progress({"event": "phase_start", "phase": "profile",
+                  "model": "claude-opus-5", "effort": None})
+        progress({"event": "phase_end", "phase": "profile", "ok": True,
+                  "num_turns": 12, "limit": None})
+        progress({"event": "gate", "approved": True, "reason": "inside budget"})
+        progress({"event": "phase_start", "phase": "settle",
+                  "model": "claude-fable-5-1", "effort": "high"})
+        progress({"event": "finished", "outcome": "done", "reason": ""})
+        return FakeResult(uploaded=["up-1"])
+
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([BOOK]),
+                            download=_downloader(tmp_path),
+                            run_driver=run_driver)
+    agent.poll_once()
+
+    assert obs.states()[0] is None or obs.states()[0] in ("idle", "running")
+    running = [b for b in obs.beats if b.get("state") == "running"]
+    assert running[0]["book"] == "Test - Book 1.docx"
+    assert running[0]["slug"] == "test-drive-1"
+    assert running[0]["run_started_at"]
+    phases = [b for b in running if b.get("phase")]
+    assert phases[0]["phase"] == "profile"
+    assert phases[0]["model"] == "claude-opus-5"
+    assert phases[0]["phase_started_at"]
+    assert any(b.get("gate") == "approved" for b in obs.beats)
+    settle = [b for b in obs.beats if b.get("phase") == "settle"]
+    assert settle and settle[0]["effort"] == "high"
+    last = obs.beats[-1]
+    assert last["state"] == "idle"
+    assert last["last_outcome"] == "done"
+    assert last["last_book"] == "Test - Book 1.docx"
+    assert last["delivery"] == "uploaded"
+    # Every beat says who and from where.
+    assert {b["agent"] for b in obs.beats} == {"test-box"}
+    assert all(b["at"] and b["version"] for b in obs.beats)
+
+
+def test_boot_is_announced_once_by_email_and_heartbeat(env, tmp_path):
+    obs = Observed()
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([]))
+    agent.announce()
+    assert obs.states() == ["starting"]
+    assert obs.beats[0]["started_at"]
+    assert len(obs.alerts) == 1
+    subject, body = obs.alerts[0]
+    assert "started on test-box" in subject
+    assert env.awaiting_url in body
+
+
+def test_a_broken_poll_alerts_once_and_again_on_recovery(env, tmp_path):
+    obs = Observed()
+    app = FakeApp([], status=401)
+    agent = _observed_agent(env, tmp_path, obs, opener=app)
+    agent.poll_once()
+    agent.poll_once()
+    agent.poll_once()
+    assert len(obs.alerts) == 1                    # not one per retry
+    assert "cannot reach DocProof" in obs.alerts[0][0]
+    assert "HTTP 401" in obs.alerts[0][1]
+    assert obs.beats[-1]["last_poll_error"].startswith("the app refused")
+    assert obs.beats[-1]["state"] == "idle"
+
+    app.status = None                              # the server is back
+    agent.poll_once()
+    assert len(obs.alerts) == 2
+    assert "reachable again" in obs.alerts[1][0]
+    assert obs.beats[-1]["last_poll_error"] == ""
+    agent.poll_once()
+    assert len(obs.alerts) == 2                    # quiet while healthy
+
+
+def test_a_crashed_run_beats_its_reason_and_ships_the_evidence(env, tmp_path):
+    import zipfile
+
+    obs = Observed()
+    uploaded: list[str] = []
+
+    def upload(files, folder_id):
+        uploaded.extend(p.name for p in files)
+        return [f"id-{i}" for i, _ in enumerate(files)]
+
+    def crash(**kwargs):
+        # Something the driver managed to write before dying.
+        ws = Path(kwargs["workspace_root"]) / kwargs["slug"]
+        (ws / "runs" / "driver").mkdir(parents=True, exist_ok=True)
+        (ws / "runs" / "driver" / "ladder.log").write_text(
+            "phase ladder\nboom\n", encoding="utf-8")
+        (ws / "PLAN.md").write_text("# plan\n", encoding="utf-8")
+        raise RuntimeError("the ladder died")
+
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([BOOK]),
+                            download=_downloader(tmp_path), run_driver=crash,
+                            upload=upload)
+    (tmp_path / "ws").mkdir(exist_ok=True)
+    (tmp_path / "ws" / ga.LOG_NAME).write_text("agent log line\n",
+                                                encoding="utf-8")
+    agent.poll_once()
+
+    last = obs.beats[-1]
+    assert last["state"] == "idle"
+    assert last["last_outcome"] == "needs_human"
+    assert "the ladder died" in last["last_reason"]
+    assert "Test - Book 2 - diagnostics.zip" in uploaded
+    bundle = tmp_path / "ws" / "test-drive-1" / "handoff" / \
+        "Test - Book 2 - diagnostics.zip"
+    names = set(zipfile.ZipFile(bundle).namelist())
+    assert {"runs/driver/ladder.log", "runs/outcome.json", "PLAN.md",
+            "agent.log"} <= names
+
+
+def test_an_abandoned_delivery_is_shouted_about(env, tmp_path):
+    obs = Observed()
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([]))
+    ledger = agent.ledger()
+    ledger.record("drive-9", ga.PENDING_DELIVERY, name="Nine - Book 1.docx",
+                  slug="nine-drive-9", folder_id="folder-Z", outcome="done",
+                  handoff_files=[str(tmp_path / "x.docx")],
+                  delivery_attempts=ga.MAX_DELIVERY_ATTEMPTS,
+                  next_delivery_at=0, delivery_error="Drive said no")
+    report = ga.RunReport()
+    agent.retry_deliveries(ledger, report, now=10)
+    assert report.skipped == ["Nine - Book 1.docx (delivery abandoned)"]
+    assert len(obs.alerts) == 1
+    subject, body = obs.alerts[0]
+    assert "Nine - Book 1.docx" in subject
+    assert "folder-Z" in body and "Drive said no" in body
+    assert obs.beats[-1]["last_error"].startswith("Nine - Book 1.docx")
+
+
+def test_the_live_beat_reads_the_running_session(env, tmp_path):
+    obs = Observed()
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([]))
+    ws = tmp_path / "ws" / "slug-1"
+    (ws / "runs" / "driver").mkdir(parents=True)
+    (ws / "runs" / "driver" / "settle.stream.jsonl").write_text(
+        '{"type":"system"}\n{"type":"assistant","x":1}\n'
+        '{"type":"user"}\n{"type":"assistant","x":2}\n', encoding="utf-8")
+    (ws / "runs" / "r1").mkdir()
+    (ws / "runs" / "r1" / "settlement.json").write_text(
+        json.dumps({"rounds": 2}), encoding="utf-8")
+    agent._status.update({"state": "running", "phase": "settle"})
+    agent._live_beat("slug-1")
+    beat = obs.beats[-1]
+    assert beat["turns"] == 2
+    assert beat["settle_rounds"] == 2
+    assert beat["last_activity_at"]
+    assert beat["phase"] == "settle"
+
+
+def test_the_default_heartbeat_posts_to_the_app(env):
+    posted: list = []
+
+    class Opener:
+        def __call__(self, request, timeout=30):
+            posted.append((request.full_url, request.get_method(),
+                           request.get_header("Authorization"),
+                           json.loads(request.data.decode("utf-8"))))
+            return _Response(b'{"ok": true}')
+
+    assert ga.post_status(env, {"state": "idle"}, opener=Opener()) is True
+    url, method, auth, body = posted[0]
+    assert url == env.status_url == f"{APP}/api/watch/agent"
+    assert method == "POST"
+    assert auth == f"Bearer {TOKEN}"
+    assert body == {"state": "idle"}
+    # A dead app costs a warning, never the run.
+    assert ga.post_status(env, {"state": "idle"},
+                          opener=FakeApp([], status=500)) is False
+
+
+# ===========================================================================
+# Packaging: the Fly agent image can actually open the subagent lane
+# ===========================================================================
+
+def test_image_installs_the_agent_sdk_the_subagent_lane_needs():
+    """The gap that stopped Test - Book One's ladder on 2026-09-07.
+
+    claude-agent-sdk was declared only under the `canvas` extra (cover
+    generation), while the Dockerfile installed `.[app,languagetool]` — so the
+    agent image carried the Claude Code CLI but not the SDK that drives it,
+    and `api.claude_lane: subagent` refused with ModuleNotFoundError before
+    the first paid read. The extra and the image install must stay in step.
+    """
+    import tomllib
+
+    root = Path(__file__).resolve().parents[2]
+    data = tomllib.loads(
+        (root / "pyproject.toml").read_text(encoding="utf-8"))
+    extras = data["project"]["optional-dependencies"]
+    assert any(dep.startswith("claude-agent-sdk")
+               for dep in extras["galley"])
+
+    dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
+    installs = [ln for ln in dockerfile.splitlines()
+                if "pip install" in ln and ".[" in ln]
+    assert installs, "the Dockerfile no longer pip-installs an extras set"
+    for line in installs:
+        assert "galley" in line, f"galley extra missing from: {line.strip()}"
+    # The SDK drives the CLI; an image with one and not the other is the bug.
+    assert "claude.ai/install.sh" in dockerfile
+
+
+# --- a rejected subscription token holds the queue -----------------------------
+
+AUTH_ERROR = ("phase profile could not sign in to Claude Code — the "
+              "subscription token (CLAUDE_CODE_OAUTH_TOKEN) is expired or "
+              "revoked; last lines of profile.log:\nFailed to authenticate. "
+              "API Error: 401 OAuth access token is invalid.")
+
+
+def _refusing_driver(**_kwargs):
+    from galley.driver import CredentialsError
+    raise CredentialsError(AUTH_ERROR)
+
+
+def test_a_rejected_token_holds_the_book_instead_of_failing_it(env, tmp_path):
+    """2026-09-07: the Fly token died and every awaiting book was written
+    off as needs_human, one per poll, with nothing read."""
+    obs = Observed()
+    uploaded = []
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([BOOK, BOOK_2]),
+                            download=_downloader(tmp_path),
+                            run_driver=_refusing_driver,
+                            upload=lambda files, folder: uploaded.extend(files))
+    report = agent.poll_once()
+
+    assert report.outcome == "held"
+    assert "401" in report.reason
+    # No verdict was written or delivered; DocWatch keeps waiting, correctly.
+    assert not uploaded
+    assert not (tmp_path / "ws" / "test-drive-1" / "runs" / "outcome.json"
+                ).exists()
+    # The claim stands, so the book resumes once the token works.
+    assert agent.ledger().state("drive-1") == ga.CLAIMED
+    assert agent.ledger().state("drive-2") == ""
+    last = obs.beats[-1]
+    assert last["state"] == "halted"
+    assert last["held_book"] == BOOK["name"]
+    assert "401" in last["credentials_error"]
+    # One alarm, and it says what to do.
+    assert len(obs.alerts) == 1
+    subject, body = obs.alerts[0]
+    assert "token rejected" in subject
+    assert "claude setup-token" in body and "GALLEY_OAUTH_TOKEN" in body
+    assert "nothing has been marked needs_human" in body
+
+
+def test_while_halted_no_further_book_is_claimed(env, tmp_path):
+    obs = Observed()
+    ran = []
+    checks = []
+
+    def preflight(values):
+        checks.append(values[ga.OAUTH_KEY])
+        return "Claude Code refused the subscription token: 401"
+
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([BOOK, BOOK_2]),
+                            download=_downloader(tmp_path),
+                            run_driver=_refusing_driver, preflight=preflight)
+    agent.poll_once()                           # claims BOOK, gets refused
+    second = agent.poll_once()
+    third = agent.poll_once()
+
+    assert second.halted and third.halted
+    assert second.claimed == "" and third.claimed == ""
+    assert agent.ledger().state("drive-2") == ""            # never touched
+    assert obs.beats[-1]["state"] == "halted"
+    assert obs.beats[-1]["awaiting"] == 2
+    assert len(obs.alerts) == 1                 # not one per poll
+    assert checks == [OAUTH, OAUTH]             # re-checked each poll
+
+
+def test_a_replaced_token_resumes_the_held_book(env_file, tmp_path):
+    env = ga.read_env(env_file)
+    obs = Observed()
+    ran = []
+    token_ok = {"value": False}
+
+    def run_driver(**kw):
+        ran.append(kw)
+        if not token_ok["value"]:
+            _refusing_driver()
+        return FakeResult(uploaded=["up-1"])
+
+    def preflight(values):
+        return "" if values[ga.OAUTH_KEY] == "sk-ant-oat-fresh" else "refused"
+
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([BOOK]),
+                            download=_downloader(tmp_path),
+                            run_driver=run_driver, preflight=preflight)
+    agent.poll_once()                           # refused
+    agent.poll_once()                           # still the old token: held
+    assert len(ran) == 1
+
+    # The operator rotates the token in the credentials file.
+    env_file.write_text(ENV_TEXT.replace(OAUTH, "sk-ant-oat-fresh"),
+                        encoding="utf-8")
+    token_ok["value"] = True
+    report = agent.poll_once()
+
+    assert not report.halted
+    assert report.outcome == "done"
+    assert len(ran) == 2
+    # The driver was handed the new token, and resumed the same claim.
+    assert ran[1]["env"][ga.OAUTH_KEY] == "sk-ant-oat-fresh"
+    assert agent.ledger().state("drive-1") == ga.FINISHED
+    assert any("signed in again" in s for s, _b in obs.alerts)
+    assert obs.beats[-1]["state"] == "idle"
+    assert not obs.beats[-1].get("credentials_error")
+
+
+def test_boot_checks_the_token_before_any_book(env, tmp_path):
+    obs = Observed()
+    ran = []
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([BOOK]),
+                            download=_downloader(tmp_path),
+                            run_driver=lambda **kw: ran.append(kw) or FakeResult(),
+                            preflight=lambda _v: "Claude Code refused the "
+                                                 "subscription token: 401")
+    agent.announce()
+    report = agent.poll_once()
+
+    assert obs.beats[-1]["state"] == "halted"
+    assert "token is rejected" in obs.alerts[0][0]
+    assert "claude setup-token" in obs.alerts[0][1]
+    assert report.halted and not ran
+    assert agent.ledger().state("drive-1") == ""
+
+
+def test_boot_with_a_working_token_is_quiet(env, tmp_path):
+    obs = Observed()
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([]),
+                            preflight=lambda _v: "")
+    agent.announce()
+    assert obs.states() == ["starting"]
+    assert "rejected" not in obs.alerts[0][0]
+
+
+# --- the sign-in check itself --------------------------------------------------
+
+class _Proc:
+    def __init__(self, rc, out="", err=""):
+        self.returncode, self.stdout, self.stderr = rc, out, err
+
+
+def test_check_credentials_runs_one_cheap_turn_on_the_token():
+    seen = {}
+
+    def runner(argv, **kw):
+        seen["argv"], seen["env"] = argv, kw["env"]
+        return _Proc(0, '{"type":"result","subtype":"success","result":"ok"}')
+
+    values = {ga.OAUTH_KEY: OAUTH, "ANTHROPIC_API_KEY": "sk-api"}
+    assert ga.check_credentials(values, runner=runner) == ""
+    assert seen["argv"][:2] == ["claude", "-p"]
+    assert "--max-turns" in seen["argv"] and "1" in seen["argv"]
+    assert seen["env"][ga.OAUTH_KEY] == OAUTH
+    assert "ANTHROPIC_API_KEY" not in seen["env"]     # signs in on the token
+
+
+def test_check_credentials_names_the_refusal():
+    runner = lambda argv, **kw: _Proc(1, "", "Failed to authenticate. API "
+                                             "Error: 401 OAuth access token "
+                                             "is invalid.")
+    error = ga.check_credentials({ga.OAUTH_KEY: OAUTH}, runner=runner)
+    assert error.startswith("Claude Code refused the subscription token")
+    assert "401" in error
+
+
+def test_check_credentials_reports_other_failures_without_blaming_the_token(
+        monkeypatch):
+    monkeypatch.delenv(ga.OAUTH_KEY, raising=False)
+    runner = lambda argv, **kw: _Proc(2, "", "some other crash")
+    error = ga.check_credentials({ga.OAUTH_KEY: OAUTH}, runner=runner)
+    assert "exited 2" in error and "some other crash" in error
+
+    def missing(argv, **kw):
+        raise FileNotFoundError("claude")
+    assert "not installed" in ga.check_credentials({ga.OAUTH_KEY: OAUTH},
+                                                   runner=missing)
+    assert "is not set" in ga.check_credentials({}, runner=runner)
+
+
+# --- forgetting a book this machine wrote off --------------------------------
+
+def test_forget_drops_the_ledger_entry_so_the_book_runs_again(env, tmp_path):
+    ran = []
+    agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
+                   download=_downloader(tmp_path),
+                   run_driver=lambda **kw: ran.append(kw) or FakeResult())
+    agent.ledger().record("drive-1", ga.FAILED, name=BOOK["name"],
+                          slug="test-drive-1", outcome="needs_human")
+    agent.poll_once()
+    assert not ran                                   # failed: never retried
+
+    assert agent.forget(BOOK["name"]) == BOOK["name"]
+    assert agent.ledger().state("drive-1") == ""
+    agent.poll_once()
+    assert len(ran) == 1                             # claimed afresh
+    assert agent.ledger().state("drive-1") == ga.FINISHED
+
+
+def test_forget_by_id_and_its_refusals(env, tmp_path):
+    agent = _agent(env, tmp_path, opener=FakeApp([]))
+    agent.ledger().record("drive-1", ga.FAILED, name="Same.docx", slug="a")
+    agent.ledger().record("drive-2", ga.FAILED, name="Same.docx", slug="b")
+    with pytest.raises(ga.AgentError, match="2 ledger entries"):
+        agent.forget("Same.docx")
+    assert agent.forget("drive-2") == "Same.docx"
+    assert agent.ledger().state("drive-1") == ga.FAILED
+    with pytest.raises(ga.AgentError, match="No book in the ledger"):
+        agent.forget("nope")

@@ -10,8 +10,11 @@ import logging
 import os
 import plistlib
 import re
+import socket
+import stat
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -21,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from docproof import agent_lane
+from galley.driver import CredentialsError
 
 log = logging.getLogger("docproof.galley.agent")
 
@@ -40,6 +44,27 @@ DOWNLOAD_DIR = ".agent-downloads"
 DEFAULT_POLL_INTERVAL_S = 300.0
 #: What the server calls the read-only route this poller lives on.
 AWAITING_PATH = "/api/watch/awaiting"
+#: Where the agent reports what it is doing, so the Proofread drawer can show
+#: it — the second and last route a machine may touch, write-only.
+STATUS_PATH = "/api/watch/agent"
+#: Optional: who gets the agent's own alerts (boot, a poll that stopped
+#: working, a delivery given up on). Falls back to the watcher's notify
+#: address.
+ALERT_EMAIL_KEY = "GALLEY_ALERT_EMAIL"
+ALERT_TAGS = "[DocProof][Galley][Agent]"
+#: While a book runs, how often the drawer hears from the agent even when no
+#: phase boundary passes. 0 disables the timer (tests).
+DEFAULT_HEARTBEAT_S = 60.0
+#: How long the sign-in check may take before it counts as a failure.
+PREFLIGHT_TIMEOUT_S = 180.0
+#: What to do when the subscription token is rejected. One place, quoted by
+#: the alert, the heartbeat and the log.
+TOKEN_FIX_HINT = (
+    "Make a new token with `claude setup-token` on a Mac that is signed in, "
+    "then: on Fly, `fly secrets set -a atmosphere-docproof "
+    "GALLEY_OAUTH_TOKEN=<token>` (the agent machine restarts and resumes the "
+    "claimed book); on a Mac, replace CLAUDE_CODE_OAUTH_TOKEN in "
+    "~/.galley/agent.env (picked up at the next poll).")
 # Service PATH defaults include the CLI and common Homebrew locations.
 PATH = ("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:"
         + str(Path.home() / ".local" / "bin"))
@@ -76,6 +101,14 @@ class AgentEnv:
     def awaiting_url(self) -> str:
         return self.app_url.rstrip("/") + AWAITING_PATH
 
+    @property
+    def status_url(self) -> str:
+        return self.app_url.rstrip("/") + STATUS_PATH
+
+    @property
+    def alert_email(self) -> str:
+        return (self.values.get(ALERT_EMAIL_KEY) or "").strip()
+
 
 #: One implementation of the file format, in docproof.agent_lane — the sifter
 #: children read the same file for the same token and cannot import galley.
@@ -110,6 +143,44 @@ def read_env(path: str | Path = DEFAULT_ENV_FILE, *,
             f"DOCPROOF_AGENT_TOKEN.")
     return AgentEnv(app_url=values[APP_URL_KEY], token=values[AGENT_TOKEN_KEY],
                     oauth_token=values[OAUTH_KEY], values=values, path=target)
+
+
+def check_credentials(values: dict[str, str], *, runner=subprocess.run,
+                      timeout_s: float = PREFLIGHT_TIMEOUT_S) -> str:
+    """Sign in once with the subscription token, cheaply, and return "" when
+    Claude Code answers — or the reason it did not.
+
+    One turn of a one-line prompt on the subscription: the cost of finding
+    out before a book is claimed, rather than after its profile phase has
+    been written off as needs_human.
+    """
+    from galley.driver import STRIPPED_KEYS, detect_credential_failure
+
+    env = dict(os.environ)
+    env.update({k: v for k, v in values.items() if v})
+    for key in STRIPPED_KEYS:             # the session signs in on the token
+        env.pop(key, None)
+    if not env.get(OAUTH_KEY):
+        return f"{OAUTH_KEY} is not set"
+    argv = ["claude", "-p", "Reply with exactly the word: ok",
+            "--max-turns", "1", "--output-format", "json"]
+    try:
+        proc = runner(argv, env=env, capture_output=True, text=True,
+                      timeout=timeout_s)
+    except FileNotFoundError:
+        return "the `claude` command is not installed on this machine"
+    except subprocess.TimeoutExpired:
+        return f"`claude -p` did not answer within {timeout_s:.0f}s"
+    output = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+    if detect_credential_failure(output):
+        line = next((ln.strip() for ln in output.splitlines()
+                     if detect_credential_failure(ln)), "")
+        return f"Claude Code refused the subscription token: {line[:300]}"
+    if proc.returncode != 0:
+        tail = "\n".join(output.strip().splitlines()[-5:])
+        return (f"`claude -p` exited {proc.returncode} before the token "
+                f"could be confirmed: {tail[:400]}")
+    return ""
 
 
 def apply_env(env: AgentEnv, *, environ: dict[str, str] | None = None) -> None:
@@ -152,6 +223,13 @@ def fetch_awaiting(env: AgentEnv, *, opener=_open_url) -> list[AwaitingBook]:
     """Fetch awaiting manuscripts; log request failures and return an empty
     list.
     """
+    return poll_awaiting(env, opener=opener)[0]
+
+
+def poll_awaiting(env: AgentEnv, *, opener=_open_url
+                  ) -> tuple[list[AwaitingBook], str]:
+    """The awaiting list and, when the poll failed, one line saying how — so
+    the caller can tell "nothing to do" from "could not ask"."""
     request = urllib.request.Request(
         env.awaiting_url,
         headers={"Authorization": f"Bearer {env.token}",
@@ -165,19 +243,67 @@ def fetch_awaiting(env: AgentEnv, *, opener=_open_url) -> list[AwaitingBook]:
             detail = e.read().decode("utf-8")[:300]
         except Exception:                                   # noqa: BLE001
             pass
+        error = (f"the app refused the awaiting list (HTTP {e.code})"
+                 f"{': ' + detail if detail else ''}")
         log.warning("The app refused the awaiting list (HTTP %s)%s",
                     e.code, f": {detail}" if detail else "")
-        return []
+        return [], error
     except Exception as e:                                  # noqa: BLE001
         log.warning("Could not reach %s (%s); trying again next poll.",
                     env.awaiting_url, e)
-        return []
+        return [], f"could not reach {env.awaiting_url} ({e})"
     if not isinstance(payload, dict):
         log.warning("The app answered something that is not an awaiting list.")
-        return []
+        return [], "the app answered something that is not an awaiting list"
     books = [AwaitingBook.from_json(row)
              for row in (payload.get("books") or []) if isinstance(row, dict)]
-    return [b for b in books if b.file_id and b.name]
+    return [b for b in books if b.file_id and b.name], ""
+
+
+def post_status(env: AgentEnv, payload: dict[str, Any], *,
+                opener=_open_url) -> bool:
+    """Tell the app what the agent is doing. Never raises: a heartbeat that
+    cannot land must not stop the work it reports on."""
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        env.status_url, data=body, method="POST",
+        headers={"Authorization": f"Bearer {env.token}",
+                 "Content-Type": "application/json",
+                 "Accept": "application/json"})
+    try:
+        with opener(request, 15) as response:
+            response.read()
+        return True
+    except Exception as e:                                  # noqa: BLE001
+        log.warning("Heartbeat did not land at %s (%s).", env.status_url, e)
+        return False
+
+
+def send_alert(env: AgentEnv, subject: str, body: str, *,
+               to: str = "", get_key=None, opener=None) -> bool:
+    """Email the agent's own alert over the watcher's Gmail sign-in — the
+    same token Drive uploads use. Quiet no-op without an address or a
+    sign-in; never raises."""
+    try:
+        from app.watch import notify
+        from app.watch.settings import WatchSettings, default_watch_home
+        from galley.driver import drive_token
+
+        address = to or env.alert_email
+        if not address:
+            ws = WatchSettings.load(default_watch_home())
+            address = (ws.notify_email or "").strip()
+        if not address:
+            log.info("No alert address (%s); not emailing: %s",
+                     ALERT_EMAIL_KEY, subject)
+            return False
+        token = drive_token(get_key=get_key)
+        kwargs = {"opener": opener} if opener is not None else {}
+        notify.send(token, address, f"{ALERT_TAGS} {subject}", body, **kwargs)
+        return True
+    except Exception as e:                                  # noqa: BLE001
+        log.warning("Agent alert could not be emailed (%s): %s", e, subject)
+        return False
 
 
 
@@ -271,11 +397,14 @@ class RunReport:
     reason: str = ""
     skipped: list[str] = field(default_factory=list)
     delivered: list[str] = field(default_factory=list)
+    #: Why no book was (or will be) claimed: the subscription token is
+    #: rejected. The claimed book, if any, stays claimed and resumes later.
+    halted: str = ""
 
     def to_json(self) -> dict[str, Any]:
         return {"looked_at": self.looked_at, "claimed": self.claimed,
                 "outcome": self.outcome, "reason": self.reason,
-                "skipped": list(self.skipped)}
+                "skipped": list(self.skipped), "halted": self.halted}
 
 
 @dataclass
@@ -296,6 +425,22 @@ class Agent:
     upload: Callable[[list[Path], str], list[str]] | None = None
     sleep: Callable[[float], None] = time.sleep
     log: Callable[[str], None] = log.info
+    #: Observability seams. `heartbeat` receives the whole status dict each
+    #: time it changes (default: POST it to the app); `alert` receives
+    #: (subject, body) for the agent's own alarms (default: email).
+    heartbeat: Callable[[dict[str, Any]], None] | None = None
+    alert: Callable[[str, str], None] | None = None
+    heartbeat_interval_s: float = DEFAULT_HEARTBEAT_S
+    host: str = field(default_factory=socket.gethostname)
+    #: The sign-in check (`check_credentials`), run at boot and again before
+    #: claiming while the token is known to be bad. None skips it — the
+    #: driver still recognises a rejected token mid-run.
+    preflight: Callable[[dict[str, str]], str] | None = None
+    _status: dict[str, Any] = field(default_factory=dict, repr=False)
+    _poll_error: str = field(default="", repr=False)
+    #: The current credentials failure, or "" while the token works.
+    _halt: str = field(default="", repr=False)
+    _file_id: str = field(default="", repr=False)
 
 
     @property
@@ -309,16 +454,99 @@ class Agent:
     def ledger(self) -> Ledger:
         return Ledger.load(self.ledger_path)
 
+    # --- what the drawer sees ------------------------------------------------
+
+    def _beat(self, **changes: Any) -> dict[str, Any]:
+        """Merge `changes` into the agent's status and send it. Never raises."""
+        from docproof import __version__
+
+        self._status.update({k: v for k, v in changes.items()})
+        payload = {"agent": self.host, "version": __version__, "at": _now(),
+                   "poll_interval_s": self.poll_interval_s,
+                   "app": self.env.awaiting_url, **self._status}
+        try:
+            if self.heartbeat is not None:
+                self.heartbeat(payload)
+            else:
+                post_status(self.env, payload, opener=self.opener)
+        except Exception:                                   # noqa: BLE001
+            log.warning("heartbeat failed", exc_info=True)
+        return payload
+
+    def _alarm(self, subject: str, body: str) -> None:
+        """One of the agent's own alerts. Never raises."""
+        self.log(f"ALERT {subject}")
+        try:
+            if self.alert is not None:
+                self.alert(subject, body)
+            else:
+                send_alert(self.env, subject, body)
+        except Exception:                                   # noqa: BLE001
+            log.warning("alert failed: %s", subject, exc_info=True)
+
+    def _on_progress(self, event: dict[str, Any]) -> None:
+        """The driver's phase-by-phase report, turned into a heartbeat."""
+        kind = str(event.get("event") or "")
+        now = _now()
+        if kind == "phase_start":
+            self._beat(state="running", phase=event.get("phase"),
+                       model=event.get("model"), effort=event.get("effort"),
+                       phase_started_at=now, turns=0, last_error="")
+        elif kind == "phase_end":
+            self._beat(phase_done=event.get("phase"),
+                       phase_ok=bool(event.get("ok")),
+                       last_phase_turns=event.get("num_turns"),
+                       last_phase_limit=event.get("limit"))
+        elif kind == "gate":
+            self._beat(gate=("approved" if event.get("approved")
+                             else "escalated" if event.get("approved") is None
+                             else "declined"))
+        elif kind == "stopped":
+            self._beat(state="stopping", last_outcome="needs_human",
+                       last_reason=str(event.get("reason") or "")[:600])
+        elif kind == "finished":
+            self._beat(state="finishing",
+                       last_outcome=event.get("outcome"),
+                       last_reason=str(event.get("reason") or "")[:600])
+
+    def _live_beat(self, slug: str) -> None:
+        """The timer's heartbeat: what the running phase has done so far."""
+        from galley.driver import live_progress
+
+        phase = self._status.get("phase")
+        try:
+            live = live_progress(self.root / slug, phase)
+        except Exception:                                   # noqa: BLE001
+            live = {}
+        self._beat(**live)
+
+    def _ticker(self, slug: str, stop: threading.Event) -> None:
+        while not stop.wait(self.heartbeat_interval_s):
+            self._live_beat(slug)
+
 
     def poll_once(self) -> RunReport:
         """Look once, and run at most one book."""
         report = RunReport()
-        books = fetch_awaiting(self.env, opener=self.opener)
+        books, error = poll_awaiting(self.env, opener=self.opener)
+        self._poll_health(error)
         report.looked_at = len(books)
         ledger = self.ledger()
 
         # Retry pending delivery before starting another book.
         self.retry_deliveries(ledger, report)
+
+        if self._halt and not self._token_recovered():
+            # A dead token would turn every awaiting book into needs_human,
+            # one per poll. Hold the queue instead, and say so.
+            report.halted = self._halt
+            self._beat(state="halted", awaiting=len(books),
+                       pending_deliveries=len(ledger.pending_deliveries()),
+                       credentials_error=self._halt[:600])
+            if books:
+                self.log(f"{len(books)} book(s) awaiting; holding them until "
+                         f"the subscription token works again.")
+            return report
 
         for book in books:
             state = ledger.state(book.file_id)
@@ -330,18 +558,141 @@ class Agent:
             return report                     # one book at a time, on purpose
         if books:
             self.log(f"{len(books)} book(s) awaiting; all already handled here.")
+        self._beat(state="idle", awaiting=len(books),
+                   pending_deliveries=len(ledger.pending_deliveries()))
         return report
+
+    def _poll_health(self, error: str) -> None:
+        """Alert once when polling breaks, and once when it recovers — not on
+        every five-minute retry in between."""
+        now = _now()
+        if error:
+            first = not self._poll_error
+            self._poll_error = error
+            self._beat(last_poll_at=now, last_poll_error=error)
+            if first:
+                self._alarm(
+                    f"cannot reach DocProof from {self.host}",
+                    f"The Galley agent on {self.host} could not ask "
+                    f"{self.env.awaiting_url} for books:\n\n  {error}\n\n"
+                    f"It keeps retrying every "
+                    f"{self.poll_interval_s / 60:.0f} minutes and will say "
+                    f"when it gets through again. Until then no book is "
+                    f"picked up. Check DOCPROOF_AGENT_TOKEN on both sides, "
+                    f"and that the app is up.")
+            return
+        if self._poll_error:
+            self._alarm(f"DocProof is reachable again from {self.host}",
+                        f"The Galley agent on {self.host} is polling "
+                        f"{self.env.awaiting_url} normally again (the last "
+                        f"failure was: {self._poll_error}).")
+        self._poll_error = ""
+        self._beat(last_poll_at=now, last_poll_error="")
+
+    def _reload_env(self) -> None:
+        """Pick up a rotated token from the credentials file, if there is one
+        (on Fly the file is rewritten at boot; on a Mac it is edited by hand)."""
+        path = self.env.path
+        if not path:
+            return
+        try:
+            self.env = read_env(path)
+        except AgentError as e:
+            self.log(f"credentials file not reloaded: {e}")
+
+    def _token_recovered(self) -> bool:
+        """While halted: re-read the credentials and try to sign in. Without
+        a preflight the next claim is the test."""
+        self._reload_env()
+        if self.preflight is not None:
+            error = self._preflight()
+            if error:
+                if error != self._halt:
+                    self._halt = error
+                    self.log(f"still halted: {error}")
+                return False
+        self._alarm(f"Galley agent on {self.host} is signed in again",
+                    f"The subscription token on {self.host} works again; "
+                    f"the held books are picked up from this poll on "
+                    f"(the last failure was: {self._halt}).")
+        self._halt = ""
+        self._beat(credentials_error="", last_error="")
+        return True
+
+    def _preflight(self) -> str:
+        try:
+            return str(self.preflight(dict(self.env.values)) or "")
+        except Exception as e:                              # noqa: BLE001
+            log.exception("The sign-in check itself failed")
+            return f"the sign-in check crashed: {e}"
+
+    def halt(self, reason: str, *, book: str = "", slug: str = "") -> None:
+        """Stop claiming books because the subscription token is rejected.
+        Alerts once per failure, not once per poll."""
+        first = not self._halt
+        self._halt = reason
+        fields: dict[str, Any] = {"state": "halted", "phase": None,
+                                  "credentials_error": reason[:600],
+                                  "last_error": reason[:400]}
+        if book:
+            fields.update(last_book=book, held_book=book, held_slug=slug,
+                          last_outcome="held", last_reason=reason[:600])
+        self._beat(**fields)
+        self.log(f"HALTED: {reason[:300]}")
+        if first:
+            held = (f"{book} is claimed and untouched; it resumes from the "
+                    f"same phase once the token works.\n\n" if book else "")
+            self._alarm(
+                f"Galley agent on {self.host}: subscription token rejected",
+                f"Claude Code on {self.host} could not sign in:\n\n  "
+                f"{reason[:800]}\n\n{held}No book is claimed until the "
+                f"token is replaced; nothing has been marked needs_human "
+                f"over this.\n\n{TOKEN_FIX_HINT}")
 
     def run_forever(self) -> None:
         self.log(f"Galley agent: polling {self.env.awaiting_url} every "
                  f"{self.poll_interval_s / 60:.0f} min.")
+        self.announce()
         while True:
             try:
                 self.poll_once()
-            except Exception:                               # noqa: BLE001
+            except Exception as e:                          # noqa: BLE001
                 # Keep polling after unexpected failures.
                 log.exception("The poll failed; trying again next interval.")
+                self._beat(state="idle", last_error=f"poll crashed: {e}"[:400])
             self.sleep(self.poll_interval_s)
+
+    def announce(self) -> None:
+        """Boot: the first heartbeat and a one-line email, so a machine that
+        came up (or came back after a deploy) is noticed."""
+        from docproof import __version__
+
+        started = _now()
+        ledger = self.ledger()
+        pending = ledger.pending()
+        self._beat(state="starting", started_at=started, awaiting=0,
+                   pending_deliveries=len(ledger.pending_deliveries()),
+                   last_error="")
+        # Find out now whether the token signs in, not after a book's first
+        # phase has been written off.
+        problem = self._preflight() if self.preflight is not None else ""
+        self._alarm(
+            f"Galley agent started on {self.host}"
+            + (" — but its token is rejected" if problem else ""),
+            f"DocProof {__version__} on {self.host} is polling "
+            f"{self.env.awaiting_url} every {self.poll_interval_s / 60:.0f} "
+            f"minutes for books to proofread.\n"
+            f"Workspaces: {self.root}\n"
+            + (f"{len(pending)} book(s) were claimed but unfinished; the "
+               f"first poll resumes them.\n" if pending else "")
+            + (f"\nThe subscription token does not sign in ({problem}). No "
+               f"book is claimed until it is replaced. {TOKEN_FIX_HINT}\n"
+               if problem else "")
+            + "Progress shows under Admin → Automations → Proofread.")
+        if problem:
+            self._halt = problem
+            self._beat(state="halted", credentials_error=problem[:600],
+                       last_error=problem[:400])
 
 
     def run_book(self, book: AwaitingBook, ledger: Ledger, report: RunReport,
@@ -356,6 +707,11 @@ class Agent:
                       folder_id=folder)
         self.log(f"{'Resuming' if resume else 'Claiming'} {book.name} "
                  f"(workspace {slug}).")
+        self._status = {k: v for k, v in self._status.items()
+                        if k in ("started_at", "last_poll_at",
+                                 "last_poll_error")}
+        self._beat(state="running", book=book.name, slug=slug,
+                   resumed=resume, run_started_at=_now(), phase=None)
 
         try:
             local = self.fetch_book(book)
@@ -371,6 +727,13 @@ class Agent:
         self._file_id = book.file_id
         try:
             result = self.drive_book(local, slug, folder, resume=resume)
+        except CredentialsError as e:
+            # The token, not the book. The claim stands and the run resumes
+            # from the same phase once the token is replaced.
+            report.outcome = "held"
+            report.reason = str(e)
+            self.halt(str(e), book=book.name, slug=slug)
+            return
         except Exception as e:                              # noqa: BLE001
             log.exception("The proofread of %s crashed", book.name)
             self.give_up(book, ledger, report, slug, folder,
@@ -389,12 +752,19 @@ class Agent:
             # finished.
             self.owe_delivery(book, ledger, slug, folder, outcome, reason,
                               handoff, why="the driver's upload failed")
+            self._beat(state="idle", phase=None, last_outcome=outcome,
+                       last_reason=reason[:600], last_book=book.name,
+                       delivery="pending")
             return
         ledger.record(book.file_id, FINISHED if outcome == "done" else FAILED,
                       name=book.name, slug=slug, folder_id=folder,
                       outcome=outcome, reason=reason[:400],
                       uploaded=uploaded)
         self.log(f"{book.name}: {outcome} — {reason[:200]}")
+        self._beat(state="idle", phase=None, last_outcome=outcome,
+                   last_reason=reason[:600], last_book=book.name,
+                   finished_at=_now(), delivery="uploaded" if uploaded
+                   else "none")
 
     def fetch_book(self, book: AwaitingBook) -> Path:
         """The Book 1, on this Mac, as a .docx."""
@@ -425,9 +795,24 @@ class Agent:
                 kwargs["start_phase"] = start
                 self.log(f"Resuming {slug} from the {start} phase.")
         runner = self.run_driver or _run_driver
-        return runner(book=local, slug=slug, workspace_root=self.root,
-                      drive_folder_id=folder_id, source_id=self._file_id,
-                      env=self.driver_env(), upload=self.upload, **kwargs)
+        # The driver reports every phase boundary; a timer fills the minutes
+        # in between with what the running session has done so far.
+        stop = threading.Event()
+        ticker = None
+        if self.heartbeat_interval_s > 0:
+            ticker = threading.Thread(target=self._ticker, args=(slug, stop),
+                                      name=f"galley-heartbeat-{slug}",
+                                      daemon=True)
+            ticker.start()
+        try:
+            return runner(book=local, slug=slug, workspace_root=self.root,
+                          drive_folder_id=folder_id, source_id=self._file_id,
+                          env=self.driver_env(), upload=self.upload,
+                          progress=self._on_progress, **kwargs)
+        finally:
+            stop.set()
+            if ticker is not None:
+                ticker.join(timeout=5)
 
     def resume_phase(self, slug: str) -> str:
         """Choose the next phase from the recorded run state and driver phase
@@ -471,6 +856,9 @@ class Agent:
         retried without rerunning the proofread.
         """
         report.outcome, report.reason = "needs_human", reason
+        self._beat(state="idle", phase=None, last_outcome="needs_human",
+                   last_reason=reason[:600], last_book=book.name,
+                   finished_at=_now(), last_error=reason[:400])
         try:
             files = self.write_failure(slug, book.name, reason)
         except Exception as e:                              # noqa: BLE001
@@ -582,6 +970,17 @@ class Agent:
                          f"attempt(s) — put {len(files)} hand-off file(s) in "
                          f"folder {folder} by hand.")
                 report.skipped.append(f"{name} (delivery abandoned)")
+                self._alarm(
+                    f"{name}: hand-off could not be delivered",
+                    f"The proofread of {name} finished ({outcome}) but its "
+                    f"hand-off could not be uploaded to Drive folder {folder} "
+                    f"in {attempts} attempts, so the agent has stopped "
+                    f"trying. The files are on {self.host} under "
+                    f"{self.root / str(entry.get('slug') or '')}/handoff/:\n"
+                    + "".join(f"  - {f.name}\n" for f in files)
+                    + f"Last error: {entry.get('delivery_error') or '?'}\n"
+                    f"DocWatch is still waiting on this book.")
+                self._beat(last_error=f"{name}: delivery abandoned")
                 continue
             uploaded_names = dict(entry.get("uploaded_names") or {})
             if self._upload_missing(files, folder, uploaded_names):
@@ -608,7 +1007,8 @@ class Agent:
                       reason: str) -> list[Path]:
         """The hand-off for a book that never ran: a verdict, and the decision
         log if there is anything to log."""
-        from galley.driver import build_handoff, handoff_base
+        from galley.driver import (build_diagnostics, build_handoff,
+                                   handoff_base)
         from galley.journal import write_journal
         from galley.outcome import Outcome, hubspot_fields
 
@@ -626,9 +1026,9 @@ class Agent:
             log.warning("No decision log for %s (%s)", slug, e)
         out = ws / "handoff"
         try:
-            return build_handoff(ws, source_name, out,
-                                 outcome_sources=[runs / "outcome.json"],
-                                 partial=True)
+            files = build_handoff(ws, source_name, out,
+                                  outcome_sources=[runs / "outcome.json"],
+                                  partial=True)
         except Exception:                                   # noqa: BLE001
             # If a partial handoff cannot be built, deliver the outcome
             # alone.
@@ -636,8 +1036,38 @@ class Agent:
             import shutil
             dest = out / f"{handoff_base(source_name)} - outcome.json"
             shutil.copy2(runs / "outcome.json", dest)
-            return [dest]
+            files = [dest]
+        # The evidence rides with the verdict: whatever the driver logged
+        # before it gave up, plus the agent's own log.
+        bundle = build_diagnostics(
+            ws, source_name, out,
+            extra=[(self.root / LOG_NAME, "agent.log")])
+        if bundle is not None:
+            files.append(bundle)
+        return files
 
+
+    def forget(self, key: str) -> str:
+        """Drop one book from the ledger, by Drive id or file name, so the
+        next poll claims it as if it had never been seen. The workspace is
+        left in place; the driver reseeds it. Returns the book's name."""
+        ledger = self.ledger()
+        wanted = key.strip()
+        matches = [fid for fid, entry in ledger.books.items()
+                   if fid == wanted or str(entry.get("name") or "") == wanted]
+        if not matches:
+            known = ", ".join(str(e.get("name") or fid)
+                              for fid, e in ledger.books.items()) or "nothing"
+            raise AgentError(f"No book in the ledger is {wanted!r}; the "
+                             f"ledger holds: {known}.")
+        if len(matches) > 1:
+            raise AgentError(f"{wanted!r} names {len(matches)} ledger entries; "
+                             f"use the Drive id: {', '.join(matches)}.")
+        entry = ledger.books.pop(matches[0])
+        ledger.save()
+        name = str(entry.get("name") or matches[0])
+        self.log(f"Forgot {name} ({matches[0]}, was {entry.get('state')}).")
+        return name
 
     def status(self) -> dict[str, Any]:
         ledger = self.ledger()
@@ -676,6 +1106,10 @@ def _run_driver(**kwargs: Any) -> Any:
 
     upload = kwargs.pop("upload", None)
     kwargs.setdefault("on_source_change", "revise")
+    # The driver's phase banners go through the logger, not print(): under a
+    # service manager stdout is block-buffered and a "--- phase settle ---"
+    # line would surface hours late, after the run.
+    kwargs.setdefault("log", lambda message: log.info("%s", message))
     driver = Driver(approve="auto", mechanical_only=True, **kwargs)
     if upload is not None:
         driver.upload = upload
@@ -941,6 +1375,8 @@ __all__ = ["AGENT_TOKEN_KEY", "APP_URL_KEY", "AWAITING_PATH", "CLAIMED",
            "LABEL", "LEDGER_NAME", "LOG_NAME", "OAUTH_KEY", "UNIT_NAME",
            "Agent", "AgentEnv", "AgentError", "AwaitingBook", "Ledger",
            "RunReport", "apply_env", "fetch_awaiting", "install", "installed",
+           "poll_awaiting", "post_status", "send_alert",
            "is_linux", "parse_env", "plist_content", "plist_path", "program",
            "read_env", "refresh_wrapper", "service_path", "slug_for",
+           "check_credentials", "TOKEN_FIX_HINT", "PREFLIGHT_TIMEOUT_S",
            "uninstall", "unit_content", "unit_path", "units_dir"]

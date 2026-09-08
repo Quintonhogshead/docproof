@@ -1497,6 +1497,11 @@ button.pill.setup.actionable:focus-visible { outline: 2px solid var(--warn); out
 .wf-drawer-head small { display: block; color: var(--muted); }
 .wf-drawer-close { border: 0; background: none; color: var(--muted); font-size: 1.3rem; line-height: 1; cursor: pointer; }
 .wf-config { padding: 0.9rem 1rem; display: grid; gap: 0.8rem; }
+/* Grid items default to min-width:auto, so one wide control — a <select>
+   sizes itself to its longest option — would widen every row past the
+   drawer's edge. Nothing in a drawer may be wider than the drawer. */
+.wf-config > * { min-width: 0; max-width: 100%; }
+.wf-config select, .wf-config input[type="text"] { width: 100%; max-width: 100%; box-sizing: border-box; }
 .wf-hint { color: var(--muted); font-size: 0.85rem; margin: 0; }
 /* The in-drawer "what's still missing" banner for a workflow that needs setup. */
 .wf-setup {
@@ -1519,14 +1524,36 @@ button.pill.setup.actionable:focus-visible { outline: 2px solid var(--warn); out
    cells keeps the whole thing inside the drawer instead of stretching the
    Automations screen into a horizontal scroll. */
 .wf-readout .table {
-  display: table; table-layout: fixed; font-size: 0.85rem;
+  display: table; table-layout: fixed; width: 100%; max-width: 100%;
+  font-size: 0.85rem;
 }
 .wf-readout .table td, .wf-readout .table th {
   vertical-align: top; white-space: normal; overflow-wrap: anywhere;
+  padding-right: 0.5rem;
+}
+/* Fixed layout hands every column a quarter of the drawer unless told
+   otherwise; the date and the verdict word need less, the reason needs the
+   rest — and the date is allowed to wrap here rather than push the table past
+   the drawer's edge. */
+.wf-readout .wf-when { white-space: normal; }
+#proof-verdicts th:nth-child(1), #proof-verdicts td:nth-child(1) { width: 27%; }
+#proof-verdicts th:nth-child(2), #proof-verdicts td:nth-child(2) { width: 19%; }
+#proof-verdicts th:nth-child(4), #proof-verdicts td:nth-child(4) { width: 21%; }
+#proof-awaiting th:nth-child(3), #proof-awaiting td:nth-child(3) { width: 24%; }
+#proof-awaiting th:nth-child(4), #proof-awaiting td:nth-child(4) { width: 17%; }
+#proof-awaiting button.small { padding: 0.15rem 0.5rem; font-size: 0.78rem; }
+/* A long reason (the driver quotes the log's last lines) shows three lines
+   and opens on click. */
+.wf-reason.clamped {
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden; cursor: pointer;
 }
 /* The verdict word itself, coloured the way the status pills are: a clean book
    reads as done, a book needing a person reads as something to act on. */
 .wf-verdict { font-weight: 600; white-space: nowrap; }
+.wf-agent-error { color: var(--danger, #b42318); }
+.wf-agent-stale { color: var(--danger, #b42318); font-weight: 600; }
+.wf-agent-live { color: var(--ok, #067647); font-weight: 600; }
 .wf-verdict.done { color: var(--ok); }
 .wf-verdict.needs_human { color: var(--warn); }
 /* The reason behind a verdict: long, and the least important thing in the row,

@@ -97,6 +97,8 @@ def _payload(*, structure, plan, sheet, stats, checks, usage, cfg, written,
                                    if p.has_link),
             "unanswered": len(unanswered),
             "untouched_outside_body": len(structure.untouched),
+            # Revisions the file arrived with, accepted before formatting.
+            "accepted_revisions": sum(n for _, n in structure.accepted_revisions),
             # Preserved in place, never tagged: everything inside a table, and
             # images sitting on their own line.
             "table_paragraphs": sum(1 for p in structure.paragraphs
@@ -169,6 +171,11 @@ def _markdown(d: dict) -> str:
         L.append(f"Not used in this manuscript: {', '.join(unused)}.\n")
 
     L.append("## Cleanup\n")
+    if counts.get("accepted_revisions"):
+        L.append(f"- The manuscript arrived with tracked changes still in it: "
+                 f"{counts['accepted_revisions']} revision(s) were accepted "
+                 f"(Accept All) before formatting. Every file here, the "
+                 f"tracked one included, starts from that accepted text.")
     L.append(f"- {counts['blank_lines_removed']} blank paragraph(s) removed — "
              f"InDesign takes vertical spacing from the styles.")
     L.append(f"- {counts['paragraphs_trimmed']} paragraph(s) had typed leading "

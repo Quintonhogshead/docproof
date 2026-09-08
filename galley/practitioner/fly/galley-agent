@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# The Fly `agent` process: run the Galley poller (`docproof galley agent`) on a
+# machine of its own, next to the DocProof web app.
+#
+# The agent reads its credentials from a mode-600 file, never the shell — on a
+# laptop that file is written by hand. On Fly the values arrive as secrets in
+# the environment, so this entrypoint writes the file from them at boot and
+# then execs the agent. Secrets are app-wide, so the web process sees them too;
+# the subscription token is therefore named GALLEY_OAUTH_TOKEN, which nothing in
+# the web app reads, and only becomes CLAUDE_CODE_OAUTH_TOKEN inside the file.
+#
+#   GALLEY_OAUTH_TOKEN     the Claude Max token from `claude setup-token`
+#   DOCPROOF_AGENT_TOKEN   the server's own agent secret (already set for the
+#                          web app; the poller presents the same value)
+#   GALLEY_APP_URL         the app's address (fly.toml [env])
+#   GOOGLE_REFRESH_TOKEN, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+#                          the watcher's Google sign-in, for Book 1 download and
+#                          the Book 2 upload
+#   ANTHROPIC_API_KEY, OPENAI_API_KEY, SAPLING_API_KEY
+#                          the sifters' keys (the web app's own secrets)
+#   GALLEY_ALERT_EMAIL     optional: who the agent emails when it boots, when
+#                          its polling breaks or recovers, and when a hand-off
+#                          delivery is given up on (falls back to the watcher's
+#                          notify address)
+set -euo pipefail
+
+token="${GALLEY_OAUTH_TOKEN:-${CLAUDE_CODE_OAUTH_TOKEN:-}}"
+agent_token="${GALLEY_AGENT_TOKEN:-${DOCPROOF_AGENT_TOKEN:-}}"
+app_url="${GALLEY_APP_URL:-}"
+if [ -z "$token" ] || [ -z "$agent_token" ] || [ -z "$app_url" ]; then
+  echo "galley-agent: need GALLEY_OAUTH_TOKEN (claude setup-token), " \
+       "DOCPROOF_AGENT_TOKEN and GALLEY_APP_URL in the environment" >&2
+  exit 2
+fi
+
+root="${GALLEY_WORKSPACE_ROOT:-/data/galley-workspaces}"
+env_file="${GALLEY_AGENT_ENV_FILE:-$HOME/.galley/agent.env}"
+watch_home="${DOCPROOF_WATCH_HOME:-/data/galley/watch}"
+export GALLEY_AGENT_ENV_FILE="$env_file" DOCPROOF_WATCH_HOME="$watch_home"
+
+umask 077
+mkdir -p "$(dirname "$env_file")" "$root" "$watch_home"
+{
+  printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(printf '%s' "$token" | tr -d '[:space:]')"
+  printf 'GALLEY_APP_URL=%s\n' "$app_url"
+  printf 'GALLEY_AGENT_TOKEN=%s\n' "$agent_token"
+  for key in ANTHROPIC_API_KEY OPENAI_API_KEY SAPLING_API_KEY GOOGLE_REFRESH_TOKEN GALLEY_ALERT_EMAIL; do
+    value="${!key:-}"
+    [ -n "$value" ] && printf '%s=%s\n' "$key" "$value"
+  done
+} > "$env_file"
+chmod 600 "$env_file"
+
+# The watcher's Google client, so drive_token() finds it where docproof-watch
+# would have put it, and the notify address `docproof galley ask` emails an
+# escalation to (GALLEY_ALERT_EMAIL — without it an escalation is only a file
+# in the workspace). Other settings in the file are left alone.
+if [ -n "${GOOGLE_CLIENT_ID:-}" ] && [ -n "${GOOGLE_CLIENT_SECRET:-}" ]; then
+  python3 - "$watch_home/watch.json" <<'PY'
+import json, os, sys
+path = sys.argv[1]
+try:
+    data = json.load(open(path, encoding="utf-8"))
+except (OSError, ValueError):
+    data = {}
+data["client_id"] = os.environ["GOOGLE_CLIENT_ID"]
+data["client_secret"] = os.environ["GOOGLE_CLIENT_SECRET"]
+alert = (os.environ.get("GALLEY_ALERT_EMAIL") or "").strip()
+if alert:
+    data["notify_email"] = alert
+    data["notify_on_complete"] = True
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(data, fh, indent=2)
+PY
+  chmod 600 "$watch_home/watch.json"
+fi
+
+# Claude Code lives in the image at /usr/local/bin/claude; the brain's sifter
+# wrapper at ~/galley-bin/docproof (galley/practitioner/galley-bin/docproof).
+exec docproof galley agent --env-file "$env_file" --workspace-root "$root" "$@"

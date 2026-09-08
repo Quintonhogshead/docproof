@@ -13,12 +13,13 @@ import re
 import shutil
 import subprocess
 import time
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
-from app.watch.naming import PROOF_STAGE as HANDOFF_STAGE
+from app.watch.naming import CLEAN_SUFFIX, PROOF_STAGE as HANDOFF_STAGE
 from docproof import agent_lane
 from galley.journal import JOURNAL_NAME as DECISION_LOG_NAME
 from galley.phases import ALL_PHASES, COPYEDIT_PHASES, MECHANICAL_PHASES
@@ -38,7 +39,32 @@ REQUIRED_STATE: dict[str, str] = {
 # API spending ceiling recorded in approval.json.
 DEFAULT_BUDGET_USD = 10.0
 DEFAULT_MODEL = "claude-fable-5-1"
+#: The cheaper, faster brain for the phases that follow a script.
+MECHANICAL_MODEL = "claude-opus-5"
+# Which brain drives each phase. Judgment phases (the plan gate, the ladder's
+# reading of its own results, audit, settle's adjudication, the copy-edit
+# flights) stay on Fable; the phases that run a fixed set of commands and read
+# their output go to Opus 5 (owner, 2026-09-06). A phase absent here runs on
+# DEFAULT_MODEL.
+PHASE_MODEL: dict[str, str] = {
+    "profile": MECHANICAL_MODEL,
+    "sweeps": MECHANICAL_MODEL,
+    "verify": MECHANICAL_MODEL,
+    "certify": MECHANICAL_MODEL,
+    "deliver": MECHANICAL_MODEL,
+}
+#: Fable phases run at high effort (owner, 2026-09-06); a phase absent here
+#: leaves the session at Claude Code's default effort.
+DEFAULT_EFFORT = "high"
+PHASE_EFFORT: dict[str, str] = {
+    phase: DEFAULT_EFFORT for phase in
+    ("approve", "ladder", "flights", "audit", "reread", "settle")
+}
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 DEFAULT_PERMISSION_MODE = "acceptEdits"
+#: Set in every phase session's environment to the phase name, so verbs
+#: that record a decision can attribute it to the brain that made it.
+BRAIN_PHASE_ENV = "GALLEY_BRAIN_PHASE"
 DEFAULT_WORKSPACE_ROOT = "~/galley-workspaces"
 DEFAULT_WRAPBIN = "~/galley-bin"
 #: Where the driver leaves its own log and ledger inside the workspace.
@@ -47,7 +73,14 @@ DRIVER_DIR = "driver"
 # Bound each session by both turns and elapsed time.
 DEFAULT_MAX_TURNS = 100
 PHASE_MAX_TURNS: dict[str, int] = {
-    "profile": 80,      # scans + PLAN.md, no spend
+    # Raised from 80 on 2026-09-07. A from-scratch profile on a 65k-word book
+    # spent all 80 and never reached PLAN.md: the number audit, paragraph map
+    # and text extraction, then the genre pack, egress report and dry-run — and
+    # then a second pricing pass, because the naive dry-run price came back
+    # over the budget cap and a plan priced above it cannot pass the gate.
+    # Every profile that fit in 80 was resuming a workspace that already had
+    # its scans. None of this work spends; the cap is turns, not dollars.
+    "profile": 160,     # scans + PLAN.md, no spend
     "approve": 60,      # genre-pack, routes, approve — three commands
     "sweeps": 120,      # a dry-run and an apply per bespoke sweep
     "ladder": 100,      # one long review command, plus log reads
@@ -66,11 +99,48 @@ PHASE_TIMEOUT_S: dict[str, float] = {
     "verify": 4 * 3600.0,
     "settle": 4 * 3600.0,
 }
+# The phases whose work grows with the book — ladder reads per chunk, verify
+# re-reads per applied edit, settle runs rounds per residual — carry caps sized
+# for a novel of LENGTH_BASELINE_WORDS. A longer book gets them scaled up in
+# proportion, never down (the table is the floor), and never past
+# LENGTH_SCALE_MAX: a 235k-word epic gets 4x, not 4.7x, because the wall clock
+# still has to catch a session that is looping rather than working. Every
+# other phase is fixed overhead: profile took 17 minutes on a 65k-word novel
+# and 17 minutes on a 3.6k-word story (2026-09-07). The word count comes from
+# the workspace's profile.json, so nothing scales until profile has run — and
+# profile itself never scales.
+LENGTH_SCALED_PHASES = ("ladder", "verify", "settle")
+LENGTH_BASELINE_WORDS = 50_000
+LENGTH_SCALE_MAX = 4.0
+
+
+def length_factor(words: int | float | None) -> float:
+    """How much to stretch a length-scaled phase's caps for a book this long:
+    1.0 at or under the baseline, proportional above it, capped."""
+    try:
+        w = float(words or 0)
+    except (TypeError, ValueError):
+        return 1.0
+    if w <= LENGTH_BASELINE_WORDS:
+        return 1.0
+    return min(LENGTH_SCALE_MAX, w / LENGTH_BASELINE_WORDS)
+
+
 # Fallback turn-cap detection for sessions without a structured result.
 _TURN_CAP_RE = re.compile(r"max(?:imum)?[ _-]?turns?\b|turn limit",
                           re.IGNORECASE)
 #: The conventional exit code for "killed by a timeout".
 TIMEOUT_RC = 124
+
+# A session that never got past sign-in. Claude Code prints one of these and
+# exits non-zero on turn one when the subscription token has expired or been
+# revoked — a machine problem, not a book problem, so the driver must not
+# write a needs_human verdict for it.
+_CREDENTIALS_RE = re.compile(
+    r"Failed to authenticate|OAuth access token is invalid"
+    r"|OAuth token (?:has )?(?:expired|been revoked)|authentication_error"
+    r"|API Error: 401\b|Invalid API key|Not logged in|Please run /login",
+    re.IGNORECASE)
 
 # Quiet means <= 4 new items; disable the percentage threshold. Escalate if
 # three rounds remain noisy.
@@ -89,6 +159,14 @@ log = logging.getLogger("galley.driver")
 
 class DriverError(RuntimeError):
     """Invalid driver configuration."""
+
+
+class CredentialsError(DriverError):
+    """The brain's session could not sign in: the subscription token behind
+    CLAUDE_CODE_OAUTH_TOKEN is expired, revoked or missing. The manuscript is
+    untouched and the run can resume from the same phase once the token is
+    replaced, so no verdict is written for the book.
+    """
 
 
 def _now() -> str:
@@ -143,10 +221,21 @@ _PROMPTS: dict[str, str] = {
         "Write the run config from PLAN.md + "
         "KNOBS.md (config REPLACES default.yaml — restate every section). Run "
         "`docproof review … --approval approval.json` to runs/ladder/ with "
-        "output redirected to runs/ladder.log; read only the summary + counts "
+        "output redirected to runs/ladder.log. Run it in the FOREGROUND and "
+        "WAIT for it to exit — never background it, never end your turn "
+        "while it runs. Redirecting output is not backgrounding: the redirect keeps the log out of your context, and you still block on the "
+        "command. A session that ends with the read still in flight kills "
+        "it, wastes every paid call it had not checkpointed, and fails the "
+        "phase. Then read only the summary + counts "
         "+ the dollar line. Confirm findings.checkpoint.json exists before "
-        "finish(). Advance the state machine (--source and --config). Report "
-        "applied/query counts and spend."),
+        "finish(). Advance the state machine (--source and --config). Then "
+        "keep the PLAN LEDGER: for EVERY numbered line of PLAN.md run "
+        "`docproof galley plan-line LABEL --status ran --evidence PATH` (or "
+        "`--status skipped --reason WHY`, or `--status deferred --evidence "
+        "WHERE`). A $0 subagent lane the plan lists is a line like any other: "
+        "run it and record it, or record why not — certify FAILS on a line it "
+        "cannot account for, and the letter tells the author what was "
+        "promised and not done. Report applied/query counts and spend."),
     "flights": (
         "Phase: copy-edit flights on the PROOFREAD text (never raw). Follow "
         "/flight-deck; every `galley flights` call carries --approval "
@@ -233,7 +322,9 @@ _PROMPTS: dict[str, str] = {
         "docx from runs/<final> to deliverable/, then render the letter, the "
         "style sheet, and the verification report with `docproof galley "
         "letter runs/<final> --workspace . --source source/{book} --out "
-        "deliverable/` (letter.md, style-sheet.md, verification.md — "
+        "deliverable/` (letter.md, style-sheet.md, verification.md, and "
+        "author-letter.docx — the AUTHOR-facing letter that ships beside the "
+        "manuscript; the author sees nothing else — "
         "--workspace is what makes the letter report the REAL spend across "
         "every run, not the $0 replay build's; the verification report "
         "carries the delivered file's SHA-256, the certificate table with its "
@@ -244,7 +335,9 @@ _PROMPTS: dict[str, str] = {
         "beside them (its outcome — done or needs_human — and reason go in "
         "the letter's closing paragraph). Advance the state machine to "
         "delivered (--source and --config). Report final spend, "
-        "change/comment counts, and the outcome."),
+        "change/comment counts, and the outcome. If certify's plan-ledger or "
+        "comment-premises check failed, deliver NOTHING: account for the "
+        "plan line, or drop the stale query and rebuild, then certify again."),
 }
 
 # Scope restrictions appended to the relevant phase prompts.
@@ -303,7 +396,20 @@ def phase_prompt(phase: str, book: str, *, mechanical_only: bool = True,
         settle_rounds=settle_rounds, settle_noisy=settle_quiet_floor + 1)
     if mechanical_only:
         prompt += _MECHANICAL_NOTE.get(phase, "")
-    return prompt
+    return prompt + _UNATTENDED_NOTE
+
+
+# Appended to every phase prompt. The manual says it too (directive 6), but a
+# brain that has just read a 65k-word intake reaches for `galley ask` the way
+# a person would reach for a colleague, and unattended there is no colleague.
+_UNATTENDED_NOTE = (
+    " UNATTENDED RUN: nobody is on the other end of `docproof galley ask` — "
+    "the driver sees a new QUESTIONS.md entry and ends the run as "
+    "needs_human with your question as the reason. So do not ask; decide, "
+    "and record the decision in the decision log. Escalate only what "
+    "genuinely blocks the book: an unreadable source, a tool that fails, a "
+    "cap you would exceed. Anything a proofreader would put to the author "
+    "goes in the deliverable as a margin query, not to `galley ask`.")
 
 
 def phases_for(mechanical_only: bool = True) -> tuple[str, ...]:
@@ -528,7 +634,8 @@ class PhaseResult:
     returncode: int
     log_path: Path | None = None
     tail: str = ""
-    #: Which runaway cap ended this session, if either: "timeout" | "max_turns".
+    #: What ended this session early, if anything: "timeout" | "max_turns"
+    #: | "credentials" (never signed in — the token, not the book).
     limit: str | None = None
     # Structured CLI result, including subtype and turn count.
     subtype: str = ""
@@ -550,6 +657,11 @@ def transcript_tail(text: str) -> str:
                      if not ln.startswith(DRIVER_LINE_PREFIX)
                      and not ln.startswith("# TIMEOUT")
                      and not ln.startswith("# result:"))
+
+
+def detect_credential_failure(text: str) -> bool:
+    """Whether the session's output says it never signed in."""
+    return bool(_CREDENTIALS_RE.search(text or ""))
 
 
 def detect_turn_cap(text: str) -> bool:
@@ -586,6 +698,13 @@ def session_limit(result: dict[str, Any] | None, tail: str) -> str | None:
     """Detect max_turns from the structured result, falling back to the
     transcript when no result exists.
     """
+    if result is not None and result.get("is_error"):
+        blob = " ".join(str(result.get(k) or "")
+                        for k in ("result", "error", "message", "subtype"))
+        if detect_credential_failure(blob):
+            return "credentials"
+    if detect_credential_failure(tail):
+        return "credentials"
     if result is not None:
         subtype = str(result.get("subtype") or "")
         if subtype == RESULT_SUBTYPE_MAX_TURNS:
@@ -726,7 +845,10 @@ def _is_copyedit_line(line: str) -> bool:
 # Allow a plan to mention excluded copyediting work.
 _NEGATED_RE = re.compile(
     r"\b(no|none|not|never|off|omitted|omit|excluded|exclude|skipped?|skip|"
-    r"locked|out of scope|tabled|n/?a|zero)\b", re.IGNORECASE)
+    # Every inflection of "lock": a plan that says the stage LOCKS
+    # smoothing (not "locked") is reporting the lane shut, not opening
+    # it — and only the past tense was excused, so it was refused.
+    r"lock(?:s|ed|ing)?|out of scope|tabled|n/?a|zero)\b", re.IGNORECASE)
 # Identify the current plan gate in QUESTIONS.md.
 GATE_TOKEN_PREFIX = "GALLEY-GATE"
 _APPROVED_RE = re.compile(r"^\s*(?:[-*>#\s]*)?(APPROVED|APPROVE|YES)\b",
@@ -748,9 +870,28 @@ class PlanSummary:
         return not self.copyedit_lines
 
 
+# A plan's promises are its priced line items: a line that opens with an item
+# marker (`2.`, `4b.`, `-`, a table pipe) and carries a dollar amount. The rest
+# of PLAN.md is the practitioner explaining the plan — and a plan for a
+# mechanical wave explains, at length, that the copy-edit lanes are shut. Read
+# as scope, that explanation refused a clean plan four lines over on
+# 2026-09-07 ("the copy-edit-scope lines are absent from this plan", "certify
+# FAILS the delivery if any copy-edit finding appears", a caveats item whose
+# "No copy-edit lane" fell on the next line). Each refusal cost a 17-minute
+# profile session. The gate scans the promises; the config gate below is the
+# authority on what the run will actually do.
+_PLAN_ITEM_RE = re.compile(
+    r"^\s*(?:\d+[a-z]?[.)]|[-*•]|\|)\s*\S.*\$\s*\d")
+
+
+def _is_plan_item(line: str) -> bool:
+    """Whether a PLAN.md line is a priced line item — a promise, not prose."""
+    return bool(_PLAN_ITEM_RE.match(line))
+
+
 def read_plan(path: str | Path) -> PlanSummary:
     """Parse a drafted PLAN.md for the two facts the gate turns on: the priced
-    total, and whether any line puts a copy-edit lane in scope."""
+    total, and whether any priced line item puts a copy-edit lane in scope."""
     try:
         text = Path(path).read_text(encoding="utf-8")
     except OSError as e:
@@ -758,7 +899,7 @@ def read_plan(path: str | Path) -> PlanSummary:
     totals = _TOTAL_RE.findall(text)
     total = float(totals[-1].replace(",", "")) if totals else None
     offenders = [ln.strip() for ln in text.splitlines()
-                 if _is_copyedit_line(ln)]
+                 if _is_plan_item(ln) and _is_copyedit_line(ln)]
     return PlanSummary(total, offenders, text)
 
 
@@ -934,18 +1075,27 @@ class Driver:
     only_phases: Sequence[str] | None = None
     handoff_dir: Path | None = None
     drive_folder_id: str = ""
-    model: str = DEFAULT_MODEL
+    # None = the per-phase table (PHASE_MODEL / PHASE_EFFORT); a value here
+    # overrides it for every phase; the by-phase maps win over both.
+    model: str | None = None
+    model_by_phase: dict[str, str] = field(default_factory=dict)
+    effort: str | None = None
+    effort_by_phase: dict[str, str] = field(default_factory=dict)
     permission_mode: str = DEFAULT_PERMISSION_MODE
     wrapbin: Path = Path(DEFAULT_WRAPBIN)
     reply_timeout_s: float = 6 * 3600.0
     poll_interval_s: float = 30.0
     state_gate: bool = True
     question_gate: bool = True
-    # Per-phase caps take precedence over global overrides.
+    # Per-phase caps take precedence over global overrides. Either override
+    # is taken exactly as given; only the table defaults scale with length.
     max_turns: int | None = None
     max_turns_by_phase: dict[str, int] = field(default_factory=dict)
     timeout_s: float | None = None
     timeout_by_phase: dict[str, float] = field(default_factory=dict)
+    # The book's length for scaling (LENGTH_SCALED_PHASES). None reads it off
+    # the workspace's profile.json once profile has written one.
+    words: int | None = None
     # Source identity and policy for changed content: refuse or archive and
     # revise.
     source_id: str = ""
@@ -963,6 +1113,10 @@ class Driver:
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
     log: Callable[[str], None] = print
+    #: Told about every step (phase start/end, the gate, the stop, the finish)
+    #: as a dict with an "event" key — the agent turns these into heartbeats.
+    #: A reporter that raises never sinks the run.
+    progress: Callable[[dict[str, Any]], None] | None = None
 
 
     @property
@@ -972,24 +1126,83 @@ class Driver:
     def _spawner(self) -> Callable[[PhaseSpec], PhaseResult]:
         return self.spawn or spawn_claude
 
+    def _progress(self, event: str, **fields: Any) -> None:
+        if self.progress is None:
+            return
+        payload = {"event": event, "slug": self.slug, "book": self.book.name,
+                   "at": _now(), **fields}
+        try:
+            self.progress(payload)
+        except Exception:                                   # noqa: BLE001
+            log.warning("progress reporter failed on %s", event, exc_info=True)
+
     def _driver_dir(self) -> Path:
         d = self.workspace / "runs" / DRIVER_DIR
         d.mkdir(parents=True, exist_ok=True)
         return d
+
+    def book_words(self) -> int | None:
+        """The manuscript's word count: an explicit `words`, else the
+        workspace profile's, else None (profile has not run)."""
+        if self.words:
+            return int(self.words)
+        try:
+            prof = json.loads((self.workspace / "profile.json")
+                              .read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(prof, dict):
+            return None
+        raw = prof.get("word_count") or prof.get("words")
+        try:
+            return int(raw) if raw and float(raw) > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    def length_factor_for(self, phase: str) -> float:
+        if phase not in LENGTH_SCALED_PHASES:
+            return 1.0
+        return length_factor(self.book_words())
 
     def turns_for(self, phase: str) -> int:
         if phase in self.max_turns_by_phase:
             return int(self.max_turns_by_phase[phase])
         if self.max_turns is not None:
             return int(self.max_turns)
-        return PHASE_MAX_TURNS.get(phase, DEFAULT_MAX_TURNS)
+        base = PHASE_MAX_TURNS.get(phase, DEFAULT_MAX_TURNS)
+        return int(round(base * self.length_factor_for(phase)))
+
+    def model_for(self, phase: str) -> str:
+        if phase in self.model_by_phase:
+            return str(self.model_by_phase[phase])
+        if self.model:
+            return str(self.model)
+        return PHASE_MODEL.get(phase, DEFAULT_MODEL)
+
+    def effort_for(self, phase: str) -> str | None:
+        """The session's --effort, or None to leave Claude Code's default."""
+        if phase in self.effort_by_phase:
+            level = self.effort_by_phase[phase]
+        elif self.effort:
+            level = self.effort
+        else:
+            level = PHASE_EFFORT.get(phase)
+        if level is None:
+            return None
+        level = str(level).strip().lower()
+        if level not in EFFORT_LEVELS:
+            raise DriverError(
+                f"effort {level!r} for {phase} — expected one of "
+                f"{', '.join(EFFORT_LEVELS)}")
+        return level
 
     def timeout_for(self, phase: str) -> float:
         if phase in self.timeout_by_phase:
             return float(self.timeout_by_phase[phase])
         if self.timeout_s is not None:
             return float(self.timeout_s)
-        return PHASE_TIMEOUT_S.get(phase, DEFAULT_PHASE_TIMEOUT_S)
+        base = PHASE_TIMEOUT_S.get(phase, DEFAULT_PHASE_TIMEOUT_S)
+        return base * self.length_factor_for(phase)
 
     def _spec(self, phase: str, env: dict[str, str]) -> PhaseSpec:
         prompt = phase_prompt(phase, self.book.name,
@@ -999,16 +1212,25 @@ class Driver:
                               settle_quiet_floor=self.settle_quiet_floor,
                               settle_quiet_share=self.settle_quiet_share)
         turns = self.turns_for(phase)
-        argv = ["claude", "-p", prompt, "--model", self.model,
+        argv = ["claude", "-p", prompt, "--model", self.model_for(phase),
                 "--permission-mode", self.permission_mode,
-                "--max-turns", str(turns),
+                "--max-turns", str(turns)]
+        effort = self.effort_for(phase)
+        if effort:
+            argv += ["--effort", effort]
+        argv += [
                 # Preserve the structured completion beside the readable
                 # log.
                 "--output-format", "stream-json", "--verbose"]
+        # The phase rides in the environment so any verb the brain runs can
+        # say who ran it. `galley outcome --set` reads it: an overrule made
+        # by the deliver-phase brain is recorded as exactly that, not as
+        # "human" (the first Fly delivery's outcome.json, decision log and
+        # HubSpot value all claimed a person overruled settle; nobody had).
         return PhaseSpec(phase=phase, prompt=prompt, workspace=self.workspace,
                          log_path=self._driver_dir() / f"{phase}.log",
-                         argv=argv, env=env, max_turns=turns,
-                         timeout_s=self.timeout_for(phase))
+                         argv=argv, env={**env, BRAIN_PHASE_ENV: phase},
+                         max_turns=turns, timeout_s=self.timeout_for(phase))
 
     def _questions_text(self) -> str:
         try:
@@ -1089,15 +1311,17 @@ class Driver:
         # produced.
         self._stopped_handoff(result)
         self.log(f"STOPPED at {phase or 'the plan gate'}: {reason}")
+        self._progress("stopped", phase=phase, outcome="needs_human",
+                       reason=reason[:600])
         return result
 
     def _stopped_handoff(self, result: DriveResult) -> None:
         """Build and upload available artifacts after a stopped run. Log
         handoff failures without replacing the original error.
         """
+        out = Path(self.handoff_dir) if self.handoff_dir \
+            else self.workspace / "handoff"
         try:
-            out = Path(self.handoff_dir) if self.handoff_dir \
-                else self.workspace / "handoff"
             # Prefer the driver failure over an earlier settle-written done
             # verdict.
             result.handoff = build_handoff(
@@ -1107,8 +1331,14 @@ class Driver:
                 partial=True)
         except Exception as e:                              # noqa: BLE001
             self.log(f"no hand-off for the stopped run ({e})")
-            return
-        if not self.drive_folder_id:
+            result.handoff = []
+        # The evidence travels with the verdict: every phase transcript, the
+        # driver ledger and the run state, zipped beside the outcome, so a
+        # needs_human never has to be diagnosed over ssh.
+        bundle = build_diagnostics(self.workspace, self.book.name, out)
+        if bundle is not None:
+            result.handoff.append(bundle)
+        if not result.handoff or not self.drive_folder_id:
             return
         uploader = self.upload or _default_upload
         try:
@@ -1144,6 +1374,29 @@ class Driver:
                        hubspot=hubspot_fields("needs_human"),
                        set_by="galley drive").save(runs)
 
+    def backgrounded_work(self, phase: str) -> str:
+        """What the phase session left running when it ended, if anything.
+
+        A `claude -p` session that backgrounds a long command exits 0 with the
+        work unfinished, and the child dies with the session. The stream log
+        records those tasks, so the driver can say so instead of reporting
+        only the missing state advance.
+
+        Returns a short description for the failure message, or "" when the
+        session ended cleanly."""
+        stream = self.workspace / "runs" / DRIVER_DIR / f"{phase}.stream.jsonl"
+        try:
+            tail = stream.read_text(encoding="utf-8",
+                                    errors="replace").splitlines()[-40:]
+        except OSError:
+            return ""
+        markers = [line for line in tail
+                   if '"background_tasks_changed"' in line
+                   or '"task_notification"' in line]
+        if not markers:
+            return ""
+        return f"{len(markers)} background-task event(s) in the last turns"
+
     def _write_ledger(self, result: DriveResult) -> Path:
         path = self._driver_dir() / "driver.json"
         path.write_text(json.dumps(result.to_json(), indent=2,
@@ -1174,6 +1427,7 @@ class Driver:
         if approved:
             record_approval(plan_path, reason, by="galley drive (auto)")
             self.log(f"plan gate: APPROVED — {reason}")
+            self._progress("gate", approved=True, reason=reason[:300])
             return True
         if self.approve == "auto":
             self._stop(result, "approve", f"plan gate refused: {reason}")
@@ -1199,6 +1453,7 @@ class Driver:
         result.gate["sent"] = True
         result.gate["sent_to"] = to
         result.gate["token"] = token
+        self._progress("gate", approved=None, escalated_to=to)
         self.log(f"plan gate: escalated to {to}; waiting up to "
                  f"{self.reply_timeout_s / 3600:.1f}h for a reply in "
                  f"{questions}")
@@ -1253,11 +1508,23 @@ class Driver:
             if phase == "approve" and gate_due:
                 if not self.run_gate(result):
                     return result
-            self.log(f"--- phase {phase} ---")
+            effort = self.effort_for(phase)
+            factor = self.length_factor_for(phase)
+            scaled = (f", x{factor:.1f} for {self.book_words():,} words"
+                      if factor > 1.0 else "")
+            self.log(f"--- phase {phase} ({self.model_for(phase)}"
+                     f"{', effort ' + effort if effort else ''}{scaled}) ---")
             spec = self._spec(phase, env)
+            self._progress("phase_start", phase=phase,
+                           model=self.model_for(phase), effort=effort,
+                           max_turns=spec.max_turns, timeout_s=spec.timeout_s,
+                           log_path=str(spec.log_path))
             asked_before = self._questions_text()
             outcome = self._spawner()(spec)
             result.phases.append(outcome)
+            self._progress("phase_end", phase=phase, ok=outcome.ok,
+                           returncode=outcome.returncode, limit=outcome.limit,
+                           num_turns=outcome.num_turns)
             if outcome.limit == "timeout":
                 return self._stop(
                     result, phase,
@@ -1271,6 +1538,18 @@ class Driver:
                     f"phase {phase} hit its turn cap of {spec.max_turns} "
                     f"(claude --max-turns) — last lines of "
                     f"{outcome.log_path}:\n{outcome.tail}")
+            if outcome.limit == "credentials":
+                # Not a verdict on the book: nothing ran, the ledger did not
+                # move, and the same phase resumes once the token is fixed.
+                self._write_ledger(result)
+                self._progress("credentials", phase=phase,
+                               tail=outcome.tail[-600:])
+                self.log(f"HALTED at {phase}: the brain could not sign in")
+                raise CredentialsError(
+                    f"phase {phase} could not sign in to Claude Code — the "
+                    f"subscription token (CLAUDE_CODE_OAUTH_TOKEN) is expired "
+                    f"or revoked; last lines of {outcome.log_path}:\n"
+                    f"{outcome.tail}")
             if not outcome.ok:
                 return self._stop(
                     result, phase,
@@ -1290,12 +1569,21 @@ class Driver:
                     return self._stop(result, phase, unconverged)
             need = REQUIRED_STATE.get(phase) if self.state_gate else None
             if need and not self._state_reached(need):
+                # Name the cause we have actually seen, because "did not
+                # advance the ledger" describes the symptom and cost four
+                # rounds of log archaeology to trace the first time.
+                backgrounded = self.backgrounded_work(phase)
+                extra = (f" The session left work running in the background "
+                         f"({backgrounded}) and ended anyway, which kills that "
+                         f"work mid-flight: a long read must run in the "
+                         f"foreground."
+                         if backgrounded else "")
                 return self._stop(
                     result, phase,
                     f"phase {phase} exited 0 but the run state machine is at "
                     f"{self._current_state() or 'nothing'!r}, not {need!r} — "
                     f"the session did not advance the ledger, so the next "
-                    f"phase would build on an unproven one")
+                    f"phase would build on an unproven one.{extra}")
             self._write_ledger(result)
 
         if "deliver" in phases:
@@ -1319,6 +1607,8 @@ class Driver:
                         f"{self.drive_folder_id} by hand.")
         result.outcome, result.reason = self._final_verdict(result)
         self._write_ledger(result)
+        self._progress("finished", outcome=result.outcome,
+                       reason=result.reason[:600])
         self.log(f"{result.outcome}: {result.reason}")
         return result
 
@@ -1370,16 +1660,20 @@ _LETTER_NAMES = ("letter.md", "EDITORS_LETTER.md")
 _STYLE_NAMES = ("style-sheet.md", "STYLE_SHEET.md")
 _JOURNAL_NAMES = (DECISION_LOG_NAME, "decision-log.md")
 _VERIFICATION_NAMES = ("verification.md", "VERIFICATION.md")
+_AUTHOR_LETTER_NAMES = ("author-letter.docx",)
 
 
 def build_handoff(workspace: str | Path, source_name: str,
                   handoff_dir: str | Path, *,
                   outcome_sources: Iterable[Path] = (),
                   partial: bool = False) -> list[Path]:
-    """Copy the manuscript, letter, style sheet, decision log, verification
-    report, and outcome into the handoff directory under house names.
+    """Copy the manuscript, author letter, editor's letter, style sheet,
+    decision log, verification report, and outcome into the handoff directory
+    under house names — and derive the clean copy (`<base> - clean.docx`:
+    every change accepted, every comment removed) from the manuscript beside
+    it, so the folder holds both the record and the reading text.
 
-    A complete handoff requires all six files. With partial=True, copy
+    A complete handoff requires all eight files. With partial=True, copy
     available files and require only outcome.json.
     """
     ws = Path(workspace)
@@ -1424,8 +1718,17 @@ def build_handoff(workspace: str | Path, source_name: str,
         raise DriverError(
             f"no outcome.json for {ws} — `docproof galley settle` writes it "
             f"beside the run's findings; deliver copies it to deliverable/")
+    # The author reads Word and nothing else: the tracked-changes file and
+    # this letter are the whole delivery from their side.
+    author_letter = _first_existing(deliverable, _AUTHOR_LETTER_NAMES)
+    if author_letter is None and not partial:
+        raise DriverError(
+            f"no author letter in {deliverable} (looked for "
+            f"{', '.join(_AUTHOR_LETTER_NAMES)}) — `docproof galley letter "
+            f"RUN --workspace {ws} --source …` renders it beside the letter")
 
     pairs = ((docx, f"{base}.docx"),
+             (author_letter, f"{base} - Author Letter.docx"),
              (letter, f"{base} - letter.md"),
              (style, f"{base} - style-sheet.md"),
              (journal, f"{base} - decision-log.md"),
@@ -1438,7 +1741,30 @@ def build_handoff(workspace: str | Path, source_name: str,
         dest = out / name
         shutil.copy2(src, dest)
         written.append(dest)
+        if src is docx:
+            clean = _clean_copy(dest, out / f"{base}{CLEAN_SUFFIX}.docx",
+                                partial=partial)
+            if clean is not None:
+                written.append(clean)
     return written
+
+
+def _clean_copy(tracked: Path, dest: Path, *, partial: bool) -> Path | None:
+    """The accepted-changes reading copy, derived from the hand-off's own
+    tracked-changes file. A complete hand-off cannot ship without it — the
+    folder would be missing the file the next reader opens first — but a
+    partial one (a stopped run's evidence) carries whatever it can."""
+    from docproof.cleancopy import CleanCopyError, write_clean_copy
+    try:
+        return write_clean_copy(tracked, dest)
+    except CleanCopyError as e:
+        if partial:
+            log.warning("no clean copy for the partial hand-off (%s)", e)
+            return None
+        raise DriverError(
+            f"could not derive the clean copy from {tracked.name} ({e}) — "
+            f"the hand-off needs both the tracked-changes file and its "
+            f"accepted-changes reading copy") from e
 
 
 def _first_existing(folder: Path, names: Sequence[str]) -> Path | None:
@@ -1452,7 +1778,109 @@ def _first_existing(folder: Path, names: Sequence[str]) -> Path | None:
 _MIME = {".docx": ("application/vnd.openxmlformats-officedocument"
                    ".wordprocessingml.document"),
          ".md": "text/markdown",
-         ".json": "application/json"}
+         ".json": "application/json",
+         ".zip": "application/zip"}
+
+
+DIAGNOSTICS_SUFFIX = " - diagnostics.zip"
+#: Files bigger than this stay out of the bundle (the raw stream-json of a
+#: long session can run to hundreds of MB; its readable rendering is enough).
+DIAGNOSTICS_MAX_FILE_BYTES = 25 * 1024 * 1024
+
+
+def diagnostics_sources(workspace: str | Path) -> list[tuple[Path, str]]:
+    """What a needs_human bundle carries: (path, name inside the zip)."""
+    ws = Path(workspace)
+    picks: list[tuple[Path, str]] = []
+
+    def add(path: Path) -> None:
+        if not path.is_file():
+            return
+        try:
+            if path.stat().st_size > DIAGNOSTICS_MAX_FILE_BYTES:
+                return
+        except OSError:
+            return
+        picks.append((path, path.relative_to(ws).as_posix()))
+
+    for name in ("PLAN.md", "QUESTIONS.md", "state.json", "profile.json",
+                 "approval.json"):
+        add(ws / name)
+    runs = ws / "runs"
+    add(runs / "outcome.json")
+    driver = runs / DRIVER_DIR
+    if driver.is_dir():
+        for path in sorted(driver.iterdir()):
+            # The readable transcripts and the ledger; not the raw stream.
+            if path.suffix in (".log", ".json") and \
+                    not path.name.endswith(".stream.jsonl"):
+                add(path)
+    for run in sorted(p for p in runs.glob("*") if p.is_dir()
+                      and p.name != DRIVER_DIR):
+        for name in ("outcome.json", "settlement.json", "verify.json",
+                     "certificate.json", "review.log", "run.log"):
+            add(run / name)
+    return picks
+
+
+def build_diagnostics(workspace: str | Path, source_name: str,
+                      handoff_dir: str | Path, *,
+                      extra: Iterable[tuple[Path, str]] = ()) -> Path | None:
+    """Zip the run's evidence beside the hand-off as
+    `<base> - diagnostics.zip`. Returns None when there is nothing to bundle
+    or the bundle cannot be written — a diagnostics failure never replaces the
+    verdict it accompanies."""
+    ws = Path(workspace)
+    out = Path(handoff_dir)
+    picks = diagnostics_sources(ws)
+    for path, name in extra:
+        if Path(path).is_file():
+            picks.append((Path(path), name))
+    if not picks:
+        return None
+    dest = out / f"{handoff_base(source_name)}{DIAGNOSTICS_SUFFIX}"
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
+            for path, name in picks:
+                zf.write(path, name)
+    except Exception:                                       # noqa: BLE001
+        log.warning("could not write the diagnostics bundle %s", dest,
+                    exc_info=True)
+        return None
+    return dest
+
+
+def live_progress(workspace: str | Path, phase: str | None) -> dict[str, Any]:
+    """What a running phase has done so far, read off the files the session
+    writes as it goes — the raw stream (turns, last activity) and the run's
+    settlement.json (rounds). Cheap enough to call every minute."""
+    ws = Path(workspace)
+    out: dict[str, Any] = {}
+    if phase:
+        stream = ws / "runs" / DRIVER_DIR / f"{phase}.stream.jsonl"
+        try:
+            st = stream.stat()
+            out["last_activity_at"] = datetime.fromtimestamp(
+                st.st_mtime, timezone.utc).isoformat()
+            out["stream_bytes"] = st.st_size
+            turns = 0
+            with open(stream, "rb") as fh:
+                for line in fh:
+                    if b'"type":"assistant"' in line or \
+                            b'"type": "assistant"' in line:
+                        turns += 1
+            out["turns"] = turns
+        except OSError:
+            pass
+    rounds = 0
+    for path in (ws / "runs").glob("*/settlement.json"):
+        data = _read_json(path)
+        if isinstance(data, dict):
+            rounds = max(rounds, int(data.get("rounds") or 0))
+    if rounds:
+        out["settle_rounds"] = rounds
+    return out
 
 
 def drive_token(*, get_key=None) -> str:
@@ -1495,18 +1923,22 @@ def _default_upload(files: list[Path], folder_id: str) -> list[str]:
 
 __all__ = [
     "ALL_PHASES", "COPYEDIT_PHASES", "DECISION_LOG_NAME", "DEFAULT_BUDGET_USD",
-    "DEFAULT_MAX_TURNS", "DEFAULT_MODEL", "DEFAULT_PERMISSION_MODE",
+    "DEFAULT_EFFORT", "DEFAULT_MAX_TURNS", "DEFAULT_MODEL", "DIAGNOSTICS_SUFFIX",
+    "DEFAULT_PERMISSION_MODE", "EFFORT_LEVELS", "MECHANICAL_MODEL",
     "DEFAULT_PHASE_TIMEOUT_S", "DEFAULT_WORKSPACE_ROOT", "DEFAULT_WRAPBIN",
-    "HANDOFF_STAGE", "MECHANICAL_PHASES", "PHASE_MAX_TURNS", "PHASE_TIMEOUT_S",
+    "HANDOFF_STAGE", "MECHANICAL_PHASES", "PHASE_EFFORT", "PHASE_MAX_TURNS",
+    "PHASE_MODEL", "PHASE_TIMEOUT_S",
     "REQUIRED_STATE", "SETTLE_QUIET_FLOOR", "SETTLE_QUIET_SHARE",
     "SETTLE_ROUNDS", "TIMEOUT_RC", "DriveResult", "Driver", "DriverError",
     "PhaseResult", "PhaseSpec", "PlanSummary", "build_env", "build_handoff",
     "config_copyedit_lanes", "detect_turn_cap", "drive_token",
     "gate_decision", "gate_question",
     "handoff_base",
+    "build_diagnostics", "diagnostics_sources", "live_progress",
     "phase_prompt", "phases_for", "read_plan", "record_approval",
     "reply_after", "seed_workspace", "select_phases", "settle_flags",
     "spawn_claude", "tail_of", "SourceChanged", "workspace_slug",
+    "CredentialsError", "detect_credential_failure",
     "transcript_tail", "parse_session_result", "session_limit",
     "DRIVER_LINE_PREFIX", "RESULT_SUBTYPE_MAX_TURNS",
 ]

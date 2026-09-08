@@ -48,6 +48,15 @@ canvas = [
     # Deployments that generate covers must install this extra.
     "claude-agent-sdk>=0.2",
 ]
+galley = [
+    # The Galley agent's subagent lane (api.claude_lane: subagent, which the
+    # mechanical-wave stage pins) drives Claude Code through the SDK, so the
+    # sifters bill the Max subscription instead of the Anthropic API. Without
+    # it the lane refuses rather than falling back — correctly, since doctrine
+    # forbids Claude billing on a Galley run — and the ladder cannot read.
+    # The Claude Code CLI the SDK drives is installed separately (Dockerfile).
+    "claude-agent-sdk>=0.2",
+]
 build = [
     "pyinstaller>=6.0",
 ]
@@ -82,7 +91,16 @@ include = ["docproof*", "app*", "config*", "galley*"]
 [tool.setuptools.package-data]
 app = ["static/*", "static/art/*", "static/canvas/*", "static/canvas/vendor/*"]
 "galley.prompts" = ["*.md"]
+# The practitioner manual, skills and launchers: galley/driver.py seeds every
+# workspace from them, and the Fly agent runs off the installed wheel.
+"galley.practitioner" = ["*.md", "*.sh", "skills/*/*", "galley-bin/*", "fly/*"]
 config = ["*.yaml"]
+# Stage and genre presets: `galley routes`/`--stage`/`--genre` resolve these
+# under resource_root(), so a wheel without them fails the plan gate on Fly
+# with "Unknown stage preset 'mechanical-wave'" and no book can run.
+"config.stages" = ["*.yaml"]
+"config.genres" = ["*.yaml"]
+"config.genres.prompts" = ["*.md"]
 "config.error_types" = ["*.yaml"]
 "config.consistency" = ["*.tsv", "*.yaml"]
 "config.prep" = ["*.yaml", "*.idml", "*.jsx"]

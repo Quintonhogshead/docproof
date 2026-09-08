@@ -25,9 +25,16 @@ BOOK="${BOOK:?set BOOK=/path/to/manuscript.docx}"
 SLUG="${SLUG:?set SLUG=book-slug}"
 WORKROOT="${WORKROOT:-$HOME/galley-workspaces}"
 WRAPBIN="${WRAPBIN:-$HOME/galley-bin}"
-MODEL="${MODEL:-claude-fable-5-1}"
+# MODEL= forces one brain on the phase; unset, the driver's per-phase table
+# decides (Fable 5.1 at high effort for judgment phases, Opus 5 for profile /
+# sweeps / verify / certify / deliver). EFFORT= likewise.
+MODEL="${MODEL:-}"
+EFFORT="${EFFORT:-}"
 PERM="${PERM:-acceptEdits}"
 PHASE="${PHASE:-profile}"
+MODEL_FLAG=()
+if [ -n "$MODEL" ]; then MODEL_FLAG+=(--model "$MODEL"); fi
+if [ -n "$EFFORT" ]; then MODEL_FLAG+=(--effort "$EFFORT"); fi
 # Go-live scope: mechanical proofreading only. COPYEDIT=1 re-opens the
 # `flights` / `reread` phases for an experiment.
 COPYEDIT_FLAG=()
@@ -41,12 +48,13 @@ if [ -n "${PROMPT:-}" ]; then
   cd "$WORKROOT/$SLUG"
   exec env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY \
        PATH="$WRAPBIN:$PATH" DOCPROOF_CANDIDATE_APPLY=1 \
-       claude -p "$PROMPT" --model "$MODEL" --permission-mode "$PERM"
+       claude -p "$PROMPT" --model "${MODEL:-claude-fable-5-1}" \
+       --effort "${EFFORT:-high}" --permission-mode "$PERM"
 fi
 
 # One phase, its own lean session; the plan gate stays a human's (--approve
 # manual is today's behaviour, and the driver refuses to auto-approve here).
 exec docproof galley drive \
   --book "$BOOK" --slug "$SLUG" --workspace-root "$WORKROOT" \
-  --phases "$PHASE" --approve manual --model "$MODEL" \
+  --phases "$PHASE" --approve manual "${MODEL_FLAG[@]}" \
   --permission-mode "$PERM" --wrapbin "$WRAPBIN" "${COPYEDIT_FLAG[@]}"

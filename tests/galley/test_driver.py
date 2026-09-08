@@ -454,6 +454,7 @@ def _deliverable(ws: Path) -> None:
     (d / "style-sheet.md").write_text("# Style sheet\n", encoding="utf-8")
     (d / gd.DECISION_LOG_NAME).write_text("# Decision log\n", encoding="utf-8")
     (d / "verification.md").write_text("# Verification\n", encoding="utf-8")
+    (d / "author-letter.docx").write_bytes(FIXTURE.read_bytes())
     (d / "outcome.json").write_text(json.dumps({
         "outcome": "done", "reason": "no open items", "evidence": {},
         "hubspot": {"value": "Proofing Complete"}, "set_by": "assess"}),
@@ -484,6 +485,8 @@ def test_handoff_writes_the_contract_files(book, tmp_path):
         ws, book.name, out,
         outcome_sources=[ws / "deliverable" / "outcome.json"])
     assert sorted(p.name for p in written) == [
+        "Ford - Book 2 - Author Letter.docx",
+        "Ford - Book 2 - clean.docx",
         "Ford - Book 2 - decision-log.md",
         "Ford - Book 2 - letter.md",
         "Ford - Book 2 - outcome.json",
@@ -493,6 +496,9 @@ def test_handoff_writes_the_contract_files(book, tmp_path):
     ]
     # The change log is NOT the manuscript.
     assert (out / "Ford - Book 2.docx").read_bytes() == FIXTURE.read_bytes()
+    # The clean copy is derived from the manuscript, not copied from anywhere.
+    from docproof.cleancopy import has_markup
+    assert not has_markup(out / "Ford - Book 2 - clean.docx")
     assert json.loads((out / "Ford - Book 2 - outcome.json").read_text(
         "utf-8"))["outcome"] == "done"
 
@@ -520,10 +526,13 @@ def test_a_full_run_hands_off_and_uploads(book, tmp_path):
                      drive_folder_id="folder-9", upload=upload,
                      handoff_dir=tmp_path / "handoff").run()
     assert result.outcome == "done"
-    assert len(result.handoff) == 6
-    assert len(result.uploaded) == 6
+    # Eight files: the manuscript, its clean copy, the author letter, and the five for the
+    # house.
+    assert len(result.handoff) == 8
+    assert len(result.uploaded) == 8
     assert {f for _n, f in uploaded} == {"folder-9"}
     assert ("Ford - Book 2.docx", "folder-9") in uploaded
+    assert ("Ford - Book 2 - Author Letter.docx", "folder-9") in uploaded
 
 
 def test_a_failed_upload_leaves_the_files_and_names_the_fix(book, tmp_path):

@@ -58,6 +58,9 @@ class Structure:
     # so the notes can say they were left alone rather than silently ignoring
     # them.
     untouched: tuple[tuple[str, str], ...] = ()
+    # Tracked changes the manuscript arrived with, accepted before anything
+    # was read: (part, how many revision elements). Empty for a clean file.
+    accepted_revisions: tuple[tuple[str, int], ...] = ()
 
     @property
     def taggable(self) -> tuple[StructureParagraph, ...]:

@@ -896,6 +896,23 @@ def _galley_parser(sub) -> None:
     _genre_arg(grs)
     grs.add_argument("--json", action="store_true")
 
+    gpl = gsub.add_parser(
+        "plan-line",
+        help="record what became of one numbered line of PLAN.md — ran "
+             "(with the artifact), skipped (with the reason) or deferred "
+             "(to where) — in runs/plan_ledger.json. certify fails on any "
+             "priced plan line it cannot account for. $0")
+    gpl.add_argument("label", help="the plan line's number, e.g. 4c")
+    gpl.add_argument("--status", required=True,
+                     choices=["ran", "skipped", "deferred"])
+    gpl.add_argument("--evidence", default="",
+                     help="the artifact it produced, or where deferred work "
+                          "went (a path or a plan line)")
+    gpl.add_argument("--reason", default="", help="why, when skipped or "
+                                                  "deferred")
+    gpl.add_argument("--workspace", default=".",
+                     help="the book's workspace (holds PLAN.md and runs/)")
+
     goc = gsub.add_parser(
         "outcome",
         help="the terminal verdict: done (no more errors the loop can find or "
@@ -911,6 +928,10 @@ def _galley_parser(sub) -> None:
                      help="overrule the assessment with this verdict "
                           "(requires --reason)")
     goc.add_argument("--reason", help="why, when overruling")
+    goc.add_argument("--by", default="",
+                     help="who is overruling (recorded as set_by). Default: "
+                          "the Galley brain and its phase when run inside a "
+                          "driver session, else 'human'")
     goc.add_argument("--rewrite-share", type=float, default=None,
                      help="needs_human threshold: share of paragraphs needing "
                           "rewrite-class work (default 0.50)")
@@ -967,6 +988,12 @@ def _galley_parser(sub) -> None:
     gag.add_argument("--status", action="store_true",
                      help="print what this machine has claimed, finished and "
                           "failed, and exit")
+    gag.add_argument("--forget", default=None, metavar="BOOK",
+                     help="drop one book (its Drive id or file name) from the "
+                          "ledger so the next poll claims it afresh — the way "
+                          "to re-run a book this machine wrote off (e.g. over "
+                          "a dead token). DocWatch must still list it as "
+                          "awaiting: hit Run there after this")
     gag.add_argument("--install", action="store_true",
                      help="write and start the service that keeps the agent "
                           "running (a launchd LaunchAgent on macOS, a systemd "
@@ -1018,8 +1045,24 @@ def _galley_parser(sub) -> None:
                           "by default: go-live Galley is mechanical "
                           "proofreading only (owner, 2026-09-03)")
     gdr.add_argument("--model", default=None,
-                     help="the brain model for every phase session "
-                          "(default: claude-fable-5)")
+                     help="the brain model for EVERY phase session, overriding "
+                          "the per-phase table (default: Fable 5.1 for the "
+                          "judgment phases — approve, ladder, audit, settle — "
+                          "and Opus 5 for profile, sweeps, verify, certify, "
+                          "deliver)")
+    gdr.add_argument("--phase-model", action="append", default=[],
+                     metavar="PHASE=MODEL",
+                     help="the brain model for ONE phase (repeatable); wins "
+                          "over --model")
+    gdr.add_argument("--effort", default=None,
+                     choices=["low", "medium", "high", "xhigh", "max"],
+                     help="the session effort for EVERY phase (default: high "
+                          "on the Fable phases, Claude Code's own default on "
+                          "the Opus phases)")
+    gdr.add_argument("--phase-effort", action="append", default=[],
+                     metavar="PHASE=LEVEL",
+                     help="the session effort for ONE phase (repeatable); wins "
+                          "over --effort")
     gdr.add_argument("--permission-mode", default=None,
                      help="the headless session's permission mode "
                           "(default: acceptEdits)")

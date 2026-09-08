@@ -356,11 +356,63 @@ def test_table_words_still_flow_into_the_idml(cfg, tmp_path):
     assert "Cell one text" in story
 
 
-def test_tracked_changes_are_refused_outright():
-    """Prep restyles every paragraph and deletes blank lines. Doing that on top
-    of somebody's unresolved edit would bury it."""
-    with pytest.raises(IngestError, match="tracked changes"):
-        preflight(FIXTURES / "tracked.docx")
+def test_tracked_changes_are_accepted_before_formatting():
+    """A manuscript that arrives with revisions still showing is formatted
+    from its accepted view, and the structure records that it was."""
+    pkg = preflight(FIXTURES / "tracked.docx")
+    structure = build_structure(pkg)
+    texts = [p.text for p in structure.paragraphs]
+    assert "An inserted phrase." in texts
+    assert structure.accepted_revisions == ((BODY_PART, 1),)
+    # Nothing tracked survives into what the writers will read.
+    assert not any(el.tag == qn("w:ins")
+                   for el in pkg.tree(BODY_PART).iter())
+
+
+_TRACKED_MARKS_DOC = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Chapter One</w:t></w:r></w:p>
+    <w:p>
+      <w:pPr><w:rPr><w:del w:id="1" w:author="A" w:date="2026-01-01T00:00:00Z"/></w:rPr></w:pPr>
+      <w:r><w:t xml:space="preserve">The first half </w:t></w:r>
+      <w:del w:id="2" w:author="A" w:date="2026-01-01T00:00:00Z"><w:r><w:delText>gone </w:delText></w:r></w:del>
+    </w:p>
+    <w:p>
+      <w:pPr><w:pStyle w:val="Quote"/></w:pPr>
+      <w:r><w:t>and the second half.</w:t></w:r>
+    </w:p>
+    <w:p>
+      <w:pPr><w:rPr><w:ins w:id="3" w:author="A" w:date="2026-01-01T00:00:00Z"/></w:rPr></w:pPr>
+      <w:ins w:id="4" w:author="A" w:date="2026-01-01T00:00:00Z"><w:r><w:t>A new paragraph.</w:t></w:r></w:ins>
+    </w:p>
+    <w:p><w:r><w:t>The end.</w:t></w:r></w:p>
+    <w:sectPr/>
+  </w:body>
+</w:document>"""
+
+
+def test_a_deleted_paragraph_mark_joins_the_paragraphs(tmp_path):
+    """Accepting a deleted paragraph mark is a join, not a removed node: the
+    runs move into the following paragraph, which keeps its own style, the
+    way Word's Accept All leaves it. An inserted mark just stays."""
+    pkg = preflight(_write_docx(tmp_path / "marks.docx", _TRACKED_MARKS_DOC))
+    structure = build_structure(pkg)
+    assert [p.text for p in structure.paragraphs] == [
+        "Chapter One", "The first half and the second half.",
+        "A new paragraph.", "The end."]
+    assert structure.paragraphs[1].style == "Quote"
+    assert structure.accepted_revisions == ((BODY_PART, 4),)
+
+
+def test_a_cell_revision_is_still_refused(tmp_path):
+    doc = _TRACKED_MARKS_DOC.replace(
+        "<w:sectPr/>",
+        '<w:tbl><w:tr><w:tc><w:tcPr><w:cellIns w:id="9" w:author="A" '
+        'w:date="2026-01-01T00:00:00Z"/></w:tcPr><w:p><w:r><w:t>cell</w:t>'
+        '</w:r></w:p></w:tc></w:tr></w:tbl><w:sectPr/>')
+    with pytest.raises(IngestError, match="cellIns"):
+        preflight(_write_docx(tmp_path / "cells.docx", doc))
 
 
 def test_an_idml_is_refused_with_the_reason():

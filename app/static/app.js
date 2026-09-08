@@ -740,7 +740,7 @@ input.addEventListener('change', () => upload([...input.files]));
 zone.addEventListener('drop', (e) => upload([...e.dataTransfer.files]));
 
 // A corrections job is an InDesign book plus a proof — a marked-up PDF or a
-// redlined Word file. The proof is not a job file (the manuscript preflight
+// redlined Word file. The proof is not a job file (the review preflight
 // refuses tracked changes and does not read PDFs at all), so a corrections drop
 // is split here: the proof is held on state.correctionsSource for the one-button
 // read-and-apply, and the book goes on to stage the normal way.
@@ -1610,8 +1610,11 @@ function fileSummary(f) {
   if (isPrep()) {
     if (!f.prep) return f.prep_error || 'cannot be prepared.';
     const p = f.prep;
+    const revs = p.accepted_revisions
+      ? `; ${p.accepted_revisions} tracked change${p.accepted_revisions === 1 ? '' : 's'} will be accepted first`
+      : '';
     return `${p.paragraphs} paragraphs, ${p.words.toLocaleString()} words`
-      + `, ${p.blank_lines} blank line${p.blank_lines === 1 ? '' : 's'} to sort out`;
+      + `, ${p.blank_lines} blank line${p.blank_lines === 1 ? '' : 's'} to sort out${revs}`;
   }
   if (!f.can_review) return f.review_error || 'cannot be reviewed.';
   const kept = keptFor(f).size;
@@ -7695,17 +7698,20 @@ function renderWatchFiles(files) {
 // only place a `needs_human` reason is visible outside the alert email.
 
 const PROOF_VERDICT_ROWS = 6;
-const PROOF_VERDICT_LABEL = { done: 'Clean', needs_human: 'Needs a human' };
+const PROOF_VERDICT_LABEL = { done: 'Clean', needs_human: 'Needs a human',
+  held: 'Held, untouched' };
 
 function applyProofRunnerHint() {
   const hint = $('proof-runner-hint');
   if (!hint) return;
   hint.textContent = $('proof-runner').value === 'app'
-    ? 'DocWatch reads the book itself and pays for it. It does not settle or '
-      + 'certify the build, and writes no decision log.'
-    : 'DocWatch only finds the book and waits. The practitioner loop on the Mac '
-      + 'reads it on a Claude Max subscription, and DocWatch picks the verdict '
-      + 'up on the next pass.';
+    ? 'DocWatch reads the book itself, once, and pays for it by the token. It '
+      + 'does not settle or certify the build and writes no decision log.'
+    : 'DocWatch only finds the book and waits. The Galley agent — the Fly '
+      + 'machine shown below, or any Mac running the agent — reads it on the '
+      + 'Claude Max subscription, settles and certifies it, and delivers the '
+      + 'Book 2 set with the decision log; DocWatch picks the verdict up on '
+      + 'its next pass.';
 }
 
 function proofWhen(iso) {
@@ -7721,7 +7727,102 @@ function proofWhen(iso) {
   return stamp;
 }
 
+function agentAgo(seconds) {
+  if (seconds == null) return 'never';
+  if (seconds < 90) return `${Math.round(seconds)}s ago`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)} min ago`;
+  if (seconds < 172800) return `${Math.round(seconds / 3600)} h ago`;
+  return `${Math.round(seconds / 86400)} days ago`;
+}
+
+function agentElapsed(iso) {
+  if (!iso) return '';
+  const t = new Date(iso);
+  if (isNaN(t)) return '';
+  const mins = Math.max(0, Math.round((Date.now() - t.getTime()) / 60000));
+  if (mins < 60) return `${mins} min`;
+  return `${Math.floor(mins / 60)} h ${mins % 60} min`;
+}
+
+// What the practitioner machine is doing right now, off its last heartbeat.
+// Redrawn on the five-second poll; the machine itself reports once a minute
+// while a book runs, and at every phase boundary.
+function renderAgentReadout(w) {
+  const block = $('proof-agent-block');
+  if (!block) return;
+  const a = w.agent;
+  // Only meaningful when a machine is supposed to be reporting.
+  block.hidden = !(a || w.proof_runner === 'external');
+  if (block.hidden) return;
+  const line = $('proof-agent-line');
+  const detail = $('proof-agent-detail');
+  const error = $('proof-agent-error');
+  line.innerHTML = '';
+  detail.hidden = true;
+  error.hidden = true;
+  if (!a) {
+    line.textContent = 'No machine has reported yet. When the agent starts it '
+      + 'shows up here within a minute.';
+    return;
+  }
+  const seen = document.createElement('span');
+  seen.className = a.stale ? 'wf-agent-stale' : 'wf-agent-live';
+  seen.textContent = a.stale
+    ? `Not heard from for ${agentAgo(a.age_s).replace(' ago', '')}`
+    : `Reporting (${agentAgo(a.age_s)})`;
+  line.append(seen, document.createTextNode(
+    ` · ${a.agent || 'unknown machine'}${a.version ? ' · v' + a.version : ''}`));
+
+  const bits = [];
+  if (a.state === 'running' || a.state === 'stopping' || a.state === 'finishing') {
+    bits.push(`Reading ${a.book || 'a book'}`);
+    if (a.phase) {
+      let phase = `phase ${a.phase}`;
+      if (a.model) phase += ` on ${a.model.replace('claude-', '')}`;
+      if (a.phase_started_at) phase += ` for ${agentElapsed(a.phase_started_at)}`;
+      bits.push(phase);
+    } else if (a.gate) {
+      bits.push(`plan gate ${a.gate}`);
+    }
+    if (a.turns) bits.push(`${a.turns} turn${a.turns === 1 ? '' : 's'}`);
+    if (a.settle_rounds) bits.push(`settle round ${a.settle_rounds}`);
+    if (a.run_started_at) bits.push(`${agentElapsed(a.run_started_at)} since claim`);
+    if (a.last_activity_at) {
+      const idle = (Date.now() - new Date(a.last_activity_at).getTime()) / 1000;
+      if (idle > 600) bits.push(`no session output for ${agentAgo(idle).replace(' ago', '')}`);
+    }
+  } else if (a.state === 'starting') {
+    bits.push('Just started; first poll pending');
+  } else if (a.state === 'halted') {
+    bits.push(`Halted · subscription token rejected · ${a.awaiting || 0} book(s) waiting`);
+    if (a.held_book) bits.push(`holding ${a.held_book} claimed and untouched`);
+    else if (a.last_book) {
+      const verdict = PROOF_VERDICT_LABEL[a.last_outcome] || a.last_outcome || '';
+      bits.push(`last: ${a.last_book}${verdict ? ' — ' + verdict : ''}`);
+    }
+  } else {
+    bits.push(a.awaiting ? `Idle · ${a.awaiting} book(s) awaiting`
+                         : 'Idle · nothing awaiting');
+    if (a.last_book) {
+      const verdict = PROOF_VERDICT_LABEL[a.last_outcome] || a.last_outcome || '';
+      bits.push(`last: ${a.last_book}${verdict ? ' — ' + verdict : ''}`);
+    }
+    if (a.pending_deliveries) bits.push(`${a.pending_deliveries} delivery retry pending`);
+  }
+  if (a.last_poll_at) bits.push(`polled ${agentAgo((Date.now() - new Date(a.last_poll_at).getTime()) / 1000)}`);
+  detail.textContent = bits.join(' · ');
+  detail.hidden = !bits.length;
+
+  const problem = a.last_poll_error || a.credentials_error || a.last_error
+    || (a.state !== 'running' && a.last_outcome === 'needs_human' ? a.last_reason : '');
+  if (problem) {
+    error.textContent = problem;
+    error.hidden = false;
+  }
+}
+
 function renderProofReadout(w) {
+  renderAgentReadout(w);
   const files = w.files || [];
   const awaiting = files.filter((f) => f.proof_marked === 'awaiting');
   const verdicts = files.filter((f) => f.proof_outcome)
@@ -7740,11 +7841,27 @@ function renderProofReadout(w) {
     table.innerHTML = '';
     empty.hidden = awaiting.length > 0;
     if (awaiting.length) {
-      table.append(headRow(['Book', 'Folder', 'Waiting since']));
-      awaiting.forEach((f) => table.append(bodyRow([
-        f.name || '—', f.folder || 'the watched folder',
-        proofWhen(f.updated_at),
-      ])));
+      table.append(headRow(['Book', 'Folder', 'Waiting since', '']));
+      awaiting.forEach((f) => {
+        const tr = bodyRow([
+          f.name || '—', f.folder || 'the watched folder',
+          proofWhen(f.updated_at),
+        ]);
+        // Take the book back: the agent resumes a claimed book at every boot
+        // for as long as the server lists it, so this is how a killed test
+        // stops coming back.
+        const td = document.createElement('td');
+        const btn = document.createElement('button');
+        btn.className = 'ghost small';
+        btn.textContent = 'Release';
+        btn.title = 'Take this book back from the practitioner queue. The '
+          + 'agent stops seeing it; set the HubSpot status to the ready value '
+          + 'again to re-queue it.';
+        btn.addEventListener('click', () => releaseProof(f, btn));
+        td.append(btn);
+        tr.append(td);
+        table.append(tr);
+      });
     }
   }
 
@@ -7766,13 +7883,48 @@ function renderProofReadout(w) {
     verdict.append(word);
     const why = document.createElement('td');
     why.className = 'wf-reason';
-    why.textContent = f.proof_reason || '—';
+    const reason = f.proof_reason || '—';
+    why.textContent = reason;
+    if (reason.length > 140) {
+      // A driver reason quotes the log tail; clamp it and let a click open it.
+      why.classList.add('clamped');
+      why.title = 'Click to show the whole reason';
+      why.addEventListener('click', () => {
+        why.classList.toggle('clamped');
+        why.title = why.classList.contains('clamped')
+          ? 'Click to show the whole reason' : '';
+      });
+    }
     const when = document.createElement('td');
     when.className = 'wf-when';
     when.textContent = proofWhen(f.updated_at);
     tr.append(book, verdict, why, when);
     vt.append(tr);
   });
+}
+
+async function releaseProof(f, btn) {
+  if (!confirm(`Release ${f.name} from the practitioner queue? The agent will `
+      + 'stop seeing it. To queue it again, put its HubSpot status back at the '
+      + 'ready value.')) return;
+  btn.disabled = true;
+  try {
+    const body = await api('/api/watch/proof/release', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_id: f.file_id }),
+    });
+    renderWatch(body, true);
+    if (!body.drive_marked) {
+      watchNote($('wf-proof-note'), `${f.name} released. DocWatch is not `
+        + 'signed in to Google, so only its own record changed; if the '
+        + 'HubSpot status is still at the ready value the next pass may mark '
+        + 'it awaiting again.', 'warn');
+    }
+  } catch (e) {
+    btn.disabled = false;
+    watchNote($('wf-proof-note'), e.message, 'error');
+  }
 }
 
 function renderWatchPlan(rows) {
@@ -7916,7 +8068,12 @@ $('watch-preview').addEventListener('click', async () => {
   try {
     const body = await api('/api/watch/preview', { method: 'POST' });
     renderWatchPlan(body.plan);
-    watchNote(note, `A pass would ${previewCounts(body)}. Nothing was `
+    // The table holds only what a pass would do; the rest of the folder is a
+    // count, so "do nothing" beside a folder of forty files still adds up.
+    const rest = body.left_alone
+      ? ` ${body.left_alone} other file${body.left_alone === 1 ? '' : 's'} in the folder would be left alone.`
+      : '';
+    watchNote(note, `A pass would ${previewCounts(body)}.${rest} Nothing was `
       + 'downloaded, prepared or uploaded.', 'muted');
   } catch (err) {
     watchNoteWithFix(note, err.message);

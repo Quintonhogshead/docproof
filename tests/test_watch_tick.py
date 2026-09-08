@@ -24,8 +24,8 @@ from app.watch import tick as ticklib
 from app.watch.drive import FOLDER_MIME, GOOGLE_DOC_MIME
 from app.watch.hubspot import HubSpotAuthError
 from app.watch.settings import WatchSettings
-from app.watch.stages import (FAILED, FORMATTED, JOB_PROP, OUTPUT_PROP,
-                              REASON_PROP, SOURCE_PROP, STATE_PROP)
+from app.watch.stages import (AT_PROP, FAILED, FORMATTED, JOB_PROP,
+                              OUTPUT_PROP, REASON_PROP, SOURCE_PROP, STATE_PROP)
 from app.watch.state import WatchState
 
 from .conftest import FIXTURES
@@ -428,6 +428,28 @@ def test_a_transient_failure_is_tried_again_and_then_given_up_on(
     assert opener.files["f-1"]["appProperties"][STATE_PROP] == FAILED
     assert "Gave up" in opener.files["f-1"]["appProperties"][REASON_PROP]
     assert report.failed
+
+
+def test_a_file_turned_away_at_the_door_is_marked_on_the_first_night(
+        tmp_path, ws, provider):
+    """A refusal — here a file that is not a .docx at all — is a fact about
+    the file, not the weather. It used to burn three attempts on three nights
+    before anyone heard; now it is marked failed and reported at once."""
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")),
+                        docx=b"this is not a Word file")
+
+    report = run(tmp_path, ws, opener)
+
+    assert not report.ok
+    props = opener.files["f-1"]["appProperties"]
+    assert props[STATE_PROP] == FAILED
+    assert "not a .docx" in props[REASON_PROP]
+    assert "Gave up" not in props[REASON_PROP]
+    assert WatchState.load(tmp_path / "state.json").get("f-1").attempts == 0
+    assert provider.calls == []                  # never reached a model
+
+    second = run(tmp_path, ws, opener)
+    assert second.new == 0                       # the marker keeps it out
 
 
 def test_a_finished_manuscript_is_never_given_up_on(tmp_path, ws, provider,
@@ -1191,6 +1213,53 @@ def test_a_ready_author_already_formatted_is_flagged_stuck(tmp_path, provider):
     assert "already formatted" in report.stuck_ready[0][1]
 
 
+def test_a_ready_author_whose_book_was_marked_failed_is_named_as_such(
+        tmp_path, provider, caplog):
+    """The intake file is present but carries the failed marker from an
+    earlier night. That is neither "waiting" nor "no Book Original": the log
+    and the report say the book was tried and refused, with the reason, so a
+    person knows to fix the file and clear the marker."""
+    ws = sub_ws(require_source_label=True)
+    opener = fake_drive(
+        {SUB: author_folder("Quinton Johnson"),
+         "m-1": in_sub("Johnson - Book Original.docx",
+                       props={STATE_PROP: FAILED,
+                              REASON_PROP: "Wolves.docx is a legacy .doc file",
+                              AT_PROP: "2026-09-01T03:00:00+00:00"})},
+        docx=MANUSCRIPT,
+        hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    with caplog.at_level(logging.WARNING, logger="docproof.app.watch.tick"):
+        report = run(tmp_path, ws, opener)
+
+    assert report.prepped == []
+    assert report.missing_source == [] and report.stuck_ready == []
+    assert [a for a, _ in report.needs_human] == ["Quinton Johnson"]
+    reason = report.needs_human[0][1]
+    assert "marked failed" in reason and "legacy .doc" in reason
+    assert "2026-09-01" in reason
+    assert "marked failed" in caplog.text and "Waiting" not in caplog.text
+
+
+def test_a_multi_book_author_whose_book_was_marked_failed_is_not_missing(
+        tmp_path, provider):
+    ws = sub_ws(require_source_label=True)
+    opener = fake_drive(
+        {SUB: author_folder("Quinton Johnson"),
+         "bf-1": author_folder("Wolves", parent=SUB),
+         "m-1": in_sub("Johnson - Book Original.docx", sub="bf-1",
+                       props={STATE_PROP: FAILED,
+                              REASON_PROP: "bad file signature"})},
+        docx=MANUSCRIPT,
+        hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.missing_source == []
+    assert [a for a, _ in report.needs_human] == ["Quinton Johnson"]
+    assert "bad file signature" in report.needs_human[0][1]
+
+
 def test_a_placed_book_0_without_a_book_original_is_flagged_missing(tmp_path,
                                                                     provider):
     """A human placed a formatted "Oda - Book 0" in the folder, but there is no
@@ -1588,6 +1657,25 @@ def test_a_subfolder_preview_is_exact_because_the_gate_already_ran(tmp_path,
     assert not any(stage in ("promo", "plan") for _n, stage in report.plan)
 
 
+def test_a_preview_lists_only_what_a_pass_would_do(tmp_path, ws, provider):
+    """The button says "what a pass would do". A finished book, DocProof's own
+    outputs, a cover image and a manuscript marked failed are all things a
+    pass leaves alone, so none of them is a row — they are a count."""
+    opener = fake_drive(folder(
+        f_1=drive_entry("Wolves.docx"),
+        f_2=drive_entry("Kestrel.docx", props={STATE_PROP: FORMATTED}),
+        f_3=drive_entry("Kestrel - book 0.docx", props={OUTPUT_PROP: "1"}),
+        f_4=drive_entry("cover art.png", mime="image/png"),
+        f_5=drive_entry("Broken.docx", props={STATE_PROP: FAILED})),
+        docx=MANUSCRIPT)
+
+    report = run(tmp_path, ws, opener, dry_run=True)
+
+    assert report.plan == [("Wolves.docx", "new")]
+    assert report.listed == 5 and report.left_alone == 4
+    assert provider.calls == []
+
+
 def test_a_preview_never_adds_rows_a_real_pass_would_not_do(tmp_path, provider):
     """The rows exist only in a preview. A real pass's `report.plan` is the
     classification alone — promo and the plan report themselves through their
@@ -1599,7 +1687,7 @@ def test_a_preview_never_adds_rows_a_real_pass_would_not_do(tmp_path, provider):
     dry = run(tmp_path, ws, opener, dry_run=True)
     real = run(tmp_path, ws, opener)
 
-    assert all(stage in ("new?", "skip") for _n, stage in dry.plan)
+    assert [stage for _n, stage in dry.plan] == ["new?"]
     assert all(not stage.endswith("?") for _n, stage in real.plan)
     assert not any(stage in ("promo", "plan") for _n, stage in real.plan)
 

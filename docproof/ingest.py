@@ -6,7 +6,8 @@ from pathlib import Path
 
 from .config import Config
 from .models import DocumentModel, ParagraphRef
-from .utils.xml_helpers import DocxPackage, paragraph_text, qn, walk_package
+from .utils.xml_helpers import (P_TAG, DocxPackage, paragraph_text, qn,
+                                walk_package)
 
 log = logging.getLogger("docproof.ingest")
 
@@ -31,6 +32,9 @@ _REMOVE = {qn("w:del"), qn("w:moveFrom"),               # drop content / markers
            qn("w:rPrChange"), qn("w:pPrChange"), qn("w:sectPrChange"),
            qn("w:tblPrChange"), qn("w:tblGridChange"),
            qn("w:tcPrChange"), qn("w:trPrChange"), qn("w:numberingChange")}
+# A paragraph mark carrying one of these is a deleted mark: accepting it joins
+# the paragraph to the next one rather than merely dropping a node.
+_DELETED_MARK = {qn("w:del"), qn("w:moveFrom")}
 
 
 class IngestError(Exception):
@@ -60,13 +64,7 @@ def preflight(path: str | Path, policy: str) -> DocxPackage:
         if not pkg.has(required):
             raise IngestError(f"{path.name} is missing {required}; not a valid .docx.")
 
-    parts = list(dict.fromkeys(wp.part for wp in walk_package(pkg)))
-    found: dict[str, set] = {}
-    for part in parts:
-        tags = {el.tag for el in pkg.tree(part).iter() if el.tag in REVISION_TAGS}
-        if tags:
-            found[part] = tags
-
+    found = find_revisions(pkg)
     if found:
         pretty = ", ".join(sorted(found))
         if policy == "abort":
@@ -80,21 +78,51 @@ def preflight(path: str | Path, policy: str) -> DocxPackage:
                 "Canonical text uses the accepted view; new edits near existing "
                 "revisions may nest. Review the output carefully.", pretty)
         else:  # accept_all_first
-            _accept_all(pkg, found)
+            accept_all_revisions(pkg, found)
             log.info("Accepted all existing tracked changes in: %s", pretty)
 
     return pkg
 
 
-def _accept_all(pkg: DocxPackage, found: dict[str, set]) -> None:
+def find_revisions(pkg: DocxPackage) -> dict[str, set]:
+    """Every part that still carries a tracked change, with the revision
+    element tags it uses. Empty when the document is clean."""
+    parts = list(dict.fromkeys(wp.part for wp in walk_package(pkg)))
+    found: dict[str, set] = {}
+    for part in parts:
+        tags = {el.tag for el in pkg.tree(part).iter() if el.tag in REVISION_TAGS}
+        if tags:
+            found[part] = tags
+    return found
+
+
+def accept_all_revisions(pkg: DocxPackage,
+                         found: dict[str, set] | None = None) -> dict[str, int]:
+    """Resolve every tracked change the way Word's Accept All would, in place.
+
+    Insertions and moved-to text are kept, deletions and moved-from text
+    dropped, and property-change records discarded in favour of the new
+    properties. A deleted paragraph mark is the one revision that is not a
+    node to unwrap or remove: accepting it joins the paragraph to the one
+    after it, so that is what happens here — the runs move into the following
+    paragraph, which keeps its own properties, exactly as Word does.
+
+    Returns how many revision elements each part had. Raises IngestError on a
+    revision kind this cannot resolve (table cell insertions and merges),
+    naming it so the person can accept it in Word instead."""
+    if found is None:
+        found = find_revisions(pkg)
     unsupported = {t for tags in found.values() for t in tags} - _UNWRAP - _REMOVE
     if unsupported:
         names = sorted(t.split('}')[1] for t in unsupported)
         raise IngestError(
-            f"accept_all_first can't resolve revision types: {names}. "
+            f"Can't resolve tracked changes of these kinds: {names}. "
             "Accept the changes in Word instead, then rerun.")
+    resolved: dict[str, int] = {}
     for part in found:
         tree = pkg.tree(part)
+        resolved[part] = sum(1 for el in tree.iter() if el.tag in REVISION_TAGS)
+        _join_deleted_paragraph_marks(tree)
         # Materialize before mutating; process removals/unwraps repeatedly
         # until fixed point (wrappers can nest).
         changed = True
@@ -112,6 +140,40 @@ def _accept_all(pkg: DocxPackage, found: dict[str, set]) -> None:
                     el.getparent().remove(el)
                     changed = True
         pkg.mark_modified(part)
+    return resolved
+
+
+def _join_deleted_paragraph_marks(tree) -> None:
+    """Merge each paragraph whose mark is deleted into the paragraph after it.
+
+    The mark lives at `w:p/w:pPr/w:rPr/w:del` (or `w:moveFrom`). Document
+    order matters: a run of consecutive deleted marks folds forward one step
+    at a time, so the whole run ends up in the first surviving paragraph. A
+    paragraph with nothing after it in its container (the last one in a cell,
+    a note, or the body) simply keeps its mark dropped — there is nothing to
+    join it to, and that is also what Word shows."""
+    ppr, rpr = qn("w:pPr"), qn("w:rPr")
+    for p in list(tree.iter(P_TAG)):
+        props = p.find(ppr)
+        if props is None:
+            continue
+        run_props = props.find(rpr)
+        if run_props is None or not any(
+                c.tag in _DELETED_MARK for c in run_props):
+            continue
+        following = p.getnext()
+        while following is not None and following.tag != P_TAG:
+            following = following.getnext()
+        if following is None:
+            continue
+        # Everything except the paragraph properties moves to the front of the
+        # next paragraph, after its own w:pPr if it has one.
+        content = [c for c in p if c.tag != ppr]
+        at = 1 if following.find(ppr) is not None else 0
+        for child in content:
+            following.insert(at, child)
+            at += 1
+        p.getparent().remove(p)
 
 
 def build_document_model(pkg: DocxPackage, cfg: Config) -> DocumentModel:
