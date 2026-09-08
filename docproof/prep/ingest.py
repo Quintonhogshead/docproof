@@ -100,14 +100,28 @@ def preflight(path: str | Path) -> DocxPackage:
             raise IngestError(
                 f"{path.name} is missing {required}; not a valid .docx.")
 
-    found = find_revisions(pkg)
-    accepted = accept_all_revisions(pkg, found) if found else {}
-    pkg.accepted_revisions = accepted
-    if accepted:
+    _accept(pkg)
+    if pkg.accepted_revisions:
         log.info("%s arrived with tracked changes; accepted all of them "
                  "(%s) before formatting.", path.name,
-                 ", ".join(f"{n} in {part}" for part, n in sorted(accepted.items())))
+                 ", ".join(f"{n} in {part}"
+                           for part, n in sorted(pkg.accepted_revisions.items())))
     return pkg
+
+
+def open_accepted(path: str | Path) -> DocxPackage:
+    """The manuscript as prep reads it: a fresh package with every tracked
+    change accepted. The writers start from this, never from the raw file —
+    paragraph ids are positional, and they were assigned on the accepted
+    view."""
+    pkg = DocxPackage(Path(path))
+    _accept(pkg)
+    return pkg
+
+
+def _accept(pkg: DocxPackage) -> None:
+    found = find_revisions(pkg)
+    pkg.accepted_revisions = accept_all_revisions(pkg, found) if found else {}
 
 
 def build_structure(pkg: DocxPackage) -> Structure:

@@ -1,0 +1,532 @@
+# =============================================================================
+# ARCHETYPE NINE — gilded_sigil
+# =============================================================================
+#
+# Reference DNA: the contemporary blockbuster fantasy hardcover in its
+# EMBLEM arrangement — the shelf Rebecca Yarros's ONYX STORM sits at the head
+# of, and which Sourcebooks/Entangled and half the YA fantasy front table have
+# been printing since. It is NOT a scene and NOT a figure. It is a MAKER'S
+# MARK: a scratched near-black slab, one huge symmetrical device struck into
+# it in a single metallic ink, a filled disc at that device's heart with one
+# small solid creature-shape crossing it, a translucent drift of something
+# falling down one side — and an enormous condensed display title stacked
+# straight down the middle on top of the whole thing.
+#
+# At thumbnail size the design must read as ONE BRIGHT COIN INSIDE A GOLD
+# DIAMOND, WITH TWO WHITE WORDS ACROSS IT. Everything below exists to protect
+# that read.
+#
+# Like Archetypes Five, Six and Seven this template is written to be ONE-SHOT.
+# The art direction chooses FIVE NOUNS, five hexes, two fonts and the lines of
+# copy. Placement, scale, blend, tint, masks, adjust layers, scrims, occlusion
+# budget and layer order are decided here, once. Five generatable slots is the
+# whole art bill — the cheapest template on the shelf, and deliberately so:
+# this arrangement's risk is not quantity of plates, it is whether ONE plate
+# (`sigil`) comes back symmetrical.
+#
+# -----------------------------------------------------------------------------
+# THE SIX RULES THIS TEMPLATE ENCODES
+# -----------------------------------------------------------------------------
+#
+# 1. THE COVER IS DARK, DARK, DARK — AND THEN PALE. This is the signature and
+#    it is structural, not decorative. Four fifths of the cover is a crushed
+#    near-black slab; the last fifth flips to a bright band where the drift
+#    pools, and the author's name sits on it in NEAR-BLACK INK. A cover that
+#    keeps a white author's name on a dark foot has thrown away the one move
+#    that separates this shelf from every dark-fantasy paperback ever printed.
+#    `foot_plate` builds that band deterministically (a color_wash in `text`
+#    behind a feathered gradient mask) whatever the generated drift came back
+#    looking like — see rule 2 for how the ink follows it.
+#
+# 2. THE FOOT'S INK IS FLIPPED BY MEASUREMENT, NOT BY DECLARATION. An
+#    archetype cannot set a text slot's `color_role` — that is TextSlot's own
+#    default (`text`) by design, and this template does not get an exception.
+#    So `author` and `series` are declared with NO PROTECTING SCRIM. That is
+#    the mechanism, not an oversight: compose's legibility autopilot escalates
+#    a slot's scrim before it flips the ink, and with nothing to escalate it
+#    goes straight to the two-ink flip and picks #111111 against the pale
+#    band, every render, deterministically. Add a scrim to either slot and you
+#    get the opposite cover: the autopilot darkens the band it was asked to
+#    keep bright until white type passes on it, and rule 1 is gone. The two
+#    "flipped text color" warnings this prints are the template WORKING.
+#
+# 3. ONE HUE, AND IT IS APPLIED BY MASK, NOT HOPED FOR. Everything struck into
+#    the slab — the device, the disc, the outrider — is one metallic ink and
+#    nothing else on the cover carries chroma. That is not left to the
+#    generator: `sigil_tint`, `heart_tint` and `outrider_tint` are gradient_map
+#    adjusts masked to those three plates, mapping each onto
+#    background -> accent -> text. Whatever colour the plate came back, the
+#    linework lands on the palette's accent with a white specular at its
+#    brightest and the slab's own black in its shadows. The disc gets this for
+#    free in the most useful direction: the small dark creature-shape inside it
+#    maps to `background`, so the silhouette-on-metal read is produced by the
+#    ramp rather than by asking a generator for two-tone art.
+#
+# 4. LINEWORK IS SCREENED, NOT CUT OUT. `sigil`, `outrider` and `drift` are
+#    prompted ON PURE BLACK and composited with `blend: screen`, so the black
+#    drops out and no alpha channel is involved. Asking a generator for a
+#    transparent PNG of a thin symmetrical engraving is the single most
+#    reliable way to get back a soft grey halo where the lines should be. The
+#    ONE plate that must carry real alpha is `heart`, because it is the only
+#    plate placed by `snap` — snap and the occlusion guards both measure ALPHA,
+#    and an opaque plate reads to them as 100% occlusion of everything.
+#
+# 5. THE DISC LANDS IN THE TITLE'S OWN GAP. `heart` is drawn IMMEDIATELY after
+#    `title` with `snap: line_gap`: compose re-fits the title, finds the real
+#    ink-to-ink gap between its two largest lines, and centres the disc there,
+#    nudging if it still grazes a letterform. That is why the emblem's heart
+#    stays visible on a two-word title and why it does not need a hand-chosen
+#    y anchor that would be wrong for the next book. A one-line title has no
+#    internal gap and the disc falls just beneath that line instead — still
+#    inside the device, still the brightest note, one line lower.
+#
+# 6. NO SHELF RECIPE. Every finishing recipe on the shelf that suits this genre
+#    runs a gradient_map over the whole composite onto background -> primary,
+#    which is precisely the one ramp that does not contain the accent — it
+#    would spend the cover's entire chroma budget and then throw it away
+#    (crossed_relics rule 5, learned again). The stack below is built by hand
+#    from the same parts (scuff, glow, vignette, grade, bloom) with no opinion
+#    about temperature, so the palette alone decides whether a cover reads cold
+#    steel or warm brass.
+#
+# -----------------------------------------------------------------------------
+# ROLES, NOT NOUNS
+# -----------------------------------------------------------------------------
+#
+#   slab       the material the whole cover is struck into
+#   sigil      THE DEVICE — one huge symmetrical mark, in linework, with a
+#              large empty circular void at its heart
+#   heart      what fills that void: one filled disc with ONE small solid
+#              shape crossing it
+#   outrider   the small echo of that shape, off-axis and far away, which is
+#              the only thing breaking the device's symmetry
+#   drift      what falls through this world's air, as one continuous
+#              translucent fall down one side and pooling at the foot
+#
+# EVERY FRAME BELOW IS WRITTEN IN GEOMETRY, NOT IN NOUNS, AND MUST STAY THAT
+# WAY — the lesson romantasy_vignette paid for. A slot asks for A LARGE
+# SYMMETRICAL MARK MADE OF LINES, or A FILLED DISC WITH A SMALL SOLID SHAPE
+# ACROSS IT, or A CONTINUOUS TRANSLUCENT FALL. What those things ARE is the
+# art direction's only say. Feed it dragons and thorns and you get this shelf;
+# feed it circuit traces, a reactor iris, a drone and venting coolant and you
+# get the same composition doing science fiction, which is the point of a
+# template.
+#
+# -----------------------------------------------------------------------------
+# THE OCCLUSION BUDGET
+# -----------------------------------------------------------------------------
+# Exactly TWO layers are drawn after the title. `heart` is snapped into the
+# title's own gap, so by construction it touches no glyph and it is exempt from
+# the contact guard (compose records the pair as a sandwich).
+#
+# `drift` is the one that has to be earned, and the first build of this
+# template got it wrong in an instructive way. Being COVER-fit only exempts a
+# plate from the contain-fit SANDWICH machinery; compose's separate text-art
+# CONTACT GUARD measures every non-fx_ art layer against every text slot drawn
+# before it, and at 35% of the title's ink it moved `drift` down below the type
+# — which silently cancels the veil AND leaves a screened plate lightening the
+# ground the title's contrast is measured against (3.87 against a 4.5
+# threshold, with the title's halo pinned at the 0.85 cap trying to save it).
+#
+# So the mask is not decoration, it is the budget: `drift` opens at 0.56 along
+# its diagonal, which puts its first real density BELOW the title's last line
+# and lets it build through the foot, where it is the thing rule 1's pale band
+# is made of. Move that start earlier and the veil does not go over the type —
+# it goes under it, and takes the title's legibility with it.
+# =============================================================================
+name: gilded_sigil
+genres: [fantasy, science_fiction, romance, mystery_thriller, young_readers]
+axis: center
+recipe: ""                      # rule 6
+describe: >-
+  A scratched near-black slab with one huge symmetrical device struck into it
+  in a single metallic ink, a filled disc at that device's heart with one small
+  solid creature-shape crossing it, a small far-off echo of that shape low on
+  one side, and a translucent fall of something drifting down the other side
+  and pooling at the foot. An enormous condensed display title stacked straight
+  down the middle on top of it all, with the disc showing through the gap
+  between its lines. Endorsement or tagline at the head; at the foot the cover
+  flips pale and the credit line and the author's name are printed on it in
+  near-black, in the title's own face.
+composition_note: >-
+  Drawn as a flat two-dimensional graphic device for a book cover — struck,
+  engraved, foil-stamped linework, seen exactly face-on with no perspective and
+  no camera angle. Every plate is a single-colour mark on pure black: no scene,
+  no horizon, no sky, no landscape, no room, no ground plane, no cast shadow,
+  no vignette, no text, no lettering, no numbers.
+casting: >-
+  Cast five nouns out of the book itself, in this order — each one constrains
+  the next.
+
+  sigil — THE BOOK'S OWN HERALDRY, as one symmetrical mark. Not a picture of
+  a scene: the thing a reader who finished the book would accept as this
+  world's crest, seal, ward, schematic, star chart or warning label. It must be
+  bilaterally symmetrical and it must be made of LINES rather than of mass, so
+  test it two ways before choosing — could it be struck into metal in one
+  colour, and does it survive shrinking to a thumbnail as a recognisable
+  outline. A soft, shaded or asymmetric subject has no device in it.
+
+  heart — THE ONE CREATURE OR CRAFT THE STORY TURNS ON, and nothing else. It
+  fills the disc at the device's centre and it is the single most-looked-at
+  half-inch of the cover, so it has to be readable as a pure black silhouette
+  in profile: a winged thing, a ship, a beast, a rider, a machine. If the
+  honest answer is a person's face, this is the wrong template — a face has no
+  silhouette.
+
+  outrider — THE SAME KIND OF THING AS `heart`, seen far off. One of them,
+  small, alone, in a different pose. It is the only asymmetry on the cover and
+  its whole job is to say the thing in the disc is not the only one.
+
+  drift — WHAT FALLS OR POURS THROUGH THIS WORLD'S AIR, as one continuous
+  translucent fall rather than as particles: smoke, silk, ash-fall, mist, snow,
+  venting coolant, sheeting rain, blown sand, a torn banner, gauze.
+
+  slab — WHAT THE WHOLE THING IS STRUCK INTO. A hard, worked, uniform material
+  the book would actually own: burnished iron, scorched stone, salt-bleached
+  wood, black glass, tarnished silver, hull plate, ledger leather.
+
+  Then the palette. `accent` IS the metallic ink and it is the ONLY chroma on
+  the cover — take it saturated and mid-value, because every struck plate is
+  mapped onto it and a pale accent gives a cover with no metal in it.
+  `background` is the slab's crushed near-black and it is also what the small
+  silhouette inside the disc becomes. `text` goes to true white: it is the
+  title's ink AND the pale foot band the author is printed on, and a bone-white
+  `text` gives a muddy band that the author's ink flip then has to fight.
+
+# =============================================================================
+art:
+# -- the ground ---------------------------------------------------------------
+  - id: slab
+    role: >-
+      the hard worked material this whole cover is struck into — burnished
+      iron, scorched stone, black glass, tarnished silver, hull plate, ledger
+      leather: whatever this book's world would actually own
+    generatable: true
+    procedural: gradient       # $0 fallback only; this slot is meant to be painted
+    fit: cover
+    prompt_frame: >-
+      A full-frame flat surface of {subject}, photographed square on and filling
+      the whole frame, very dark and close to black, its grain and wear running
+      right across it, lit by one broad soft light so the surface reads as
+      material rather than as a colour. Completely empty — nothing lying on it,
+      nothing standing on it.
+
+  - id: slab_scuff
+    # Rule 1's first half: the distressing is procedural, so it costs nothing
+    # and never comes back as a picture OF scratches.
+    generatable: false
+    fit: cover
+    procedural: scratches
+    opacity: 0.22
+    blend: screen
+
+  - id: centre_glow
+    # The lift that makes the device read as a ring of light on a dead ground.
+    # Without it the emblem and the corners sit at the same value and the
+    # thumbnail is a grey rectangle.
+    generatable: false
+    fit: cover
+    procedural: radial_glow
+    opacity: 0.18            # 0.26 lifted the ground behind the title enough
+                              # to cost it half a contrast point
+    blend: screen
+
+# -- the struck tier ----------------------------------------------------------
+  - id: sigil
+    role: >-
+      the book's own heraldry as ONE huge symmetrical mark made of lines — the
+      crest, seal, ward, schematic, star chart or warning label this world
+      would strike into metal
+    # Rule 4: on pure black and screened. No alpha, no cutout, no halo.
+    # The gold is NOT in this plate — it is applied afterwards by the
+    # `sigil_ink` adjust layer below (rule 3).
+    generatable: true
+    fit: contain
+    blend: screen
+    anchor: [0.50, 0.455]
+    scale: 0.92                # 0.98 landed the linework 1% off the trim
+    prompt_frame: >-
+      One large bilaterally symmetrical device based on {subject}, drawn as
+      flat single-colour linework — fine strokes, dots, dashes, rays and
+      hatching, no shading and no solid masses — centred and reaching almost to
+      every edge of its own frame, with a LARGE COMPLETELY EMPTY CIRCULAR VOID
+      at its exact centre. On pure black.
+
+  - id: outrider
+    role: >-
+      the same kind of thing as `heart`, seen far off — one of them, small,
+      alone, in a different pose; the only asymmetry on the cover
+    generatable: true
+    fit: contain
+    blend: screen
+    anchor: [0.135, 0.775]
+    scale: 0.22                # rule 3's tint costs a small plate its read;
+    opacity: 0.80               # 0.17 disappeared into the slab entirely
+    prompt_frame: >-
+      One single small {subject}, seen from the side in clean full profile and
+      drawn as one flat opaque light-toned shape with no interior detail,
+      placed small and alone with wide empty space all around it. On pure black.
+
+# -- the veil, drawn last of the art tier -------------------------------------
+  - id: drift
+    role: >-
+      what falls or pours through this world's air, as ONE continuous
+      translucent fall — smoke, silk, ash-fall, mist, venting coolant, sheeting
+      rain, blown sand, a torn banner
+    # Rule 4 again (screened, on black) and the occlusion budget: COVER fit, so
+    # the sandwich machinery never sees it and can never demote it; the mask is
+    # what keeps it honest instead.
+    generatable: true
+    fit: cover
+    blend: screen
+    opacity: 0.70
+    mask:
+      gradient: {kind: linear, angle: 55.0, start: 0.56, end: 0.98}
+    prompt_frame: >-
+      One long continuous fall of {subject} pouring down through the frame in a
+      single unbroken translucent sheet, gathered and bright where it folds and
+      thinning away to nothing at its edges, softly lit from one side. On pure
+      black.
+
+# -- the heart: the ONE plate with real alpha ---------------------------------
+  - id: heart
+    role: >-
+      the one creature or craft the story turns on, crossing a filled disc —
+      it must read as a pure black silhouette in profile at half an inch wide
+    # Rule 4's exception and rule 5's whole mechanism. transparent: true is
+    # load-bearing: `snap` and the occlusion guards measure ALPHA.
+    generatable: true
+    transparent: true
+    fit: contain
+    snap: line_gap
+    anchor: [0.50, 0.50]        # snap decides y; only x is read here
+    # THE one knob that moves this plate's contact with the title, and it is
+    # smaller than it looks like it should be. Measured: 0.21 -> 9%, 0.16 ->
+    # 6%, 0.14 -> 4.5%, 0.125 -> 3.7% against a 4% limit. A display face set
+    # at 0.145 of canvas height has an inter-line gap NARROWER than the void
+    # the device was drawn around, so the void is not the guide — the type is.
+    scale: 0.125
+    prompt_frame: >-
+      One large solid filled disc seen exactly face-on, its whole surface a
+      single continuous material, brightest at the middle and falling off
+      toward its rim, with no pattern and no writing on it — and crossing it,
+      one small flat opaque BLACK silhouette of {subject} in clean profile,
+      wholly inside the disc's edge with clear space around it. Nothing else in
+      the picture; isolated on a fully transparent background.
+    # The glow is FREE and the scale is not — worth knowing before tuning
+    # this slot the expensive way round. `snap` measures the RAW plate alpha
+    # (compose runs art effect stacks after placement), and snapping records
+    # (title, heart) as a sandwich pair, which exempts the plate from the
+    # later text-art contact guard as well. So no effect on this slot can
+    # ever cost it contact, and a generous halo is how the coin buys back the
+    # presence that shrinking it to clear the letterforms took away.
+    effects:
+      - {kind: drop_shadow, dy: 0.003, blur: 0.010, alpha: 0.55}
+      - {kind: outer_glow, blur: 0.028, alpha: 0.44}
+
+# =============================================================================
+adjust:
+  - id: slab_grade
+    # crossed_relics rule 1, inherited: a generated "dark iron" plate always
+    # comes back as a bright PHOTOGRAPH of dark iron. Graded, it becomes a
+    # ground, and the struck tier has somewhere to be the brightest thing.
+    op: grade
+    brightness: -0.30
+    saturation: -0.42
+    contrast: 0.10
+
+  - id: sigil_lift
+    # Rule 3's precondition, and the first build's biggest miss. A screened
+    # plate of THIN LINES carries very little luminance, so the luminance mask
+    # below is weak everywhere and the tint lands as a ghost — a device you
+    # have to hunt for rather than the second thing you see. Lifting the
+    # linework FIRST, through its own mask, is what makes the ink take. It is
+    # deliberately a `grade` and not a higher tint opacity: opacity would push
+    # the whole ramp toward `text` and give white lines, not metal ones.
+    op: grade
+    brightness: 0.42
+    contrast: 0.30
+    mask: {luminance_of: sigil}
+
+  - id: outrider_lift
+    op: grade
+    brightness: 0.40
+    contrast: 0.26
+    mask: {luminance_of: outrider}
+
+  - id: sigil_ink
+    # Rule 3. Masked by LUMINANCE, not by alpha: `sigil` is an opaque screened
+    # plate, so its alpha is solid everywhere and a from_layer stencil would
+    # tint the entire canvas. Its luminance IS the linework.
+    op: gradient_map
+    stops: [background, accent, text]
+    opacity: 0.88
+    mask: {luminance_of: sigil, feather: 0.0015}
+
+  - id: outrider_ink
+    # TWO stops, not three, and that is aerial perspective rather than an
+    # oversight: the third stop is a white specular, and a specular is what
+    # says NEAR. Given one, the outrider came back a bright white swoosh
+    # sitting in the same plane as the disc, which is exactly the read this
+    # slot exists to avoid — it is meant to be the same kind of thing, far
+    # off. Ending the ramp at `accent` keeps it in the metal and in the
+    # distance.
+    op: gradient_map
+    stops: [background, accent]
+    opacity: 0.90
+    mask: {luminance_of: outrider}
+
+  - id: heart_ink
+    # Rule 3's best trick: `heart` carries real alpha, so a from_layer stencil
+    # is exactly the disc — and the dark silhouette inside it maps to
+    # `background` while the disc's own falloff becomes an accent-to-white
+    # metal ramp. The two-tone read is produced by the ramp.
+    op: gradient_map
+    stops: [background, accent, text]
+    # 0.92 flattened the disc into one solid sweet colour — a mint sticker, not
+    # a coin. Leaving a quarter of the plate's own material under the ramp is
+    # what keeps the surface reading as struck metal.
+    opacity: 0.74
+    mask: {from_layer: heart}
+
+  - id: edge_fall
+    # Drawn BEFORE foot_plate on purpose: a vignette after it would put dirty
+    # corners on the one bright band the cover has.
+    op: vignette
+    strength: 0.42
+
+  - id: foot_plate
+    # Rule 1, made deterministic. color_wash composites a solid fill AS a
+    # layer; the linear gradient mask (angle 90 = top transparent -> bottom
+    # opaque, held fully clear until `start`) is the feather. `text` rather
+    # than a literal hex so the band and the title's ink are the same white.
+    op: color_wash
+    color: text
+    blend: normal
+    # Enough to carry near-black type at 4.5:1 and no more: at 0.80 the wash
+    # buried the drift it is supposed to be the pooling OF, and the foot went
+    # from silk to a printed grey rectangle.
+    opacity: 0.68
+    mask:
+      gradient: {kind: linear, angle: 90.0, start: 0.775, end: 0.945}
+
+  - id: final_grade
+    op: grade
+    contrast: 0.07
+    saturation: -0.10
+
+  - id: sheen
+    # The specular on the struck tier — what makes the accent read as metal
+    # rather than as a colour.
+    op: bloom
+    threshold: 0.82
+    radius: 0.018
+    strength: 0.30
+
+# =============================================================================
+scrims:
+  # TWO scrims, and the omissions are the design (rule 2): `author` and
+  # `series` are deliberately unprotected so the autopilot flips their ink to
+  # near-black on the pale band instead of darkening the band under white ink.
+  - {kind: halo, protects: subtitle, strength: 0.30}
+  - {kind: halo, protects: title, strength: 0.10}
+
+# =============================================================================
+text:
+  - id: subtitle
+    # The head line: an endorsement quote, or a tagline, or nothing. Up to
+    # three lines because a real blurb is three lines and setting it as one
+    # long ribbon is the tell of a template that never expected one.
+    zone: {x: 0.095, y: 0.035, w: 0.81, h: 0.098}
+    case: as_is
+    align: center
+    valign: top
+    tracking: 4
+    max_lines: 3
+    optional: true
+    size_min: 0.013
+    size_max: 0.024
+    effects:
+      - {kind: drop_shadow, dy: 0.003, blur: 0.008, alpha: 0.75}
+
+  - id: title
+    # Flat white and CRISP — no gradient overlay, no texture, no ornament. The
+    # whole cover's decoration is the struck tier behind it; the type's job is
+    # to be the one clean thing in the frame, which is why the halo above
+    # starts nearly inert (the slab is near-black, contrast here is free).
+    # Negative tracking is the shelf's own convention: the display face is
+    # condensed and the words interlock.
+    zone: {x: 0.055, y: 0.268, w: 0.89, h: 0.402}
+    case: upper
+    align: center
+    valign: middle
+    tracking: -10
+    max_lines: 3
+    size_min: 0.058
+    # 0.155 pinned every two-word title at the ceiling and closed the line gap
+    # `heart` has to land in — the disc is worth a few points of title.
+    size_max: 0.145
+    effects:
+      # A tight dark contact shadow under a wide soft one — the pro type move.
+      - {kind: drop_shadow, dy: 0.002, blur: 0.004, alpha: 0.70}
+      - {kind: drop_shadow, dy: 0.012, blur: 0.032, alpha: 0.38}
+
+  - id: series
+    # The credit/eyebrow line, on the pale band. NO scrim — see rule 2.
+    zone: {x: 0.09, y: 0.846, w: 0.82, h: 0.030}
+    case: upper
+    tracking: 55
+    max_lines: 1
+    optional: true
+    size_min: 0.012
+    size_max: 0.019
+
+  - id: author
+    # font_role: title is the deliberate opposite of romantasy_vignette's
+    # choice, and it is what this shelf actually does: on a brand-name
+    # hardcover the author's name is a SECOND TITLE, set in the same condensed
+    # display face at nearly the same weight, because the name is the thing
+    # being sold. Give it a quiet supporting face here and the foot looks like
+    # a different book's cover. NO scrim — see rule 2.
+    zone: {x: 0.055, y: 0.882, w: 0.89, h: 0.084}
+    font_role: title
+    case: upper
+    tracking: 12
+    max_lines: 1
+    size_min: 0.032
+    size_max: 0.068
+
+# =============================================================================
+# Z-ORDER, bottom first. The four that are easy to get wrong and fatal:
+# every *_ink adjust must follow its own plate; `heart` must be IMMEDIATELY
+# after `title` or `snap: line_gap` silently does nothing; `foot_plate` must
+# come after `edge_fall` and before `series`/`author`; and `drift` must stay
+# cover-fit and after the title, where nothing can demote it.
+layers: [slab, slab_grade, slab_scuff, centre_glow,
+        sigil, sigil_lift, sigil_ink, outrider, outrider_lift, outrider_ink,
+        "scrim:0", subtitle, "scrim:1", title,
+        heart, heart_ink, drift,
+        edge_fall, foot_plate, series, author,
+        final_grade, sheen]
+
+# =============================================================================
+# WHAT THE DIRECTOR STILL CHOOSES, AND NOTHING ELSE
+# =============================================================================
+#   * five `{subject}` fills, one per generatable slot (see `casting` above).
+#   * five palette hexes. `accent` is the metallic and the cover's ONLY chroma;
+#     `background` is both the slab and the silhouette inside the disc; `text`
+#     is the title's ink AND the pale foot band, so take it to true white.
+#   * title_font and author_font — though `author` wears the TITLE face here,
+#     so author_font only ever dresses the head line and the credit line.
+#   * the head line, the credit line, the title's own line breaks.
+#
+# It does NOT choose placement, scale, blend, opacity, masks, adjust layers,
+# tints, effects, scrim kinds, recipe, or layer order.
+#
+# HONEST SCOPE: the skeleton is "one struck emblem, one silhouette in its
+# heart, two white words across it". It fits epic and YA fantasy, romantasy,
+# space opera, occult thriller — anything with a heraldry and a creature. It
+# does NOT fit a book whose cover should show a face, a scene, or a place, and
+# it should not be stretched to. The riskiest plate by far is `sigil`: a
+# generator asked for bilateral symmetry returns it perhaps three times in
+# four, and no template rule fixes the fourth — repaint it.

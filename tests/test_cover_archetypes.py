@@ -22,6 +22,7 @@ from docproof.cover.archetypes import (ARCHETYPES, ARCHETYPES_DIR,
                                        zone_px)
 from docproof.cover.compose import compose
 from docproof.cover.recipes import RECIPES
+from docproof.cover.textures import TEXTURES
 from docproof.cover.fonts import AUTHOR_FONT_DEFAULT, FAMILIES, describe_fonts, font_path
 from docproof.cover.model import Brief, Direction, Palette, Zone, build_spec
 
@@ -209,6 +210,7 @@ def test_an_untagged_archetype_is_in_scope_for_every_genre():
 _EXPECTED_GENRES = {
     "romantasy_organic": ["fantasy", "romance"],
     "romantasy_vignette": ["fantasy", "romance"],
+    "gilded_descent": ["fantasy", "romance", "horror", "historical"],
     "pale_reliquary": ["fantasy", "romance"],
     "crossed_relics": ["fantasy", "romance", "mystery_thriller",
                               "science_fiction", "historical"],
@@ -216,6 +218,12 @@ _EXPECTED_GENRES = {
     "portrait_luminary": ["fantasy", "romance"],
     "elemental_aperture": ["fantasy", "science_fiction", "romance",
                           "mystery_thriller", "horror"],
+    "gilded_sigil": ["fantasy", "science_fiction", "romance",
+                    "mystery_thriller", "young_readers"],
+    "uplit_vigil": ["fantasy", "romance", "horror"],
+    "gilded_cartouche": ["fantasy", "romance", "historical", "horror"],
+    "burning_cartouche": ["fantasy", "romance", "horror"],
+    "sable_regalia": ["fantasy", "horror"],
 }
 
 
@@ -333,7 +341,14 @@ def test_describe_archetypes_genre_filter_includes_multi_genre_tags():
 
 def test_describe_archetypes_genre_filter_shrinks_the_enumeration():
     # A real assertion that filtering actually filters, not just includes.
-    assert len(describe_archetypes("historical").splitlines()) < len(ARCHETYPES)
+    # Count ENTRY lines ("- name — describe"), not raw lines: an archetype's
+    # optional `casting` block is emitted as an indented paragraph underneath
+    # its entry, so a raw line count measures how chatty the matching
+    # templates are rather than how many of them matched.
+    def _entries(text: str) -> int:
+        return sum(1 for line in text.splitlines() if line.startswith("- "))
+
+    assert _entries(describe_archetypes("historical")) < len(ARCHETYPES)
 
 
 @pytest.mark.parametrize("genre", sorted(SUBJECT_KEYS))
@@ -1070,3 +1085,602 @@ def test_pale_reliquary_keeps_its_discrete_object_plates_whole():
     for sid in ("crown", "undergrowth", "beast", "bloom", "claw"):
         assert not by_id[sid].keep_whole
         assert by_id[sid].cut_edge
+
+
+# -- Archetype Nine (gilded_sigil) — the six rules, as regression guards -----
+#
+# Every assertion below is a rule the template's own header states and which a
+# well-meaning later edit would plausibly "fix" in the wrong direction. They
+# are written against gilded_sigil by name (not swept over the shelf) because
+# each is a property of THIS arrangement, not of templates in general.
+
+def test_gilded_sigil_snaps_its_heart_into_the_titles_own_line_gap():
+    """Rule 5. `snap: line_gap` only fires for a CONTAIN-fit slot drawn
+    IMMEDIATELY after a text layer (compose._position_all_art reads
+    layers[i - 1]); slide one layer between them and the disc silently
+    reverts to its fixed anchor, which is the wrong place for every book.
+    And snap measures ALPHA, so the plate must carry real transparency —
+    rule 4's one exception."""
+    a = ARCHETYPES["gilded_sigil"]
+    heart = next(s for s in a.art if s.id == "heart")
+    assert heart.snap == "line_gap"
+    assert heart.fit == "contain"
+    assert heart.transparent, "snap and the occlusion guards measure alpha"
+    assert heart.blend == "normal", "a screened plate has no alpha to snap by"
+    i = a.layers.index("heart")
+    assert a.layers[i - 1] == "title"
+
+
+def test_gilded_sigil_leaves_its_foot_type_unprotected_on_purpose():
+    """Rule 2, and the single most likely wrong 'fix' in this file. The pale
+    foot band plus near-black author ink is produced by compose's two-ink
+    flip, which only runs once scrim escalation has nothing left to
+    escalate. Give `author` or `series` a scrim and the autopilot darkens
+    the band instead of flipping the ink, and rule 1's value inversion is
+    gone."""
+    a = ARCHETYPES["gilded_sigil"]
+    protected = {s.protects for s in a.scrims}
+    assert "author" not in protected
+    assert "series" not in protected
+    # ...while the two slots that sit on the DARK four-fifths keep theirs.
+    assert protected == {"title", "subtitle"}
+
+
+def test_gilded_sigil_builds_its_pale_foot_deterministically():
+    """Rule 1. The band may not depend on how the generated `drift` plate
+    came back, so it is a color_wash in the `text` role behind a feathered
+    gradient mask — drawn after the vignette (which would otherwise dirty
+    the one bright band on the cover) and before the two text slots that
+    stand on it."""
+    a = ARCHETYPES["gilded_sigil"]
+    foot = next(j for j in a.adjust if j.id == "foot_plate")
+    assert foot.op == "color_wash"
+    assert foot.color == "text"
+    assert foot.mask is not None and foot.mask.gradient is not None
+    assert foot.mask.gradient.angle == 90.0
+    order = a.layers.index
+    assert order("edge_fall") < order("foot_plate") < order("series")
+    assert order("foot_plate") < order("author")
+
+
+def test_gilded_sigil_quarantines_its_one_hue_by_mask():
+    """Rule 3. The metallic is APPLIED, not hoped for: one gradient_map per
+    struck plate, each onto background -> accent -> text and each masked to
+    its own plate. The mask SOURCE differs by plate kind and that is the
+    load-bearing detail — an opaque screened plate has solid alpha, so a
+    from_layer stencil would tint the whole canvas; its luminance is the
+    linework."""
+    a = ARCHETYPES["gilded_sigil"]
+    by_id = {j.id: j for j in a.adjust}
+    art_by_id = {s.id: s for s in a.art}
+    for adj_id, plate in (("sigil_ink", "sigil"),
+                          ("outrider_ink", "outrider"),
+                          ("heart_ink", "heart")):
+        adj = by_id[adj_id]
+        assert adj.op == "gradient_map"
+        # The near plates get the third stop — a white specular, which is what
+        # says NEAR. `outrider` is the same kind of thing seen far off and
+        # deliberately ends at `accent`: given a specular it renders as a
+        # bright swoosh in the disc's own plane (aerial perspective).
+        assert adj.stops == (["background", "accent"] if plate == "outrider"
+                             else ["background", "accent", "text"])
+        assert adj.mask is not None
+        if art_by_id[plate].transparent:
+            assert adj.mask.from_layer == plate
+        else:
+            assert adj.mask.luminance_of == plate, (
+                f"{plate} is opaque — a from_layer stencil tints everything")
+        assert a.layers.index(adj_id) > a.layers.index(plate)
+
+
+def test_gilded_sigil_screens_its_linework_instead_of_cutting_it_out():
+    """Rule 4. A generator asked for a transparent PNG of thin symmetrical
+    engraving returns a soft grey halo where the lines should be. Every
+    plate but `heart` is prompted on pure black and screened."""
+    a = ARCHETYPES["gilded_sigil"]
+    for sid in ("sigil", "outrider", "drift"):
+        slot = next(s for s in a.art if s.id == sid)
+        assert slot.blend == "screen"
+        assert not slot.transparent
+        assert "on pure black" in " ".join(slot.prompt_frame.split()).lower()
+
+
+def test_gilded_sigil_keeps_its_veil_undemotable():
+    """The occlusion budget. `drift` is the only art drawn after the title
+    that is not snapped, and it is COVER fit so the contain-fit sandwich
+    machinery never looks at it — it cannot be demoted below the type. What
+    keeps it honest instead is its own gradient mask, which holds it clear
+    of the upper frame and opens toward the foot."""
+    a = ARCHETYPES["gilded_sigil"]
+    drift = next(s for s in a.art if s.id == "drift")
+    assert drift.fit == "cover"
+    assert a.layers.index("drift") > a.layers.index("title")
+    assert drift.mask is not None and drift.mask.gradient is not None
+    assert drift.mask.gradient.start > 0.0
+
+
+def test_gilded_sigil_sets_the_author_in_the_title_face():
+    """The deliberate opposite of romantasy_vignette's choice, and what this
+    shelf actually does: on a brand-name hardcover the author's name is a
+    second title, because the name is the thing being sold."""
+    a = ARCHETYPES["gilded_sigil"]
+    author = next(t for t in a.text if t.id == "author")
+    assert author.font_role == "title"
+    assert ARCHETYPES["romantasy_vignette"].text[-1].font_role == ""
+
+
+def test_gilded_sigil_wears_no_shelf_recipe():
+    """Rule 6. Every recipe that suits this genre runs a gradient_map onto
+    background -> primary — the one ramp that does not contain the accent
+    this whole template spends its chroma budget on (crossed_relics rule 5,
+    learned again)."""
+    assert ARCHETYPES["gilded_sigil"].recipe == ""
+# -- uplit_vigil (archetype ten) ------------------------------------------
+#
+# Two rules here fight each other and the resolution is the whole design, so
+# both halves are guarded. Rule 2 puts the figure on the TOP layer, which
+# forbids the usual way of making a standing figure look grounded (paint some
+# ground in front of her feet). Rule 3 still demands she look grounded. What
+# is left is a hem that dissolves, a shadow pool she stands in, and a kerb of
+# ground just behind her — plus rule 9's blur, which is the only depth cue the
+# composition has left once nothing may overlap her.
+
+def test_uplit_vigil_draws_its_figure_above_every_art_layer():
+    """Rule 2. The figure is composited after every art plate and after the
+    title; only the author's name — type, not paint — crosses her."""
+    a = ARCHETYPES["uplit_vigil"]
+    order = a.layers
+    here = order.index("subject")
+    for slot in a.art:
+        if slot.id == "subject":
+            continue
+        assert order.index(slot.id) < here, f"{slot.id} is painted over the figure"
+    assert here > order.index("title")
+    assert here < order.index("author")
+
+
+def test_uplit_vigil_dissolves_its_figures_hem_rather_than_cutting_it():
+    """Rule 3, mechanism one — and with rule 2 having retired the occlusion,
+    this is now the load-bearing one. Without the mask her plate ends on a hard
+    horizontal cut line partway up the hazard band."""
+    subject = next(s for s in ARCHETYPES["uplit_vigil"].art if s.id == "subject")
+    assert subject.cut_edge == "bottom"
+    assert subject.mask is not None and subject.mask.gradient is not None
+    # angle 270 = bottom-transparent, top-opaque: the fade runs the right way.
+    assert subject.mask.gradient.angle == 270.0
+    # place_by ink (§15.24) is what lands her painted feet on the measured
+    # point instead of her plate's transparent margin.
+    assert subject.place_by == "ink"
+
+
+def test_uplit_vigil_pools_its_contact_shadow_on_the_axis_before_the_figure():
+    """Rule 3, mechanism two. The pool is defined by the template's centre
+    axis rather than by the figure's silhouette, and that is FORCED, not
+    chosen: a `from_layer` mask reads already-composited pixels, so rule 2's
+    top-layer figure cannot be a mask source for anything. Guard both the
+    ordering and the fact that no layer tries to mask off her."""
+    a = ARCHETYPES["uplit_vigil"]
+    pool = next(x for x in a.adjust if x.id == "foot_shadow")
+    assert pool.mask is not None and pool.mask.gradient is not None
+    assert pool.mask.gradient.kind == "radial"
+    assert pool.mask.invert is True
+    assert a.layers.index("foot_shadow") < a.layers.index("subject")
+    # The pool sits under the axis the figure is anchored to.
+    subject = next(s for s in a.art if s.id == "subject")
+    assert a.axis == "center"
+    assert pool.mask.gradient.center[0] == subject.anchor[0] == 0.5
+    # Nothing may name the figure as a mask source — the loader refuses it,
+    # and this asserts the template never tries.
+    for layer in list(a.adjust) + list(a.art):
+        mask = getattr(layer, "mask", None)
+        if mask is not None:
+            assert mask.from_layer != "subject"
+            assert mask.luminance_of != "subject"
+
+
+def test_uplit_vigil_keeps_a_kerb_of_ground_behind_the_figures_feet():
+    """Rule 3, mechanism three. `hazard_near` no longer crosses in front of
+    her, but it must still be drawn after the distant floor and off the centre
+    axis, or she has no ground plane to meet at all."""
+    a = ARCHETYPES["uplit_vigil"]
+    order = a.layers
+    assert order.index("hazard") < order.index("hazard_near") < order.index("subject")
+    near = next(s for s in a.art if s.id == "hazard_near")
+    assert near.anchor[0] != 0.5, "a plinth on the axis is not ground"
+    # §15.24, and not optional: the prompt empties the plate's upper three
+    # quarters, so frame-anchoring parks the whole strip below the trim.
+    assert near.place_by == "ink"
+
+
+def test_uplit_vigil_softens_the_background_and_nothing_else():
+    """Rule 9: the blur is the LAST background operation. Every art plate but
+    the figure is below it; every text layer and the figure are above it.
+    Move it up and it smears the title; move it down and plates escape it."""
+    a = ARCHETYPES["uplit_vigil"]
+    order = a.layers
+    blur = next(x for x in a.adjust if x.id == "back_soften")
+    assert blur.op == "blur" and 0.0 < blur.opacity < 1.0
+    here = order.index("back_soften")
+    for slot in a.art:
+        if slot.id == "subject":
+            assert order.index(slot.id) > here
+        else:
+            assert order.index(slot.id) < here, f"{slot.id} escapes the softening"
+    for slot in a.text:
+        assert order.index(slot.id) > here, f"{slot.id} would be blurred"
+
+
+def test_uplit_vigil_spends_its_occlusion_budget_to_zero():
+    """Rule 2's price, asserted as the rule rather than as a slot list: no art
+    plate is drawn after any text slot, so there is no sandwich left for the
+    composer to silently demote."""
+    a = ARCHETYPES["uplit_vigil"]
+    order = a.layers
+    last_art_below_type = max(
+        order.index(s.id) for s in a.art if s.id != "subject")
+    first_type = min(order.index(t.id) for t in a.text)
+    assert last_art_below_type < first_type
+
+
+def test_uplit_vigil_throws_the_floors_colour_back_onto_the_void():
+    """Rule 1: `ember_wash` is the layer that makes sky and floor one
+    photograph. It must screen `primary` from a centre below the bottom trim,
+    inverted — a non-inverted radial mask lights the CORNERS instead."""
+    a = ARCHETYPES["uplit_vigil"]
+    wash = next(x for x in a.adjust if x.id == "ember_wash")
+    assert wash.op == "color_wash" and wash.blend == "screen"
+    assert wash.color == "primary"
+    assert wash.mask is not None and wash.mask.gradient is not None
+    assert wash.mask.gradient.kind == "radial"
+    assert wash.mask.gradient.center[1] > 1.0
+    assert wash.mask.invert is True
+    # Between the floor and the figure, so she is rimmed by it, not washed over.
+    assert a.layers.index("hazard") < a.layers.index("ember_wash") < a.layers.index("subject")
+
+
+def test_uplit_vigil_sets_its_author_in_the_display_face():
+    """Rule 7: the author's name is the second title. `font_role: title` is
+    the only thing that puts it in the display face, and dropping it silently
+    demotes the name to the eyebrow's supporting font."""
+    author = next(t for t in ARCHETYPES["uplit_vigil"].text if t.id == "author")
+    assert author.font_role == "title"
+    title = next(t for t in ARCHETYPES["uplit_vigil"].text if t.id == "title")
+    # near-title scale, not a caption
+    assert author.size_max >= title.size_max * 0.9
+
+
+def test_uplit_vigil_keeps_its_tagline_clear_of_the_figure():
+    """Rule 8: the tagline fills the dead left band. Under rule 2 this is no
+    longer only a taste rule — a tagline set wide enough to reach the figure
+    gets her DEMOTED below it, which silently cancels rule 2. The zone must
+    end well left of the centre axis, not merely start left of it."""
+    tagline = next(t for t in ARCHETYPES["uplit_vigil"].text if t.id == "subtitle")
+    assert tagline.align == "left"
+    assert tagline.zone.x + tagline.zone.w <= 0.32
+
+
+def test_uplit_vigil_leaves_its_frame_open_at_the_bottom():
+    """Rule 4: three vapor plates, all entering from the top or the upper
+    sides. A fourth closing the bottom makes this romantasy_vignette's wreath."""
+    a = ARCHETYPES["uplit_vigil"]
+    vapor = [s for s in a.art if s.id.startswith("vapor_")]
+    assert len(vapor) == 3
+    assert {s.cut_edge for s in vapor} == {"top", "left", "right"}
+    # Asymmetry clause: the two side masses differ in height AND in scale.
+    left = next(s for s in vapor if s.id == "vapor_left")
+    right = next(s for s in vapor if s.id == "vapor_right")
+    assert left.anchor[1] != right.anchor[1]
+    assert left.scale != right.scale
+
+
+def test_uplit_vigil_clamps_only_its_whole_fragment_plate():
+    """Rule 6 and its one exception (§15.25): severed ends overshoot the trim,
+    but the scatter of discrete whole pieces is clamped inside it."""
+    a = ARCHETYPES["uplit_vigil"]
+    whole = [s.id for s in a.art if s.keep_whole]
+    assert whole == ["ember_drift"]
+    for slot in a.art:
+        if slot.cut_edge:
+            assert not slot.keep_whole, f"{slot.id} both severs and clamps"
+
+
+def test_uplit_vigil_dictates_no_pose():
+    """Rule 10. The template used to hard-code "from BEHIND", "turned away"
+    and "one arm is raised" into the figure's frame, which is one book's
+    staging masquerading as structure. What it may still dictate is geometry
+    and light; what it may not is which way the character faces."""
+    subject = next(s for s in ARCHETYPES["uplit_vigil"].art if s.id == "subject")
+    frame = subject.prompt_frame.lower()
+    for banned in ("turned away", "from behind", "arm is raised", "raised arm",
+                   "over one shoulder", "her back"):
+        assert banned not in frame, f"the frame still dictates a pose: {banned!r}"
+    # ...but the structure it DOES need is still spelled out.
+    assert "full-length" in frame
+    assert "one large simple pale shape" in frame
+    assert "below" in frame            # the light direction, rule 1
+
+
+# -- Archetype Twelve (burning_cartouche): the two laws §24 paid for -----------
+
+def test_burning_cartouche_places_every_contain_slot_by_its_ink():
+    # Same reasoning as pale_reliquary's rule 0 (§15.25): every contain-fit
+    # slot here is anchored on a severed edge or clamped whole, and the frame
+    # measurement can honour neither — it flushes the model's arbitrary
+    # transparent margin to the trim instead of the subject.
+    a = ARCHETYPES["burning_cartouche"]
+
+
+# -- Archetype Thirteen: the single-saturation rule (§15.31) ------------------
+
+def test_sable_regalia_mono_line_is_a_total_desaturation():
+    """Rule 1. The whole template is a stacking order, and this is the layer
+    the order is about: at anything softer than -1.0 a red-lit generation
+    stays faintly red under the type, and the foil stops reading as foil."""
+    a = ARCHETYPES["sable_regalia"]
+    mono = next(adj for adj in a.adjust if adj.id == "mono_line")
+    assert mono.op == "grade"
+    assert mono.saturation == -1.0
+    # ...and it is a FULL-FRAME grade: a mask would let a plate through.
+    assert mono.mask is None
+    assert mono.opacity == 1.0
+
+
+def test_sable_regalia_every_mount_plate_is_below_the_mono_line():
+    """The rule stated as an ordering assertion rather than as prose. Ground,
+    ornament, glow, far tier, both arms and the crest are monochrome by
+    construction; the two chroma plates and all four text slots are not."""
+    a = ARCHETYPES["sable_regalia"]
+    cut = a.layers.index("mono_line")
+    below = set(a.layers[:cut])
+    above = set(a.layers[cut + 1:])
+    for slot in ("field", "damask", "halo", "fan", "crown_left",
+                 "crown_right", "crest"):
+        assert slot in below, f"{slot} must be desaturated by mono_line"
+    for slot in ("seeds_back", "seeds_front", "brambles",
+                 "title", "subtitle", "author", "series"):
+        assert slot in above, f"{slot} carries chroma and must clear mono_line"
+
+
+def test_sable_regalia_chroma_is_one_object_seen_at_two_depths():
+    """`seeds_back` and `seeds_front` are the cover's entire colour budget
+    besides the type, and the casting note tells the director to give them the
+    same noun — so they must be the only two non-mount generatable plates
+    above the line, and one of them must be in front of the title."""
+    a = ARCHETYPES["sable_regalia"]
+    assert a.layers.index("seeds_front") > a.layers.index("title")
+    assert a.layers.index("seeds_back") < a.layers.index("title")
+
+
+def test_sable_regalia_mounted_masses_dissolve_their_feet():
+    """Rule 2, the §15.23 exception. Nothing here stands on anything, so the
+    two plates that would otherwise end in a flat hem inside the frame carry
+    an INVERTED linear gradient mask instead of a cut edge."""
+    a = ARCHETYPES["sable_regalia"]
+    by_id = {s.id: s for s in a.art}
+    for sid in ("crest", "fan"):
+        slot = by_id[sid]
+        assert slot.mask is not None and slot.mask.gradient is not None, sid
+        assert slot.mask.invert, f"{sid}'s foot fade must run opaque->clear"
+        assert slot.mask.gradient.kind == "linear"
+        assert not slot.cut_edge, (
+            f"{sid} dissolves its foot; a cut edge is the other answer")
+
+
+def test_sable_regalia_places_every_contain_slot_by_its_ink():
+    # Archetype Six's rule 0 (§15.25), inherited: a contain-fit slot here is
+    # anchored on either a severed edge or the centre axis, and the frame
+    # measurement can honour neither.
+    a = ARCHETYPES["sable_regalia"]
+    contain = [s for s in a.art if s.fit == "contain"]
+    assert contain
+    assert all(s.place_by == "ink" for s in contain), [
+        s.id for s in contain if s.place_by != "ink"]
+
+
+def test_burning_cartouche_border_is_two_trim_pinned_columns_not_a_ring():
+    """§24.1. The border was ONE cover-fit plate asked for "a ring with a large
+    empty hole through the centre"; the generator filled the hole twice, the
+    second time while honouring every other clause in the frame, and buried the
+    field, the floor, the chain and the title's ground under one reef texture.
+
+    A plate pinned to a side trim cannot fill the middle whatever comes back,
+    so the hole is geometry now instead of a request. Guard the geometry: two
+    columns, opposite trims, both cut on the edge they are anchored to."""
+    by_id = {s.id: s for s in ARCHETYPES["burning_cartouche"].art}
+    assert "bower" not in by_id, "the full-frame ring is the bug, not the design"
+    left, right = by_id["bower_left"], by_id["bower_right"]
+    assert (left.cut_edge, left.anchor[0]) == ("left", 0.0)
+    assert (right.cut_edge, right.anchor[0]) == ("right", 1.0)
+    # ...and the surplus width leaves through the trim (§24.2's visible-width
+    # law): the offset pushes OUT, it does not pull the column inboard.
+    assert left.offset[0] < 0 and right.offset[0] > 0
+    # Rule 1: the organic half is asymmetric BY KIND as well as by placement.
+    assert left.scale != right.scale
+    assert left.anchor[1] != right.anchor[1]
+
+
+def test_burning_cartouche_metal_is_symmetric_and_the_organic_is_not():
+    """Rule 1, the whole design. `filigree` is one ornament kaleidoscoped into
+    four byte-identical corners; nothing organic may wear `corners`."""
+    by_id = {s.id: s for s in ARCHETYPES["burning_cartouche"].art}
+    assert by_id["filigree"].corners
+    assert by_id["filigree"].corners_flip_vertical, (
+        "a rocaille scroll is top/bottom symmetric and wants the full mirror")
+    for sid in ("bower_left", "bower_right", "bough", "floor"):
+        assert not by_id[sid].corners, f"{sid} is the irregular half of rule 1"
+
+
+def test_burning_cartouche_blaze_is_the_whole_occlusion_budget():
+    """Rule 6. Exactly one plate is drawn after the title, it is on `screen`
+    (which can only ADD light, so it glows over the byline instead of eating
+    it), and §24.1's gradient mask fades its top out whatever shape the
+    generator returns."""
+    a = ARCHETYPES["burning_cartouche"]
+    after_title = a.layers[a.layers.index("title") + 1:]
+    art_ids = {s.id for s in a.art}
+    crossing = [ref for ref in after_title if ref in art_ids]
+    assert crossing == ["blaze"], crossing
+    blaze = {s.id: s for s in a.art}["blaze"]
+    assert blaze.blend == "screen"
+    assert blaze.mask is not None and blaze.mask.gradient is not None
+
+
+def test_burning_cartouche_hides_the_chains_cut_behind_the_relic():
+    """§24.3. `pendant`'s severed end leaves through no trim — the relic's own
+    body covers it — which only works if the chain is drawn FIRST. This
+    ordering looks wrong in the layers list and is right on the page, so it
+    gets a guard rather than a comment."""
+    layers = ARCHETYPES["burning_cartouche"].layers
+    assert layers.index("pendant") < layers.index("relic")
+
+
+def test_burning_cartouche_puts_nothing_but_the_relic_on_the_altar():
+    """Rule 3. An earlier draft carried a `strewn` slot — loose fragments of
+    the border material come to rest around the relic's foot — and it was cut
+    on owner note, for the same reason romantasy_enclosure's cabinet of
+    curiosities and crossed_relics' second scatter were cut: made of the same
+    stuff as the border, the fragments read as the border leaking into the
+    middle, which is the one place this template defends. Every tuning it
+    needed was a rule invented to stop it doing damage.
+
+    The floor between the relic and the type is meant to be EMPTY, so guard
+    the emptiness rather than trusting the comment."""
+    a = ARCHETYPES["burning_cartouche"]
+    assert "strewn" not in {s.id for s in a.art}
+    # What is left on the centre axis below the border tier: the chain and the
+    # relic, and nothing else.
+    between = a.layers[a.layers.index("finial") + 1:a.layers.index("scrim:3")]
+    assert between == ["pendant", "relic"], between
+    # The relic rests rather than grows, hangs or spans, so it may not be
+    # trim-cut (§15.25).
+    assert {s.id: s for s in a.art}["relic"].keep_whole
+
+
+def test_burning_cartouche_grounds_its_type_before_drawing_it():
+    """§24.4. `foot_wash` sat AFTER the title for four tunings. That was
+    harmless while its ramp started below the type and became the whole problem
+    the moment the ramp was moved up to darken the title's ground: a wash over
+    the type is a VEIL, and it dims the ink in exact proportion to how much it
+    was supposed to be helping. The render read as a title fading out down a
+    ramp — an ink fault it was not, so three successive tunings of the ink moved
+    it essentially not at all. Fixing the order alone took title contrast from
+    4.58 to 15.02.
+
+    A wash is a ground only if it is drawn first."""
+    a = ARCHETYPES["burning_cartouche"]
+    wash = a.layers.index("foot_wash")
+    for slot in ("subtitle", "title", "author"):
+        assert wash < a.layers.index(slot), (
+            f"foot_wash is drawn after {slot!r}, which veils it rather than "
+            f"grounding it")
+    # `series` is the exception and deliberately so: it lives in the crest's
+    # medallion at the very top, nowhere near this wash's ramp.
+    assert wash > a.layers.index("series")
+
+
+def test_burning_cartouche_title_is_a_three_line_stack_in_a_tall_zone():
+    """The uniform fit sizes every line to whatever the LONGEST line can carry,
+    so the extra break is what buys the size: three lines throttled by
+    "DROWNING" instead of two throttled by "DROWNING BELL", +27% on the fitted
+    size. The tall zone is half of that decision — without the height the fit
+    just re-throttles on the zone instead of the measure."""
+    title = {t.id: t for t in ARCHETYPES["burning_cartouche"].text}["title"]
+    assert title.max_lines >= 3
+    assert title.zone.h >= 0.20
+    # justify_stack was tried and is the trap here (§15.24's known gap): it
+    # shrinks the block to the zone height and clamps short lines at size_max,
+    # which returned a two-line title at 0.047 — smaller than the uniform fit's
+    # 0.063 — under a giant "THE".
+    assert title.fit_mode == "uniform"
+
+
+def test_burning_cartouche_relic_is_loud_by_light_not_by_edge():
+    """Rule 3, restated. Against a border of hundreds of small crisp objects a
+    hard-edged, hard-lit focal plate is just one more hard thing; the relic
+    wins by being the soft, lit, simple mass. The prompt says so and
+    `relic_soften` backs it up in the engine, so the read does not depend on
+    one generation coming back tender."""
+    a = ARCHETYPES["burning_cartouche"]
+    soften = {j.id: j for j in a.adjust}["relic_soften"]
+    assert soften.op == "blur"
+    assert soften.mask is not None and soften.mask.from_layer == "relic"
+    assert a.layers.index("relic") < a.layers.index("relic_soften")
+    frame = {s.id: s for s in a.art}["relic"].prompt_frame
+    assert "soft" in frame.lower() and "no hard specular" in frame.lower()
+
+
+def test_sable_regalia_discrete_objects_stay_whole_and_arms_overshoot():
+    a = ARCHETYPES["sable_regalia"]
+    by_id = {s.id: s for s in a.art}
+    for sid in ("crest", "seeds_front"):
+        assert by_id[sid].keep_whole, f"{sid} is one or more whole objects"
+    for sid in ("crown_left", "crown_right", "brambles"):
+        assert not by_id[sid].keep_whole
+        assert by_id[sid].cut_edge, f"{sid} has a severed end to carry off"
+
+
+def test_sable_regalia_arms_are_a_near_symmetry_not_a_mirror():
+    """Rule 3. Two identical halves are a logo; the eye must read balance
+    while the measurement reads difference."""
+    a = ARCHETYPES["sable_regalia"]
+    by_id = {s.id: s for s in a.art}
+    left, right = by_id["crown_left"], by_id["crown_right"]
+    assert a.axis == "center"
+    assert left.anchor[1] != right.anchor[1]
+    assert left.scale != right.scale
+    assert left.prompt_frame != right.prompt_frame
+
+
+def test_sable_regalia_title_is_a_built_foil_stamp():
+    """Rule 5: flat ink is not foil. The metallic ramp and the bevel are the
+    two effects that cannot be dropped without the type going to plain ink,
+    and the ramp stops short of opaque so the autopilot's flip keeps a say."""
+    a = ARCHETYPES["sable_regalia"]
+    title = next(t for t in a.text if t.id == "title")
+    kinds = [e.kind for e in title.effects]
+    assert "gradient_overlay" in kinds and "bevel" in kinds
+    ramp = next(e for e in title.effects if e.kind == "gradient_overlay")
+    assert ramp.stops == ["accent", "primary"], "foil body -> foil highlight"
+    assert ramp.opacity < 1.0
+    # Rule 6: the justified stack is the emphasis, so a short last line runs
+    # enormous — unreachable under the uniform fit.
+    assert title.fit_mode == "justify_stack"
+
+
+def test_sable_regalia_author_wears_the_display_face_and_the_same_foil():
+    """The one shelf convention `font_role` was added for: the author's name
+    is a second wordmark, not a credit block."""
+    a = ARCHETYPES["sable_regalia"]
+    author = next(t for t in a.text if t.id == "author")
+    title = next(t for t in a.text if t.id == "title")
+    assert author.font_role == "title"
+    a_ramp = next(e for e in author.effects if e.kind == "gradient_overlay")
+    t_ramp = next(e for e in title.effects if e.kind == "gradient_overlay")
+    assert a_ramp.stops == t_ramp.stops
+    assert a_ramp.opacity < t_ramp.opacity, "visibly the quieter stamp"
+
+
+def test_sable_regalia_keeps_its_occlusion_budget_to_two_plates():
+    """Half romantasy_vignette's, on purpose: this title is the largest
+    object on the cover and its job is to be a wordmark."""
+    a = ARCHETYPES["sable_regalia"]
+    art_ids = {s.id for s in a.art}
+    after_title = [n for n in a.layers[a.layers.index("title") + 1:]
+                   if n in art_ids]
+    assert after_title == ["brambles", "seeds_front"]
+    for sid in after_title:
+        slot = next(s for s in a.art if s.id == sid)
+        assert any(e.kind == "drop_shadow" for e in slot.effects), (
+            f"{sid} crosses the type; without a shadow onto the letterforms "
+            f"it reads as a sticker")
+
+
+def test_sable_regalia_all_over_ornament_degrades_to_a_shelf_plate():
+    """Rule 4: the unbroken patterned field is the cheapest layer on the
+    cover and the one it can least afford to lose, so it carries a $0
+    fallback and lifts out of the black by screening rather than by paint."""
+    a = ARCHETYPES["sable_regalia"]
+    damask = next(s for s in a.art if s.id == "damask")
+    assert damask.fit == "cover" and damask.blend == "screen"
+    assert damask.texture_file in TEXTURES
+    assert damask.opacity < 0.4, "tone-on-tone, not a foreground pattern"
