@@ -13,7 +13,8 @@ from pathlib import Path
 
 from lxml import etree
 
-from ..ingest import IngestError, OLE_MAGIC, REVISION_TAGS, ZIP_MAGIC
+from ..ingest import (IngestError, OLE_MAGIC, ZIP_MAGIC, accept_all_revisions,
+                      find_revisions)
 from ..utils.xml_helpers import (DocxPackage, RPR_TAG, TEXTBOX_LOCATION,
                                  iter_text_elements, paragraph_text, qn,
                                  walk_package)
@@ -53,12 +54,18 @@ _ANCHOR = qn("w:anchor")
 def preflight(path: str | Path) -> DocxPackage:
     """Open a manuscript, or refuse it with a sentence the author can act on.
 
-    Unlike review, prep has no tracked-changes policy: a document with
-    revisions in it is refused, full stop. Prep rewrites paragraph styles and
-    removes blank lines wholesale, and doing that around someone else's
-    unresolved edits would either bury their changes or nest revisions inside
-    revisions. Accepting or rejecting them first is a decision for the person
-    who made them, not for us."""
+    A document that still has tracked changes in it is taken as its accepted
+    view: every pending insertion kept, every deletion dropped, every deleted
+    paragraph mark joined — what the author sees with "Accept All". Prep
+    rewrites paragraph styles and removes blank lines wholesale, and doing that
+    around unresolved revisions would nest revisions inside revisions, so they
+    are resolved first and the notes say so. Formatting is the last step
+    before layout; by then the edits have been decided, and a file that arrives
+    with them still showing is one somebody forgot to clean, not one that
+    needs a second opinion.
+
+    `pkg.accepted_revisions` records what was resolved, per part, so the
+    structure (and the notes) can carry it."""
     path = Path(path)
     if not path.exists():
         raise IngestError(f"File not found: {path}")
@@ -93,20 +100,14 @@ def preflight(path: str | Path) -> DocxPackage:
             raise IngestError(
                 f"{path.name} is missing {required}; not a valid .docx.")
 
-    tracked = _tracked_parts(pkg)
-    if tracked:
-        raise IngestError(
-            f"{path.name} still has tracked changes in it ({', '.join(tracked)}). "
-            f"Accept or reject them in Word first — prep restyles every "
-            f"paragraph and removes blank lines, and it will not do that on top "
-            f"of edits nobody has decided about yet.")
+    found = find_revisions(pkg)
+    accepted = accept_all_revisions(pkg, found) if found else {}
+    pkg.accepted_revisions = accepted
+    if accepted:
+        log.info("%s arrived with tracked changes; accepted all of them "
+                 "(%s) before formatting.", path.name,
+                 ", ".join(f"{n} in {part}" for part, n in sorted(accepted.items())))
     return pkg
-
-
-def _tracked_parts(pkg: DocxPackage) -> list[str]:
-    parts = list(dict.fromkeys(wp.part for wp in walk_package(pkg)))
-    return sorted(part for part in parts
-                  if any(el.tag in REVISION_TAGS for el in pkg.tree(part).iter()))
 
 
 def build_structure(pkg: DocxPackage) -> Structure:
@@ -151,7 +152,9 @@ def build_structure(pkg: DocxPackage) -> Structure:
              "outside the body.", len(paragraphs), blanks, pkg.path.name,
              len(untouched))
     return Structure(source_path=str(pkg.path), paragraphs=tuple(paragraphs),
-                     untouched=tuple(untouched))
+                     untouched=tuple(untouched),
+                     accepted_revisions=tuple(
+                         sorted(getattr(pkg, "accepted_revisions", {}).items())))
 
 
 def _is_toc(p: etree._Element, style: str) -> bool:

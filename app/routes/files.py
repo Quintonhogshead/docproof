@@ -138,12 +138,15 @@ def register(app: FastAPI) -> None:
             "input_tokens": prepared.est_document_tokens,
             "output_tokens": prepared.est_output_tokens,
             "style_sheet": prepared.sheet.name,
+            # Tracked changes the file arrived with; prep formats the accepted
+            # view, and the card says so rather than letting it pass silently.
+            "accepted_revisions": sum(n for _, n in structure.accepted_revisions),
         }, None
 
     def _promo_preflight(cfg, paths: Paths,
                          path: Path) -> tuple[dict | None, str | None]:
-        # Promo only reads, so it opens what prep would turn away (a manuscript
-        # with tracked changes in it, say). We render the same prompt the run
+        # Promo only reads, so it opens what review would turn away (a
+        # manuscript with tracked changes in it, say). We render the same prompt the run
         # will, so the token figure behind the cost estimate is the real one, not
         # a word-count guess. `allow_oversize=True` is not the run override — it
         # only stops a book too big for one pass from becoming a drop-time error:
