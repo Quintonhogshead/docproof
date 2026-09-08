@@ -34,6 +34,10 @@ from docproof.pipeline import (JobCancelled, content_hash, finish, prepare,
                                read_meaning_held, run_sync)
 from docproof.models import CoverageLedger, Usage
 from docproof.prep.convert import ConversionError
+
+# `Job.error_kind` for a prep job whose file was turned away at the door — a
+# deterministic refusal the watcher must not spend retries on.
+REFUSED = "refused"
 from docproof.prep.styles import StyleSheetError
 from docproof.prep.verify import VerificationFailed
 from docproof.promo import PromoError, PromoTooLarge
@@ -326,6 +330,9 @@ class Job:
     # beyond the message string. Currently "oversize" for a promo book past the
     # single-pass limit, so the watcher can email a person about that case
     # specifically. "" on success and on ordinary failures.
+    # "" for an ordinary failure; "oversize" (promo/plan: the book is too big
+    # for one pass); REFUSED (prep: the file itself was turned away — a legacy
+    # .doc, a corrupt zip, a revision nobody can resolve — so no retry helps).
     error_kind: str = ""
     # Intake source used to reconcile spending across the app and watcher.
     source: str = "app"                # app | watch
@@ -1543,8 +1550,16 @@ class JobRunner:
             prepared = preplib.prepare(
                 cfg, job.source_path, config_dir=self.config_path.parent,
                 override_dir=self.store.paths.prep)
-        except (ProviderError, IngestError, StyleSheetError, ConversionError,
-                FileNotFoundError, ValueError) as e:
+        except (IngestError, ConversionError) as e:
+            # A fact about the file — a legacy .doc, a corrupt zip, a revision
+            # kind nobody can resolve — that no retry will change. Recorded as
+            # such so the watcher marks it at once instead of trying it on
+            # three separate nights first.
+            self.store.update_if(job_id, expect=job.state, state="failed",
+                                 error=str(e), error_kind=REFUSED)
+            return
+        except (ProviderError, StyleSheetError, FileNotFoundError,
+                ValueError) as e:
             self.store.update_if(job_id, expect=job.state, state="failed",
                                  error=str(e))
             return
