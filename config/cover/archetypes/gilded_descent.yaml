@@ -1,0 +1,574 @@
+# =============================================================================
+# ARCHETYPE EIGHT — gilded_descent
+# =============================================================================
+#
+# Reference DNA: the ornamented-border romantasy hardcover. Not a subject
+# lying on a ground (crossed_relics, pale_reliquary), not a figure inside a
+# wreath of severed growth (romantasy_vignette) — a figure SUSPENDED IN A
+# MEDIUM, lit from one end, with a metalwork ring closing all four edges of
+# the cover. Kalie Cassidy's IN THE VEINS OF THE DROWNING is the canonical
+# shelf example; the Orbit/Del Rey ornamented-frame fantasy shelf is full of
+# it.
+#
+# The composition is a WINDOW, not a stage. Something dark hangs in the middle
+# of something luminous, and the reader is looking at it through a cast-metal
+# opening. At thumbnail size the whole design must read as ONE BRIGHT COLUMN
+# INSIDE A DARK METAL RING, WITH A DARK SHAPE FALLING THROUGH IT — everything
+# below exists to protect that read.
+#
+# Written to be ONE-SHOT, like romantasy_organic and romantasy_vignette: the
+# art direction chooses SEVEN NOUNS, five hexes, two fonts and the words.
+# Placement, scale, cut edges, effects, adjust layers, scrims, occlusion
+# budget and layer order are decided here, once.
+#
+# -----------------------------------------------------------------------------
+# THE SIX RULES THIS TEMPLATE ENCODES
+# -----------------------------------------------------------------------------
+#
+# 1. THE FIGURE IS UNSUPPORTED, AND THE MEDIUM IS WHAT IT COSTS.
+#    §15.23's cardinal rule — a standing figure must look like it is standing
+#    on something — is not repealed here, it is PAID FOR. This template's
+#    figure is not standing, so it owes no floor; what it owes instead is a
+#    SUBSTANCE to hang in. `medium` is therefore a real, generated, full-frame
+#    plate with its own striations, depth haze and falloff, and `streaks` and
+#    `drift` put moving matter in it at two scales. A suspended figure over a
+#    flat colour field is a cutout on a swatch, which is the exact failure
+#    §15.23 was written about wearing different clothes. Hence also
+#    `keep_whole: true` on `subject`: a body that grows out of nothing has no
+#    severed end for the trim to carry off, and a limb sliced by the trim
+#    reads as amputated rather than as continuing past the page.
+#
+# 2. THE IDENTITY IS WITHHELD BY VALUE. romantasy_vignette withholds it by
+#    turning the figure away; this template withholds it by BACKLIGHTING —
+#    the figure is a near-solid dark shape with a trace of interior detail,
+#    and the silhouette carries everything. That has a consequence the prompt
+#    frame states outright: the outline must be broad, open and nameable at
+#    100px. Limbs tucked against the body make a blob, and a blob at
+#    thumbnail is this template's one unrecoverable failure. It also means
+#    the figure IS the title's contrast bed — see rule 6.
+#
+# 3. ONE LIGHT SOURCE, AND IT IS IN THE PICTURE. `corona` is the only bright
+#    thing on the cover besides the type, it enters through ONE edge, and it
+#    sits at the FAR END of the figure so light and body share one axis. Two
+#    light sources on a submerged cover is weather, not drama.
+#
+# 4. THE RING IS AN OBJECT, NOT A BORDER — and this is a PROMPTING rule
+#    before it is a design one. `imaging.NEGATIVE_SUFFIX` ends every prompt
+#    this engine sends with "no borders, no frames", and `CUTOUT_SUFFIX` adds
+#    "one single isolated subject only". Ask for an ornamental border and you
+#    are asking two fixed suffixes to lose an argument. So the slot asks for a
+#    frame-shaped THING instead: a gate grille, a reliquary casing, a mirror
+#    surround, a window tracery, a cast fence panel — one object, hammered by
+#    somebody, whose own construction leaves a hole through the middle. That
+#    is §15.21 rule 2 ("change the reproduction medium, not the palette")
+#    arriving at a third door, and it is why this is ONE plate rather than
+#    four edge strips: four strips dodge the suffix too, but nothing makes
+#    their corners meet.
+#
+# 5. SOMETHING ALIVE LIVES IN THE METALWORK. The reference's ring is scroll
+#    and leaf with serpents woven through it, and the serpents are the entire
+#    difference between ornament and clip art. They are prompted INTO the
+#    `border` plate so they emerge from the same ink, and `emblem` then puts
+#    ONE larger specimen on ONE side, off-centre, breaking the ring's
+#    symmetry. A ring symmetric on both axes is a medal.
+#
+# 6. THREE VALUE BANDS, AND A PALETTE CONTRACT THAT IS MEASURED.
+#    dark ring / luminous medium / near-black figure, with white type over
+#    the last two. That third band is the constraint: the title is wide and
+#    tall and WILL cross both the figure and the open medium beside it, which
+#    is precisely the worst-region measurement romantasy_vignette solved by
+#    narrowing its title zone. This template cannot narrow it — a four-line
+#    justified stack is the shelf convention — so it constrains the PALETTE
+#    instead: `primary` (the medium's brightest core) must stay dark enough
+#    that near-white type holds on it, ~50 L* or below. Take `primary`
+#    brighter and no scrim, ink flip or zone nudge will save the title; the
+#    autopilot will paint a panel over the window instead, and the window is
+#    the design.
+#
+# -----------------------------------------------------------------------------
+# ROLES, NOT NOUNS
+# -----------------------------------------------------------------------------
+#
+#   medium     the substance the whole cover is submerged in
+#   weave      the cloth tooth over everything (procedural)
+#   keylight   the medium's own brightening around the light (procedural)
+#   streaks    long thin matter, all running ONE way
+#   corona     the single light, entering through one edge and branching
+#   subject    THE SUSPENDED BODY — whole, unsupported, backlit to a shape
+#   drift      small round matter, many sizes, many depths
+#   border     THE RING — one frame-shaped metal object, edge to edge
+#   emblem     ONE larger living thing in the same metal, on ONE side
+#
+# EVERY FRAME BELOW IS WRITTEN IN GEOMETRY, NOT IN NOUNS, and must stay that
+# way — the lesson romantasy_vignette paid for. A slot asks for LONG THIN
+# MATTER ALL RUNNING ONE WAY, or A FRAME-SHAPED OBJECT MADE IN ONE METAL, or
+# SMALL ROUND MATTER AT MANY DEPTHS. What those things ARE is the art
+# direction's only say. Two books built from this template share no noun:
+#
+#   deep salt water / falling rain-lines / a breaking crown of white lightning
+#   / a drowned woman in a black gown / rising bubbles / a gilded serpent
+#   grille / one crowned eel
+#
+#   hot ochre kiln-dust / rising chaff and sparks / a blown breach of
+#   white-gold furnace light / a pilgrim rising in a torn coat / pale moths /
+#   a wrought-iron thorn grille with locusts in it / one great locust
+#
+# -----------------------------------------------------------------------------
+# THE OCCLUSION BUDGET
+# -----------------------------------------------------------------------------
+# TWO plates are drawn after the title: `border` and `emblem`. That is the
+# whole budget, and it is small on purpose. The ring's ink lives outside
+# x∈[0.13, 0.87] where the title never goes, so its crossings are the inner
+# tendrils only — three or four glyph-edges' worth, which is the sandwich.
+# `emblem` is the one that can overreach: it is pinned to a side trim at 20%
+# scale for exactly that reason. If either gets demoted below the title the
+# sandwich is silently cancelled and the ring goes flat — check `occlusion`
+# in the render report, not the render.
+# =============================================================================
+name: gilded_descent
+genres: [fantasy, romance, horror, historical]
+axis: center
+recipe: dark_academia
+recipe_strength: 0.25          # the ring and `depth_close` already shut the
+                                # corners; full strength shuts them twice and
+                                # cooks nine separately-lit plates to sepia
+describe: >-
+  One whole figure suspended in mid-air inside a luminous medium — falling,
+  sinking or rising, touching nothing — lit from a single branching burst at
+  one end of it and backlit to a near-solid dark shape, with a huge white
+  high-contrast display title justified down the middle across it, and a cast
+  metalwork ring with something alive woven through it closing all four edges
+  in front. Endorsement block top left, author's name in the display face at
+  the foot, over the metal.
+casting: >-
+  Cast seven nouns out of the book itself, in this order — each one
+  constrains the next.
+
+
+  medium — WHAT THE BOOK IS DROWNING IN. A substance, not a place: water,
+  smoke, ash, kiln-dust, snowfall, incense, floodlight, static, the dark
+  between stars. It has to be a thing that can be dense in the corners and
+  clear in the middle, and it sets the cover's whole colour. If the honest
+  answer is a room or a landscape, this is the wrong template.
+
+
+  corona — THE ONE LIGHT, and it should be the thing the plot turns on rather
+  than a light bulb: the breach, the surface, the wound, the furnace, the
+  spell, the star. It branches, so favour whatever forks — lightning, roots,
+  cracks, veins, antlers, a splash.
+
+
+  subject — WHO IS SUSPENDED, at full length, whole. Read the book for what
+  they are WEARING or MADE OF, because backlit that is all the reader gets:
+  a gown, a coat, wings, a diving rig, rags, armour, a shroud, feathers. Then
+  say which way they are going — falling, sinking, rising, blown — because
+  that decides which way the streaks run and which end the light is at.
+
+
+  streaks and drift — THE MEDIUM IN MOTION, at two scales. Long thin matter
+  running one way (rain, chaff, sparks, snow, silt) and small round matter at
+  many depths (bubbles, moths, seeds, embers, spores). They must be different
+  KINDS of thing, not one thing at two sizes.
+
+
+  border — THE RING, named as a frame-shaped OBJECT and never as a border:
+  a gate grille, a reliquary casing, a mirror surround, a rood screen, a
+  window tracery, a cast fence panel, an embroidered sampler edge. Choose the
+  metal (or the material) from the book's own world, and choose it to OPPOSE
+  the medium's temperature — warm metal in a cold medium, cold metal in a
+  warm one.
+
+
+  emblem — THE LIVING THING IN THE METALWORK, one specimen, larger. Serpents,
+  eels, hounds, moths, locusts, crows, hands. It is prompted into the border
+  as well, so name it once and use it twice.
+composition_note: >-
+  Painted as a rich photoreal fantasy book-cover illustration on woven cloth,
+  lit by one cold source at a single edge with a deep falloff into near-black
+  — heavy shadow, restrained specular highlights, full value range, low
+  overall saturation. No scene, no horizon, no sky, no landscape, no
+  buildings, no ground plane, no cast shadow on any surface.
+
+# =============================================================================
+art:
+# -- the medium ---------------------------------------------------------------
+  - id: medium
+    role: ground
+    generatable: true
+    procedural: gradient       # $0 fallback only; this slot is meant to be painted
+    fit: cover
+    prompt_frame: >-
+      A full-frame field of {subject} seen from inside it, and nothing else —
+      dense and nearly black in all four corners and down both long edges,
+      opening into one brighter, clearer column through the middle of the
+      frame, with fine drifting striations running through it and a soft
+      depth-of-field haze. Completely empty: no subject, no horizon, no
+      surface, no far edge.
+
+  - id: weave
+    # The cloth tooth the whole reference cover is printed on, and the one
+    # thing that stops nine separately generated plates reading as nine
+    # images. §15.21 default 4: this is a SLOT, low on the stack, not a
+    # finishing recipe's paper layer — the recipe's own grain sits above
+    # everything later and is doing a different job. Both are true here.
+    generatable: false
+    texture_file: canvas_weave
+    texture_fit: tile
+    blend: multiply
+    opacity: 0.22
+
+  - id: keylight
+    # The medium brightening around the light, before the ring and the
+    # recipe close the corners down. This is what makes `border` read as a
+    # ring rather than as a rectangle of ornament.
+    generatable: false
+    fit: cover
+    procedural: radial_glow
+    opacity: 0.68           # the window has to GLOW; at 0.34 the medium came
+    blend: screen            # back one flat mid-tone and the ring had nothing
+                             # to be a ring around
+
+# -- matter in the medium, behind the figure ----------------------------------
+  - id: streaks
+    role: directional_particles
+    # ONE whole plate, never `scatter` (romantasy_organic rule 3). Screen,
+    # and "on pure black", because these emit rather than occlude.
+    generatable: true
+    transparent: true
+    fit: cover
+    blend: screen
+    opacity: 0.62
+    prompt_frame: >-
+      A full-frame field of {subject}, drawn as long thin straight streaks
+      ALL RUNNING IN ONE DIRECTION across the frame at many different lengths
+      and many different degrees of focus — a few sharp and near, most faint
+      and far. Irregularly spaced, with large empty gaps. On pure black.
+
+  - id: corona
+    role: light_source
+    # Rule 3. Enters through the top edge and branches downward and outward,
+    # so the figure below it is lit from one end. `cut_edge: top` plus the
+    # negative offset carries its root off the trim: a burst that starts in
+    # mid-air has a beginning, and a light source with a beginning is a lamp.
+    generatable: true
+    transparent: true
+    fit: contain
+    cut_edge: top
+    anchor: [0.46, 0.00]
+    offset: [0.00, -0.04]
+    scale: 0.54
+    blend: screen
+    opacity: 0.95
+    prompt_frame: >-
+      One single burst of {subject} entering the frame from one edge and
+      branching outward from a single root into many fine tapering tendrils
+      that thin, split and fade as they spread. Brilliant and dense at the
+      root, dissolving to nothing at the tips. It is the brightest thing in
+      the picture and the only light in it.
+
+  - id: subject
+    role: focal_subject
+    # Rules 1 and 2. `place_by: ink` because scale here means THE BODY is 78%
+    # of the canvas, not the model's arbitrary transparent margin (§15.25);
+    # `keep_whole: true` because a suspended body has no severed end and the
+    # trim slicing a hand off reads as amputation, not as continuation. Drawn
+    # AFTER every plate behind it and BEFORE the title, which lands on it.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    keep_whole: true
+    anchor: [0.50, 0.46]
+    scale: 0.78
+    prompt_frame: >-
+      {subject}. ONE whole body at full length, seen slightly from below,
+      suspended in mid-air with nothing touching it and nothing at all
+      beneath it — not standing, not sitting, not leaning, not resting on
+      anything. Lit hard from behind so that it reads as a near-solid dark
+      shape with only a trace of interior detail: the OUTLINE carries
+      everything. The limbs are held well clear of the body and whatever
+      loose material is on it streams away in one direction, so the
+      silhouette is broad, open, and instantly nameable at the size of a
+      thumbnail. Framed loose, with empty air all the way around the whole
+      figure.
+    effects:
+      - {kind: outer_glow, blur: 0.030, alpha: 0.26}
+
+  - id: drift
+    role: particles
+    # The second scale of matter, and the only plate drawn between the figure
+    # and the type — a few near, out-of-focus specks in FRONT of the body is
+    # what puts the body inside the medium rather than pasted over it.
+    generatable: true
+    transparent: true
+    fit: cover
+    blend: screen
+    opacity: 0.20           # a generated "mostly tiny and far" scatter comes
+                             # back with three enormous near ones in it; at
+                             # 0.42 they read as a second subject
+    prompt_frame: >-
+      A full-frame scattering of {subject} suspended at many different sizes
+      and many different depths, a few large and sharp and near, most tiny
+      and soft and far out of focus, drifting well apart with large empty
+      gaps between them. No two alike. On pure black.
+
+# -- THE RING: drawn AFTER the title ------------------------------------------
+#
+# Rule 4 lives in the prompt frame below and rule 5 in its last sentence. The
+# drop shadow falling onto the letterforms IS the depth — without it the ring
+# is a sticker on the front of the cover.
+#
+  - id: border
+    role: ring
+    generatable: true
+    transparent: true
+    fit: cover
+    scale: 1.03                # its own artwork bleeds a little past the trim
+                                # rather than stopping short of it
+    prompt_frame: >-
+      THE MIDDLE OF THIS PICTURE IS EMPTY. The centre two thirds of the
+      image, both across and down, is nothing at all — no material, no
+      shadow, no haze, void. Around that emptiness, and only around it, runs
+      a NARROW RIM of {subject}: one single object, made all in one material
+      by one hand, hugging the four outside edges of the picture in a band no
+      wider than a sixth of the picture across. Photographed square-on. The
+      band is heaviest and most crowded down the two long sides and at the
+      four corners, and thins to almost nothing across the middle of the top
+      and the middle of the bottom, so the two halves answer each other
+      without matching. Living creatures are worked into the material itself,
+      emerging from it and disappearing back into it. Not a thicket, not a
+      mass, not a wall of it — a RIM around a hole, an OBJECT somebody cast,
+      forged and hammered, photographed on its own.
+    effects:
+      - {kind: drop_shadow, dy: 0.005, blur: 0.012, alpha: 0.58}
+
+  - id: emblem
+    role: asymmetry
+    # Rule 5's second half: ONE larger specimen, on ONE side, at one height,
+    # so the ring is not symmetric on both axes. Pinned hard to a side trim
+    # at 20% because this is the plate that can overreach into the title and
+    # get itself demoted, which silently cancels the sandwich.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: left
+    mirror: true               # turns the plate's cut to the right, so the
+                                # right trim can carry it off
+    anchor: [1.00, 0.305]
+    offset: [0.045, 0.00]
+    scale: 0.155
+    prompt_frame: >-
+      One single large {subject}, made of the same material as the metalwork
+      around it, seen from the side with its body curling and doubling back
+      on itself, cut short where it would join on to anything else.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.011, alpha: 0.55}
+
+# =============================================================================
+adjust:
+  - id: medium_grade
+    # A generated substance comes back as a bright, saturated PHOTOGRAPH of
+    # that substance. This sits on it before any art, so the whole cover is
+    # built on a quiet field and `corona` has somewhere to be the brightest
+    # thing. It is also half of rule 6's palette contract in practice: the
+    # medium as rendered is darker than the hex the direction chose.
+    op: grade
+    brightness: -0.16
+    saturation: -0.22
+    contrast: 0.14
+
+  - id: shade
+    # RULE 2's INSURANCE, and the exact twin of `gild` below: the figure's own
+    # pixels are pushed down and desaturated so the plate reads as a
+    # SILHOUETTE whatever the generator actually sent back. It is needed
+    # because the medium and the figure are lit by the same corona and a
+    # generated body therefore arrives at very nearly the medium's own value —
+    # a first build here had the pilgrim at 6.65 title contrast and visually
+    # dissolved into the dust; this took it to 7.46 and put the outline back.
+    # Masked to the figure and drawn before the corner close, so nothing else
+    # on the cover is touched.
+    op: grade
+    brightness: -0.30
+    contrast: 0.16
+    saturation: -0.26
+    mask: {from_layer: subject, feather: 0.004}
+
+  - id: depth_close
+    # The corners shut before the ring lands on them, so the metalwork sits
+    # on black rather than on the medium. Mild, because the recipe vignettes
+    # again at 0.25.
+    op: vignette
+    color: background
+    strength: 0.44
+
+  - id: gild
+    # Rule 6's first band, guaranteed rather than hoped for: the ring's own
+    # pixels are pushed warm and saturated against a cold field (or cold
+    # against a warm one — the grade follows the metal the direction chose,
+    # the SEPARATION is what is fixed). Masked to the ring, feathered just
+    # enough to lose the 50%-threshold stencil edge. Drawn after `emblem` so
+    # it never touches the figure.
+    op: grade
+    temperature: 0.22
+    saturation: 0.18
+    contrast: 0.10
+    brightness: 0.04
+    mask: {from_layer: border, feather: 0.006}
+
+  - id: foot_wash
+    # A feathered black wash over the lower fifth so the credit line and the
+    # author's name have something quiet under them — the ring's bottom is
+    # the busiest place on the cover and the author's name is set across it.
+    op: color_wash
+    color: "#000000"
+    blend: normal
+    opacity: 0.46
+    mask:
+      gradient: {kind: linear, angle: 90.0, start: 0.74, end: 1.0}
+
+  - id: tonal_spine
+    # One shared colour spine under nine separately-lit plates.
+    op: gradient_map
+    stops: [background, primary, text]
+    opacity: 0.16
+    blend: soft_light
+
+  - id: core_bloom
+    # The light source and the type, and nothing else — threshold high
+    # enough that the medium's mid-tones stay out of it.
+    op: bloom
+    threshold: 0.82
+    radius: 0.024
+    strength: 0.40
+
+# =============================================================================
+scrims:
+  # All halo. A gradient_up/down scrim protecting anything not flush with a
+  # canvas edge paints a full-height slab with hard vertical sides
+  # (romantasy_organic rule 5). The title's starts near-inert per rule 6: if
+  # a render pushes it, the palette is wrong, not the type.
+  - {kind: halo, protects: title, strength: 0.10}
+  - {kind: halo, protects: author, strength: 0.20}
+  - {kind: halo, protects: subtitle, strength: 0.42}
+
+# =============================================================================
+text:
+  - id: subtitle
+    # THE ENDORSEMENT BLOCK — this shelf's signature, and the reason this
+    # slot is left-aligned and ragged in a template whose every other line is
+    # centred. It sits top left over the ring's upper corner, which is the
+    # busiest ground any type on this cover has, hence the strongest halo and
+    # its own shadow.
+    zone: {x: 0.135, y: 0.045, w: 0.335, h: 0.120}
+    case: as_is
+    align: left
+    valign: top
+    tracking: 4
+    max_lines: 4
+    optional: true
+    size_min: 0.012
+    size_max: 0.021
+    effects:
+      - {kind: drop_shadow, dy: 0.003, blur: 0.008, alpha: 0.80}
+
+  - id: title
+    # `justify_stack` is not decoration here, it IS the convention: the shelf
+    # sets a four-line title as an optically justified stack where the
+    # connective lines shrink and the nouns fill the measure. It also happens
+    # to be what makes a wide title survive rule 6 — a stack whose long lines
+    # reach the measure puts most of its ink on the figure, where the value
+    # opposition is strongest, and leaves only the short connective lines
+    # over the open medium.
+    #
+    # The zone is deliberately tall and deliberately WIDE, unlike
+    # romantasy_vignette's narrow band. That template kept its title inside
+    # one value regime; this one cannot and does not try. What holds the type
+    # is rule 6's palette contract plus the ink itself: a cold pale ramp
+    # (gradient_overlay accent -> text) over a tight contact shadow and a
+    # wide soft one.
+    zone: {x: 0.115, y: 0.205, w: 0.770, h: 0.515}
+    case: upper
+    align: center
+    valign: middle
+    tracking: 8
+    max_lines: 4
+    fit_mode: justify_stack
+    size_min: 0.038
+    size_max: 0.105
+    effects:
+      - {kind: drop_shadow, dy: 0.003, blur: 0.004, alpha: 0.70}
+      - {kind: drop_shadow, dy: 0.014, blur: 0.032, alpha: 0.44}
+      - {kind: gradient_overlay, stops: [accent, text], angle: 90.0, opacity: 0.92}
+
+  - id: series
+    # The credit / series line above the author's name.
+    zone: {x: 0.12, y: 0.845, w: 0.76, h: 0.026}
+    case: upper
+    tracking: 70
+    max_lines: 1
+    optional: true
+    size_min: 0.010
+    size_max: 0.016
+
+  - id: author
+    # UNLIKE romantasy_vignette, the author's name wears the DISPLAY face.
+    # That template gives the author a plain block as a counterweight to an
+    # ornamented title; this one has an ornamented RING doing that job all
+    # round the edge, and a second, unrelated typeface at the foot would be a
+    # third voice on a cover that already has two. The reference shelf sets
+    # the author in the title face at nearly full width across the ring's
+    # bottom, and that is what `font_role: title` here buys.
+    zone: {x: 0.085, y: 0.876, w: 0.830, h: 0.072}
+    font_role: title
+    case: upper
+    align: center
+    tracking: 38
+    max_lines: 1
+    size_min: 0.026
+    size_max: 0.060
+    effects:
+      - {kind: drop_shadow, dy: 0.004, blur: 0.010, alpha: 0.62}
+
+# =============================================================================
+# Z-ORDER, bottom first. The four that are easy to get wrong and fatal:
+# `streaks`/`drift` bracket the figure (one behind, one in front) so the body
+# is IN the medium; `subject` is drawn before the title, which needs it as a
+# contrast bed; `border` and `emblem` are drawn AFTER the title; and `gild`
+# comes after `emblem` so the grade lands only on metal.
+layers: [medium, medium_grade, weave, keylight,
+        streaks, corona, subject, drift, shade, depth_close,
+        "scrim:2", subtitle, "scrim:0", title,
+        border, emblem, gild,
+        foot_wash, "scrim:1", series, author,
+        tonal_spine, core_bloom]
+
+# =============================================================================
+# WHAT THE DIRECTOR STILL CHOOSES, AND NOTHING ELSE
+# =============================================================================
+#   * seven `{subject}` fills, one per generatable slot — `subject`'s is the
+#     long one (who, what they wear, which way they are going) and `border`'s
+#     is the tricky one (a frame-shaped OBJECT, plus the creature in it).
+#   * five palette hexes. `primary` is the medium's lit core and is CAPPED by
+#     rule 6 at roughly 50 L*; `accent` is the ring's metal and the title's
+#     dark stop, so take it from the metal and keep it at least 35 L* from
+#     `primary`; `text` is the title's light stop and the author's ink — take
+#     it near white, the finishing stack costs the type ~25% brightness.
+#   * title_font (a high-contrast display serif — the ring is ornament
+#     enough, so a blackletter or a script here is one flourish too many) and
+#     author_font, which on this template dresses only the endorsement block
+#     and the credit line and should be plain.
+#   * the endorsement, the credit line, the words.
+#
+# It does NOT choose placement, scale, blend, opacity, masks, adjust layers,
+# effects, scrim kinds, recipe strength, or layer order.
+#
+# HONEST SCOPE: the skeleton is "one whole unsupported body inside a luminous
+# medium, seen through a cast ring". It fits fantasy, romantasy, gothic and
+# horror, and it fits historical wherever the ring can be a real period
+# object. It does not fit a thriller (no ring), a memoir, or any book whose
+# cover should not have a figure on it. The riskiest plate is `border`: it is
+# arguing with two fixed prompt suffixes (rule 4) and it is the one that can
+# come back as four disconnected strips. The second riskiest is `subject`,
+# for the reason every figure cutout is — no template rule fixes a bad one,
+# repaint it.

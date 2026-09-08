@@ -1668,6 +1668,63 @@ would be a different decision than the archetype asked for.
 **Ask which kind of thing a plate holds before reaching for an overshooting
 anchor.** That question is now part of authoring a slot.
 
+### 15.26 The ring you cannot ask for — Archetype Eight (`gilded_descent`)
+
+Provenance: the ornamented-border romantasy hardcover (Kalie Cassidy, IN THE VEINS OF THE
+DROWNING), built as `gilded_descent` on 2026-09-01. Four things generalize past that one
+template.
+
+**1. A figure may be unsupported, but the medium is the price.** §15.23 is the cardinal rule —
+a standing figure must look like it is standing on something — and the shelf's whole
+suspended-figure convention appears to violate it. It does not: it *pays* for the exemption. A
+body that falls, sinks, rises or drifts owes no floor, and what it owes instead is a
+**substance** — a generated full-frame medium with its own striations, falloff and depth haze,
+plus matter moving through it at two scales (long thin one-way streaks, small round many-depth
+motes). Suspend a figure over a flat colour field and §15.23's failure returns wearing different
+clothes: a cutout on a swatch. The corollary is a `keep_whole: true` on the figure — §15.25's
+severed-end doctrine governs things that grow or hang, and a body in mid-air has no cut end for
+the trim to carry off, so a trimmed limb reads as amputation rather than continuation.
+
+**2. To get a border past a prompt suffix that forbids borders, ask for a frame-shaped OBJECT.**
+`imaging.NEGATIVE_SUFFIX` ends every prompt this engine sends with *"no borders, no frames"* and
+`CUTOUT_SUFFIX` adds *"one single isolated subject only"*. An archetype whose signature IS an
+edge-to-edge ornamental ring is therefore arguing with two fixed strings it cannot edit (this is
+§19.3's contradiction reaching a second door). The move that wins is not a louder adjective: ask
+for a **gate grille, reliquary casing, mirror surround, rood screen, window tracery, cast fence
+panel** — one hammered object whose own construction leaves a hole through the middle. That is
+§15.21 rule 2 ("change the reproduction medium, not the palette") generalized: *when a suffix
+forbids a category, name an instance instead.* One plate, not four edge strips — strips dodge
+the suffix too, but nothing makes their corners meet.
+
+**3. State the emptiness first, and quantify it.** The first `border` pull said "a tall standing
+object ... whose own construction leaves a large empty opening ... filling the picture from edge
+to edge" and came back a **solid thicket**: the emptiness was one clause among fifteen and
+"filling the picture edge to edge" was the sentence the generator obeyed. The rewrite opens
+`THE MIDDLE OF THIS PICTURE IS EMPTY. The centre two thirds, both across and down, is nothing at
+all`, then describes the ornament as a **rim no wider than a sixth of the picture**, and it came
+back correct first try. For any plate whose subject is a hole, the hole is the subject: say it
+in the first sentence, in fractions, and say what the thing is NOT (`not a thicket, not a mass,
+not a wall of it`). One $0.03 repaint, no template change.
+
+**4. A masked grade is how a template *guarantees* a value band it can only ask for.** Rule 2 of
+that template wants the figure read as a silhouette and rule 6 wants the ring read as metal —
+both are prompt requests, and a generator lit by the same corona returns a body at very nearly
+the medium's own value. Two adjust layers make them structural instead: `shade` (grade,
+`mask: {from_layer: subject}`, brightness −0.30 / saturation −0.26) and `gild` (grade,
+`mask: {from_layer: border}`, temperature +0.22 / saturation +0.18). Measured on the live build,
+`shade` alone took title contrast **6.65 → 7.46** and put the outline back. Each sits immediately
+after the layer it grades, so neither ever reaches the other's plate. Generalizes: wherever a
+template's rule is "plate X must be darker/warmer/flatter than everything else", a masked grade
+next to X is cheaper and more reliable than a better adjective.
+
+**A caution this template does NOT resolve.** Its title zone is deliberately wide and crosses
+both the figure and the open medium, which is exactly the worst-region measurement
+`romantasy_vignette` solved by *narrowing* its zone. A four-line justified stack is the shelf
+convention and cannot be narrowed, so the constraint moves to the palette: `primary` (the
+medium's lit core) is capped at roughly **50 L\*** so near-white type holds on it. Take `primary`
+brighter and no scrim, ink flip or zone nudge recovers the title — the autopilot paints a panel
+over the window instead, and the window is the design.
+
 ## 16. The director and the atelier (DECIDED 2026-08-31, owner) — how a cover is made now
 
 The old flow was: distil a manuscript *sample* into a grounding sheet, ask one call for N directions, then paint each concept and put it through a fixed critique loop. The new flow is two acts, and it is what the owner arrived at by building six Longsword covers by hand with six agents:
