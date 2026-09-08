@@ -7695,7 +7695,8 @@ function renderWatchFiles(files) {
 // only place a `needs_human` reason is visible outside the alert email.
 
 const PROOF_VERDICT_ROWS = 6;
-const PROOF_VERDICT_LABEL = { done: 'Clean', needs_human: 'Needs a human' };
+const PROOF_VERDICT_LABEL = { done: 'Clean', needs_human: 'Needs a human',
+  held: 'Held, untouched' };
 
 function applyProofRunnerHint() {
   const hint = $('proof-runner-hint');
@@ -7789,6 +7790,13 @@ function renderAgentReadout(w) {
     }
   } else if (a.state === 'starting') {
     bits.push('Just started; first poll pending');
+  } else if (a.state === 'halted') {
+    bits.push(`Halted · subscription token rejected · ${a.awaiting || 0} book(s) waiting`);
+    if (a.held_book) bits.push(`holding ${a.held_book} claimed and untouched`);
+    else if (a.last_book) {
+      const verdict = PROOF_VERDICT_LABEL[a.last_outcome] || a.last_outcome || '';
+      bits.push(`last: ${a.last_book}${verdict ? ' — ' + verdict : ''}`);
+    }
   } else {
     bits.push(a.awaiting ? `Idle · ${a.awaiting} book(s) awaiting`
                          : 'Idle · nothing awaiting');
@@ -7802,7 +7810,7 @@ function renderAgentReadout(w) {
   detail.textContent = bits.join(' · ');
   detail.hidden = !bits.length;
 
-  const problem = a.last_poll_error || a.last_error
+  const problem = a.last_poll_error || a.credentials_error || a.last_error
     || (a.state !== 'running' && a.last_outcome === 'needs_human' ? a.last_reason : '');
   if (problem) {
     error.textContent = problem;

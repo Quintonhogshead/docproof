@@ -131,6 +131,16 @@ _TURN_CAP_RE = re.compile(r"max(?:imum)?[ _-]?turns?\b|turn limit",
 #: The conventional exit code for "killed by a timeout".
 TIMEOUT_RC = 124
 
+# A session that never got past sign-in. Claude Code prints one of these and
+# exits non-zero on turn one when the subscription token has expired or been
+# revoked — a machine problem, not a book problem, so the driver must not
+# write a needs_human verdict for it.
+_CREDENTIALS_RE = re.compile(
+    r"Failed to authenticate|OAuth access token is invalid"
+    r"|OAuth token (?:has )?(?:expired|been revoked)|authentication_error"
+    r"|API Error: 401\b|Invalid API key|Not logged in|Please run /login",
+    re.IGNORECASE)
+
 # Quiet means <= 4 new items; disable the percentage threshold. Escalate if
 # three rounds remain noisy.
 SETTLE_ROUNDS = 3
@@ -148,6 +158,14 @@ log = logging.getLogger("galley.driver")
 
 class DriverError(RuntimeError):
     """Invalid driver configuration."""
+
+
+class CredentialsError(DriverError):
+    """The brain's session could not sign in: the subscription token behind
+    CLAUDE_CODE_OAUTH_TOKEN is expired, revoked or missing. The manuscript is
+    untouched and the run can resume from the same phase once the token is
+    replaced, so no verdict is written for the book.
+    """
 
 
 def _now() -> str:
@@ -601,7 +619,8 @@ class PhaseResult:
     returncode: int
     log_path: Path | None = None
     tail: str = ""
-    #: Which runaway cap ended this session, if either: "timeout" | "max_turns".
+    #: What ended this session early, if anything: "timeout" | "max_turns"
+    #: | "credentials" (never signed in — the token, not the book).
     limit: str | None = None
     # Structured CLI result, including subtype and turn count.
     subtype: str = ""
@@ -623,6 +642,11 @@ def transcript_tail(text: str) -> str:
                      if not ln.startswith(DRIVER_LINE_PREFIX)
                      and not ln.startswith("# TIMEOUT")
                      and not ln.startswith("# result:"))
+
+
+def detect_credential_failure(text: str) -> bool:
+    """Whether the session's output says it never signed in."""
+    return bool(_CREDENTIALS_RE.search(text or ""))
 
 
 def detect_turn_cap(text: str) -> bool:
@@ -659,6 +683,13 @@ def session_limit(result: dict[str, Any] | None, tail: str) -> str | None:
     """Detect max_turns from the structured result, falling back to the
     transcript when no result exists.
     """
+    if result is not None and result.get("is_error"):
+        blob = " ".join(str(result.get(k) or "")
+                        for k in ("result", "error", "message", "subtype"))
+        if detect_credential_failure(blob):
+            return "credentials"
+    if detect_credential_failure(tail):
+        return "credentials"
     if result is not None:
         subtype = str(result.get("subtype") or "")
         if subtype == RESULT_SUBTYPE_MAX_TURNS:
@@ -1492,6 +1523,18 @@ class Driver:
                     f"phase {phase} hit its turn cap of {spec.max_turns} "
                     f"(claude --max-turns) — last lines of "
                     f"{outcome.log_path}:\n{outcome.tail}")
+            if outcome.limit == "credentials":
+                # Not a verdict on the book: nothing ran, the ledger did not
+                # move, and the same phase resumes once the token is fixed.
+                self._write_ledger(result)
+                self._progress("credentials", phase=phase,
+                               tail=outcome.tail[-600:])
+                self.log(f"HALTED at {phase}: the brain could not sign in")
+                raise CredentialsError(
+                    f"phase {phase} could not sign in to Claude Code — the "
+                    f"subscription token (CLAUDE_CODE_OAUTH_TOKEN) is expired "
+                    f"or revoked; last lines of {outcome.log_path}:\n"
+                    f"{outcome.tail}")
             if not outcome.ok:
                 return self._stop(
                     result, phase,
@@ -1855,6 +1898,7 @@ __all__ = [
     "phase_prompt", "phases_for", "read_plan", "record_approval",
     "reply_after", "seed_workspace", "select_phases", "settle_flags",
     "spawn_claude", "tail_of", "SourceChanged", "workspace_slug",
+    "CredentialsError", "detect_credential_failure",
     "transcript_tail", "parse_session_result", "session_limit",
     "DRIVER_LINE_PREFIX", "RESULT_SUBTYPE_MAX_TURNS",
 ]

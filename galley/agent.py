@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from galley.driver import CredentialsError
+
 log = logging.getLogger("docproof.galley.agent")
 
 # Credentials file; group/other permissions are forbidden.
@@ -50,6 +52,16 @@ ALERT_TAGS = "[DocProof][Galley][Agent]"
 #: While a book runs, how often the drawer hears from the agent even when no
 #: phase boundary passes. 0 disables the timer (tests).
 DEFAULT_HEARTBEAT_S = 60.0
+#: How long the sign-in check may take before it counts as a failure.
+PREFLIGHT_TIMEOUT_S = 180.0
+#: What to do when the subscription token is rejected. One place, quoted by
+#: the alert, the heartbeat and the log.
+TOKEN_FIX_HINT = (
+    "Make a new token with `claude setup-token` on a Mac that is signed in, "
+    "then: on Fly, `fly secrets set -a atmosphere-docproof "
+    "GALLEY_OAUTH_TOKEN=<token>` (the agent machine restarts and resumes the "
+    "claimed book); on a Mac, replace CLAUDE_CODE_OAUTH_TOKEN in "
+    "~/.galley/agent.env (picked up at the next poll).")
 # Service PATH defaults include the CLI and common Homebrew locations.
 PATH = ("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:"
         + str(Path.home() / ".local" / "bin"))
@@ -148,6 +160,44 @@ def read_env(path: str | Path = DEFAULT_ENV_FILE, *,
             f"DOCPROOF_AGENT_TOKEN.")
     return AgentEnv(app_url=values[APP_URL_KEY], token=values[AGENT_TOKEN_KEY],
                     oauth_token=values[OAUTH_KEY], values=values, path=target)
+
+
+def check_credentials(values: dict[str, str], *, runner=subprocess.run,
+                      timeout_s: float = PREFLIGHT_TIMEOUT_S) -> str:
+    """Sign in once with the subscription token, cheaply, and return "" when
+    Claude Code answers — or the reason it did not.
+
+    One turn of a one-line prompt on the subscription: the cost of finding
+    out before a book is claimed, rather than after its profile phase has
+    been written off as needs_human.
+    """
+    from galley.driver import STRIPPED_KEYS, detect_credential_failure
+
+    env = dict(os.environ)
+    env.update({k: v for k, v in values.items() if v})
+    for key in STRIPPED_KEYS:             # the session signs in on the token
+        env.pop(key, None)
+    if not env.get(OAUTH_KEY):
+        return f"{OAUTH_KEY} is not set"
+    argv = ["claude", "-p", "Reply with exactly the word: ok",
+            "--max-turns", "1", "--output-format", "json"]
+    try:
+        proc = runner(argv, env=env, capture_output=True, text=True,
+                      timeout=timeout_s)
+    except FileNotFoundError:
+        return "the `claude` command is not installed on this machine"
+    except subprocess.TimeoutExpired:
+        return f"`claude -p` did not answer within {timeout_s:.0f}s"
+    output = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+    if detect_credential_failure(output):
+        line = next((ln.strip() for ln in output.splitlines()
+                     if detect_credential_failure(ln)), "")
+        return f"Claude Code refused the subscription token: {line[:300]}"
+    if proc.returncode != 0:
+        tail = "\n".join(output.strip().splitlines()[-5:])
+        return (f"`claude -p` exited {proc.returncode} before the token "
+                f"could be confirmed: {tail[:400]}")
+    return ""
 
 
 def apply_env(env: AgentEnv, *, environ: dict[str, str] | None = None) -> None:
@@ -364,11 +414,14 @@ class RunReport:
     reason: str = ""
     skipped: list[str] = field(default_factory=list)
     delivered: list[str] = field(default_factory=list)
+    #: Why no book was (or will be) claimed: the subscription token is
+    #: rejected. The claimed book, if any, stays claimed and resumes later.
+    halted: str = ""
 
     def to_json(self) -> dict[str, Any]:
         return {"looked_at": self.looked_at, "claimed": self.claimed,
                 "outcome": self.outcome, "reason": self.reason,
-                "skipped": list(self.skipped)}
+                "skipped": list(self.skipped), "halted": self.halted}
 
 
 @dataclass
@@ -396,8 +449,14 @@ class Agent:
     alert: Callable[[str, str], None] | None = None
     heartbeat_interval_s: float = DEFAULT_HEARTBEAT_S
     host: str = field(default_factory=socket.gethostname)
+    #: The sign-in check (`check_credentials`), run at boot and again before
+    #: claiming while the token is known to be bad. None skips it — the
+    #: driver still recognises a rejected token mid-run.
+    preflight: Callable[[dict[str, str]], str] | None = None
     _status: dict[str, Any] = field(default_factory=dict, repr=False)
     _poll_error: str = field(default="", repr=False)
+    #: The current credentials failure, or "" while the token works.
+    _halt: str = field(default="", repr=False)
     _file_id: str = field(default="", repr=False)
 
 
@@ -494,6 +553,18 @@ class Agent:
         # Retry pending delivery before starting another book.
         self.retry_deliveries(ledger, report)
 
+        if self._halt and not self._token_recovered():
+            # A dead token would turn every awaiting book into needs_human,
+            # one per poll. Hold the queue instead, and say so.
+            report.halted = self._halt
+            self._beat(state="halted", awaiting=len(books),
+                       pending_deliveries=len(ledger.pending_deliveries()),
+                       credentials_error=self._halt[:600])
+            if books:
+                self.log(f"{len(books)} book(s) awaiting; holding them until "
+                         f"the subscription token works again.")
+            return report
+
         for book in books:
             state = ledger.state(book.file_id)
             if state in (FINISHED, FAILED, PENDING_DELIVERY):
@@ -535,6 +606,66 @@ class Agent:
         self._poll_error = ""
         self._beat(last_poll_at=now, last_poll_error="")
 
+    def _reload_env(self) -> None:
+        """Pick up a rotated token from the credentials file, if there is one
+        (on Fly the file is rewritten at boot; on a Mac it is edited by hand)."""
+        path = self.env.path
+        if not path:
+            return
+        try:
+            self.env = read_env(path)
+        except AgentError as e:
+            self.log(f"credentials file not reloaded: {e}")
+
+    def _token_recovered(self) -> bool:
+        """While halted: re-read the credentials and try to sign in. Without
+        a preflight the next claim is the test."""
+        self._reload_env()
+        if self.preflight is not None:
+            error = self._preflight()
+            if error:
+                if error != self._halt:
+                    self._halt = error
+                    self.log(f"still halted: {error}")
+                return False
+        self._alarm(f"Galley agent on {self.host} is signed in again",
+                    f"The subscription token on {self.host} works again; "
+                    f"the held books are picked up from this poll on "
+                    f"(the last failure was: {self._halt}).")
+        self._halt = ""
+        self._beat(credentials_error="", last_error="")
+        return True
+
+    def _preflight(self) -> str:
+        try:
+            return str(self.preflight(dict(self.env.values)) or "")
+        except Exception as e:                              # noqa: BLE001
+            log.exception("The sign-in check itself failed")
+            return f"the sign-in check crashed: {e}"
+
+    def halt(self, reason: str, *, book: str = "", slug: str = "") -> None:
+        """Stop claiming books because the subscription token is rejected.
+        Alerts once per failure, not once per poll."""
+        first = not self._halt
+        self._halt = reason
+        fields: dict[str, Any] = {"state": "halted", "phase": None,
+                                  "credentials_error": reason[:600],
+                                  "last_error": reason[:400]}
+        if book:
+            fields.update(last_book=book, held_book=book, held_slug=slug,
+                          last_outcome="held", last_reason=reason[:600])
+        self._beat(**fields)
+        self.log(f"HALTED: {reason[:300]}")
+        if first:
+            held = (f"{book} is claimed and untouched; it resumes from the "
+                    f"same phase once the token works.\n\n" if book else "")
+            self._alarm(
+                f"Galley agent on {self.host}: subscription token rejected",
+                f"Claude Code on {self.host} could not sign in:\n\n  "
+                f"{reason[:800]}\n\n{held}No book is claimed until the "
+                f"token is replaced; nothing has been marked needs_human "
+                f"over this.\n\n{TOKEN_FIX_HINT}")
+
     def run_forever(self) -> None:
         self.log(f"Galley agent: polling {self.env.awaiting_url} every "
                  f"{self.poll_interval_s / 60:.0f} min.")
@@ -559,15 +690,26 @@ class Agent:
         self._beat(state="starting", started_at=started, awaiting=0,
                    pending_deliveries=len(ledger.pending_deliveries()),
                    last_error="")
+        # Find out now whether the token signs in, not after a book's first
+        # phase has been written off.
+        problem = self._preflight() if self.preflight is not None else ""
         self._alarm(
-            f"Galley agent started on {self.host}",
+            f"Galley agent started on {self.host}"
+            + (" — but its token is rejected" if problem else ""),
             f"DocProof {__version__} on {self.host} is polling "
             f"{self.env.awaiting_url} every {self.poll_interval_s / 60:.0f} "
             f"minutes for books to proofread.\n"
             f"Workspaces: {self.root}\n"
             + (f"{len(pending)} book(s) were claimed but unfinished; the "
                f"first poll resumes them.\n" if pending else "")
+            + (f"\nThe subscription token does not sign in ({problem}). No "
+               f"book is claimed until it is replaced. {TOKEN_FIX_HINT}\n"
+               if problem else "")
             + "Progress shows under Admin → Automations → Proofread.")
+        if problem:
+            self._halt = problem
+            self._beat(state="halted", credentials_error=problem[:600],
+                       last_error=problem[:400])
 
 
     def run_book(self, book: AwaitingBook, ledger: Ledger, report: RunReport,
@@ -602,6 +744,13 @@ class Agent:
         self._file_id = book.file_id
         try:
             result = self.drive_book(local, slug, folder, resume=resume)
+        except CredentialsError as e:
+            # The token, not the book. The claim stands and the run resumes
+            # from the same phase once the token is replaced.
+            report.outcome = "held"
+            report.reason = str(e)
+            self.halt(str(e), book=book.name, slug=slug)
+            return
         except Exception as e:                              # noqa: BLE001
             log.exception("The proofread of %s crashed", book.name)
             self.give_up(book, ledger, report, slug, folder,
@@ -915,6 +1064,28 @@ class Agent:
         return files
 
 
+    def forget(self, key: str) -> str:
+        """Drop one book from the ledger, by Drive id or file name, so the
+        next poll claims it as if it had never been seen. The workspace is
+        left in place; the driver reseeds it. Returns the book's name."""
+        ledger = self.ledger()
+        wanted = key.strip()
+        matches = [fid for fid, entry in ledger.books.items()
+                   if fid == wanted or str(entry.get("name") or "") == wanted]
+        if not matches:
+            known = ", ".join(str(e.get("name") or fid)
+                              for fid, e in ledger.books.items()) or "nothing"
+            raise AgentError(f"No book in the ledger is {wanted!r}; the "
+                             f"ledger holds: {known}.")
+        if len(matches) > 1:
+            raise AgentError(f"{wanted!r} names {len(matches)} ledger entries; "
+                             f"use the Drive id: {', '.join(matches)}.")
+        entry = ledger.books.pop(matches[0])
+        ledger.save()
+        name = str(entry.get("name") or matches[0])
+        self.log(f"Forgot {name} ({matches[0]}, was {entry.get('state')}).")
+        return name
+
     def status(self) -> dict[str, Any]:
         ledger = self.ledger()
         return {"workspace_root": str(self.root),
@@ -1224,4 +1395,5 @@ __all__ = ["AGENT_TOKEN_KEY", "APP_URL_KEY", "AWAITING_PATH", "CLAIMED",
            "poll_awaiting", "post_status", "send_alert",
            "is_linux", "parse_env", "plist_content", "plist_path", "program",
            "read_env", "refresh_wrapper", "service_path", "slug_for",
+           "check_credentials", "TOKEN_FIX_HINT", "PREFLIGHT_TIMEOUT_S",
            "uninstall", "unit_content", "unit_path", "units_dir"]
