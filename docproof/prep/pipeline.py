@@ -114,7 +114,8 @@ def prepare(cfg: Config, input_path: str | Path, *, config_dir: str | Path,
     """Open the manuscript, read every paragraph, and load the house style set.
 
     Raises IngestError on a document prep refuses — a legacy .doc, an InDesign
-    layout, or one that still has tracked changes in it."""
+    layout, or a tracked change it cannot resolve. A manuscript that arrives
+    with ordinary tracked changes is formatted from its accepted view."""
     pkg = prep_ingest.preflight(input_path)
     structure = prep_ingest.build_structure(pkg)
     sheet = load_style_sheet(resolve(config_dir, cfg.prep.style_sheet),

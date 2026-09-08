@@ -219,9 +219,9 @@ def textbox() -> None:
 
 
 def tracked() -> None:
-    """A manuscript that still has an unresolved edit in it. Prep refuses this
-    outright — it restyles every paragraph, and doing that around somebody
-    else's undecided change would bury it."""
+    """A manuscript that still has an unresolved edit in it. Prep formats the
+    accepted view of it: the inserted phrase stays, and the notes say a
+    revision was accepted."""
     d = docx.Document()
     d.add_paragraph("A perfectly ordinary paragraph of manuscript text.")
     p = d.add_paragraph()
