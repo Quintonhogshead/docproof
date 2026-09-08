@@ -1,0 +1,626 @@
+# =============================================================================
+# ARCHETYPE THIRTEEN — sable_regalia
+# =============================================================================
+#
+# Reference DNA: the dark-fantasy special-edition hardback. A single ornate
+# object mounted head-on above the title like a coat of arms, everything
+# around it fanning out and away from it, the whole art tier in SILVER AND
+# BLACK — and the only colour on the entire cover in the type, plus a scatter
+# of one small object that matches it. Amber V. Nicole's THRONE OF BROKEN GODS
+# is the canonical shelf example; the Bloom/Slowburn dark-fantasy foil-jacket
+# shelf is full of it.
+#
+# It is the OPPOSITE arrangement to the three romantasy templates. Those are
+# collages — asymmetric, many-coloured, a figure inside a wreath. This one is
+# an EMBLEM: near-symmetric, monochrome, one object, no figure required, and
+# it reads at thumbnail size as A PALE BURST OVER A BLOOD-RED WORDMARK.
+#
+# Like its siblings this template is written to be ONE-SHOT. The art direction
+# chooses NINE NOUNS, five hexes, two fonts and three lines of copy. Placement,
+# scale, cut edges, masks, effects, adjust layers, scrims, the desaturation
+# line and layer order are decided here, once.
+#
+# -----------------------------------------------------------------------------
+# THE SIX RULES THIS TEMPLATE ENCODES
+# -----------------------------------------------------------------------------
+#
+# 1. THE SINGLE-SATURATION RULE. `mono_line` is a full-frame grade at
+#    saturation -1.0 sitting at a FIXED POINT in the layer stack. Everything
+#    beneath it — ground, ornament, glow, fan, both crown arms, the crest — is
+#    monochrome BY CONSTRUCTION, whatever colours nine separate generations
+#    come back as. Everything above it — the two scatter plates and all four
+#    lines of type — carries the cover's ENTIRE chroma budget.
+#
+#    That is the whole trick of the reference jacket and it is not a palette
+#    choice, it is a stacking order. A red title on a red-lit silver relic is
+#    a red cover; a red title on a NEUTRAL silver relic is FOIL. Nothing else
+#    here makes metal look stamped. Move a plate across `mono_line` and the
+#    template stops being this template.
+#
+#    The corollary is that the mount tier can be prompted photoreal and lit
+#    however each plate happens to come back: `mono_line` is this template's
+#    stylization, standing in for the duotone/silhouette/posterize treatments
+#    the shelf-wide photoreal ban would otherwise force (§19.4) and which would
+#    each destroy it — photo_soft maps every plate onto the background→primary
+#    ramp, which here is BLACK→RED, and would paint the relic the colour of
+#    the title. Hence `photoreal: true`, and hence the recipe.
+#
+# 2. A MOUNTED MASS HAS NO FLOOR — DISSOLVE THE FOOT, DO NOT CUT IT.
+#    §15.23's cardinal rule is that a standing figure must look like it is
+#    standing on something, and that when the plate has no floor you GENERATE
+#    the ground. This template is the documented exception, and it has to
+#    state why it is allowed to be one: nothing here is standing. The crest is
+#    MOUNTED — hung on a wall, held up, heraldic — and a coat of arms does not
+#    get a floor, it gets a field.
+#
+#    But a mounted mass still cannot END. A plate whose ink stops in a flat
+#    horizontal line inside the frame reads as amputated no matter how good
+#    it is. So `crest` and `fan` each carry an inverted linear gradient mask
+#    that takes their lower thirds down into the ground: the mass arrives out
+#    of the dark rather than sitting on nothing. Foot fade, not cut edge, and
+#    the two must not be confused — this is what a slot does when it has no
+#    severed end AND no ground to stand on.
+#
+# 3. NEAR-SYMMETRY, NEVER A MIRROR. The composition is heraldic and composes
+#    on the centre axis, which is why `axis: center`. But `crown_left` and
+#    `crown_right` sit at different heights (0.20 vs 0.14) and different
+#    scales (0.52 vs 0.46) and are asked for different KINDS of thing, and
+#    `seeds_front` is pinned off-axis on one side only. Two identical halves
+#    are a logo. A near-symmetry the eye reads as balanced and the measurement
+#    reads as unequal is an emblem.
+#
+# 4. THE ORNAMENT IS TONE-ON-TONE AND COVERS EVERYTHING. `damask` is a
+#    full-bleed all-over pattern at `screen` and low opacity, so it lifts a
+#    few percent out of the black and no further. It runs UNDER the crest and
+#    the type both, edge to edge, corners included — that unbroken field is
+#    what makes the black read as a printed, patterned jacket rather than as
+#    an empty background, and it is the cheapest layer on the cover. It has a
+#    shelf texture as its $0 fallback so this never fails to a bare void.
+#
+# 5. THE TITLE IS A FOIL STAMP, AND IT IS BUILT, NOT COLOURED. Flat ink is
+#    not foil. The stack is: a tight contact shadow, a wide soft one, a
+#    two-stop metallic ramp along the ink (`accent` body → `primary`
+#    highlight), and a bevel — the light rim top-left, the dark rim
+#    bottom-right — which is the only thing on the cover that says STAMPED
+#    rather than PRINTED. The ramp deliberately stops at 0.95 rather than
+#    1.00: the legibility autopilot's ink flip has to retain SOME authority,
+#    or a bad palette drives it into halving the finishing stack instead.
+#
+# 6. THE TITLE IS SET IN A JUSTIFIED STACK, NOT A FITTED ONE. `fit_mode:
+#    justify_stack` grows every line to the measure, so a three-line title
+#    whose last line is short comes out with that word ENORMOUS — which is
+#    the shelf's signature move and is unreachable under the uniform fit,
+#    which sizes every line the same. A director who wants the break points
+#    somewhere else sets `title_breaks` (§15.24); the template does not
+#    guess them, because they are a property of the words.
+#
+# -----------------------------------------------------------------------------
+# ROLES, NOT NOUNS
+# -----------------------------------------------------------------------------
+#
+#   field         the void everything is mounted in
+#   damask        the all-over tone-on-tone ornament, edge to edge
+#   halo          the light behind the crest, procedural
+#   fan           the far tier: many tall thin things fanning up and outward
+#   crown_left    a long curling length reaching in from the left trim
+#   crown_right   a long curling length reaching in from the right trim
+#   crest         THE MOUNTED MASS — one ornate object, head-on, centre axis
+#   seeds_back    the chroma, drifting behind the type
+#   brambles      the front tier's growth, crossing the type
+#   seeds_front   the chroma again, sharp, in front of the type, off-axis
+#
+# EVERY FRAME BELOW IS WRITTEN IN GEOMETRY AND LIGHT, NOT IN NOUNS, and must
+# stay that way — the lesson §15.24 paid for twice. A slot asks for ONE
+# SYMMETRICAL ORNATE OBJECT SEEN HEAD ON, or MANY TALL THIN THINGS FANNING
+# OUTWARD, or A LONG CURLING LENGTH. What those things ARE is the art
+# direction's only say, and that is the entire point of the template.
+#
+# The one place this template does name a material is `composition_note`, and
+# it names it for every plate identically: cold neutral metal, one key, one
+# rim. That is not decoration, it is rule 1's other half — nine plates lit
+# nine different ways survive `mono_line` as nine different greys.
+#
+# -----------------------------------------------------------------------------
+# THE OCCLUSION BUDGET
+# -----------------------------------------------------------------------------
+# TWO plates cross the title zone (`brambles`, low and wide; `seeds_front`,
+# small and pinned to one side) and both are drawn after it, each carrying its
+# own drop shadow onto the letterforms. That is the whole budget, and it is
+# deliberately half of romantasy_vignette's: this title is the largest object
+# on the cover and its job is to be a WORDMARK. One or two crossings, at the
+# edges of the block, never through the middle of a word.
+# =============================================================================
+name: sable_regalia
+genres: [fantasy, horror]
+axis: center
+photoreal: true
+recipe: dark_academia
+recipe_strength: 0.35          # for the vignette, the dust and the paper
+                                # tooth ONLY — the shared printed surface that
+                                # puts nine generations on one jacket. Full
+                                # strength also brings +0.35 temperature,
+                                # which is a sepia cast on a cold-silver
+                                # cover; `mono_line` pre-cools by -0.34 to
+                                # land the composite back at neutral.
+describe: >-
+  One ornate object mounted head-on above the title like a coat of arms, with
+  a fan of tall thin forms bursting behind it and long curling arms reaching
+  in from both trims — the whole art tier in silver and black, and the only
+  colour on the cover in a huge three-line foil-stamped title, a scatter of
+  one small object that matches it, and the author's name in the same foil.
+  Series line under the title, credit line at the foot.
+composition_note: >-
+  Painted as a rich photoreal dark-fantasy book-cover illustration in COLD
+  NEUTRAL METAL — pewter, bone and graphite, no warm tone anywhere — lit by
+  one hard key from the upper left and one cold rim down the far right edge,
+  against pure black. Deep shadow side, hard specular highlights on every
+  edge, full value range from near-black to blown white. No scene, no horizon,
+  no sky, no landscape, no buildings, no ground, no floor, no surface of any
+  kind beneath the subject, no vignette, no cast shadow on anything.
+casting: >-
+  Cast this template from the book's INSTITUTION and its RELIC, not from its
+  characters. `crest` is the one object the whole plot is organised around and
+  is named or handled in the manuscript again and again — a crown, a reactor
+  core, a ledger, a mask, a hive, a broken machine; it must be a THING, seen
+  head-on, and it must be ornate enough to survive being the only object on
+  the cover. `fan` and the two `crown` arms are the world that object grew out
+  of, in three different shapes of the same material. `seeds_back` and
+  `seeds_front` are the SAME small object and they are the cover's entire
+  colour budget, so choose something the book has in quantity and that means
+  something in it — the thing that spills, drips, falls or is counted. Do not
+  put a person in any slot: this arrangement has no figure and adding one
+  gives it two subjects.
+
+# =============================================================================
+art:
+# -- ground tier --------------------------------------------------------------
+  - id: field
+    role: ground
+    generatable: true
+    procedural: gradient       # $0 fallback only; this slot is meant to be painted
+    fit: cover
+    prompt_frame: >-
+      A full-frame empty field of {subject}, pure black at every edge and
+      lifting only slightly toward a point above centre, with a soft
+      depth-of-field haze. Completely empty — nothing in it.
+
+  - id: damask
+    role: all_over_ornament
+    # Rule 4. `screen` on a dark plate lifts only what is already grey, so a
+    # pattern painted mid-grey on black comes out as the black-on-black
+    # jacquard the reference jacket has and nothing brighter. `texture_file`
+    # is the $0 fallback when this slot is not generated — the cover degrades
+    # to a shelf damask, never to an empty void.
+    generatable: true
+    transparent: true
+    fit: cover
+    blend: screen
+    opacity: 0.26
+    texture_file: damask_faint
+    texture_fit: cover
+    prompt_frame: >-
+      A seamless all-over repeating ornamental pattern built from {subject},
+      interlocking and scrolling edge to edge across the whole frame with no
+      centre and no focal point, drawn flat in mid-grey line and low relief on
+      pure black, evenly dense everywhere including the corners.
+
+  - id: halo
+    # The crest's own light on the field behind it — the only reason the
+    # centre is brighter than the corners before the recipe's vignette closes
+    # the edges down, and what makes the mount read as lit from within rather
+    # than pasted on.
+    generatable: false
+    fit: cover
+    procedural: radial_glow
+    opacity: 0.30
+    blend: screen
+
+# -- the mount ----------------------------------------------------------------
+  - id: fan
+    role: far_tier
+    # Rule 2: no cut edge, no ground — a foot fade instead. The mask is
+    # canvas-space, so this dissolves across the band where the crest's own
+    # mass takes over, and the two reinforce each other rather than stacking
+    # two hard hems.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    anchor: [0.50, 0.06]
+    scale: 0.94
+    opacity: 0.74
+    mask:
+      gradient: {kind: linear, angle: 90.0, start: 0.30, end: 0.56}
+      invert: true
+    prompt_frame: >-
+      Many tall thin lengths of {subject} of different heights, fanning
+      upward and outward from one point low in the frame in a wide burst,
+      packed dense at the base and opening into gaps at the tips, each one
+      catching a hard edge highlight. Nothing beneath them.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.014, alpha: 0.42}
+
+  - id: crown_left
+    role: reaching_arm
+    # Rule 3: 0.20 / 0.52 against the right arm's 0.14 / 0.46.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: left
+    anchor: [0.00, 0.20]
+    offset: [-0.06, 0.00]
+    scale: 0.52
+    prompt_frame: >-
+      One long curling length of {subject} entering from one edge and
+      reaching in and upward across the frame in a single sweep, thick where
+      it enters and tapering as it goes, doubling back on itself once.
+    effects:
+      - {kind: drop_shadow, dy: 0.005, blur: 0.011, alpha: 0.48}
+
+  - id: crown_right
+    role: reaching_arm
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: right
+    anchor: [1.00, 0.14]
+    offset: [0.06, 0.00]
+    scale: 0.46
+    prompt_frame: >-
+      One long curling length of {subject} entering from one edge and
+      reaching in and upward across the frame in a single sweep, thick where
+      it enters and tapering as it goes, splitting into two near its far end.
+    effects:
+      - {kind: drop_shadow, dy: 0.005, blur: 0.011, alpha: 0.48}
+
+  - id: crest
+    role: mounted_mass
+    # THE subject. Drawn AFTER the whole far tier — the same ordering fix
+    # romantasy_organic's `hero` needed. `keep_whole` because this is one
+    # discrete object with no severed end (§15.25): sliced by the trim it
+    # reads as a thing cut in half, which is the exact failure the overshoot
+    # rule exists to prevent. Its foot fade is rule 2.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    keep_whole: true
+    anchor: [0.50, 0.05]
+    scale: 0.62
+    mask:
+      gradient: {kind: linear, angle: 90.0, start: 0.34, end: 0.60}
+      invert: true
+    prompt_frame: >-
+      ONE single {subject}, seen straight on and dead centre, filling the
+      frame, symmetrical about its own vertical axis and ornate all over.
+      It is the brightest, sharpest, most detailed thing in the picture, with
+      hard specular highlights along every raised edge and deep black in every
+      recess. Where it has holes, gaps, openings or negative space, those
+      openings are genuinely empty. It is floating in pure black with nothing
+      beneath it and nothing behind it.
+    effects:
+      - {kind: drop_shadow, dy: 0.009, blur: 0.016, alpha: 0.50}
+      - {kind: outer_glow, blur: 0.036, alpha: 0.28}
+
+# -- THE CHROMA, drawn after mono_line ----------------------------------------
+  - id: seeds_back
+    role: chroma_drift
+    # One whole plate, never `scatter` (romantasy_organic rule 3). Sits
+    # ABOVE `mono_line` and below the type: this and `seeds_front` are half
+    # the colour on the cover and the reason the title does not look like the
+    # only coloured thing that wandered in.
+    #
+    # RULE 1'S PRICE, AND THE ONE PLATE THAT PAYS IT. Keeping the chroma above
+    # `mono_line` puts this plate structurally IN FRONT of the crest — there
+    # is nowhere else for it to go and stay coloured. So it is the one slot on
+    # this template that can bury the subject, and the first build of this
+    # archetype did exactly that: at `fit: cover` the generator answered
+    # "many different sizes" with fist-sized fruit filling the frame, which
+    # covered the mask, matched the title's own red, and dropped the title's
+    # contrast to the worst of the four text slots.
+    #
+    # The size of the objects is therefore FIXED IN THE FRAME, not left to
+    # "sparse" and "many different sizes" — a cover fit has no scale knob, so
+    # the only place scale can be stated is the prompt, and it has to be
+    # stated as a fraction of the frame. A drift plate on this template is a
+    # spatter, never a still life.
+    generatable: true
+    transparent: true
+    fit: cover
+    opacity: 0.72
+    prompt_frame: >-
+      A wide, mostly EMPTY black frame with a thin scattering of {subject}
+      falling through it. Each one is TINY — no wider than a fortieth of the
+      frame, the size of a grain of rice on this page — and they are far
+      apart, with big stretches of pure black between them and none of them
+      touching. Perhaps thirty in the whole frame, at slightly different sizes
+      and angles, a few sharp and most small and out of focus, denser toward
+      the top and thinning to nothing across the middle. On pure black.
+
+# -- FRONT TIER: drawn AFTER the title ----------------------------------------
+#
+# Each carries its own drop shadow — the shadow falling onto the letterforms
+# IS the depth illusion; without it a front plate reads as a sticker.
+#
+  - id: brambles
+    role: front_growth
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: bottom
+    anchor: [0.38, 1.00]
+    offset: [0.00, 0.07]
+    scale: 0.40                # the wordmark is the largest object on this
+                                # cover; a front plate that buries a whole
+                                # glyph gets DEMOTED below the title, which
+                                # cancels the sandwich outright
+    prompt_frame: >-
+      Several bare thin lengths of {subject} rising from the bottom of the
+      frame and leaning apart as they rise, crossing each other low down,
+      crisply lit and sharply focused against pure black.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.010, alpha: 0.60}
+
+  - id: seeds_front
+    role: chroma_front
+    # Rule 3's off-axis note, and §15.25's `keep_whole`: these are discrete
+    # whole objects with no cut end, so the trim must not slice them.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    keep_whole: true
+    anchor: [0.79, 0.615]
+    scale: 0.19                # 0.24 touched 11% of the title's ink and got
+                                # DEMOTED below it, which cancels the sandwich
+                                # — the same lesson romantasy_vignette's
+                                # sweep_front recorded at 0.56
+    prompt_frame: >-
+      Five or six separate whole pieces of {subject} at different sizes and
+      angles with wide empty space between them, each one complete and
+      unbroken, wet-looking and crisply lit with a hard highlight. Nothing
+      connects them. On pure black.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.011, alpha: 0.58}
+
+# =============================================================================
+adjust:
+  - id: field_grade
+    # A generated void comes back as a bright, saturated PHOTOGRAPH of haze.
+    # This sits on it before any art, so the whole cover is built on black.
+    op: grade
+    brightness: -0.34
+    saturation: -0.30
+    contrast: 0.10
+
+  - id: haze_back
+    # Aerial perspective: the far tier flattens so it sits behind the mount
+    # rather than in it.
+    op: grade
+    brightness: 0.04
+    contrast: -0.24
+    saturation: -0.35
+    opacity: 0.90
+    mask: {from_layer: fan, feather: 0.02}
+
+  - id: mono_line
+    # ============================ RULE 1 ================================
+    # THE HARD LINE. Everything below this layer is monochrome, whatever it
+    # generated as; everything above it carries the cover's whole chroma.
+    # saturation -1.0 is not a taste dial and must not be softened — at -0.8
+    # a red-lit plate stays faintly red, which is the one thing that makes
+    # foil stop looking like foil.
+    #
+    # temperature -0.34 pre-cools the mount so that `dark_academia`'s own
+    # +0.35 warm step (at recipe_strength 0.35, so ~+0.12) lands the finished
+    # composite at cool-neutral silver with warm blacks, instead of sepia.
+    # ====================================================================
+    op: grade
+    saturation: -1.0
+    temperature: -0.34
+    contrast: 0.14
+    brightness: -0.03
+
+  - id: cool_spine
+    # One shared tonal spine, kept very low ON PURPOSE: a gradient_map over a
+    # monochrome composite is a duotone, and at any real opacity it would undo
+    # `mono_line` and paint the silver the colour of the title. At 0.10 through
+    # soft_light it only cools the greys and warms the deepest blacks, which is
+    # what a printed jacket does.
+    op: gradient_map
+    stops: [background, primary, text]
+    opacity: 0.10
+    blend: soft_light
+
+  - id: crest_bloom
+    # Rule 1's insurance for the metal: glow on the crest's hot edges and on
+    # the foil, so the highlights blow the way a photographed stamp does.
+    op: bloom
+    threshold: 0.86
+    radius: 0.019
+    strength: 0.34
+
+  - id: foot_wash
+    # A feathered black wash over the lower fifth, fading out upward, so the
+    # author's name and the credit line sit on something quiet. `color_wash`
+    # composites a solid fill AS a layer; the linear gradient mask (angle 90 =
+    # top transparent -> bottom opaque, held fully clear until `start`) is the
+    # feather.
+    op: color_wash
+    color: "#000000"
+    blend: normal
+    opacity: 0.55
+    mask:
+      gradient: {kind: linear, angle: 90.0, start: 0.68, end: 1.0}
+
+# =============================================================================
+scrims:
+  # All halo — a gradient_up/down scrim protecting anything not flush with a
+  # canvas edge paints a full-height slab with hard vertical sides
+  # (romantasy_organic rule 5). The title's is near-inert: rule 5 says the
+  # title is held by the foil ramp against black, and if a render needs a bar
+  # behind it the PALETTE is wrong, not the type.
+  - {kind: halo, protects: title, strength: 0.10}
+  - {kind: halo, protects: author, strength: 0.16}
+  - {kind: halo, protects: subtitle, strength: 0.30}
+  - {kind: halo, protects: series, strength: 0.24}
+
+# =============================================================================
+text:
+  - id: title
+    # Rules 5 and 6. Three lines, justified to the measure, so a short last
+    # line comes out enormous. The zone sits fully below the crest's foot fade
+    # and fully above the series line, in the darkest, quietest band on the
+    # cover — the whole mount was placed to leave it empty.
+    zone: {x: 0.085, y: 0.372, w: 0.830, h: 0.265}
+    case: upper
+    align: center
+    valign: middle
+    tracking: 6
+    max_lines: 3
+    fit_mode: justify_stack
+    size_min: 0.050
+    size_max: 0.115
+    effects:
+      # A tight dark contact shadow under a wide soft one — the pro type move.
+      - {kind: drop_shadow, dy: 0.002, blur: 0.003, alpha: 0.78}
+      - {kind: drop_shadow, dy: 0.012, blur: 0.028, alpha: 0.46}
+      # THE FOIL: the metallic ramp, accent body up to primary highlight.
+      # Stops at 0.95 so the legibility autopilot's ink flip keeps some say.
+      - {kind: gradient_overlay, stops: [accent, primary], angle: 90.0, opacity: 0.95}
+      # ...and the stamp. The light rim top-left, the dark rim bottom-right.
+      # This is the only layer on the cover that says PRESSED INTO rather than
+      # PRINTED ON, and it is why there is no texture_overlay here: a stone or
+      # paper plate over the ink reads as worn, which is the opposite claim.
+      - {kind: bevel, width: 0.0022, alpha: 0.50}
+
+  - id: subtitle
+    # The series line, directly under the title. Stays in `text` near-white:
+    # three coloured type blocks is one too many, and this is the one that
+    # gives the eye somewhere neutral to land between the wordmark and the
+    # author.
+    zone: {x: 0.140, y: 0.660, w: 0.720, h: 0.070}
+    case: upper
+    align: center
+    valign: top
+    tracking: 120
+    max_lines: 2
+    optional: true
+    size_min: 0.012
+    size_max: 0.019
+    effects:
+      - {kind: drop_shadow, dy: 0.0035, blur: 0.008, alpha: 0.75}
+
+  - id: author
+    # `font_role: title` — the display face, not the supporting one. This is
+    # the convention the field was added for and this shelf runs on it: the
+    # author's name is a SECOND WORDMARK in the same foil, at a third the
+    # size, and a plain sans here reads as a different book's credit block.
+    # The ramp runs at 0.85 rather than the title's 0.95 so it is visibly the
+    # quieter stamp of the two.
+    zone: {x: 0.100, y: 0.760, w: 0.800, h: 0.115}
+    font_role: title
+    case: upper
+    align: center
+    valign: middle
+    tracking: 60
+    max_lines: 2
+    size_min: 0.032
+    size_max: 0.062
+    effects:
+      - {kind: drop_shadow, dy: 0.0025, blur: 0.004, alpha: 0.70}
+      - {kind: gradient_overlay, stops: [accent, primary], angle: 90.0, opacity: 0.85}
+
+  - id: series
+    # The credit line at the very foot, over the wash. Tiny, wide, near-white.
+    zone: {x: 0.100, y: 0.912, w: 0.800, h: 0.032}
+    case: upper
+    align: center
+    tracking: 110
+    max_lines: 1
+    optional: true
+    size_min: 0.011
+    size_max: 0.017
+
+# =============================================================================
+# Z-ORDER, bottom first. Three things here are load-bearing and fatal to get
+# wrong: `crest` is drawn AFTER the whole far tier; `mono_line` sits between
+# the mount and the chroma and NOTHING may cross it; and the two front plates
+# are drawn AFTER the title.
+layers: [field, field_grade, damask, halo,
+        fan, haze_back, crown_left, crown_right, crest,
+        mono_line,
+        seeds_back,
+        "scrim:0", title,
+        "scrim:2", subtitle,
+        brambles, seeds_front,
+        foot_wash, "scrim:3", series, "scrim:1", author,
+        cool_spine, crest_bloom]
+
+# =============================================================================
+# WHAT THE DIRECTOR STILL CHOOSES, AND NOTHING ELSE
+# =============================================================================
+#   * nine `{subject}` fills, one per generatable slot — and `seeds_back` and
+#     `seeds_front` must get the SAME noun, because they are one object seen
+#     at two depths. That noun must also be something that IS `accent`'s
+#     colour in the world: gold foil wants coins, brass keys, wheat; ice-blue
+#     wants glass or frost. Red petals under a blue title puts two hues in the
+#     chroma tier and dissolves the whole single-saturation payoff.
+#   * five palette hexes, and this template reads them differently from every
+#     other one on the shelf:
+#       background  the near-black jacket. Take it to within a few points of
+#                   black; the mount is the only bright thing here.
+#       accent      THE FOIL BODY — the darker stop of the title's metallic
+#                   ramp, and the colour of both scatter plates. This is the
+#                   ONLY saturated colour on the cover.
+#
+#                   ANY HUE WORKS — `mono_line` leaves a neutral grey mount,
+#                   so nothing here is tuned for red. What binds is VALUE:
+#                   take `accent` well clear of the near-black ground, and
+#                   remember that a deep blue or aubergine is much darker
+#                   than a red at the same saturation.
+#
+#                   AND YOU MUST JUDGE THAT YOURSELF. The legibility
+#                   autopilot measures the slot's BASE ink (near-white, from
+#                   color_role) against what is under it; the gradient_overlay
+#                   that paints the foil runs later in the effect stack and is
+#                   never measured. So a too-dark accent does not trip a scrim
+#                   escalation — it just renders dim, and rule 5's "if it
+#                   needs a scrim the palette is wrong" will never fire for
+#                   this particular way of getting the palette wrong.
+#       primary     THE FOIL HIGHLIGHT — the bright end of that same ramp.
+#                   Same hue family as `accent`, 25-40 L* brighter. A primary
+#                   from a different hue makes the title look mis-registered,
+#                   not metallic.
+#       text        near white, warm or cold to taste — the series line, the
+#                   credit line, and the ink the ramp is laid over. The
+#                   finishing stack costs the type ~25% brightness on the way
+#                   down, so take it near white.
+#       scrim       black.
+#   * title_font and author_font. `title_font` carries BOTH the title and the
+#     author's name, so it has to hold up at 0.115 of the canvas and at 0.04
+#     — a high-contrast display serif with real character in the caps. The
+#     `author_font` is only ever seen in two lines of tiny letterspaced caps;
+#     an engraved hairline sans is the shelf answer.
+#   * `title_breaks` (§15.24) when the title's natural break is not the one
+#     the justified stack finds, and `emphasis_word` never — this template's
+#     emphasis is the justified stack itself.
+#   * the series line, the credit line, the tagline.
+#
+# It does NOT choose placement, scale, blend, opacity, masks, adjust layers,
+# effects, scrim kinds, recipe, recipe strength, or layer order. In particular
+# it does not choose `treatment`: rule 1 already spent this template's
+# stylization budget, and any treatment layered on top of `mono_line` either
+# does nothing or re-colours the metal.
+#
+# HONEST SCOPE: the skeleton is "one ornate object mounted like a coat of arms
+# over a foil wordmark, in silver and black". It fits dark fantasy, gothic
+# horror, grimdark, occult and cursed-object stories. It does not fit anything
+# whose cover needs a person, a place, or more than one colour, and it should
+# not be stretched to. The riskiest plate is `crest`: it is the only thing on
+# the cover and it must come back symmetrical, ornate and cleanly cut out —
+# a crest that generates asymmetric or muddy sinks the whole render, and no
+# template rule can fix that. Repaint it.

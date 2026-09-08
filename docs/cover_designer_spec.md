@@ -1668,6 +1668,243 @@ would be a different decision than the archetype asked for.
 **Ask which kind of thing a plate holds before reaching for an overshooting
 anchor.** That question is now part of authoring a slot.
 
+### 15.26 The ring you cannot ask for — Archetype Eight (`gilded_descent`)
+
+Provenance: the ornamented-border romantasy hardcover (Kalie Cassidy, IN THE VEINS OF THE
+DROWNING), built as `gilded_descent` on 2026-09-01. Four things generalize past that one
+template.
+
+**1. A figure may be unsupported, but the medium is the price.** §15.23 is the cardinal rule —
+a standing figure must look like it is standing on something — and the shelf's whole
+suspended-figure convention appears to violate it. It does not: it *pays* for the exemption. A
+body that falls, sinks, rises or drifts owes no floor, and what it owes instead is a
+**substance** — a generated full-frame medium with its own striations, falloff and depth haze,
+plus matter moving through it at two scales (long thin one-way streaks, small round many-depth
+motes). Suspend a figure over a flat colour field and §15.23's failure returns wearing different
+clothes: a cutout on a swatch. The corollary is a `keep_whole: true` on the figure — §15.25's
+severed-end doctrine governs things that grow or hang, and a body in mid-air has no cut end for
+the trim to carry off, so a trimmed limb reads as amputation rather than continuation.
+
+**2. To get a border past a prompt suffix that forbids borders, ask for a frame-shaped OBJECT.**
+`imaging.NEGATIVE_SUFFIX` ends every prompt this engine sends with *"no borders, no frames"* and
+`CUTOUT_SUFFIX` adds *"one single isolated subject only"*. An archetype whose signature IS an
+edge-to-edge ornamental ring is therefore arguing with two fixed strings it cannot edit (this is
+§19.3's contradiction reaching a second door). The move that wins is not a louder adjective: ask
+for a **gate grille, reliquary casing, mirror surround, rood screen, window tracery, cast fence
+panel** — one hammered object whose own construction leaves a hole through the middle. That is
+§15.21 rule 2 ("change the reproduction medium, not the palette") generalized: *when a suffix
+forbids a category, name an instance instead.* One plate, not four edge strips — strips dodge
+the suffix too, but nothing makes their corners meet.
+
+**3. State the emptiness first, and quantify it.** The first `border` pull said "a tall standing
+object ... whose own construction leaves a large empty opening ... filling the picture from edge
+to edge" and came back a **solid thicket**: the emptiness was one clause among fifteen and
+"filling the picture edge to edge" was the sentence the generator obeyed. The rewrite opens
+`THE MIDDLE OF THIS PICTURE IS EMPTY. The centre two thirds, both across and down, is nothing at
+all`, then describes the ornament as a **rim no wider than a sixth of the picture**, and it came
+back correct first try. For any plate whose subject is a hole, the hole is the subject: say it
+in the first sentence, in fractions, and say what the thing is NOT (`not a thicket, not a mass,
+not a wall of it`). One $0.03 repaint, no template change.
+
+**4. A masked grade is how a template *guarantees* a value band it can only ask for.** Rule 2 of
+that template wants the figure read as a silhouette and rule 6 wants the ring read as metal —
+both are prompt requests, and a generator lit by the same corona returns a body at very nearly
+the medium's own value. Two adjust layers make them structural instead: `shade` (grade,
+`mask: {from_layer: subject}`, brightness −0.30 / saturation −0.26) and `gild` (grade,
+`mask: {from_layer: border}`, temperature +0.22 / saturation +0.18). Measured on the live build,
+`shade` alone took title contrast **6.65 → 7.46** and put the outline back. Each sits immediately
+after the layer it grades, so neither ever reaches the other's plate. Generalizes: wherever a
+template's rule is "plate X must be darker/warmer/flatter than everything else", a masked grade
+next to X is cheaper and more reliable than a better adjective.
+
+**A caution this template does NOT resolve.** Its title zone is deliberately wide and crosses
+both the figure and the open medium, which is exactly the worst-region measurement
+`romantasy_vignette` solved by *narrowing* its zone. A four-line justified stack is the shelf
+convention and cannot be narrowed, so the constraint moves to the palette: `primary` (the
+medium's lit core) is capped at roughly **50 L\*** so near-white type holds on it. Take `primary`
+brighter and no scrim, ink flip or zone nudge recovers the title — the autopilot paints a panel
+over the window instead, and the window is the design.
+### 15.27 The value flip, and Archetype Nine (`gilded_sigil`)
+
+Provenance: building Archetype Nine (2026-09-01) off the blockbuster-fantasy
+EMBLEM shelf — a scratched near-black slab, one huge symmetrical device struck
+into it in a single metallic ink, a filled disc at its heart with one small
+creature-silhouette crossing it, an enormous condensed title straight down the
+middle. Five generatable slots, the cheapest template on the shelf. Four things
+came out of it that are not about that one arrangement.
+
+**1. A cover may change value regime partway down, and the ink follows by
+MEASUREMENT.** This shelf's real signature is not the emblem, it is that the
+last fifth of the cover flips pale and the author's name is printed on it in
+near-black. An archetype cannot express that directly: `TextSlot.color_role` is
+deliberately not an `ArchetypeText` field (fonts come from the Direction,
+content from the Brief, ink from TextSlot's own default), and this template did
+not get an exception. It does not need one. compose's legibility autopilot
+escalates a slot's protecting scrim *first* and only then flips to the better of
+two fixed inks — so **a text slot standing on a deliberately bright band is
+declared with NO SCRIM**, the escalation step has nothing to do, and the flip to
+`#111111` happens on its own, every render, correctly measured against whatever
+the band actually came out as. Give that slot a scrim and you get the opposite
+cover: the autopilot darkens the band it was asked to keep bright until white
+type passes on it.
+
+The general rule: **an omitted scrim is a design decision and should be
+commented as one.** Two of this template's tests exist only to stop a later
+reader "fixing" the omission.
+
+**2. `blend: screen` on pure black is how you generate linework; `luminance_of`
+is how you colour it.** Asking a generator for a transparent PNG of thin
+symmetrical engraving returns a soft grey halo where the lines should be.
+Prompting the same thing ON PURE BLACK and screening it drops the ground for
+free with no alpha involved. The cost is that the plate is then fully opaque, so
+`mask: {from_layer: ...}` — a 50%-alpha stencil — masks the entire canvas.
+`mask: {luminance_of: ...}` is the correct source for a screened plate: its
+luminance *is* the linework.
+
+Two consequences worth carrying forward. First, **a screened plate of thin lines
+carries almost no luminance**, so a `gradient_map` through that mask lands as a
+ghost; lift the linework with a masked `grade` BEFORE tinting it, not by raising
+the tint's opacity (opacity pushes the whole ramp toward the light stop and
+gives white lines, not metal ones). Second, mapping an alpha-carrying plate
+through `background -> accent -> text` does two-tone art for free: a dark
+silhouette inside a lit disc maps to `background` while the disc's own falloff
+becomes an accent-to-white metal ramp. Ask the ramp for the two-tone read rather
+than asking a generator for it.
+
+**3. COVER fit does not exempt a plate from the text-art contact guard.** It
+exempts it from the contain-fit *sandwich* machinery, which is a different
+thing, and the first build of this template confused them: a full-canvas veil
+drawn after the title touched 35% of its ink, was reordered below the type
+(cancelling the veil), and then sat there as a screened plate lightening the
+very ground the title's contrast is measured against — 3.87 against a 4.5
+threshold with the title's halo pinned at the 0.85 cap trying to save it. The
+fix is the plate's own gradient mask, opening below the type's last line. **A
+mask on a full-bleed layer drawn over text is an occlusion budget, not
+decoration.**
+
+**4. On a `snap: line_gap` slot the effects are free and the scale is not.**
+`snap` measures the RAW plate alpha (art effect stacks run after placement), and
+snapping records the pair as a sandwich, which exempts the plate from the
+contact guard as well. So no glow, shadow or stroke on that slot can ever cost
+it contact — while `scale` is the only knob that moves it, and it moves less
+than you expect (measured here: 0.21 -> 9%, 0.16 -> 6%, 0.14 -> 4.5%, 0.125 ->
+3.7% against a 4% limit). **A display face has an inter-line gap narrower than
+the void a device was drawn around**, so size the snapped ornament against the
+TYPE, then buy the presence back with a generous halo, which costs nothing.
+
+### 15.31 The single-saturation rule, and Archetype Thirteen (`sable_regalia`)
+
+**The archetype.** `config/cover/archetypes/sable_regalia.yaml` — one ornate object mounted
+head-on above the title like a coat of arms, a fan of tall thin forms bursting behind it, long
+curling arms reaching in from both trims, **the entire art tier in silver and black**, and every
+saturated pixel on the cover spent on a huge three-line foil-stamped title, the author's name in
+the same foil, and a scatter of one small object that matches them. It is the dark-fantasy
+special-edition hardback, and it is the shelf's other pole from the three romantasy templates:
+where those are asymmetric many-coloured collages built around a figure, this is a near-symmetric
+monochrome **emblem** with no figure in it at all.
+
+**The single-saturation rule — the whole template is a stacking order.** `mono_line` is a
+full-frame `grade` at `saturation: -1.0` sitting at a fixed point in `layers`. Everything beneath
+it (ground, all-over ornament, glow, far tier, both arms, the crest) is monochrome *by
+construction*, whatever colours nine separate generations happen to come back as; everything above
+it (the two chroma plates and all four text slots) carries the cover's entire colour budget.
+
+This is not a palette preference, and it is the one thing about this template that cannot be
+softened:
+
+- A red title on a red-lit silver relic is **a red cover**. A red title on a *neutral* silver
+  relic is **foil**. Nothing else in the composition makes metal look stamped.
+- At `saturation: -0.8` a warm-lit generation stays faintly warm under the type, and the effect
+  collapses — so the value is stated as a rule with a test, not left as a dial.
+- The layer *order* is the assertion, so it is tested as an order:
+  `test_sable_regalia_every_mount_plate_is_below_the_mono_line` names both halves. Move a plate
+  across that line and the template stops being this template.
+
+It also resolves what would otherwise be a standoff with §19.4's shelf-wide photoreal ban. That
+ban exists because an untreated photoreal plate is the biggest "AI-generated" tell, and its
+mitigation is stylization — duotone, silhouette, posterize, `photo_soft`. **Every one of those
+destroys this cover**: `photo_soft` maps each plate onto the background→primary ramp, which here
+is BLACK→RED, so the mitigation would paint the relic the colour of the title. `mono_line` *is*
+this template's stylization, which is why it ships `photoreal: true` — and, per the flag's own
+bargain, a finishing `recipe` (`dark_academia` at `recipe_strength: 0.35`) for the vignette, dust
+and paper tooth that put nine generations on one jacket. That recipe's `+0.35` warm step is
+pre-cancelled by `mono_line`'s own `temperature: -0.34`, which is the honest way to borrow a shelf
+recipe you only want two thirds of.
+
+**A mounted mass has no floor — dissolve the foot, do not cut it.** §15.23's cardinal rule is that
+a standing figure must look like it is standing on something, and that when the plate has no floor
+you GENERATE the ground. This is the documented exception, and an exception has to say why it is
+allowed to be one: **nothing here is standing.** The crest is *mounted* — hung, held up, heraldic —
+and a coat of arms does not get a floor, it gets a field.
+
+But a mounted mass still cannot END. A plate whose ink stops in a flat horizontal line inside the
+frame reads as amputated however good it is. So `crest` and `fan` each carry an **inverted linear
+gradient mask** taking their lower thirds down into the ground: the mass arrives out of the dark.
+That is a third answer alongside the two the shelf already had, and the three are now a closed
+set an author picks from when placing any slot:
+
+| the plate's subject | the answer |
+|---|---|
+| grows or hangs — a stem, cane, chain, blade (§15.21 rule 1) | **cut edge**, carried off the trim by `anchor`/`offset` |
+| is a discrete whole object — a berry, a float, a mask (§15.25) | **`keep_whole`**, clamped inside the trim |
+| is mounted, with no cut end and no ground | **foot fade**, an inverted gradient mask |
+
+`cut_edge` and a foot fade are mutually exclusive instructions and the archetype test says so.
+
+**Rule 1's price, and the plate that pays it — a cover-fit plate's only scale knob is the
+prompt.** Keeping the chroma above `mono_line` puts the drift plate structurally IN FRONT of the
+crest; there is nowhere else it can go and stay coloured. So it is the one slot here that can bury
+the subject, and the first build of this archetype did exactly that: asked for "many different
+sizes... sparse... large empty gaps" at `fit: cover`, the generator answered with fist-sized fruit
+filling the frame, which covered the mask, matched the title's own red, and made the title the
+lowest-contrast element on the cover. A `contain` slot would have been fixed with `scale`; a cover
+fit has no scale knob at all, so **the size of the objects has to be stated in the prompt as a
+fraction of the frame** ("no wider than a fortieth of the frame", "perhaps thirty in the whole
+frame"), not implied by adjectives. One $0.03 repaint, and the same fix protects every book that
+ever uses the template. Generalisable: adjectives do not set scale, and on a cover-fit plate
+nothing else can.
+
+**Three smaller things worth stealing.**
+
+- **Near-symmetry, never a mirror.** The composition is heraldic and declares `axis: center`, but
+  the two arms sit at different heights (0.20 / 0.14) and different scales (0.52 / 0.46) and are
+  asked for different *kinds* of thing, and the front chroma plate is pinned off-axis on one side
+  only. Two identical halves are a logo. A symmetry the eye reads as balanced and the measurement
+  reads as unequal is an emblem.
+- **The foil title is built, not coloured.** Flat ink is not foil. The stack is a tight contact
+  shadow, a wide soft one, a two-stop metallic `gradient_overlay` (`accent` body → `primary`
+  highlight, same hue family, 25–40 L\* apart), and a `bevel` — the light rim top-left, the dark
+  rim bottom-right — which is the only layer on the cover that says PRESSED INTO rather than
+  PRINTED ON. Deliberately no `texture_overlay`: a stone or paper plate over the ink reads as
+  *worn*, which is the opposite claim. The ramp stops at `0.95` rather than `1.00` so the
+  legibility autopilot's ink flip retains some authority instead of being driven into halving the
+  finishing stack.
+- **The author's name is a second wordmark.** `font_role: title` on the author slot, wearing the
+  same metallic ramp at `0.85` — visibly the quieter stamp of the two. This is the convention
+  `font_role` was added for and half the shelf runs on it; a plain sans there reads as a different
+  book's credit block.
+
+**The palette contract is this template's own**, and a director has to be told so: `accent` is the
+FOIL BODY and the only saturated colour on the cover, `primary` is the FOIL HIGHLIGHT and must be
+the same hue family, `background` is near-black, `text` is near-white for the two small lines. A
+`primary` from a different hue makes the title look mis-registered rather than metallic. That, the
+casting note ("cast from the book's institution and its relic, not from its characters"), and the
+instruction that `seeds_back` and `seeds_front` get the SAME noun are the whole brief the art
+direction receives.
+
+**Honest scope.** Dark fantasy, gothic horror, grimdark, occult, cursed-object stories. It does
+not fit anything whose cover needs a person, a place, or more than one colour. The riskiest plate
+is `crest`: it is the only object on the cover and must come back symmetrical, ornate and cleanly
+cut out — no template rule can fix one that does not.
+
+Provenance: built 2026-09-01 against the dark-fantasy foil-jacket shelf, and proved on *The
+Orchard of Hollow Saints* (an iron saint's mask over pomegranate seeds), nine draft plates.
+
+Numbering note: §15.26 and §15.27 are Archetypes Eight (`gilded_descent`) and Nine
+(`gilded_sigil`), on sibling branches; §15.28–§15.30 are reserved for Ten through Twelve, two of
+which (`gilded_cartouche`, `uplit_vigil`) were in flight unnumbered when this was written. Whoever
+merges last renumbers, as usual.
+
 ## 16. The director and the atelier (DECIDED 2026-08-31, owner) — how a cover is made now
 
 The old flow was: distil a manuscript *sample* into a grounding sheet, ask one call for N directions, then paint each concept and put it through a fixed critique loop. The new flow is two acts, and it is what the owner arrived at by building six Longsword covers by hand with six agents:
@@ -1908,3 +2145,183 @@ simplest-form-wins ladder (which pushes silhouettes and does not apply to a phot
 and the `treatment` vocabulary. Marked but not carved out, the call obeys a rule it has been told
 it is exempt from; carved out but not marked, it cannot tell which archetypes hold the exemption.
 A test asserts the marker and the rule stay in step.
+
+## 24. Archetype Twelve — `burning_cartouche`, and the two laws it paid for (2026-09-01)
+
+`config/cover/archetypes/burning_cartouche.yaml` — the maximalist dark-romantasy hardcover
+(Kaylie Smith's PHANTASMA and the shelf around it). A patterned near-black wall; a symmetrical
+gilt ornament entering from the top, the bottom and all four corners; two heavy columns of one
+repeated organic form pinned to the side trims; one pale relic centred on a polished floor with a
+token hanging from it on a chain; a foil display title across the lower third; and a band of live
+fire rising over the byline from the bottom trim. Fourteen art slots, twelve of them generated.
+
+**Numbering note:** five sibling sessions drew a template from the same brief on the same day
+and all five initially claimed "Archetype Eight" at v0.176.0 — `engraved_specimen`,
+`sable_regalia`, `gilded_descent`, `gilded_cartouche` and this one. Per owner ruling this template
+takes **Twelve**, last of the five, with the version and spec section numbered to match
+(v0.180.0, §24) on the assumption the other four land as Eight through Eleven at v0.176.0–v0.179.0
+and §20–§23. If they merge in a different order or a different count, this file's section number
+and `__version__` are the two things to rebase — nothing else in the template depends on either.
+The file name was changed off `gilded_cartouche` for a separate reason: a sibling branch shipped
+that exact stem, and two different templates cannot share one.
+
+It is the first template on the shelf whose design argument is **addition**. Every other one earns
+its cover by subtraction — `romantasy_enclosure`'s whole revision history is objects being removed,
+`crossed_relics` deleted a second scatter slot rather than govern it, `pale_reliquary` spends
+two-thirds of its canvas on deliberate emptiness. Here the density *is* the pitch, and the thing
+that keeps it a cover instead of a rug is one structural idea: **the metal is byte-exact symmetric
+and the organic is deliberately not.** `filigree` is ONE generated ornament kaleidoscoped into all
+four corners by `corners: true` — symmetry no generator can produce, which the eye reads instantly
+as *made* — while the two border columns sit at different scales and different heights and `bough`
+exists only to make one upper corner heavier than the other. Make the ornament irregular and the
+cover loses its spine; make the growth symmetric and the whole thing is a damask swatch with a
+title on it.
+
+Two engine laws came out of building it, both learned the expensive way, both worth stealing.
+
+### 24.1 When a composition depends on a shape, get the shape from the ENGINE
+
+The first draft asked a single cover-fit plate for *"a ring of them massed around all four edges…
+through the centre of the frame a LARGE EMPTY HOLE."* The generator filled the hole. Hardening the
+sentence (*"cut out on a FULLY TRANSPARENT background… no fill in the empty middle"*) bought a real
+alpha channel and the hole was still filled — the second render came back as one continuous reef
+texture with the field, the floor, the chain and the title's ground all buried under it.
+
+A cover-fit plate anchored nowhere has no reason to leave a hole. A plate **pinned to a side trim
+cannot fill the middle**, whatever the generator paints. So the ring became two column slots —
+`bower_left` and `bower_right`, `cut_edge` left and right, anchored to their own trims — and rule 2
+of the template stopped being a request and became geometry. This is `elemental_aperture`'s matte
+lesson in a second costume: *the aperture is a matte, not artwork.*
+
+The same ruling applies to `blaze`. Its frame asks for a band *"no more than ONE FIFTH of the way
+up the frame"*; generators return a third, and `place_by: ink` then faithfully scales that third to
+37% of the cover. A linear gradient mask (`start: 0.78, end: 0.99`) fades the band's top out
+whatever comes back — and because the ramp is still climbing where the byline sits, the fire is
+dimmest exactly where the name needs contrast and full strength at the trim. Byline contrast went
+2.49 → 5.84 on that one mask, with no scrim escalation and no finishing attenuation at all.
+
+### 24.2 The visible-width law, and the aspect trap under it
+
+§15.25 established that a contain-fit slot sizes on the ink's **binding axis**. This template made
+the consequence concrete twice in one build, in opposite directions:
+
+- **`blaze` at `scale: 1.25`** assumed wide ink. The plate came back a full-frame *column* of
+  flame, so the ink bound on HEIGHT and 1.25 ran it to 125% of the **canvas height** — fire past
+  the title, 88% of the byline covered, and the legibility autopilot halving the entire finishing
+  stack five times trying to rescue a title that was simply underwater. The fix is in the prompt,
+  not the number: dictate the band's height *as a fraction of its own frame* so the ink is wide by
+  construction, then mask the remainder (§24.1).
+- **`bower_left` at `scale: 0.96`** assumed a narrow column. A 0.30-aspect plate run to full canvas
+  height is **0.46 of the canvas width**, and two of those leave a cover that is 92% border.
+
+Hence the law, which every column slot on this template now carries in a comment: *a full-height
+column is as wide as its own ink aspect makes it; push the surplus out through the trim with
+`offset`, never with `scale`.* Shrinking the plate instead is the tempting move and it is wrong — a
+border that stops short of the top and bottom edges is not a border.
+
+### 24.3 Two smaller rulings
+
+**The chain's cut is hidden by a plate, not by the trim.** `pendant` hangs on the centre axis and
+is the one slot here whose severed end does not leave the frame: it is drawn *before* `relic`, so
+the relic's own body covers the join. That is the legitimate second answer to §15.21 rule 1 — a cut
+end is fine when something opaque is in front of it — and it is why the layer order reads wrong in
+the list and right on the page. It also forces an arithmetic on the two slots above it: the relic
+has to be sized and seated so its foot lands around y=0.54, because any lower and the chain has
+nowhere to hang between it and the tagline. The first build lost the pendant entirely that way.
+
+**A fourth text slot spent on the design, not on marketing.** The reference sets `#1 NEW YORK TIMES
+BESTSELLING AUTHOR` above the byline; this template has no slot for it, on the same ruling
+`crossed_relics` made about the gold SPECIAL EDITION seal — a credit line is marketing for one
+printing, not a piece of the design. The `series` slot is spent instead on the volume numeral,
+set into an **empty medallion** the `crest` prompt asks for at its own centre. That is diegetic
+type on a generated host (§15.22) and it carries the matching hazard: the boss's real position is
+dictated, not measured. The zone's `y` is tuned off a real render rather than guessed, the slot is
+`optional` so a standalone novel leaves the boss blank, and a medallion that lands off-centre is a
+$0.03 repaint of `crest` — **never** a moved zone, or the next book's crest is wrong in the other
+direction.
+
+### 24.4 A wash is a ground only if it is drawn first (the legibility red herring)
+
+Owner note on the first build: *the focal image needs to be softer, and the title needs to be bigger
+and easier to read.* The first two were straightforward. The third produced the most expensive
+false trail in this template's history, and it is worth writing down because the symptom names the
+wrong layer.
+
+`foot_wash` — the feathered black wash at the foot — sat **after** the title in `layers`. That was
+harmless as long as its ramp started at 0.74, below the type, where it only ever touched the
+byline's field. The moment the ramp was moved up to 0.58, then 0.46, then 0.44 to darken the
+*title's* ground, the wash started falling **on the title instead of under it**. A wash over type is
+a veil, and it dims the ink in exact proportion to how much it was meant to be helping.
+
+The render read as a title whose first line was legible and whose last two faded out down a ramp —
+which looks exactly like an ink fault. Three successive tunings of the ink followed, and moved the
+render essentially not at all:
+
+- **ramp bias** — `[accent, text, accent]` → `[accent, text, text]`, so only one end of each stroke
+  sits in the dark stop;
+- **stop order** — discovered along the way that `gradient_overlay` at `angle: 90` lands `stops[0]`
+  at the **bottom** of the alpha bbox, the opposite of the mask helper's documented
+  "top-transparent → bottom-opaque" reading of the same angle. Reversed to `[text, text, accent]`;
+- **ramp authority** — opacity 0.96 → 0.42, which is a real fix for a different problem (below) and
+  did nothing for this one.
+
+Moving `foot_wash` above `subtitle` in the layer order, changing nothing else, took title contrast
+from **4.58 to 15.02** and left enough headroom to give back both the wash's opacity (0.93 → 0.80,
+which had been flattening the foot of the cover to solid black — finial, floor and all) and the
+ramp's authority (0.42 → 0.62, so the title reads as metal again).
+
+**The rule:** any `color_wash` or grade whose job is to be a type's *ground* must appear before that
+type in `layers`. If a wash's ramp is ever moved up into a band that carries type, check what is
+under it first. There is now a test for this archetype's ordering; the general form belongs in any
+template that grounds type with a wash.
+
+**Two smaller findings from the same pass.** *The multi-line ramp trap:* `gradient_overlay` ramps
+across the layer's whole alpha **bbox**, not per glyph and not per line — a shimmer down each
+letterform on a one-line title, but on a three-line stack it puts an entire *line* inside each stop.
+At full opacity that renders the first line solid in the accent. *Where the extra size actually
+came from:* not from a bigger zone and not from `justify_stack`, which is the trap here (§15.24's
+known gap — it shrinks the block to the zone height and clamps short lines at `size_max`, returning
+a two-line title at 0.047, smaller than the uniform fit's 0.063, under a giant "THE"). It came from
+**one more line break**: the uniform fit sizes every line to whatever the longest line can carry, so
+three lines throttled by "DROWNING" beat two throttled by "DROWNING BELL" — +27% on the fitted size,
+with the zone made tall enough that the height does not become the new throttle.
+
+**And rule 3 was restated: dominance is not hardness.** The relic's frame asked for hard edges, a
+cold specular rim and *"every surface mark, crack and pit sharply in focus."* Against a border of
+hundreds of small crisp objects that reads as one more hard thing in a field of hard things, and the
+eye has nowhere to rest. The relic wins by being the **soft, lit, simple** mass in a busy frame:
+broad diffuse light, gentle falloff, an outline that eases rather than cuts, a wider and weaker
+contact shadow than the border plates carry. `relic_soften` — a masked `blur` mixed back at 0.45 —
+backs the prompt up in the engine, so the read does not depend on one generation coming back tender.
+
+### 24.5 `strewn` cut — a slot whose every rule was damage control
+
+Owner note, second revision: *broken shards of pottery and shell should be removed from the
+archetype.* `strewn` — loose detached fragments of the border material, come to rest on the floor
+around the relic's foot — is gone. Eleven generated slots now, not twelve.
+
+The cut is the same ruling `romantasy_enclosure` made about its cabinet of curiosities and
+`crossed_relics` made about its second scatter, and the tell was visible in this template's own
+history without needing the note. Every property `strewn` carried was a rule invented to stop it
+doing damage:
+
+- a **hard scale ceiling** under the relic's, because the first build ran it at 0.68 against a 0.46
+  relic and put debris bigger than the focal object across the middle of the cover;
+- an **off-axis anchor**, because a symmetric spill under a symmetric relic under a symmetric crest
+  is three bullseyes in a column;
+- an **anchor that had to clear the title band**, re-tuned three separate times as the title grew;
+- and it **buried `pendant`** outright on two of those tunings — the one plate rule 5 says the
+  composition comes apart without.
+
+A slot that needs four rules to stop it hurting the design is not being governed, it is being
+tolerated. And the underlying fault was material, not placement: the fragments were made of the
+*same stuff as the border*, so wherever they landed they read as the border having leaked into the
+middle — the one region rule 2 exists to defend.
+
+**The floor between the relic and the type is meant to be empty.** A book that wants debris at its
+relic's foot should ask `floor` for a surface that already has some, which costs no slot, cannot
+drift inward, and is lit by the same light as the plane it sits on.
+
+Worth generalising: on a template built by addition, the honest test for a slot is not "does it look
+good here" but **"how many rules does it need in order to be safe?"** Zero is a structural slot. One
+is a slot with a known hazard. Four is a slot that should not exist.
