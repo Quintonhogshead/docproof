@@ -517,21 +517,21 @@ Two rehearsals, in order. Neither costs anything.
 docproof-watch once --dry-run
 ```
 
-Lists the folder and says what it would do with each file — for **every**
-automation that is switched on, not just formatting. It downloads nothing,
+Says what a pass would **do** — one row per action, for **every** automation
+that is switched on, not just formatting — and nothing else. Files a pass
+would leave alone (already prepared, DocProof's own outputs, a cover image, a
+manuscript marked failed) are counted, not listed. It downloads nothing,
 prepares nothing and uploads nothing; the listing is the only request it makes.
 
 ```
-7 file(s) in the folder:
+8 file(s) in the folder; a pass would act on these:
 
   to prepare                             Wolves of the Yard.docx
   to proofread                           Kestrel - Book One.docx
   to write promo copy for                Kestrel - Book One.docx
-  already prepared                       Kestrel.docx
-  DocProof wrote this                    Kestrel - book 0.docx
-  DocProof wrote this                    Kestrel - book 0 - notes.md
-  not a manuscript                       cover art.png
-  needs attention                        Broken.docx
+
+  5 other file(s) left alone (already prepared, DocProof's own outputs, not
+  manuscripts, or marked failed).
 
 A real run would prepare 1 manuscript(s), proofread 1 and write promo copy for
 1. Nothing was downloaded, prepared or uploaded.
@@ -728,6 +728,22 @@ The folder an author and a designer are both looking at should hold
 manuscripts, not apologies, so nothing is uploaded to explain. If you would
 rather it said so out loud, `upload_failure_note: true` in `watch.json` puts a
 short `prep_failed_<book>.md` there instead.
+
+**A manuscript DocProof cannot read is marked on the first night.** A legacy
+`.doc`, a corrupt or password-protected file, a tracked change of a kind
+nobody can resolve (inserted or merged table cells): that is a fact about the
+file, and trying it on three separate nights would only fail the same way
+three times and delay the moment somebody hears. It is marked `failed` with the
+reason at once and reported. (Ordinary tracked changes are not a refusal any
+more — formatting accepts them first and says so in its notes, see
+[prep.md](prep.md#what-it-doesnt-do).)
+
+**A book that is present but marked `failed` is named as such.** When HubSpot
+still says an author is ready and the `<surname> - Book Original` is in the
+folder carrying a `failed` marker from an earlier pass, the log and the report
+say so — with the recorded reason and date — rather than calling the author
+"waiting" or "missing its Book Original". Fix the file and clear the marker to
+have it tried again, or move the status on.
 
 **Everything else is tried again.** A model that would not answer, a folder
 that would not list, a network that was not there: the file is left unmarked

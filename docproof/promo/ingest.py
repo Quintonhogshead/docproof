@@ -1,10 +1,9 @@
 """Reading a finished manuscript for promo: the whole book as plain text.
 
-Promo only ever reads. Prep refuses a document with unresolved tracked changes
-because it restyles every paragraph and will not do that on top of edits nobody
-has decided about; promo has no such stake — it takes the text as it stands and
-asks a model to write about it — so it opens files prep would turn away. It
-reuses prep's paragraph walker for the extraction (same tested code that reads
+Promo only ever reads. Review refuses a document with unresolved tracked
+changes by default; promo has no such stake — it takes the text as it stands
+and asks a model to write about it — so it opens files review would turn away
+(prep does too, from the accepted view). It reuses prep's paragraph walker for the extraction (same tested code that reads
 every paragraph, blanks and headings included) and wraps it in a tolerant
 preflight that checks the file is a real .docx and nothing more.
 """

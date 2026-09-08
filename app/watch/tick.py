@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from app.jobs import Job, JobRunner, JobStore
+from app.jobs import REFUSED, Job, JobRunner, JobStore
 from app.settings import Paths, get_api_key, resource_root
 
 from . import drive, folders, hubspot, naming, notify, plan, prep, promo, proof
@@ -36,7 +36,8 @@ from .drive import DriveError, DriveFile
 from .hubspot import HubSpotAuthError, HubSpotError
 from .keys import key_from_name
 from .settings import GOOGLE_KEY, HUBSPOT_KEY, WatchSettings
-from .stages import (FORMATTED, JOB_PROP, OUTPUT_PROP, PLAN_DONE, PLAN_FAILED,
+from .stages import (AT_PROP, FORMATTED, JOB_PROP, OUTPUT_PROP, PLAN_DONE,
+                     PLAN_FAILED, REASON_PROP,
                      PLAN_PENDING, PREVIEW_GATED, PREVIEW_PLAN, PREVIEW_PROMO,
                      PROMO_DONE, PROMO_FAILED, PROMO_PENDING, PROOF_AWAITING,
                      PROOF_DONE, PROOF_FAILED, PROOF_HUMAN, PROOF_PROP,
@@ -115,6 +116,10 @@ class TickReport:
     # rides the same alert email. Each is (author, reason).
     stuck_ready: list[tuple[str, str]] = field(default_factory=list)
     plan: list[tuple[str, str]] = field(default_factory=list)
+    # Dry run only: files in the folder a pass would leave alone — already
+    # prepared, DocProof's own outputs, not manuscripts, marked failed. Counted
+    # so the preview can say "and N others untouched" without listing them.
+    left_alone: int = 0
     dry_run: bool = False
 
     @property
@@ -1026,6 +1031,10 @@ class DiscoveryStage:
     id_set: Callable[[Any, str], None]
     candidate: Callable[[DriveFile], bool]
     already_done: Callable[[DriveFile], bool]
+    # Whether this stage already tried the file and marked it failed. Such a
+    # file is not a candidate (the marker keeps it out of the nightly run) but
+    # it is not missing either, and the report has to say which.
+    already_failed: Callable[[DriveFile], bool]
     # Whether this record is still this stage's to finish — the test that
     # re-lists an in-flight book's folder after its status has moved off ready.
     in_flight: Callable[[Any], bool]
@@ -1053,6 +1062,7 @@ def format_stage(ws: WatchSettings) -> DiscoveryStage:
         id_set=lambda r, v: setattr(r, "hubspot_id", v),
         candidate=lambda f: classify(f) is Stage.NEW_MANUSCRIPT,
         already_done=lambda f: classify(f) is Stage.DONE,
+        already_failed=lambda f: classify(f) is Stage.FAILED,
         in_flight=lambda r: r.marked != FORMATTED,
         source_stage=naming.SOURCE_STAGE,
         source_name=naming.is_source_name,
@@ -1074,6 +1084,8 @@ def proof_stage(ws: WatchSettings) -> DiscoveryStage:
         candidate=is_proof_candidate,
         already_done=lambda f: (f.app_properties.get(PROOF_PROP)
                                 in PROOF_TERMINAL),
+        already_failed=lambda f: (f.app_properties.get(PROOF_PROP)
+                                  == PROOF_FAILED),
         in_flight=lambda r: r.proof_marked not in PROOF_TERMINAL,
         source_stage=naming.PROOF_SOURCE_STAGE,
         source_name=naming.is_proof_source_name,
@@ -1206,14 +1218,17 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
     # whose HubSpot status simply never moved, not a missing one.
     intake_files = [f for f in contents if stage.source_name(f.name, last)]
     intake_done = any(stage.already_done(f) for f in intake_files)
+    intake_failed = [f for f in intake_files if stage.already_failed(f)]
 
     def _unprepared(missing_detail: str) -> None:
         """Account for a ready author with no book to prepare — none dropped
         silently. A finished book whose status stuck gets its own alert (so a
-        person can move HubSpot on); a genuine absence is a missing source file
-        — the `Book Original` for formatting, the dev-edited `Book 1` for
-        proofing; an intake present but unfinished was already reported when the
-        run failed, so it is not raised again."""
+        person can move HubSpot on); an intake already tried and marked failed
+        is a person's to fix, and is named as such rather than reported as
+        missing; a genuine absence is a missing source file — the `Book
+        Original` for formatting, the dev-edited `Book 1` for proofing; an
+        intake present but unfinished was already reported when the run
+        failed, so it is not raised again."""
         ready = stage.ready_value
         if intake_done:
             log.info("Waiting: %s is flagged ready but its book is already "
@@ -1224,6 +1239,9 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
                          f"'{last} - {stage.source_stage}' is already "
                          f"{stage.done_word} — the status never moved on, so "
                          f"check the write-back."))
+        elif intake_failed:
+            _report_failed_intake(author, intake_failed[0], stage=stage,
+                                  report=report)
         elif intake_files:
             log.info("Waiting: %s is flagged ready; its intake file is present "
                      "but not yet prepared (a prior run may have failed).",
@@ -1304,6 +1322,7 @@ def _discover_nested(token: str, ws: WatchSettings, record, first: str,
     same as an empty author folder is."""
     queued = 0
     flagged = 0
+    failed_intakes: list[DriveFile] = []
     for folder in book_folders:
         contents = drive.list_folder(token, folder.id, opener=opener)
         manuscripts = [f for f in contents if stage.candidate(f)]
@@ -1311,6 +1330,9 @@ def _discover_nested(token: str, ws: WatchSettings, record, first: str,
             manuscripts = [f for f in manuscripts
                            if stage.source_name(f.name, last)]
         if not manuscripts:
+            failed_intakes += [f for f in contents
+                               if stage.source_name(f.name, last)
+                               and stage.already_failed(f)]
             continue
         if len(manuscripts) > 1:
             reason = (f"{len(manuscripts)} new manuscripts are in {author}'s "
@@ -1341,12 +1363,39 @@ def _discover_nested(token: str, ws: WatchSettings, record, first: str,
 
     if queued or flagged:
         return
+    if failed_intakes:
+        # The book is there; it was tried and marked failed. Not missing.
+        _report_failed_intake(author, failed_intakes[0], stage=stage,
+                              report=report)
+        report.waiting += 1
+        return
     ready = stage.ready_value
     detail = (f"none of its {len(book_folders)} book folder(s) holds a "
               f"'{last} - {stage.source_stage}'")
     log.info("Waiting: %s is flagged ready but %s.", author, detail)
     report.missing_source.append((author, f"flagged '{ready}' but {detail}."))
     report.waiting += 1
+
+
+def _report_failed_intake(author: str, file: DriveFile, *,
+                          stage: DiscoveryStage, report: TickReport) -> None:
+    """A ready author whose intake file is present but carries this stage's
+    failed marker. The nightly run rightly leaves it alone (the marker is what
+    stops a bad file being tried forever), but "Waiting" and "no Book
+    Original" are both the wrong words for it: the file exists, DocProof
+    already said no to it, and a person has to act — fix the file and clear
+    the marker, or move the status on. Named with the reason and the date the
+    marker recorded, so the log answers the question it raises."""
+    props = file.app_properties
+    why = props.get(REASON_PROP) or "no reason was recorded"
+    when = (props.get(AT_PROP) or "")[:10]
+    dated = f" on {when}" if when else ""
+    reason = (f"flagged '{stage.ready_value}' but its '{file.name}' was "
+              f"already tried{dated} and marked failed: {why}. Fix the file "
+              f"and clear the marker to try again, or move the status on.")
+    log.warning("Needs a person: %s is flagged ready but '%s' is marked "
+                "failed%s (%s).", author, file.name, dated, why)
+    report.needs_human.append((author, reason))
 
 
 def _adopt(token: str, subfolder_id: str, listing: list[DriveFile],
@@ -1391,6 +1440,18 @@ def _one(token: str, home: Path, ws: WatchSettings, file: DriveFile,
     if job.state == "failed" and job.verified is False:
         _refuse(token, ws, file, job, rec, state, listing,
                 dest_folder_id=dest_folder_id, opener=opener, report=report)
+        return
+    if job.state == "failed" and job.error_kind == REFUSED:
+        # Turned away at the door — a legacy .doc, a corrupt file, a revision
+        # nobody can resolve. That is a fact about the file, not about the
+        # weather: trying it on three separate nights would fail the same way
+        # three times and only delay the moment somebody hears about it. So
+        # it is marked now, with the reason, and reported now.
+        reason = job.error or "DocProof could not read the manuscript."
+        log.error("%s was not formatted: %s", file.name, reason)
+        prep.mark_source(token, file, job, rec, state, failed=reason,
+                         opener=opener)
+        report.failed.append((file.name, reason))
         return
     if job.state != "done":
         # Something transient — a model that would not answer, a disk that
@@ -1500,7 +1561,11 @@ def _prepare(token: str, home: Path, ws: WatchSettings, file: DriveFile,
                     and existing.results_dir
                     and Path(existing.results_dir).is_dir())
         if finished or (existing.state == "failed"
-                        and existing.verified is False):
+                        and (existing.verified is False
+                             or existing.error_kind == REFUSED)):
+            # Done, proven wrong, or turned away: each is a settled answer,
+            # so the job is handed back for `_one` to finish acting on rather
+            # than run again.
             log.info("%s was already prepared; picking up where the last run "
                      "stopped.", file.name)
             return existing
@@ -1755,6 +1820,8 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
         report.new = sum(1 for _, stage in report.plan
                          if stage == Stage.NEW_MANUSCRIPT.value)
         report.plan = _preview_rows(ws, every, report.plan)
+        acted_on = {name for name, _stage in report.plan}
+        report.left_alone = sum(1 for f in every if f.name not in acted_on)
         return report
 
     paths = Paths(root).ensure()
@@ -1804,6 +1871,10 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     return report
 
 
+# The `classify` answers a pass acts on. Everything else it leaves where it is.
+PREVIEW_ACTIONS = (Stage.NEW_MANUSCRIPT.value, Stage.PROOF_MANUSCRIPT.value)
+
+
 def _preview_rows(ws: WatchSettings, listing: list[DriveFile],
                   rows: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """What a dry run says a pass would do — for every automation, and only as
@@ -1828,16 +1899,21 @@ def _preview_rows(ws: WatchSettings, listing: list[DriveFile],
     Promo and the plan stand aside entirely in subfolder mode (see `run_promo`),
     so a preview that listed them there would describe work that cannot happen.
 
+    And only what it would DO. A file already prepared, one DocProof wrote,
+    a cover image, a manuscript marked failed: a pass leaves each of those
+    alone, so none of them is a row. The button says "what a pass would do",
+    and a table that answered with everything in the folder made a person
+    read past six "DocProof wrote this" lines to find the one book it meant.
+    What was left alone is counted (`report.left_alone`), not itemized.
+
     Nothing here changes what a real pass does: `tick` returns before this on a
     real pass, and the only caller is the dry-run branch.
     """
+    rows = [(name, stage) for name, stage in rows
+            if stage in PREVIEW_ACTIONS]
     gated = ws.hubspot_enabled and not ws.subfolders_enabled
     if gated:
-        rows = [(name, stage + PREVIEW_GATED)
-                if stage in (Stage.NEW_MANUSCRIPT.value,
-                             Stage.PROOF_MANUSCRIPT.value)
-                else (name, stage)
-                for name, stage in rows]
+        rows = [(name, stage + PREVIEW_GATED) for name, stage in rows]
     if ws.subfolders_enabled:
         return rows
 

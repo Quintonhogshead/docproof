@@ -463,15 +463,15 @@ def test_a_preview_says_what_a_pass_would_do_and_touches_nothing(client,
                                                                  tmp_path):
     configured(client)
     client.app_state.watch._tick = lambda h, ws, **kw: TickReport(
-        listed=2, new=1, dry_run=True,
-        plan=[("Wolves.docx", "new"), ("cover.png", "skip")])
+        listed=2, new=1, left_alone=1, dry_run=True,
+        plan=[("Wolves.docx", "new")])
 
     body = client.post("/api/watch/preview").json()
 
     assert body["new"] == 1
-    assert body["plan"][0] == {"name": "Wolves.docx", "stage": "new",
-                               "label": "to prepare"}
-    assert body["plan"][1]["label"] == "not a manuscript"
+    assert body["plan"] == [{"name": "Wolves.docx", "stage": "new",
+                             "label": "to prepare"}]
+    assert body["left_alone"] == 1
     assert not (client.home / "jobs").exists()
 
 

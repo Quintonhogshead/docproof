@@ -740,7 +740,7 @@ input.addEventListener('change', () => upload([...input.files]));
 zone.addEventListener('drop', (e) => upload([...e.dataTransfer.files]));
 
 // A corrections job is an InDesign book plus a proof — a marked-up PDF or a
-// redlined Word file. The proof is not a job file (the manuscript preflight
+// redlined Word file. The proof is not a job file (the review preflight
 // refuses tracked changes and does not read PDFs at all), so a corrections drop
 // is split here: the proof is held on state.correctionsSource for the one-button
 // read-and-apply, and the book goes on to stage the normal way.
@@ -1610,8 +1610,11 @@ function fileSummary(f) {
   if (isPrep()) {
     if (!f.prep) return f.prep_error || 'cannot be prepared.';
     const p = f.prep;
+    const revs = p.accepted_revisions
+      ? `; ${p.accepted_revisions} tracked change${p.accepted_revisions === 1 ? '' : 's'} will be accepted first`
+      : '';
     return `${p.paragraphs} paragraphs, ${p.words.toLocaleString()} words`
-      + `, ${p.blank_lines} blank line${p.blank_lines === 1 ? '' : 's'} to sort out`;
+      + `, ${p.blank_lines} blank line${p.blank_lines === 1 ? '' : 's'} to sort out${revs}`;
   }
   if (!f.can_review) return f.review_error || 'cannot be reviewed.';
   const kept = keptFor(f).size;
@@ -8065,7 +8068,12 @@ $('watch-preview').addEventListener('click', async () => {
   try {
     const body = await api('/api/watch/preview', { method: 'POST' });
     renderWatchPlan(body.plan);
-    watchNote(note, `A pass would ${previewCounts(body)}. Nothing was `
+    // The table holds only what a pass would do; the rest of the folder is a
+    // count, so "do nothing" beside a folder of forty files still adds up.
+    const rest = body.left_alone
+      ? ` ${body.left_alone} other file${body.left_alone === 1 ? '' : 's'} in the folder would be left alone.`
+      : '';
+    watchNote(note, `A pass would ${previewCounts(body)}.${rest} Nothing was `
       + 'downloaded, prepared or uploaded.', 'muted');
   } catch (err) {
     watchNoteWithFix(note, err.message);

@@ -239,10 +239,16 @@ model and by document.
 - **Headers, footers and notes are left alone.** A house template supplies its
   own running heads. They are counted in the notes so you can see they were
   seen.
-- **Tracked changes are refused outright.** Prep restyles every paragraph and
-  deletes blank lines; doing that around somebody's unresolved edit would bury
-  it. Accept or reject them in Word first. (Review has a policy for this; prep
-  deliberately does not.)
+- **Tracked changes are accepted first, not formatted around.** A manuscript
+  that arrives with revisions still showing is formatted from its accepted
+  view — insertions kept, deletions dropped, deleted paragraph marks joined —
+  exactly what "Accept All" in Word would leave. Prep restyles every paragraph
+  and deletes blank lines, and doing that on top of open revisions would nest
+  revisions inside revisions. The notes say how many were accepted, and the
+  tracked file starts from the accepted text, so rejecting everything in it
+  gives you the accepted manuscript, not the one with the author's revisions
+  still open. The one thing prep still refuses is a table-cell revision
+  (inserted, deleted or merged cells): accept those in Word.
 - **`.doc`, `.rtf`, `.odt`, `.txt`** are converted with LibreOffice if it is
   installed, and refused with a clear message if it isn't. A `.txt` source has
   no italics to recover, and the notes say so.
@@ -260,7 +266,7 @@ model and by document.
 ```
 docproof/prep/
 ├── convert.py      .doc/.rtf/.odt/.txt → .docx, via LibreOffice
-├── ingest.py       every w:p, blanks included; refuses tracked changes
+├── ingest.py       every w:p, blanks included; accepts tracked changes first
 ├── chunker.py      ordered windows, with the tail of the previous one
 ├── tagger.py       the one model call; enum schema from the style sheet
 ├── rules.py        body first, scene breaks, sanity checks, flags
