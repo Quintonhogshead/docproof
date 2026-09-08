@@ -464,6 +464,7 @@ def test_handoff_writes_the_contract_files(book, tmp_path):
         outcome_sources=[ws / "deliverable" / "outcome.json"])
     assert sorted(p.name for p in written) == [
         "Ford - Book 2 - Author Letter.docx",
+        "Ford - Book 2 - clean.docx",
         "Ford - Book 2 - decision-log.md",
         "Ford - Book 2 - letter.md",
         "Ford - Book 2 - outcome.json",
@@ -473,6 +474,9 @@ def test_handoff_writes_the_contract_files(book, tmp_path):
     ]
     # The change log is NOT the manuscript.
     assert (out / "Ford - Book 2.docx").read_bytes() == FIXTURE.read_bytes()
+    # The clean copy is derived from the manuscript, not copied from anywhere.
+    from docproof.cleancopy import has_markup
+    assert not has_markup(out / "Ford - Book 2 - clean.docx")
     assert json.loads((out / "Ford - Book 2 - outcome.json").read_text(
         "utf-8"))["outcome"] == "done"
 
@@ -500,10 +504,10 @@ def test_a_full_run_hands_off_and_uploads(book, tmp_path):
                      drive_folder_id="folder-9", upload=upload,
                      handoff_dir=tmp_path / "handoff").run()
     assert result.outcome == "done"
-    # Seven files: the manuscript, the author letter, and the five for the
+    # Eight files: the manuscript, its clean copy, the author letter, and the five for the
     # house.
-    assert len(result.handoff) == 7
-    assert len(result.uploaded) == 7
+    assert len(result.handoff) == 8
+    assert len(result.uploaded) == 8
     assert {f for _n, f in uploaded} == {"folder-9"}
     assert ("Ford - Book 2.docx", "folder-9") in uploaded
     assert ("Ford - Book 2 - Author Letter.docx", "folder-9") in uploaded

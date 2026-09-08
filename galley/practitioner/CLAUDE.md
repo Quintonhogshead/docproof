@@ -507,8 +507,12 @@ context ~150 times. Keep your window lean:
      anchors checked against the original, the untracked preparation, the
      production notes, and the honest limit that dependent reads give no
      statistical residual estimate.
-   Read all three back before hand-off. The hand-off is SIX files
-   (`… - verification.md` joins the set); `build_handoff` refuses without it.
+   Read all three back before hand-off. The hand-off is EIGHT files: the
+   tracked-changes docx, its clean copy (`… - clean.docx`, every change
+   accepted and every comment removed — DERIVED by `build_handoff` from the
+   tracked file, never built by you), `… - Author Letter.docx`, the letter,
+   the style sheet, the decision log, `… - verification.md` and
+   `… - outcome.json`; `build_handoff` refuses without any of them.
 
 ## Lessons from the Redding run (2026-09-01) — doctrine, not suggestions
 
