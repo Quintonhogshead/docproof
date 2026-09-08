@@ -77,6 +77,11 @@ PLAN_PROP = "docproof.plan"
 # has a non-terminal value — "awaiting", written when an external practitioner
 # has the book and the watcher is waiting for the hand-off files to appear.
 PROOF_PROP = "docproof.proof"
+# Interior corrections' own marker, on the designer's IDML rather than on a
+# manuscript: "done" once the Book N.5 and its spreadsheet are in the folder and
+# HubSpot has moved on; "failed" after the attempts ran out. Separate again, so
+# the IDML stage never reads another stage's "done".
+CORRECTIONS_PROP = "docproof.corrections"
 
 FORMATTED = "formatted"
 FAILED = "failed"
@@ -97,6 +102,9 @@ PROOF_DONE = "done"
 PROOF_HUMAN = "human"
 PROOF_FAILED = "failed"
 PROOF_TERMINAL = (PROOF_DONE, PROOF_HUMAN, PROOF_FAILED)
+CORRECTIONS_DONE = "done"
+CORRECTIONS_FAILED = "failed"
+CORRECTIONS_TERMINAL = (CORRECTIONS_DONE, CORRECTIONS_FAILED)
 
 
 # Two more rows a DRY RUN can produce, for the automations `classify` knows

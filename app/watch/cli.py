@@ -165,6 +165,34 @@ def main(argv=None) -> int:
     ini.add_argument("--proof-budget", type=float,
                      help="dollars one book's proofread may cost; 0 uses the "
                           "tier's own default")
+    ini.add_argument("--enable-corrections", action="store_true",
+                     help="also apply the author's Pre-Proof Interior Design "
+                          "Corrections Form to the designer's IDML when a "
+                          "record is flagged 'Ready for Corrections' (needs "
+                          "HubSpot and subfolders on)")
+    ini.add_argument("--disable-corrections", action="store_true",
+                     help="stop applying interior corrections (the default)")
+    ini.add_argument("--hubspot-corrections-ready-value",
+                     help="the status value the form workflow sets (default "
+                          "'Ready for Corrections')")
+    ini.add_argument("--hubspot-corrections-done-value",
+                     help="the status value DocProof sets once the Book N.5 "
+                          "and its spreadsheet are back (default "
+                          "'Corrections Applied')")
+    ini.add_argument("--hubspot-corrections-file-property",
+                     help="the record property the workflow copies the form's "
+                          "uploaded file URL into")
+    ini.add_argument("--hubspot-corrections-text-property",
+                     help="the record property the workflow copies the form's "
+                          "typed corrections into")
+    ini.add_argument("--corrections-folder-name",
+                     help="the author subfolder holding the designer's IDML "
+                          "(default 'Interior Design')")
+    ini.add_argument("--corrections-no-model-passes",
+                     dest="corrections_model_passes", action="store_false",
+                     default=None,
+                     help="apply deterministically only: skip the sanity gate, "
+                          "second look and escalation the panel runs by default")
     ini.add_argument("--hubspot-read-only", dest="hubspot_write_back",
                      action="store_false", default=None,
                      help="gate on HubSpot but never write back to it (a book "
@@ -339,6 +367,7 @@ def cmd_init(args, home: Path) -> int:
         ws.notify_on_complete = args.notify_on_complete
     _apply_hubspot(args, ws)
     _apply_proofing(args, ws)
+    _apply_corrections(args, ws)
     _apply_subfolders(args, ws)
     ws.save(home)
 
@@ -382,6 +411,17 @@ def cmd_init(args, home: Path) -> int:
         if ws.proof_runner == "app":
             budget = ws.proof_budget_usd or "the tier default"
             print(f"  reading at {ws.proof_tier}, up to {budget} per book")
+    if ws.corrections_enabled:
+        print(f"Interior corrections on: "
+              f"'{ws.hubspot_corrections_ready_value or '— not set'}' → "
+              f"'{ws.hubspot_corrections_done_value or '— not set'}'")
+        print(f"  reading '<surname> - Book N.idml' in '{ws.corrections_folder_name}', "
+              f"handing back '<surname> - Book N.5.idml' + corrections.xlsx")
+        print(f"  form file property: "
+              f"{ws.hubspot_corrections_file_property or '— not set'}; text "
+              f"property: {ws.hubspot_corrections_text_property or '— not set'}"
+              + ("" if ws.corrections_model_passes
+                 else "  (deterministic only: no model passes)"))
     print(f"Keeping its things in {home}")
     missing = _missing(ws)
     if missing:
@@ -485,6 +525,56 @@ def _apply_proofing(args, ws: WatchSettings) -> None:
     for attr, prompt in _PROOF_REQUIRED.items():
         if not getattr(ws, attr):
             setattr(ws, attr, _ask(prompt))
+
+
+_CORRECTIONS_FLAGS = (
+    ("hubspot_corrections_ready_value", "hubspot_corrections_ready_value"),
+    ("hubspot_corrections_done_value", "hubspot_corrections_done_value"),
+    ("hubspot_corrections_file_property", "hubspot_corrections_file_property"),
+    ("hubspot_corrections_text_property", "hubspot_corrections_text_property"),
+    ("corrections_folder_name", "corrections_folder_name"),
+    ("corrections_model_passes", "corrections_model_passes"),
+)
+
+# What the stage cannot run without. The two values ship with defaults; the form
+# properties do not — they are the press's own property names, so they are asked
+# for (at least one of the two) when the stage is switched on and both are blank.
+_CORRECTIONS_REQUIRED = {
+    "hubspot_corrections_ready_value": "Which value means 'ready for corrections'",
+    "hubspot_corrections_done_value": "Which value means 'corrections applied'",
+    "corrections_folder_name": "Which author subfolder holds the designer's IDML",
+}
+
+
+def _apply_corrections(args, ws: WatchSettings) -> None:
+    """Fold the `--*-corrections` flags in, and fill any required field left
+    blank once the stage is switched on — the posture every stage takes."""
+    if getattr(args, "disable_corrections", False):
+        ws.corrections_enabled = False
+    for attr, flag in _CORRECTIONS_FLAGS:
+        value = getattr(args, flag, None)
+        if value is not None:
+            setattr(ws, attr, value)
+    if getattr(args, "enable_corrections", False):
+        ws.corrections_enabled = True
+    if not ws.corrections_enabled:
+        return
+    if not ws.hubspot_enabled or not ws.subfolders_enabled:
+        print("Note: interior corrections need the HubSpot gate and per-author "
+              "subfolders on — the form flips a CRM value and the IDML lives in "
+              "the author's folder. Enable them with --enable-hubspot and "
+              "--enable-subfolders.")
+    for attr, prompt in _CORRECTIONS_REQUIRED.items():
+        if not getattr(ws, attr):
+            setattr(ws, attr, _ask(prompt))
+    if not (ws.hubspot_corrections_file_property
+            or ws.hubspot_corrections_text_property):
+        ws.hubspot_corrections_file_property = _ask(
+            "Which property holds the form's uploaded-file URL (blank if the "
+            "form has no upload)")
+        if not ws.hubspot_corrections_file_property:
+            ws.hubspot_corrections_text_property = _ask(
+                "Which property holds the form's typed corrections")
 
 
 # The name properties subfolder mode cannot resolve a folder without.

@@ -4510,6 +4510,15 @@ function correctionsActions(job) {
   actions.append(openButton(job, 'corrections-notes',
     WEB ? 'Download the report (Markdown)' : 'Open the report notes', note,
     { quiet: true }));
+  // The two-sheet Excel ledger: every correction the run received, on exactly
+  // one of "Applied" / "Not applied", with the page it was marked on and the
+  // InDesign page it landed on. Built from the same data as the report.
+  const sheet = openButton(job, 'corrections-sheet',
+    WEB ? 'Download the spreadsheet (Excel)' : 'Open the spreadsheet', note,
+    { quiet: true });
+  sheet.title = 'An Excel workbook with two sheets, Applied and Not applied: '
+    + 'every correction received, once, with its page.';
+  actions.append(sheet);
   // The read-only InDesign check tour: a script that walks the designer to each
   // composition check and open flag in the live document — the one thing no file
   // comparison can settle. Offered only when the run left something to walk to.
@@ -7444,6 +7453,13 @@ function renderWatch(body, quiet) {
   $('proof-done').value = w.hubspot_proof_done_value ?? '';
   $('proof-needs-human').value = w.hubspot_proof_needs_human_value ?? '';
   applyProofRunnerHint();
+  $('corrections-enabled').checked = !!w.corrections_enabled;
+  $('corrections-ready').value = w.hubspot_corrections_ready_value ?? '';
+  $('corrections-done').value = w.hubspot_corrections_done_value ?? '';
+  $('corrections-file-prop').value = w.hubspot_corrections_file_property ?? '';
+  $('corrections-text-prop').value = w.hubspot_corrections_text_property ?? '';
+  $('corrections-folder').value = w.corrections_folder_name ?? '';
+  $('corrections-model-passes').checked = w.corrections_model_passes !== false;
   $('watch-archive-enabled').checked = w.archive_enabled;
   $('watch-archive-folder').value = w.archive_folder_id || '';
   $('watch-archive-source').checked = w.archive_include_source;
@@ -9405,6 +9421,11 @@ function automationWorkflows() {
                        && pl.hubspot_plan_done_value);
   const proofReady = !!(w.hubspot_enabled && w.hubspot_proof_ready_value
                         && w.hubspot_proof_done_value);
+  const corrReady = !!(w.hubspot_enabled && w.subfolders_enabled
+                       && w.hubspot_corrections_ready_value
+                       && w.hubspot_corrections_done_value
+                       && (w.hubspot_corrections_file_property
+                           || w.hubspot_corrections_text_property));
   // When a workflow reads "Needs setup", `setup` names what's missing and where
   // to fix it: a `target` tab jumps straight there, `self` opens the drawer
   // whose own fields are the fix, and a null target means the blocker is a
@@ -9438,6 +9459,28 @@ function automationWorkflows() {
         : (w.hubspot_enabled
             ? { hint: 'Fill in the HubSpot trigger and done values.',
                 target: 'self' }
+            : hubspotMissing),
+    },
+    {
+      id: 'corrections', name: 'Interior corrections',
+      sub: 'Author form → Book N.5 IDML + spreadsheet',
+      trigger: {
+        text: w.hubspot_corrections_ready_value
+          ? 'HubSpot: ' + w.hubspot_corrections_ready_value : 'HubSpot status',
+        hs: true,
+      },
+      effect: 'Book N.5 + Applied / Not applied sheet',
+      config: 'wf-config-corrections',
+      enabled: !!w.corrections_enabled, toggleable: true,
+      status: !w.corrections_enabled ? 'off' : (corrReady ? 'on' : 'setup'),
+      // Needs HubSpot, subfolder mode (the IDML lives in the author's folder),
+      // both dropdown values, and at least one of the two form properties the
+      // workflow copies the submission into. The CLI sets the rest.
+      setup: (!w.corrections_enabled || corrReady) ? null
+        : (w.hubspot_enabled
+            ? { hint: 'Run `docproof-watch init --enable-corrections` to name '
+                + 'the form properties (and turn subfolders on).',
+                target: null }
             : hubspotMissing),
     },
     {
@@ -9675,8 +9718,8 @@ function applyDrawer() {
   const layout = $('wf-layout');
   if (!drawer || !layout) return;
   const x = automationWorkflows().find((w) => w.id === wfUI.selected);
-  ['wf-config-prep', 'wf-config-proof', 'wf-config-promo',
-   'wf-config-plan'].forEach((cid) => {
+  ['wf-config-prep', 'wf-config-proof', 'wf-config-corrections',
+   'wf-config-promo', 'wf-config-plan'].forEach((cid) => {
     const el = $(cid); if (el) el.hidden = !(x && cid === x.config);
   });
   drawer.hidden = !x;
@@ -9691,7 +9734,8 @@ function applyDrawer() {
   // A drawer's setup banner: what's still missing, and a jump to fix it. Only
   // the drawers that have one are listed; a `self` target has no jump, because
   // the fields under the banner are the fix.
-  [['prep', 'wf-prep-setup'], ['proof', 'wf-proof-setup']].forEach(([id, el]) => {
+  [['prep', 'wf-prep-setup'], ['proof', 'wf-proof-setup'],
+   ['corrections', 'wf-corrections-setup']].forEach(([id, el]) => {
     const banner = $(el);
     if (!banner) return;
     const s = x && x.id === id ? x.setup : null;
@@ -9723,6 +9767,11 @@ async function toggleWorkflow(x) {
         body: JSON.stringify({ promo_enabled: !x.enabled }),
       });
       await loadPromoSettings();
+    } else if (x.id === 'corrections') {
+      renderWatch(await api('/api/watch', {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ corrections_enabled: !x.enabled }),
+      }));
     } else if (x.id === 'plan') {
       await api('/api/promo/plan-settings', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -9851,6 +9900,32 @@ $('wf-proof-save').addEventListener('click', async () => {
         // Sent even when blank: an empty box is a real choice here — that
         // verdict then writes nothing and the book waits for a person.
         hubspot_proof_needs_human_value: $('proof-needs-human').value,
+      }),
+    });
+    renderWatch(body);
+    watchNote(note, 'Saved.', 'ok');
+  } catch (err) {
+    watchNote(note, err.message, 'error');
+  } finally { button.disabled = false; }
+});
+
+// The Interior corrections drawer: the switch, the two HubSpot values, the two
+// form properties, the designer's folder name and the model-passes switch.
+$('wf-corrections-save').addEventListener('click', async () => {
+  const button = $('wf-corrections-save');
+  const note = $('wf-corrections-note');
+  note.hidden = true; button.disabled = true;
+  try {
+    const body = await api('/api/watch', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        corrections_enabled: $('corrections-enabled').checked,
+        hubspot_corrections_ready_value: $('corrections-ready').value,
+        hubspot_corrections_done_value: $('corrections-done').value,
+        hubspot_corrections_file_property: $('corrections-file-prop').value,
+        hubspot_corrections_text_property: $('corrections-text-prop').value,
+        corrections_folder_name: $('corrections-folder').value,
+        corrections_model_passes: $('corrections-model-passes').checked,
       }),
     });
     renderWatch(body);

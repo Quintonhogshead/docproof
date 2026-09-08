@@ -20,6 +20,8 @@ dependencies = [
     "pypdf>=5.0",
     # Word bounding boxes anchor PDF highlights accurately in justified text.
     "pdfplumber>=0.11",
+    # Writes the corrections spreadsheet.
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]

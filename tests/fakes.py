@@ -253,6 +253,11 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
         path = parsed.path
 
         if "api.hubapi.com" in request.full_url:
+            if request.get_method() == "GET":
+                # A form-uploaded file, served by the id at the end of the path;
+                # `content` holds its bytes under that id, like a Drive file.
+                _maybe_fail("hubspot_file")
+                return Response(content.get(path.rsplit("/", 1)[-1], b""))
             if path.endswith("/search"):
                 _maybe_fail("hubspot_search")
                 body = json.loads(request.data)

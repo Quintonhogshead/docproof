@@ -61,6 +61,16 @@ class WatchUpdate(BaseModel):
     # refuses an empty value rather than blanking the status property — so the
     # book stays at the ready value for a person. The panel says so.
     hubspot_proof_needs_human_value: str | None = None
+    # Interior corrections: the switch, the two dropdown values, the two form
+    # properties the workflow copies the submission into, the designer's
+    # subfolder name, and whether the run buys the model passes.
+    corrections_enabled: bool | None = None
+    hubspot_corrections_ready_value: str | None = None
+    hubspot_corrections_done_value: str | None = None
+    hubspot_corrections_file_property: str | None = None
+    hubspot_corrections_text_property: str | None = None
+    corrections_folder_name: str | None = None
+    corrections_model_passes: bool | None = None
     # Bounds so a slip in the UI cannot spend a morning's worth of manuscripts
     # in one pass, or set a clock that never stops going off.
     max_files_per_tick: int | None = Field(default=None, ge=1, le=50)
@@ -273,12 +283,18 @@ def register(app: FastAPI) -> None:
         # So they are set with `is not None`, not with a truth test — an admin
         # clearing the needs-a-human box has to be able to mean it.
         for name in ("hubspot_proof_ready_value", "hubspot_proof_done_value",
-                     "hubspot_proof_needs_human_value"):
+                     "hubspot_proof_needs_human_value",
+                     "hubspot_corrections_ready_value",
+                     "hubspot_corrections_done_value",
+                     "hubspot_corrections_file_property",
+                     "hubspot_corrections_text_property",
+                     "corrections_folder_name"):
             value = getattr(update, name)
             if value is not None:
                 setattr(ws, name, value.strip())
         for name in ("upload_failure_note",
                      "require_source_label", "proofing_enabled",
+                     "corrections_enabled", "corrections_model_passes",
                      "max_files_per_tick", "auto_ticks", "tick_every_minutes",
                      "archive_enabled", "archive_include_source"):
             value = getattr(update, name)

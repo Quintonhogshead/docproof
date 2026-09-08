@@ -204,6 +204,56 @@ def set_properties(token: str, object_type: str, record_id: str,
                what=f"mark the {object_type} record done")
 
 
+def download_file(token: str, url: str, dest_dir, *, opener=_open_url,
+                  fallback_name: str = "submission") -> "Path":
+    """A file the author attached to a HubSpot form, onto disk.
+
+    A form's file-upload field stores the uploaded file as a URL on the record —
+    a signed `form-integrations/.../signed-url-redirect/...` link, or a
+    `hubspotusercontent` address. The bearer token rides along only to HubSpot's
+    own hosts, never to wherever a redirect lands. The name comes from the URL's
+    `filename=` (what the author called it), else the Content-Disposition, else
+    the path; a name with no suffix cannot be read, and the caller says so."""
+    from pathlib import Path
+    import re as _re
+    import urllib.parse
+
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise HubSpotError(f"{url!r} is not a web address DocProof can fetch.")
+    request = urllib.request.Request(url, method="GET")
+    host = (parsed.hostname or "").lower()
+    if host.endswith("hubapi.com") or host.endswith("hubspot.com"):
+        request.add_header("Authorization", f"Bearer {token}")
+    with _answer(request, opener=opener, what="download the form's file") as r:
+        body = r.read()
+        disposition = ""
+        headers = getattr(r, "headers", None)
+        if headers is not None:
+            disposition = headers.get("Content-Disposition", "") or ""
+    query = urllib.parse.parse_qs(parsed.query)
+    name = (query.get("filename") or [""])[0]
+    if not name and disposition:
+        m = _re.search(r"filename\*?=(?:UTF-8\'\')?\"?([^\";]+)", disposition)
+        if m:
+            name = urllib.parse.unquote(m.group(1))
+    if not name:
+        name = urllib.parse.unquote(parsed.path.rsplit("/", 1)[-1])
+    name = name.replace("/", "-").replace(":", "-").strip() or fallback_name
+    folder = Path(dest_dir)
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / name
+    target.write_bytes(body)
+    return target
+
+
+def file_urls(value: str) -> list[str]:
+    """The URL(s) a file-upload property holds. HubSpot joins several with a
+    semicolon; whitespace and blanks are dropped."""
+    return [part.strip() for part in (value or "").replace("\n", ";").split(";")
+            if part.strip()]
+
+
 def name_matches(stored: str, key: str) -> bool:
     """Whether a filename's author key names this record.
 

@@ -31,7 +31,8 @@ from typing import Any, Callable
 from app.jobs import REFUSED, Job, JobRunner, JobStore
 from app.settings import Paths, get_api_key, resource_root
 
-from . import drive, folders, hubspot, naming, notify, plan, prep, promo, proof
+from . import (corrections, drive, folders, hubspot, naming, notify, plan,
+               prep, promo, proof)
 from .drive import DriveError, DriveFile
 from .hubspot import HubSpotAuthError, HubSpotError
 from .keys import key_from_name
@@ -93,6 +94,10 @@ class TickReport:
     # person is expected to act, so it earns a status line and the owner email
     # the same way `missing_source` does. Each is (book, reason).
     awaiting_proof: list[tuple[str, str]] = field(default_factory=list)
+    # Designer exports the corrections stage applied the author's form to this
+    # pass, each with its tally ("Johnson - Book 3.idml: 41 of 58 applied").
+    # Its own list again, so a pass reports each stage separately.
+    corrected: list[str] = field(default_factory=list)
     uploaded: list[str] = field(default_factory=list)
     failed: list[tuple[str, str]] = field(default_factory=list)
     # Manuscripts a person must sort out before DocProof can act — chiefly a file
@@ -1741,6 +1746,31 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
                 "Marketing plans are switched on but " + ", ".join(blanks)
                 + " is not set. Run `docproof-watch init` to fill it in.")
 
+    if ws.corrections_enabled:
+        # Interior corrections are driven by a value of the same dropdown and
+        # find the designer's IDML through the author's folder, so both HubSpot
+        # and subfolder mode must be on, and the form's properties named —
+        # half-configured would find no corrections to apply and say nothing.
+        if not ws.hubspot_enabled or not ws.subfolders_enabled:
+            raise NotConfigured(
+                "Interior corrections are switched on but HubSpot or per-author "
+                "subfolders are not. The form flips a HubSpot status and the "
+                "IDML lives in the author's folder, so both have to be on. Run "
+                "`docproof-watch init`, or turn corrections off.")
+        blanks = [name for name, value in (
+            ("hubspot_corrections_ready_value", ws.hubspot_corrections_ready_value),
+            ("hubspot_corrections_done_value", ws.hubspot_corrections_done_value),
+            ("corrections_folder_name", ws.corrections_folder_name),
+        ) if not value]
+        if not (ws.hubspot_corrections_file_property
+                or ws.hubspot_corrections_text_property):
+            blanks.append("hubspot_corrections_file_property or "
+                          "hubspot_corrections_text_property")
+        if blanks:
+            raise NotConfigured(
+                "Interior corrections are switched on but " + ", ".join(blanks)
+                + " is not set. Run `docproof-watch init` to fill it in.")
+
     if ws.subfolders_enabled:
         # Routing into per-author subfolders needs a name to route by, and that
         # name comes from HubSpot — so subfolder mode without HubSpot, or
@@ -1863,6 +1893,11 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     # the three stages touching each other. Flat mode only, like promo.
     run_plans(token, root, ws, listing, state, runner, store, mock=mock,
               opener=opener, hs_token=hs_token, report=report)
+    # Interior corrections run last, on their own value of the dropdown, over
+    # the designer's IDML in the author's "Interior Design" folder — a file no
+    # other stage reads — and on their own marker and state fields.
+    corrections.run_stage(token, root, ws, state, runner, store, mock=mock,
+                          opener=opener, hs_token=hs_token, report=report)
 
     # Last, and on the same Google token the folder was read with: a pass that
     # left something for a person says so, once, by email. Best-effort — see
@@ -1954,6 +1989,9 @@ def _drain(runner: JobRunner, state: WatchState,
     # novel is the most expensive thing here to finish for nothing.
     owner.update({rec.proof_job_id: fid for fid, rec in state.files.items()
                   if rec.proof_job_id})
+    # And the corrections jobs, on their own field.
+    owner.update({rec.corrections_job_id: fid for fid, rec in state.files.items()
+                  if rec.corrections_job_id})
     runner.resume_interrupted()
     while True:
         try:

@@ -112,6 +112,20 @@ class FileRecord:
     # Whether the owner has been told this book is waiting on an external
     # practitioner. One email per book, not one per tick.
     proof_awaiting_emailed: bool = False
+    # Interior corrections, on the designer's IDML's own file id and its own
+    # lifecycle: the record here is keyed by the source "<surname> - Book N.idml",
+    # never by a manuscript. `subfolder_id` above doubles as the folder its
+    # outputs go back into (the "Interior Design" folder the IDML was found in).
+    corrections_job_id: str = ""
+    corrections_hubspot_id: str = ""     # the ready record it matched
+    corrections_hubspot_done: bool = False
+    corrections_marked: str = ""         # "" | "done" | "failed"
+    corrections_attempts: int = 0
+    corrections_uploaded: dict[str, str] = field(default_factory=dict)
+    # What the author sent, so `status` can say it without re-reading HubSpot:
+    # "pdf" | "docx" | "text" and the file it was saved as.
+    corrections_input_kind: str = ""
+    corrections_input_name: str = ""
     modified_time: str = ""
     updated_at: str = ""
 

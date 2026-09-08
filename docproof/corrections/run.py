@@ -96,6 +96,10 @@ class CorrectionsOutputs:
     # document. None when there was nothing to tour (a clean run), or in
     # verify-only mode (no file was written to tour).
     tour_jsx: Path | None = None
+    # The two-sheet Excel ledger ("Applied" / "Not applied") built from the same
+    # payload as `corrections.json`, so every correction the run received is on
+    # exactly one sheet with its page. None when it could not be written.
+    spreadsheet: Path | None = None
 
     @property
     def applied(self) -> int:
@@ -696,6 +700,10 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
         pages=(pages_placed, pages_total), pages_cited=pages_cited,
         checks=checks,
         merged_away=merged_away, page_labels=page_labels, queue=queue)
+    # The spreadsheet ledger, from the JSON just written so the two can never
+    # disagree. Best-effort — the IDML is the deliverable, so a sheet that
+    # cannot be written is logged, never raised.
+    spreadsheet = _write_spreadsheet(out, src_idml, report_json, corrected.name)
     # The InDesign check tour: a read-only script that selects the designer onto
     # each composition check and open flag in the live document. Built from the
     # same `checks` and `queue` the report carries, against the corrected file so
@@ -726,7 +734,24 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
         reanchored=reanchored, merged=merged, merged_away=merged_away,
         resolved=resolved, advised=advised,
         pages_placed=pages_placed, pages_total=pages_total, checks=checks,
-        tour_jsx=tour_jsx)
+        tour_jsx=tour_jsx, spreadsheet=spreadsheet)
+
+
+def _write_spreadsheet(out: Path, src_idml, report_json: Path,
+                       corrected_name: str) -> Path | None:
+    """Write `<stem>_corrections.xlsx` beside the report — the same stem the
+    corrected file and the check tour use — from the payload in `report_json`.
+    None, with a logged warning, when it cannot be written."""
+    try:
+        import json as _json
+        from .spreadsheet import write_spreadsheet
+        payload = _json.loads(report_json.read_text(encoding="utf-8"))
+        return write_spreadsheet(
+            payload, out / f"{Path(src_idml).stem}_corrections.xlsx",
+            corrected_name=corrected_name)
+    except Exception:                  # noqa: BLE001 - the run stands without it
+        log.warning("Could not write the corrections spreadsheet", exc_info=True)
+        return None
 
 
 def _verify_status_of(verify_report: VerifyReport):
@@ -770,6 +795,8 @@ def verify_corrections(before_idml: str | Path, after_idml: str | Path,
     report_md, report_json = write_report(
         out, source_path=before_idml, after_path=after_idml, parse=parsed,
         apply=None, verify=verify_report, comments=dispositions)
+    spreadsheet = _write_spreadsheet(out, before_idml, report_json,
+                                     Path(after_idml).name)
     log.info("Corrections verified for %s: %s",
              Path(after_idml).name,
              "clean" if verify_report.clean else
@@ -777,4 +804,4 @@ def verify_corrections(before_idml: str | Path, after_idml: str | Path,
     return CorrectionsOutputs(
         report_md=report_md, report_json=report_json, parse=parsed,
         verify=verify_report, corrected_idml=None, apply=None,
-        comments=dispositions)
+        comments=dispositions, spreadsheet=spreadsheet)

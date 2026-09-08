@@ -40,7 +40,7 @@ log = logging.getLogger("docproof.app.watch.archive")
 # (see app/watch/proof.py), filed under its own name so a proofread's case file,
 # letter and verdict are found where a person would look for them.
 KIND_FOLDER = {"review": "Reviews", "prep": "Prep", "promo": "Promo",
-               "galley": "Proofing"}
+               "galley": "Proofing", "corrections": "Corrections"}
 
 # The manifest's fixed name, and the marker that this folder/file is the
 # archive's. `docproof.job` is spelled the same as the watcher's JOB_PROP on
@@ -538,6 +538,12 @@ def _mime(name: str) -> str:
         return JSON_MIME
     if low.endswith(".md"):
         return MARKDOWN_MIME
+    if low.endswith(".xlsx"):
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if low.endswith(".idml"):
+        return "application/vnd.adobe.indesign-idml-package"
+    if low.endswith(".jsx"):
+        return "text/plain"
     return "application/octet-stream"
 
 
