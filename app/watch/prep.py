@@ -30,10 +30,11 @@ from pathlib import Path
 
 from docproof import prep as preplib
 from docproof.batch import new_job_id
-from docproof.prep.convert import ensure_docx
+from docproof.ingest import IngestError
+from docproof.prep.convert import ConversionError, ensure_docx
 from docproof.prep.verify import VerificationFailed
 
-from app.jobs import Job, JobRunner, JobStore
+from app.jobs import REFUSED, Job, JobRunner, JobStore
 
 from . import drive, naming
 from .drive import DOCX_MIME, DriveFile
@@ -126,6 +127,12 @@ def run_job(runner: JobRunner, store: JobStore, job: Job, *,
             _run_mock(runner, store, job)
         else:
             runner.run_one(job.id)
+    except (IngestError, ConversionError) as e:
+        # The rehearsal's `prepare` raises these straight through; the real
+        # runner records them itself (see `JobRunner._run_prep`). Same record
+        # either way: a refusal, not a failure worth another night.
+        log.error("Preparing %s was refused: %s", job.filename, e)
+        store.update(job.id, state="failed", error=str(e), error_kind=REFUSED)
     except Exception as e:                # noqa: BLE001 - mirrors _work
         log.exception("Preparing %s failed", job.filename)
         store.update(job.id, state="failed", error=str(e))

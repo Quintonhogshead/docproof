@@ -721,6 +721,22 @@ manuscripts, not apologies, so nothing is uploaded to explain. If you would
 rather it said so out loud, `upload_failure_note: true` in `watch.json` puts a
 short `prep_failed_<book>.md` there instead.
 
+**A manuscript DocProof cannot read is marked on the first night.** A legacy
+`.doc`, a corrupt or password-protected file, a tracked change of a kind
+nobody can resolve (inserted or merged table cells): that is a fact about the
+file, and trying it on three separate nights would only fail the same way
+three times and delay the moment somebody hears. It is marked `failed` with the
+reason at once and reported. (Ordinary tracked changes are not a refusal any
+more — formatting accepts them first and says so in its notes, see
+[prep.md](prep.md#what-it-doesnt-do).)
+
+**A book that is present but marked `failed` is named as such.** When HubSpot
+still says an author is ready and the `<surname> - Book Original` is in the
+folder carrying a `failed` marker from an earlier pass, the log and the report
+say so — with the recorded reason and date — rather than calling the author
+"waiting" or "missing its Book Original". Fix the file and clear the marker to
+have it tried again, or move the status on.
+
 **Everything else is tried again.** A model that would not answer, a folder
 that would not list, a network that was not there: the file is left unmarked
 and the next pass has another go — resuming from the checkpoint, so the
