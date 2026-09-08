@@ -1,0 +1,673 @@
+# =============================================================================
+# ARCHETYPE ELEVEN — gilded_cartouche
+# =============================================================================
+#
+# Reference DNA: the DELUXE SPECIAL EDITION romantasy hardcover — the sprayed-
+# edge, foiled-case, Bookstagram-object tier of the shelf (K.M. Moronova's
+# ONCE WRITTEN IN GILDED BLOOD is the canonical example; the whole
+# signed-edition subscription-box market runs on this arrangement). It is not
+# a picture of the story. It is a HERALDIC EMBLEM of the story, printed on a
+# slab of expensive-looking stone, and its promise to the buyer is that the
+# physical object is worth owning.
+#
+# The composition is an ALTARPIECE. Perfect bilateral symmetry in the
+# architecture; one long vertical relic standing dead on the centre axis; an
+# ornate carved enclosure closing around it; organic mass crowding in from
+# both sides at different heights; and an enormous gilded display title
+# stacked down the middle of the relic's shaft, with the gilding physically
+# RUNNING OFF the letterforms.
+#
+# At thumbnail size it must read as ONE BRIGHT VERTICAL COLUMN OF TYPE INSIDE
+# A DARK ORNAMENTED OVAL. Everything below exists to protect that read.
+#
+# Like Archetypes One, Six and Seven this template is written to be ONE-SHOT.
+# The art direction chooses NINE NOUNS, five hexes, two fonts, a tagline and a
+# set of title line breaks. Placement, scale, cut edges, effects, adjust
+# layers, scrims, occlusion budget and layer order are decided here, once.
+#
+# -----------------------------------------------------------------------------
+# THE SEVEN RULES THIS TEMPLATE ENCODES
+# -----------------------------------------------------------------------------
+#
+# 1. THE FIELD IS A MATERIAL, NOT A COLOUR — AND ITS FIGURE IS A SECOND PLATE.
+#    A near-black cover with a flat ground is a hole in the shelf. This one is
+#    printed on a slab with visible internal figure (veining, grain, crazing,
+#    weave, circuitry — whatever the book's world is made of), and the BRIGHT
+#    branching tracery through it is `veins`, a separate screen-blended plate.
+#    That separation is load-bearing: asked for in one prompt, a generator
+#    paints the figure at the same value as the stone and it disappears; as
+#    its own screen layer it can be pushed to exactly the intensity that makes
+#    the field feel lit from within without ever competing with the type.
+#
+# 2. THE RELIC IS WHOLE AND VERTICAL, AND ITS HEAD IS THE TOP NOTE. This is
+#    the deliberate INVERSE of pale_reliquary's rule 3, and the two templates
+#    should be read together. There, a rigid relic lies on a diagonal and
+#    bleeds at BOTH ends, because a diagonal that stops inside the frame reads
+#    as a dropped stick. Here the relic stands upright on the centre axis and
+#    is `keep_whole: true` with NO `cut_edge`, because the whole point of a
+#    ceremonial object presented head-on is that you are shown all of it — its
+#    ornamented terminal, sitting above the title's first line, is the single
+#    highest-chroma note in the top third and the reason the eye starts at the
+#    top of the cover. Sever it and you have a stick again.
+#
+# 3. THE WHOLE COMPOSITION IS BILATERALLY SYMMETRIC. Not the architecture
+#    alone — EVERYTHING. `architecture`, `cartouche`, `relic`, `gilt_front`
+#    and `runoff` are each prompted symmetric about their own centre line, and
+#    the two flanking clusters carry EQUAL MASS AT EQUAL HEIGHT AND EQUAL
+#    SCALE: same anchor y, same scale, same offset magnitude, same count in
+#    the frame text. The template's own numbers enforce it, so it cannot be
+#    lost to art direction.
+#
+#    This corrects the rule's first draft, which said the opposite — symmetry
+#    in the architecture, asymmetry in the growth, two different scales at two
+#    different heights — on the theory that a rigid frame with unruly matter
+#    growing over it was the genre. It is not what the shelf actually does,
+#    and the first build proved it: one flank climbing higher and larger than
+#    the other turned the emblem into a still life with a lean, and the eye
+#    went to the heavier corner instead of down the centre axis. The whole
+#    argument this template makes — that the book is a ceremonial object worth
+#    owning — is carried by symmetry. An altarpiece is symmetric. A coat of
+#    arms is symmetric. A shrine is symmetric. Break the axis and you have
+#    thrown the argument away.
+#
+#    THE ASYMMETRY LIVES IN THE DETAIL, NOT IN THE PLACEMENT. The two flanks
+#    are separate slots, and separate nouns, precisely so the matched masses
+#    are not a photocopy of each other: different individual forms, different
+#    angles, different states, inside two silhouettes of the same size sitting
+#    at the same height. Symmetric mass, asymmetric contents. Mirror one plate
+#    into both corners instead and the cover reads as a printing error.
+#
+# 4. THE TITLE IS THE ARTWORK, NOT A LABEL ON IT. Four interlocking lines
+#    across ~0.45 of frame height in `justify_stack`, gilded by a
+#    gradient_overlay and a bevel rather than set in a flat ink. Every plate
+#    in the composition is placed to leave it a clear vertical corridor, and
+#    the corridor is the relic's own dark shaft — see rule 6.
+#
+# 5. NOTHING IS DRAWN IN FRONT OF THE TYPE, AND THE TYPE IS THE BRIGHTEST
+#    THING ON THE COVER. This template has NO front tier. That is unusual on
+#    this shelf — Archetypes One, Six and Seven all run a sandwich, and this
+#    one shipped with one too: a `runoff` plate of metal running off the
+#    letterforms, plus ornament curls crossing the last line, on the standard
+#    argument that without a plate drawn after the type an ornate title is a
+#    sticker sitting on a picture.
+#
+#    That argument loses here, and it is worth being clear about why rather
+#    than treating this as a lost feature. This title is FOUR lines of ornate
+#    display face across 0.45 of frame height — it is not a two-word slug with
+#    room to spare. Every crossing costs it ink, the composer demotes any
+#    front plate that costs too much (which silently cancels the sandwich you
+#    paid for), and the one remaining crossing still measured 13.8% of the
+#    title's glyph ink. Meanwhile the depth this template needs is already
+#    carried three other ways: the relic is drawn after the whole back tier,
+#    the enclosure closes over the flanks, and the title's own stacked contact
+#    shadow and bevel lift it off the field. A sandwich was buying a fourth
+#    copy of something the cover already had, at the price of the one element
+#    that has to be perfectly legible.
+#
+#    So `runoff` is deleted rather than demoted — it existed only to be in
+#    front of the type, and drawn behind it, it is drips floating in space —
+#    and `gilt_front` keeps its corners but is drawn BEFORE the title.
+#
+#    The second half of the rule is not decoration either: the type must be
+#    the brightest ink on the cover, brighter than the relic's metal. See the
+#    z-order note on why that is a LAYER ORDER fact before it is a colour one. So `runoff` is
+#    `keep_whole: true` and must not be carried off the trim.
+#
+# 6. THE TITLE CORRIDOR IS ONE VALUE REGIME. Inherited verbatim from
+#    romantasy_vignette rule 5 and just as binding: legibility is measured
+#    WORST-REGION, so a title crossing both a bright relic head and a dark
+#    field fails on whichever half its single ink does not suit, and the
+#    autopilot then starts dismantling the finishing stack trying to fix it.
+#    The relic's shaft behind the title is therefore prompted DARK, NARROW AND
+#    QUIET for its whole length, all its ornament gathered into the head above
+#    the type. If a render wants a scrim here, the relic plate is wrong — not
+#    the type.
+#
+# 7. CHROMA IS ONE FIELD HUE AND ONE METAL. Two hues on the whole cover. The
+#    clusters take the FIELD's hue, not their own natural one — that is why
+#    the reference's roses are ink-blue rather than red, and it is the single
+#    biggest reason the object looks expensive. `tonal_spine` enforces it from
+#    above; `chroma_pull` desaturates the organic tier from below. A third hue
+#    turns the altarpiece into a bouquet.
+#
+# -----------------------------------------------------------------------------
+# ROLES, NOT NOUNS
+# -----------------------------------------------------------------------------
+#
+#   field          the figured slab the whole cover is printed on
+#   veins          bright branching tracery running through that slab
+#   motes          fine suspended matter, drifting low in the stack
+#   architecture   the far tier: tall repeated verticals rising behind, symmetric
+#   cartouche      THE ENCLOSURE — one dark ornate closed frame, symmetric
+#   cluster_left   large rounded forms, the left flank
+#   cluster_right  large rounded forms, the right flank — SAME mass, SAME
+#                  height, SAME scale, different contents
+#   relic          THE VERTICAL — one long rigid object, whole, centre axis,
+#                  ornate at the head and quiet down the shaft
+#   gilt_front     metallic ornament, lower corners, symmetric pair
+#
+# EVERY FRAME BELOW IS WRITTEN IN GEOMETRY, NOT IN NOUNS, AND MUST STAY THAT
+# WAY — the doctrine romantasy_vignette had to learn the hard way. A slot asks
+# for A LONG RIGID THING ORNAMENTED AT ONE END, or A CLUSTER OF LARGE ROUNDED
+# FORMS, or A SYMMETRIC PAIR OF CURLING ORNAMENTS. What those things ARE is
+# the art direction's only say, and that is the whole point of the template.
+#
+# Three books this skeleton fits, sharing not one noun:
+#   figured stone / lightning veins / a longsword, jewelled at the pommel /
+#   great ink-blue roses / carved acanthus scroll / gilt curls
+#   black glass / cold circuit tracery / a spinal antenna crowned in sensors /
+#   clusters of glass floats / a machined bezel / chrome flanges
+#   smoked resin / gold kintsugi seams / a lacquered oar with a carved crest /
+#   knots of dried chrysanthemum / a lacquer cartouche / brass mon
+#
+# -----------------------------------------------------------------------------
+# THE OCCLUSION BUDGET IS ZERO
+# -----------------------------------------------------------------------------
+# No plate is drawn after the title, and none may be added. The composer's
+# demotion machinery therefore never fires on this template, and the title's
+# measured contrast is a property of the FIELD BEHIND IT alone — which is what
+# makes rule 6's "one value regime" corridor enforceable instead of aspirational.
+# If a future book wants something crossing its type, it wants a different
+# archetype.
+# =============================================================================
+name: gilded_cartouche
+genres: [fantasy, romance, historical, horror]
+axis: center
+recipe: dark_academia
+recipe_strength: 0.30          # the emblem supplies its own vignette in
+                               # `cartouche` and `edge_close`; at full
+                               # strength the shelf recipe cooks ten
+                               # separately-lit plates into one sepia mass
+describe: >-
+  A rigorously symmetric near-black figured slab lit from within by bright
+  branching veins, with one long ornate relic standing whole on the centre
+  axis inside a carved symmetric enclosure, matched masses of large rounded
+  growth crowding in from both sides at the same height, and an enormous gilded four-line display title stacked
+  down the relic's shaft with the gilding physically running off the
+  letterforms. Metallic ornament curls into the lower corners in FRONT of the
+  type; credit line and author at the foot over a feathered wash.
+composition_note: >-
+  Painted as a rich photoreal deluxe-edition book-cover illustration, lit by a
+  single cool key from the upper left with warm metallic specular highlights
+  picking out every raised edge — deep near-black shadow, full value range,
+  jewel-like rendering. No scene, no horizon, no sky, no landscape, no
+  figures, no faces, no hands, no vignette, no cast shadow on any surface.
+
+# =============================================================================
+art:
+# -- the slab -----------------------------------------------------------------
+  - id: field
+    role: ground
+    generatable: true
+    procedural: gradient       # $0 fallback only; this slot is meant to be painted
+    fit: cover
+    prompt_frame: >-
+      A full-frame surface of {subject}, filling the frame edge to edge, very
+      dark and deep with fine internal figure and mottling drifting through
+      it, slightly warmer and lighter toward the centre and sinking to near
+      black in the corners. Completely empty — nothing lying on it, nothing
+      in front of it.
+
+  - id: veins
+    role: tracery
+    # Rule 1. Screen, because this is light coming THROUGH the slab, not a
+    # pattern printed on it. Its own plate so its intensity is a dial.
+    generatable: true
+    transparent: true
+    fit: cover
+    blend: screen
+    opacity: 0.42
+    prompt_frame: >-
+      A full-frame network of {subject} — fine bright branching lines forking
+      and tapering as they travel, thick where they begin and hairline where
+      they end, spreading unevenly across the frame with large empty areas
+      between them. On pure black, nothing else in the frame.
+
+  - id: motes
+    role: particles
+    # One whole plate, never `scatter` (Archetype One rule 3). Low in the
+    # stack: this is atmosphere inside the slab, not glitter on top of it.
+    generatable: true
+    transparent: true
+    fit: cover
+    blend: screen
+    opacity: 0.30
+    prompt_frame: >-
+      A full-frame scattering of {subject} suspended in empty air at many
+      different sizes, some sharp and near, some tiny and far out of focus,
+      irregular and sparse with large empty gaps and no two alike. On pure
+      black.
+
+  - id: keylight
+    # The single cool key restated on the field, so the centre is fractionally
+    # brighter than the corners before the recipe's vignette closes them down.
+    # This is what makes the enclosure read as a ring rather than a rectangle.
+    generatable: false
+    fit: cover
+    procedural: radial_glow
+    opacity: 0.26
+    blend: screen
+
+# -- the far tier -------------------------------------------------------------
+  - id: architecture
+    role: far_tier
+    # Rule 3's symmetric half. Cut at the top: these RISE, so their upper ends
+    # leave through the trim and the composition has no visible ceiling.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink              # pale_reliquary rule 0 — measure the ink, not
+                               # the model's arbitrary transparent margin
+    cut_edge: top
+    anchor: [0.50, 0.00]
+    offset: [0.00, -0.05]
+    scale: 0.84
+    opacity: 0.58
+    prompt_frame: >-
+      A bilaterally symmetric arrangement of {subject} — tall parallel
+      vertical structures rising in matched pairs on the left and the right,
+      the tallest at the outer edges and stepping down toward the middle,
+      with the whole centre of the frame left completely empty between them.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.016, alpha: 0.42}
+
+# -- the enclosure ------------------------------------------------------------
+  - id: cartouche
+    role: enclosure
+    # Rule 3. NOT cut and NOT bled: a frame sliced by the trim stops being a
+    # frame, which is the pale_reliquary rule 0b question asked of an
+    # enclosure — this plate holds a CLOSED FIGURE, so it is clamped inside.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    keep_whole: true
+    anchor: [0.50, 0.53]
+    scale: 0.88
+    prompt_frame: >-
+      One single closed ornamental frame made of {subject}, perfectly
+      symmetric about its vertical centre line, tall and narrow — a rounded
+      arch at the top narrowing to a point at the bottom, its two long sides
+      bowing outward and its detail gathering into heavy scrolled masses at
+      the four corners. Very dark, almost silhouetted, lit only by narrow
+      highlights along its raised edges. The entire inside of the frame is
+      completely empty and open.
+    effects:
+      - {kind: drop_shadow, dy: 0.008, blur: 0.018, alpha: 0.50}
+
+# -- the growth, asymmetric by construction -----------------------------------
+  - id: cluster_left
+    role: cluster
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: left
+    anchor: [0.00, 0.24]
+    offset: [-0.09, 0.00]
+    scale: 0.56
+    prompt_frame: >-
+      A crowded cluster of {subject} — six or seven large rounded forms at
+      different sizes and angles and in different states, some fully opened
+      out and some still closed, packed so they overlap into one mass with
+      smaller ones filling the gaps between the big ones, and no two alike.
+    effects:
+      - {kind: drop_shadow, dy: 0.007, blur: 0.014, alpha: 0.52}
+
+  - id: cluster_right
+    role: cluster
+    # Rule 3: EVERY placement number here is cluster_left's, mirrored — same
+    # anchor y, same scale, same offset magnitude, same count in the frame
+    # below. Only the noun differs. Drifting any of these apart is how the
+    # first build lost its axis.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    cut_edge: right
+    anchor: [1.00, 0.24]
+    offset: [0.09, 0.00]
+    scale: 0.56
+    prompt_frame: >-
+      A crowded cluster of {subject} — six or seven large rounded forms at
+      different sizes and angles and in different states, some fully opened
+      out and some still closed, packed so they overlap into one mass with
+      smaller ones filling the gaps between the big ones, and no two alike.
+    effects:
+      - {kind: drop_shadow, dy: 0.007, blur: 0.014, alpha: 0.52}
+
+# -- THE VERTICAL -------------------------------------------------------------
+  - id: relic
+    role: focal_subject
+    # Rules 2 and 6. Whole, upright, dead centre, drawn AFTER the entire back
+    # tier so nothing can bury it — the ordering fix Archetype One's `hero`
+    # and romantasy_vignette's `subject` both needed. Measured by its ink so
+    # `scale` sizes the OBJECT and the centre axis really is its own axis.
+    generatable: true
+    transparent: true
+    fit: contain
+    place_by: ink
+    keep_whole: true
+    anchor: [0.50, 0.50]
+    scale: 0.90
+    prompt_frame: >-
+      One single {subject}, standing perfectly upright and seen straight on,
+      complete from end to end with nothing cut off, symmetric about its own
+      vertical centre line. ALL of its ornament, jewelling and detail is
+      gathered into the head at the TOP END, which is small, bright and
+      intricate. Below the head the long shaft is narrow, dark, plain and
+      completely unornamented for its entire length — one quiet unbroken
+      vertical with no jewels, no engraving and no bright highlights anywhere
+      along it.
+    effects:
+      - {kind: drop_shadow, dy: 0.009, blur: 0.016, alpha: 0.48}
+      - {kind: outer_glow, blur: 0.030, alpha: 0.26}
+
+# -- the corner ornament, drawn BEFORE the title (rule 5) ---------------------
+#
+  - id: gilt_front
+    role: corner_ornament
+    # Rule 3's symmetric half, restated at the foot. Cover-fit so its
+    # own edges are always outside the trim and the pair always lands in the
+    # two lower corners; the middle of its frame is prompted empty so it
+    # intrudes on the title's LAST line only.
+    generatable: true
+    transparent: true
+    fit: cover
+    opacity: 0.95
+    prompt_frame: >-
+      A symmetric matched pair of small {subject} in the two bottom corners
+      of the frame — one curling inward and upward from the bottom left
+      corner, its mirror image curling inward and upward from the bottom
+      right corner, each a bright polished curl catching a hard specular
+      highlight along its outer edge. Each one is SMALL and stays inside its
+      own bottom corner, rising no more than a quarter of the way up the
+      frame. The entire top three quarters of the frame is completely empty
+      and so is the whole middle; the two curls come nowhere near each other.
+    effects:
+      - {kind: drop_shadow, dy: 0.006, blur: 0.012, alpha: 0.58}
+
+# =============================================================================
+adjust:
+  - id: field_grade
+    # A generated slab comes back as a bright saturated PHOTOGRAPH of stone.
+    # This sits on it before any art, so the whole cover is built on a quiet
+    # dark field and the metal has somewhere to be the brightest thing.
+    op: grade
+    brightness: -0.30
+    saturation: -0.22
+    contrast: 0.10
+
+  - id: haze_back
+    # Aerial perspective: the far tier fades and desaturates so it sits
+    # behind the emblem rather than in it.
+    op: grade
+    brightness: 0.04
+    contrast: -0.28
+    saturation: -0.40
+    opacity: 0.90
+    mask: {from_layer: architecture, feather: 0.02}
+
+  - id: recede_left
+    # Rules 6 and 7 from below, and this pair is not optional.
+    #
+    # SATURATION WAS ONLY HALF THE JOB. The first build desaturated one flank
+    # and left both of them at full BRIGHTNESS — so a wall of pale anemones
+    # and lit glass floats reached into the middle of the frame, the title's
+    # measured corridor stopped being one value regime, and contrast came in
+    # at 4.07 against a 4.5 threshold with the autopilot already out of moves.
+    # A generated cluster arrives lit like a hero plate because that is how a
+    # generator lights anything it is asked to make beautiful; the template
+    # has to put it back in its place. Darken first, desaturate second, and
+    # do it to BOTH flanks — one grade per cluster, because a single grade
+    # masked to one of them and feathered wide enough to catch the other also
+    # catches the relic's metal, which is the one thing that must stay bright.
+    op: grade
+    brightness: -0.24
+    saturation: -0.34
+    opacity: 0.90
+    mask: {from_layer: cluster_left, feather: 0.03}
+
+  - id: recede_right
+    op: grade
+    brightness: -0.24
+    saturation: -0.34
+    opacity: 0.90
+    mask: {from_layer: cluster_right, feather: 0.03}
+
+  - id: tonal_spine
+    # Rule 7 from above: one shared colour spine under nine separately-lit
+    # plates. soft_light and low, so it unifies without repainting.
+    op: gradient_map
+    stops: [background, primary, text]
+    opacity: 0.17
+    blend: soft_light
+
+  - id: gild_bloom
+    # The deluxe-edition tell: foil catches light. The threshold is set to sit
+    # just UNDER the title's own ink so the type blooms along with the metal —
+    # at 0.84 it caught the relic's head and the gilt curls and left the
+    # letterforms alone, which is backwards for a template whose type is
+    # supposed to outshine its metal (rule 5). Last layer in the stack on
+    # purpose: it is the only thing allowed over the type, because it is the
+    # only adjust layer that ADDS light.
+    op: bloom
+    threshold: 0.70
+    radius: 0.019
+    strength: 0.40
+
+  - id: edge_close
+    # The emblem needs a dark rim to sit inside. Declared here rather than
+    # left to the recipe, because `recipe_strength` is held at 0.30 for rule
+    # 7's sake and the shelf vignette arrives too weak at that setting.
+    op: vignette
+    strength: 0.38
+
+  - id: foot_wash
+    # A feathered black wash over the lower fifth, fading out upward, so the
+    # credit line and the author sit on something quiet. `color_wash`
+    # composites a solid fill AS a layer; the linear gradient mask (angle 90 =
+    # top transparent -> bottom opaque, held clear until `start`) is the
+    # feather.
+    op: color_wash
+    color: "#000000"
+    blend: normal
+    opacity: 0.62
+    mask:
+      gradient: {kind: linear, angle: 90.0, start: 0.72, end: 1.0}
+
+# =============================================================================
+scrims:
+  # Rule 6: the title gets NO scrim. Its corridor is the relic's dark shaft
+  # and the field beside it — one value regime by construction. If the
+  # autopilot asks for a bar here, the relic plate came back ornamented down
+  # its length; repaint it, do not paint a box.
+  - {kind: halo, protects: author, strength: 0.14}
+  - {kind: halo, protects: subtitle, strength: 0.30}
+
+# =============================================================================
+text:
+  - id: subtitle
+    # The tagline, top centre, over the emptiest part of the architecture.
+    # Carries its own shadow as well as the halo.
+    zone: {x: 0.11, y: 0.036, w: 0.78, h: 0.055}
+    case: upper
+    align: center
+    valign: top
+    tracking: 92
+    max_lines: 2
+    optional: true
+    size_min: 0.014
+    size_max: 0.023
+    effects:
+      - {kind: drop_shadow, dy: 0.0035, blur: 0.008, alpha: 0.78}
+
+  - id: title
+    # Rule 4. `justify_stack` is what makes the four lines interlock — the
+    # long words set wide and the short connecting words tucked into the
+    # negative space they leave (the §15.12 move pale_reliquary documents).
+    # The direction supplies `title_breaks` to say WHERE the lines fall; a
+    # break list that does not fit the book's own title is dropped with a log
+    # line and the fitter falls back to its own breaks.
+    #
+    # The gilding is the effects stack, not the ink: gradient_overlay ramps
+    # accent -> text down the letterforms, bevel raises them off the field,
+    # and the marble texture at soft_light gives the metal something to catch.
+    # soft_light and NOT multiply — a stone plate at multiply pulls display
+    # type down to translucent.
+    zone: {x: 0.085, y: 0.255, w: 0.83, h: 0.450}
+    case: upper
+    align: center
+    valign: middle
+    tracking: 8
+    max_lines: 4
+    fit_mode: justify_stack
+    size_min: 0.052
+    size_max: 0.115
+    effects:
+      # A tight dark contact shadow under a wide soft one — the pro type move.
+      - {kind: drop_shadow, dy: 0.003, blur: 0.004, alpha: 0.74}
+      - {kind: drop_shadow, dy: 0.014, blur: 0.032, alpha: 0.44}
+      # Rule 5's brightness half. Both stops are LIGHT — `accent` is the
+      # metal's own highlight-side mid-tone, not its shadow — and the overlay
+      # is pulled back to 0.82 so the ramp tints the ink rather than
+      # replacing it. The texture drops to 0.10 for the same reason: at 0.22
+      # a stone plate at soft_light was costing the type real luminance for
+      # a tooth nobody sees at thumbnail size.
+      - {kind: gradient_overlay, stops: [accent, text], angle: 90.0, opacity: 0.82}
+      - {kind: bevel, width: 0.0035, alpha: 0.38}
+      - {kind: texture_overlay, texture_file: marble, blend: soft_light, opacity: 0.10}
+
+  - id: series
+    # The credit/eyebrow line above the author's name.
+    zone: {x: 0.10, y: 0.828, w: 0.80, h: 0.028}
+    case: upper
+    tracking: 72
+    max_lines: 1
+    optional: true
+    size_min: 0.011
+    size_max: 0.017
+
+  - id: author
+    # Deliberately NOT the display face. The one plain unornamented block of
+    # type on the cover is the counterweight to the title's flourish; give the
+    # author the title font as well and the cover has no anchor at the foot.
+    zone: {x: 0.07, y: 0.862, w: 0.86, h: 0.062}
+    case: upper
+    tracking: 48
+    max_lines: 1
+    size_min: 0.026
+    size_max: 0.052
+
+# =============================================================================
+# Z-ORDER, bottom first. Rule 5 is a LAYER ORDER fact before it is a colour
+# one, and this is where it is enforced: EVERY DIMMING LAYER SITS UNDER THE
+# TYPE. `edge_close` and `tonal_spine` used to sit at the end of the stack,
+# where a vignette written to darken the cover's corners was also darkening
+# the title's corners, and a gradient map written to put ten separately-lit
+# PLATES on one tonal spine was mapping the type through that ramp as well.
+# Neither was ever meant to touch the letterforms — a plate-unifying grade
+# left above the type is simply a type-dimming grade — and moving the pair
+# down cost the design nothing and bought back most of the luminance the
+# finishing stack had been quietly taking.
+#
+# `gild_bloom` stays last because it is the one adjust layer that ADDS light.
+# The recipe's own fx_ layers are appended after everything by build_spec and
+# are outside a template's reach, which is the remaining reason `text` must be
+# taken near white: the finish still costs the type on the way down.
+#
+# The other three that are easy to get wrong: `motes` sits low, `relic` is
+# drawn AFTER the whole back tier, and NOTHING is drawn after the title.
+layers: [field, veins, field_grade, motes, keylight,
+         architecture, haze_back, cartouche,
+         cluster_left, cluster_right, recede_left, recede_right, relic,
+         gilt_front, edge_close, tonal_spine,
+         "scrim:1", subtitle, title,
+         foot_wash, "scrim:0", series, author,
+         gild_bloom]
+
+# =============================================================================
+casting: >-
+  Cast nine nouns out of the book itself, in this order — the first three
+  constrain everything after them.
+
+
+  relic — THE OBJECT THE PLOT TURNS ON, presented as a ceremonial thing. One
+  long rigid upright object, ornate at one end. A sword, yes, but equally a
+  staff, a key, an oar, a spine, a mast, a syringe, an antenna, a pen, a
+  crozier, a rifle, a telescope. Test it: does it have a HEAD worth looking
+  at, and a long plain shaft below it? Fail either half and pick something
+  else — a shapeless or evenly-detailed object gives the title no corridor.
+
+
+  field — WHAT THE BOOK'S WORLD IS MADE OF, as a dark material with internal
+  figure. Stone, glass, lacquer, resin, ice, iron, water, wood, cloth, ash.
+
+
+  veins — WHAT MOVES THROUGH THAT WORLD, as bright branching lines. Lightning,
+  gold seams, frost, roots, circuitry, rivers, cracks, nerves, fire.
+
+
+  cartouche — THE INSTITUTION OR ORDER the story runs inside, as carved
+  ornament. Whatever a reader would recognise as the shape of its authority:
+  acanthus scroll, a machined bezel, thorned iron, bone, rope, a lacquer
+  cartouche, gothic tracery.
+
+
+  architecture — WHERE IT HAPPENS, as tall repeated verticals. Columns,
+  towers, stacks, pipes, trees, pilings, ribs, spires.
+
+
+  cluster_left and cluster_right — TWO DIFFERENT KINDS of large rounded form
+  from the book's own world, not two sizes of one. Blooms and fruit; floats
+  and buoys; skulls and lanterns. The template sets them at identical scale
+  and identical height, so pick two things of COMPARABLE BULK — a cluster of
+  skulls balances a cluster of lanterns, but a cluster of skulls against a
+  cluster of seed pods leaves one flank looking starved (rule 3). Both are
+  rendered in the FIELD's hue, never their own natural colour (rule 7).
+
+
+  motes — WHAT THE AIR IS FULL OF. Embers, pollen, dust, snow, spores, ash,
+  static.
+
+
+  gilt_front — THE METAL OF THE EDITION, as a pair of curls. Gilt scrollwork,
+  chrome flanges, brass fittings, bone hooks, copper vine.
+
+# =============================================================================
+# WHAT THE DIRECTOR STILL CHOOSES, AND NOTHING ELSE
+# =============================================================================
+#   * nine `{subject}` fills, one per generatable slot (see `casting`).
+#   * five palette hexes. `background` is the slab and must be genuinely dark;
+#     `accent` and `text` are the title's two stops and together they ARE the
+#     metal, so take both from ONE metal (an old-gold and a pale cream, a
+#     bright pewter and a white) rather than from two unrelated hues, or the
+#     ramp reads as a colour error rather than as foil. BOTH MUST BE LIGHT.
+#     `accent` is the metal's highlight-side mid-tone, NOT its shadow: the
+#     first build took it from the shadow side at #4E5654 and the ramp spent
+#     the top half of every letterform in the dark, so the title lost to the
+#     relic's own brass and the autopilot had to flip the ink to recover 4.5
+#     contrast. Take `text` near white, because the recipe's finishing layers
+#     are appended above everything and still cost the type on the way down.
+#   * title_font and author_font — an ornate display face and a plain one.
+#   * `title_breaks`, because this title is set in four interlocking lines and
+#     the fitter's own breaks will not find the shape (§15.12).
+#   * the tagline, the credit line.
+#
+# It does NOT choose placement, scale, blend, opacity, masks, adjust layers,
+# effects, scrim kinds, recipe strength, or layer order.
+#
+# HONEST SCOPE: the skeleton is "one whole ceremonial vertical inside a closed
+# ornate enclosure, under a gilded four-line title that drips". It fits
+# romantasy, gothic, epic fantasy, dark historical and ornate horror. It does
+# not fit a contemporary romcom, a memoir, a thriller, or anything whose cover
+# should read as fast and modern rather than as an expensive object — the
+# whole design is an argument that the book is worth owning in hardcover, and
+# on a book that is not making that argument it just looks overwrought.
+#
+# THE RISKIEST PLATE is `relic`: rule 6 asks the generator for an object that
+# is intricate at one end and deliberately boring for the rest of its length,
+# which is the opposite of what an image model wants to do. Expect to repaint
+# it once. `cluster_right` is second, and for a reason rule 3 explains — it
+# has to match `cluster_left`'s bulk, and a plate that comes back sparse
+# leaves the cover leaning.
