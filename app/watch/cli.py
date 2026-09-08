@@ -587,7 +587,14 @@ def cmd_once(args, home: Path) -> int:
 
 def _report(report: ticklib.TickReport) -> int:
     if report.dry_run:
-        print(f"{report.listed} file(s) in the folder:\n")
+        # Only what a pass would do. What it would leave alone — outputs,
+        # finished books, a cover image — is a count, not a list.
+        if report.plan:
+            print(f"{report.listed} file(s) in the folder; a pass would act "
+                  f"on these:\n")
+        else:
+            print(f"{report.listed} file(s) in the folder; a pass would act "
+                  f"on none of them.")
         # The label column is sized to the labels actually present rather than
         # to a guess: "to write a marketing plan for — if HubSpot says so" is
         # three times "to prepare", and a fixed width either wraps the long ones
@@ -597,6 +604,10 @@ def _report(report: ticklib.TickReport) -> int:
         width = max([len(label) for label in labels], default=0) + 2
         for (name, _stage), label in zip(report.plan, labels):
             print(f"  {label:<{width}}{name}")
+        if report.left_alone:
+            print(f"\n  {report.left_alone} other file(s) left alone (already "
+                  f"prepared, DocProof's own outputs, not manuscripts, or "
+                  f"marked failed).")
         counts = _preview_counts(report)
         print(f"\nA real run would {counts}. "
               f"Nothing was downloaded, prepared or uploaded.")

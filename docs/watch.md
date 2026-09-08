@@ -509,21 +509,21 @@ Two rehearsals, in order. Neither costs anything.
 docproof-watch once --dry-run
 ```
 
-Lists the folder and says what it would do with each file — for **every**
-automation that is switched on, not just formatting. It downloads nothing,
+Says what a pass would **do** — one row per action, for **every** automation
+that is switched on, not just formatting — and nothing else. Files a pass
+would leave alone (already prepared, DocProof's own outputs, a cover image, a
+manuscript marked failed) are counted, not listed. It downloads nothing,
 prepares nothing and uploads nothing; the listing is the only request it makes.
 
 ```
-7 file(s) in the folder:
+8 file(s) in the folder; a pass would act on these:
 
   to prepare                             Wolves of the Yard.docx
   to proofread                           Kestrel - Book One.docx
   to write promo copy for                Kestrel - Book One.docx
-  already prepared                       Kestrel.docx
-  DocProof wrote this                    Kestrel - book 0.docx
-  DocProof wrote this                    Kestrel - book 0 - notes.md
-  not a manuscript                       cover art.png
-  needs attention                        Broken.docx
+
+  5 other file(s) left alone (already prepared, DocProof's own outputs, not
+  manuscripts, or marked failed).
 
 A real run would prepare 1 manuscript(s), proofread 1 and write promo copy for
 1. Nothing was downloaded, prepared or uploaded.

@@ -1657,6 +1657,25 @@ def test_a_subfolder_preview_is_exact_because_the_gate_already_ran(tmp_path,
     assert not any(stage in ("promo", "plan") for _n, stage in report.plan)
 
 
+def test_a_preview_lists_only_what_a_pass_would_do(tmp_path, ws, provider):
+    """The button says "what a pass would do". A finished book, DocProof's own
+    outputs, a cover image and a manuscript marked failed are all things a
+    pass leaves alone, so none of them is a row — they are a count."""
+    opener = fake_drive(folder(
+        f_1=drive_entry("Wolves.docx"),
+        f_2=drive_entry("Kestrel.docx", props={STATE_PROP: FORMATTED}),
+        f_3=drive_entry("Kestrel - book 0.docx", props={OUTPUT_PROP: "1"}),
+        f_4=drive_entry("cover art.png", mime="image/png"),
+        f_5=drive_entry("Broken.docx", props={STATE_PROP: FAILED})),
+        docx=MANUSCRIPT)
+
+    report = run(tmp_path, ws, opener, dry_run=True)
+
+    assert report.plan == [("Wolves.docx", "new")]
+    assert report.listed == 5 and report.left_alone == 4
+    assert provider.calls == []
+
+
 def test_a_preview_never_adds_rows_a_real_pass_would_not_do(tmp_path, provider):
     """The rows exist only in a preview. A real pass's `report.plan` is the
     classification alone — promo and the plan report themselves through their
@@ -1668,7 +1687,7 @@ def test_a_preview_never_adds_rows_a_real_pass_would_not_do(tmp_path, provider):
     dry = run(tmp_path, ws, opener, dry_run=True)
     real = run(tmp_path, ws, opener)
 
-    assert all(stage in ("new?", "skip") for _n, stage in dry.plan)
+    assert [stage for _n, stage in dry.plan] == ["new?"]
     assert all(not stage.endswith("?") for _n, stage in real.plan)
     assert not any(stage in ("promo", "plan") for _n, stage in real.plan)
 

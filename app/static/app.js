@@ -8068,7 +8068,12 @@ $('watch-preview').addEventListener('click', async () => {
   try {
     const body = await api('/api/watch/preview', { method: 'POST' });
     renderWatchPlan(body.plan);
-    watchNote(note, `A pass would ${previewCounts(body)}. Nothing was `
+    // The table holds only what a pass would do; the rest of the folder is a
+    // count, so "do nothing" beside a folder of forty files still adds up.
+    const rest = body.left_alone
+      ? ` ${body.left_alone} other file${body.left_alone === 1 ? '' : 's'} in the folder would be left alone.`
+      : '';
+    watchNote(note, `A pass would ${previewCounts(body)}.${rest} Nothing was `
       + 'downloaded, prepared or uploaded.', 'muted');
   } catch (err) {
     watchNoteWithFix(note, err.message);

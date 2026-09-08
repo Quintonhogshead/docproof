@@ -512,6 +512,9 @@ def register(app: FastAPI) -> None:
 
         return {
             "listed": report.listed,
+            # Files a pass would leave alone. Counted, not listed: the table
+            # holds only what a pass would do.
+            "left_alone": report.left_alone,
             "new": report.new,
             "proof": counted("proof"),
             "promo": counted("promo"),

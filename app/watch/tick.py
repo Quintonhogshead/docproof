@@ -116,6 +116,10 @@ class TickReport:
     # rides the same alert email. Each is (author, reason).
     stuck_ready: list[tuple[str, str]] = field(default_factory=list)
     plan: list[tuple[str, str]] = field(default_factory=list)
+    # Dry run only: files in the folder a pass would leave alone — already
+    # prepared, DocProof's own outputs, not manuscripts, marked failed. Counted
+    # so the preview can say "and N others untouched" without listing them.
+    left_alone: int = 0
     dry_run: bool = False
 
     @property
@@ -1816,6 +1820,8 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
         report.new = sum(1 for _, stage in report.plan
                          if stage == Stage.NEW_MANUSCRIPT.value)
         report.plan = _preview_rows(ws, every, report.plan)
+        acted_on = {name for name, _stage in report.plan}
+        report.left_alone = sum(1 for f in every if f.name not in acted_on)
         return report
 
     paths = Paths(root).ensure()
@@ -1865,6 +1871,10 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     return report
 
 
+# The `classify` answers a pass acts on. Everything else it leaves where it is.
+PREVIEW_ACTIONS = (Stage.NEW_MANUSCRIPT.value, Stage.PROOF_MANUSCRIPT.value)
+
+
 def _preview_rows(ws: WatchSettings, listing: list[DriveFile],
                   rows: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """What a dry run says a pass would do — for every automation, and only as
@@ -1889,16 +1899,21 @@ def _preview_rows(ws: WatchSettings, listing: list[DriveFile],
     Promo and the plan stand aside entirely in subfolder mode (see `run_promo`),
     so a preview that listed them there would describe work that cannot happen.
 
+    And only what it would DO. A file already prepared, one DocProof wrote,
+    a cover image, a manuscript marked failed: a pass leaves each of those
+    alone, so none of them is a row. The button says "what a pass would do",
+    and a table that answered with everything in the folder made a person
+    read past six "DocProof wrote this" lines to find the one book it meant.
+    What was left alone is counted (`report.left_alone`), not itemized.
+
     Nothing here changes what a real pass does: `tick` returns before this on a
     real pass, and the only caller is the dry-run branch.
     """
+    rows = [(name, stage) for name, stage in rows
+            if stage in PREVIEW_ACTIONS]
     gated = ws.hubspot_enabled and not ws.subfolders_enabled
     if gated:
-        rows = [(name, stage + PREVIEW_GATED)
-                if stage in (Stage.NEW_MANUSCRIPT.value,
-                             Stage.PROOF_MANUSCRIPT.value)
-                else (name, stage)
-                for name, stage in rows]
+        rows = [(name, stage + PREVIEW_GATED) for name, stage in rows]
     if ws.subfolders_enabled:
         return rows
 
