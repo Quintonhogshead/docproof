@@ -1172,6 +1172,67 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                 </div>
               </div>
 
+              <!-- Interior corrections -->
+              <div class="wf-config" id="wf-config-corrections" hidden>
+                <div class="wf-setup" id="wf-corrections-setup" hidden></div>
+                <p class="wf-hint">When the author's Pre-Proof Interior Design
+                  Corrections Form comes in and a workflow flips the status to
+                  <em>Ready for Corrections</em>, DocProof opens the author's
+                  <em>Interior Design</em> folder, takes the highest
+                  <code>&lt;surname&gt; - Book N.idml</code>, applies what it can,
+                  and puts back <code>&lt;surname&gt; - Book N.5.idml</code> with
+                  a two-sheet spreadsheet — <em>Applied</em> / <em>Not
+                  applied</em>, every correction on exactly one of them, pages
+                  as the file's own folios — then flips the status to
+                  <em>Corrections Applied</em> for the designer.</p>
+
+                <label class="checkbox">
+                  <input type="checkbox" id="corrections-enabled">
+                  Apply interior corrections automatically
+                  <small class="muted">Off by default. Needs HubSpot and
+                    per-author subfolders (set from the CLI).</small>
+                </label>
+                <label class="field">
+                  <span>HubSpot status value the form workflow sets</span>
+                  <input type="text" id="corrections-ready"
+                         placeholder="Ready for Corrections">
+                </label>
+                <label class="field">
+                  <span>Status value to set once the Book N.5 is back</span>
+                  <input type="text" id="corrections-done"
+                         placeholder="Corrections Applied">
+                </label>
+                <label class="field">
+                  <span>Record property holding the form's uploaded file</span>
+                  <input type="text" id="corrections-file-prop"
+                         placeholder="e.g. corrections_file">
+                  <small class="muted">A marked-up PDF proof or a Word list.
+                    HubSpot stores the upload as a URL on the record.</small>
+                </label>
+                <label class="field">
+                  <span>Record property holding the form's typed
+                    corrections</span>
+                  <input type="text" id="corrections-text-prop"
+                         placeholder="e.g. corrections_text">
+                </label>
+                <label class="field">
+                  <span>Author subfolder that holds the designer's IDML</span>
+                  <input type="text" id="corrections-folder"
+                         placeholder="Interior Design">
+                </label>
+                <label class="checkbox">
+                  <input type="checkbox" id="corrections-model-passes">
+                  Run the model passes (sanity gate, second look, escalation)
+                  <small class="muted">— the panel's defaults; off applies
+                    deterministically and flags more for the designer</small>
+                </label>
+
+                <div class="job-actions">
+                  <button id="wf-corrections-save" class="primary">Save</button>
+                </div>
+                <p id="wf-corrections-note" class="action-note" hidden></p>
+              </div>
+
               <!-- Promo copy -->
               <div class="wf-config" id="wf-config-promo" hidden>
                 <p class="wf-hint">When a book's HubSpot status reaches the ready

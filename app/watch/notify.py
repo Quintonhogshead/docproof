@@ -135,7 +135,8 @@ def summary(report) -> tuple[str, str] | None:
     # true job count with no double-counting. `uploaded` is deliberately left
     # out: it is one entry per delivered output, not per job.
     succeeded = (len(report.prepped) + len(report.proofed)
-                 + len(report.promoted) + len(report.planned))
+                 + len(report.promoted) + len(report.planned)
+                 + len(getattr(report, "corrected", ())))
     subject = f"{ALERT_TAGS} {count} item(s) need a look"
     body = ("DocProof finished a pass over the Drive folder and left the "
             "following for a person:\n\n" + "\n".join(lines) +

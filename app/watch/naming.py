@@ -322,6 +322,95 @@ def _is_stage_name(name: str, last: str, stage: str) -> bool:
     return surname is not None and _surname_key(surname) == key
 
 
+# --- The designer's IDML series -------------------------------------------------
+#
+# Interior corrections read a different series from the manuscripts above: the
+# designer exports "<surname> - Book 3.idml", and each round of the author's
+# corrections goes to the highest-numbered export in the "Interior Design"
+# folder. DocProof hands back the half-step — "Book 3.5" — and the designer's
+# next export is "Book 4". So an integer version is an input and a fractional
+# one is DocProof's own output, which is the whole recogniser.
+IDML_SUFFIX = ".idml"
+CORRECTIONS_STEP = 0.5
+_IDML_VERSION_RE = re.compile(
+    rf"^(?P<author>.+?){_STAGE_SEP}(?P<word>book)(?P<gap>\s*)"
+    rf"(?P<version>\d+(?:\.\d+)?)\s*$", re.IGNORECASE)
+
+
+def idml_version(name: str) -> tuple[str, float] | None:
+    """`(author, version)` for a "<surname> - Book N.idml" export, or None.
+
+    Only `.idml` files count; any dash and either spacing of the token ("Book 3"
+    or "Book3") are forgiven, as everywhere else here. The version is numeric so
+    "Book 10" sorts after "Book 9" and "Book 3.5" sits between 3 and 4."""
+    path = Path(name)
+    if path.suffix.lower() != IDML_SUFFIX:
+        return None
+    m = _IDML_VERSION_RE.match(_fold(path.stem))
+    if not m:
+        return None
+    try:
+        return m.group("author").strip(), float(m.group("version"))
+    except ValueError:
+        return None
+
+
+def is_idml_source_name(name: str, last: str) -> bool:
+    """Whether this is one of the author's designer exports — an integer
+    "<surname> - Book N.idml" whose surname is the record's. A fractional
+    version is DocProof's own hand-off and never an input."""
+    parsed = idml_version(name)
+    if parsed is None:
+        return False
+    author, version = parsed
+    return (version == int(version)
+            and _surname_key(author) == _surname_key(last))
+
+
+def is_idml_output_name(name: str) -> bool:
+    """Whether this is a corrections hand-off — a fractional "Book N.5.idml",
+    or one of its companions under the same base."""
+    stem = Path(name).stem
+    for suffix in (CORRECTIONS_SHEET_SUFFIX, NOTES_SUFFIX, CHECKS_SUFFIX):
+        if stem.lower().endswith(suffix.lower()):
+            stem = stem[:-len(suffix)]
+            break
+    parsed = idml_version(stem + IDML_SUFFIX)
+    return parsed is not None and parsed[1] != int(parsed[1])
+
+
+def corrections_base(source_name: str) -> str:
+    """The hand-off base for a designer export: "Johnson - Book 3.idml" ->
+    "Johnson - Book 3.5". The spacing of the token mirrors the source ("Book3"
+    stays "Book3.5") so the pair sorts together in the folder."""
+    stem = Path(source_name).stem
+    m = _IDML_VERSION_RE.match(stem)
+    if not m:
+        raise ValueError(f"{source_name!r} is not a '<surname> - Book N.idml'")
+    version = float(m.group("version"))
+    if version != int(version):
+        raise ValueError(f"{source_name!r} is already a corrections hand-off")
+    # Everything up to the version, verbatim, then the half-step.
+    head = stem[:m.start("version")]
+    return f"{head}{int(version)}.5"
+
+
+# The companions to the corrected IDML, under the "<surname> - Book N.5" base.
+CORRECTIONS_SHEET_SUFFIX = " - corrections"
+CHECKS_SUFFIX = " - checks"
+
+
+def corrections_hand_off_names(source_name: str) -> dict[str, str]:
+    """What the corrections stage puts in the folder, by role."""
+    base = corrections_base(source_name)
+    return {
+        "idml": f"{base}{IDML_SUFFIX}",
+        "sheet": f"{base}{CORRECTIONS_SHEET_SUFFIX}.xlsx",
+        "notes": f"{base}{NOTES_SUFFIX}.md",
+        "checks": f"{base}{CHECKS_SUFFIX}.jsx",
+    }
+
+
 def is_output_name(name: str) -> bool:
     """Whether a filename is one a DocProof stage wrote.
 
@@ -345,7 +434,11 @@ def is_output_name(name: str) -> bool:
                for pattern in _TOKEN[stage])
 
 
-__all__ = ["CLEAN_SUFFIX", "DECISION_LOG_SUFFIX", "INDESIGN_SUFFIX",
+__all__ = ["CHECKS_SUFFIX", "CLEAN_SUFFIX", "CORRECTIONS_SHEET_SUFFIX",
+           "CORRECTIONS_STEP", "IDML_SUFFIX",
+           "corrections_base", "corrections_hand_off_names", "idml_version",
+           "is_idml_output_name", "is_idml_source_name",
+           "DECISION_LOG_SUFFIX", "INDESIGN_SUFFIX",
            "LETTER_SUFFIX",
            "NOTES_SUFFIX", "OUTCOME_SUFFIX", "OUTPUT_STAGE", "OUTPUT_STAGES",
            "PROOF_SOURCE_STAGE", "PROOF_STAGE", "SOURCE_STAGE", "SPELLINGS",

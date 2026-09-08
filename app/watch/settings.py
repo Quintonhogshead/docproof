@@ -317,6 +317,32 @@ class WatchSettings:
     plan_blurb_pattern: str = "blurb|back.?cover|endorsement"
     plan_form_pattern: str = "questionnaire|pnq|publicity"
 
+    # Interior corrections: the author's Pre-Proof Interior Design Corrections
+    # Form, applied to the designer's exported IDML. A HubSpot workflow flips the
+    # status dropdown to the ready value when the form comes in; DocWatch finds
+    # the author's folder, its "Interior Design" subfolder and the highest
+    # "<surname> - Book N.idml" there, applies what it can, and hands back
+    # "<surname> - Book N.5.idml" with a two-sheet spreadsheet (Applied / Not
+    # applied) beside it. Every book then goes to a human designer for the
+    # remainder, so the done value is the designer's cue, not a "finished".
+    # Off by default; requires `hubspot_enabled` and `subfolders_enabled`. See
+    # app/watch/corrections.py and docs/watch.md.
+    corrections_enabled: bool = False
+    hubspot_corrections_ready_value: str = "Ready for Corrections"
+    hubspot_corrections_done_value: str = "Corrections Applied"
+    # The form's answers, as the workflow copies them onto the Projects record:
+    # the file-upload field (a marked-up PDF proof, or a Word list; HubSpot
+    # stores the uploaded file's URL, several separated by ";") and the typed
+    # field (the author's own list, in their own words). Either or both.
+    hubspot_corrections_file_property: str = ""
+    hubspot_corrections_text_property: str = ""
+    # The subfolder of the author's folder that holds the designer's files.
+    corrections_folder_name: str = "Interior Design"
+    # Whether the run buys the model passes the app's Corrections job runs by
+    # default (sanity gate, second look, escalation over the queries). On, to
+    # match manual mode; off is deterministic and free but flags more.
+    corrections_model_passes: bool = True
+
     @classmethod
     def load(cls, home: str | Path) -> "WatchSettings":
         path = Path(home) / WATCH_SETTINGS

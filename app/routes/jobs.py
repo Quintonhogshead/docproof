@@ -17,6 +17,11 @@ from pydantic import BaseModel, Field
 from typing import get_args
 
 from docproof import batch as batchlib
+# The corrections serializer lives with the headless intake (the DocWatch
+# automation reads a submission through it without these routes) so the two
+# can never drift.
+from docproof.corrections.intake import (
+    edits_to_corrections_json as _edits_to_corrections_json)
 from docproof.config import (SmoothingConfig, candidate_screening_killed,
                              examination_graph_killed,
                              examination_judgment_killed, load_config)
@@ -320,6 +325,9 @@ def _result_name(job: Job, which: str) -> str | None:
         # The read-only InDesign check tour — an ExtendScript the designer runs to
         # be walked to each composition check and open flag in the live document.
         "check-tour": f"{stem}_checks.jsx",
+        # The two-sheet Excel ledger: every correction received, on exactly one
+        # of "Applied" / "Not applied", with its page.
+        "corrections-sheet": f"{stem}_corrections.xlsx",
         # Galley's two prose deliverables: the editorial cover letter (what ran,
         # what it cost, every open query) and the per-book style-sheet decision
         # log. See galley.letter.render_all.
@@ -485,33 +493,6 @@ def _create_galley(req: JobRequest, owner: str, paths: Paths,
         owner_id=owner,
     )
     return {"jobs": [runner.enqueue(job).to_api()], "group_id": group_id}
-
-
-def _edits_to_corrections_json(edits) -> str:
-    """Serialize an extracted `Edit` list back into the corrections JSON the
-    textarea holds, so a person reviews and edits it before anything is applied.
-    Fields at their default are left out so the result reads clean."""
-    rows = []
-    for e in edits:
-        row = {"find": e.find, "replace": e.replace}
-        if e.context:
-            row["context"] = e.context     # keeps the anchor across review→apply
-        if e.instruction:
-            row["instruction"] = e.instruction
-        if e.kind != "mechanical":         # model.MECHANICAL
-            row["kind"] = e.kind
-        if e.occurrence:
-            row["occurrence"] = e.occurrence
-        if e.source:
-            row["source"] = e.source       # ties the edit to its PDF comment id
-        if e.format:
-            row["format"] = e.format       # italics are an edit, not a design note
-        if e.paragraph:
-            row["paragraph"] = e.paragraph  # a forced break, a keep, a para added
-        if e.paragraph_style:
-            row["paragraph_style"] = e.paragraph_style
-        rows.append(row)
-    return json.dumps(rows, indent=2, ensure_ascii=False)
 
 
 def _extract_response(result) -> dict:

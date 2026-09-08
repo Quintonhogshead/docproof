@@ -114,8 +114,13 @@ def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
         },
         "apply": (None if apply is None else {
             "applied": apply.applied,
-            "flagged": [_outcome(o) for o in apply.flagged],
-            "no_op": [_outcome(o) for o in apply.outcomes
+            # The applied outcomes itemised (the count above is kept as it was),
+            # so the spreadsheet can list every correction that landed with its
+            # page — the flagged and no-op lists already do that for theirs.
+            "applied_items": [_outcome(o, page_labels) for o in apply.outcomes
+                              if o.applied],
+            "flagged": [_outcome(o, page_labels) for o in apply.flagged],
+            "no_op": [_outcome(o, page_labels) for o in apply.outcomes
                       if not o.applied and not o.needs_human],
             # Edits that several-into-one merges removed from the list. Reported so
             # the id count reconciles: parsed + emptied-line removals = applied +
@@ -147,9 +152,12 @@ def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
             "paragraphs_expected": verify.paragraphs_expected,
             "structure_intended": verify.structure_intended,
             "reconciliations": [
-                {"id": r.edit.id, "status": r.status,
-                 "find": r.edit.find, "replace": r.edit.replace,
-                 "detail": r.detail}
+                _with_label({"id": r.edit.id, "status": r.status,
+                             "find": r.edit.find, "replace": r.edit.replace,
+                             "detail": r.detail, "page": r.edit.page,
+                             "source": r.edit.source,
+                             "instruction": r.edit.instruction},
+                            page_labels)
                 for r in verify.reconciliations],
             "discrepancies": [dataclasses.asdict(d) for d in verify.discrepancies],
         },
@@ -216,16 +224,20 @@ def _with_label(row: dict, page_labels: dict[int, str]) -> dict:
     return row
 
 
-def _outcome(o) -> dict:
+def _outcome(o, page_labels: dict[int, str] | None = None) -> dict:
     row = {"id": o.edit.id, "status": o.status, "find": o.edit.find,
            "replace": o.edit.replace, "instruction": o.edit.instruction,
            "story_id": o.story_id, "paragraph": o.paragraph,
-           "occurrences": o.occurrences, "detail": o.detail}
+           "occurrences": o.occurrences, "detail": o.detail,
+           # The proof page the edit was marked on (0 for a typed list) and the
+           # reviewer comment it came from, so a row can be placed and traced
+           # without going back through the comment ledger.
+           "page": o.edit.page, "source": o.edit.source}
     # A formatting edit leaves the text alone, so find and replace read as
     # identical; saying which formatting it applied is what makes the row legible.
     if o.edit.format:
         row["format"] = o.edit.format
-    return row
+    return _with_label(row, page_labels or {})
 
 
 def _comment(c: CommentDisposition, page_labels: dict[int, str]) -> dict:

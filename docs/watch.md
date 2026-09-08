@@ -377,6 +377,85 @@ however many passes run.
 Turn it back off with `docproof-watch init --disable-proofing`; the values stay
 for next time.
 
+## Interior corrections (optional)
+
+The fifth stage, and the first over a **designer's** file rather than a
+manuscript. After the interior is typeset the author fills in the press's
+*Pre-Proof Interior Design Corrections Form* — sometimes a marked-up PDF proof,
+sometimes a Word list, sometimes their own words in the form's text box. A
+HubSpot workflow flips the status dropdown to `Ready for Corrections` when the
+form lands; DocWatch does the rest:
+
+```
+Author Folder/
+  Quinton Johnson/
+    Interior Design/
+      Johnson - Book 3.idml                      the designer's latest export (input)
+      Johnson - Book 3.5.idml                    DocProof: the corrections applied
+      Johnson - Book 3.5 - corrections.xlsx      DocProof: Applied / Not applied
+      Johnson - Book 3.5 - notes.md              DocProof: the change log, in prose
+      Johnson - Book 3.5 - checks.jsx            DocProof: the InDesign walkthrough
+```
+
+| stage | reads | the workflow sets | DocProof writes | and hands back |
+|---|---|---|---|---|
+| corrections | the highest `<surname> - Book N.idml` in `Interior Design` | `Ready for Corrections` | `Corrections Applied` | `<surname> - Book N.5.idml` + spreadsheet |
+
+Off by default. It needs the HubSpot gate **and** per-author subfolders on —
+the form flips a CRM value, and the IDML lives in the author's own folder — and
+the names of the two properties the workflow copies the form's answers into:
+
+```bash
+docproof-watch init --enable-corrections \
+  --hubspot-corrections-file-property corrections_file \
+  --hubspot-corrections-text-property corrections_text
+```
+
+Or in the app: **Automations → Workflows → Interior corrections**.
+
+**The file it reads.** The designer exports whole numbers — `Book 3`, then
+`Book 4` after the next round — and DocProof hands back the half-step, so an
+integer is always an input and a fraction is always DocProof's. The stage takes
+the *highest* integer export in the folder (`Book 4` over `Book 3`, `Book 10`
+over `Book 9`), whatever the spacing (`Book3` comes back as `Book3.5`). Two files
+at the same highest number is nobody's to guess and stops the book. A
+`Book N.5` already in the folder that DocProof did not write is **never
+overwritten**: the book stops and you are told.
+
+**What it reads.** The form's uploaded file is fetched from the URL HubSpot
+stores on the record — a PDF proof with comments is read deterministically
+(every mark becomes a row, page and all), a Word file with tracked changes the
+same; a Word *list* or the form's typed text goes through the house reader
+(Luna) to become exact find/replace edits. A proof PDF beside the export under
+the same stem (`Johnson - Book 3.pdf`) lends its page texts so a typed "page 47"
+narrows to the text page 47 actually set. A form that reached the record with
+neither a file nor text stops the book and tells you to check the workflow.
+
+**What comes back.** The app's own corrections job runs — anchored, verified,
+with the panel's default model passes unless `--corrections-no-model-passes` —
+and the four files above go beside the export. The spreadsheet has exactly two
+sheets, **Applied** and **Not applied**, and every correction the author sent
+sits on exactly one of them with the correction as written, what was found and
+replaced, a status in plain words ("The text to change was not found") and a
+reason. Page numbers are the file's **own folios**, re-read from the corrected
+IDML: the `Page (as marked)` column is the proof page the author pointed at,
+`Page in IDML` is where that page sits in the file, and `Page confirmed` says
+whether the two were aligned — a page is never guessed.
+
+**Then a designer.** DocProof expects to place most of a form and not all of it
+— a "remove this chapter" is a layout request, not a text edit — so every book
+moves to `Corrections Applied`, which is the designer's cue to open the
+`Book N.5`, walk the `checks.jsx`, and finish the *Not applied* sheet by hand.
+Exactly one CRM write per book; the export is marked `done` in Drive last, so a
+pass that dies halfway re-uploads what never landed and never re-applies.
+
+A submission that cannot be read at all (a flattened PDF with no comment layer,
+a typed list with no key for the reader) marks the export `failed` with the
+reason and emails you, rather than retrying a fixed input three mornings
+running. Clear the marker to try again once the form is fixed.
+
+Turn it back off with `docproof-watch init --disable-corrections`.
+
 ## Per-author subfolders (optional)
 
 By default the watched folder is flat: manuscripts and the files DocProof writes
