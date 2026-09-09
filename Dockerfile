@@ -42,7 +42,9 @@ RUN pip install --no-cache-dir ".[app,languagetool,galley]" || true
 
 # Now the source, and a real install so the console scripts exist.
 COPY . .
-RUN pip install --no-cache-dir ".[app,languagetool,galley]"
+# The dependency warm-up can leave generated modules in build/lib. Rebuild
+# them from this source snapshot rather than reusing timestamp-based output.
+RUN rm -rf build && pip install --no-cache-dir ".[app,languagetool,galley]"
 
 # The Galley agent's entrypoint and the brain's sifter wrapper (first on the
 # brain's PATH; re-injects the keys the driver strips from the brain's env).
