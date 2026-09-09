@@ -409,6 +409,35 @@ def _schema_check(value, schema, where="review"):
             _schema_check(item, schema["items"], where + "[]")
 
 
+def finding_explanation_repairs(review: dict, packet: dict) -> dict:
+    """Resolve exact metadata targets without interpreting model prose as code.
+
+    Only finding explanations are writable. Historical corrected_text, anchors,
+    dispositions, and manuscript text remain outside this operation's scope.
+    """
+    rows = dict(zip(packet["finding_ids"], packet["artifacts"]["findings.json"]["findings"]))
+    repairs = {}
+    for action in review["actions"]:
+        if action["kind"] != "internal_repair":
+            continue
+        ids = action["finding_ids"]
+        if (len(ids) != 1 or ids[0] not in rows or
+                any(action[k] for k in ("comment_ids", "revision_ids", "issue_ids"))):
+            raise AstraReviewError(f"Astra internal repair {action['id']} requires one exact finding explanation target")
+        fid = ids[0]
+        row = rows[fid]
+        if row.get("para_id") != action["para_id"]:
+            raise AstraReviewError(f"Astra internal repair {action['id']} names a finding in a different paragraph")
+        if not action["quote"] or action["quote"] != row.get("explanation"):
+            raise AstraReviewError(f"Astra internal repair {action['id']} quote is absent from the exact finding explanation")
+        if not action["replacement"].strip() or action["replacement"] == action["quote"]:
+            raise AstraReviewError(f"Astra internal repair {action['id']} needs a nonempty changed explanation")
+        if fid in repairs:
+            raise AstraReviewError(f"Astra repairs finding {fid} more than once")
+        repairs[fid] = action["replacement"]
+    return repairs
+
+
 def validate_review(review: dict, packet: dict) -> dict:
     if packet.get("packet_sha256") != _hash({k: v for k, v in packet.items() if k != "packet_sha256"}):
         raise AstraReviewError("Frozen Astra packet content does not match its hash")
@@ -477,13 +506,16 @@ def validate_review(review: dict, packet: dict) -> dict:
         # their supporting quote may name that exact comment instead of body text.
         quoted_comment = (action["kind"] in {"remove_comment", "replace_comment"}
                           and any(action["quote"] == comment_text[c] for c in action["comment_ids"]))
-        if action["quote"] and action["quote"] not in paras[action["para_id"]] and not quoted_comment:
-            raise AstraReviewError("Astra action quote is absent from accepted paragraph")
+        if (action["kind"] != "internal_repair" and action["quote"]
+                and action["quote"] not in paras[action["para_id"]] and not quoted_comment):
+            raise AstraReviewError(f"Astra action quote is absent from accepted paragraph "
+                                   f"(action={action['id']}, kind={action['kind']}, paragraph={action['para_id']})")
         if action["kind"] == "edit_text" and (not action["quote"] or
                 paras[action["para_id"]].count(action["quote"]) != 1):
             raise AstraReviewError("Astra text edit needs an unambiguous nonempty quote")
         if action["kind"] == "edit_text" and action["replacement"] == action["quote"]:
             raise AstraReviewError("Astra text edit is a no-op")
+    finding_explanation_repairs(review, packet)
     for item in review["revision_review"]["exceptions"]:
         allowed = {"revert": {"revert_revision"}, "repair": {"edit_text", "internal_repair"},
                    "author_query": {"add_author_query", "replace_comment"}}[item["action"]]
@@ -700,6 +732,12 @@ def validate_receipt(run_dir, *, docx_path=None, context_paths=()) -> dict:
     inputs = receipt.get("inputs", {})
     docx_path = docx_path or inputs.get("docx_path")
     context_paths = context_paths or inputs.get("context_paths", ())
+    from galley.astra_reconcile import RECONCILIATION_FILE, reconcile_run
+    proof_path = run / RECONCILIATION_FILE
+    if proof_path.is_file() and _load(proof_path).get("status") == "prepared":
+        # Complete only the exact durable plan after a crash between document
+        # and metadata replacement. No generation or new editorial decision.
+        reconcile_run(run, docx_path=docx_path, context_paths=context_paths)
     packet = build_packet(run, docx_path=docx_path, context_paths=context_paths)
     if receipt.get("model") != MODEL or receipt.get("reasoning_effort") != REASONING_EFFORT:
         raise AstraReviewError("Astra receipt used an unapproved model or reasoning effort")

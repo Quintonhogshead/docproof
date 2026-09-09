@@ -7,6 +7,7 @@ were applied, with no additional document or evidence changes.
 from __future__ import annotations
 
 import copy
+import fcntl
 import hashlib
 import itertools
 import os
@@ -19,7 +20,7 @@ from lxml import etree
 from galley.astra_review import (AstraReviewError, MODEL, PACKET_FILE, RECEIPT_FILE,
                                 REASONING_EFFORT, _atomic, _hash, _load, _node,
                                 _now, _revision, _views, build_packet,
-                                validate_review)
+                                validate_review, finding_explanation_repairs)
 
 RECONCILIATION_FILE = "astra-reconciliation.json"
 SOURCE_FILE = "astra-evidence/source.docx"
@@ -40,8 +41,6 @@ def _members(path):
 def _plan(review):
     """Every nontrivial decision needs an operation with the right meaning."""
     actions = review["actions"]
-    if any(a["kind"] == "internal_repair" for a in actions):
-        raise AstraReviewError("Astra identified an internal repair requiring operator work")
 
     def kinds(key, value):
         return {a["kind"] for a in actions if value in a[key]}
@@ -71,7 +70,8 @@ def _plan(review):
     for d in review["finding_review"]["exceptions"]:
         actual = kinds("finding_ids", d["finding_id"])
         required = {"edit": {"edit_text", "revert_revision"},
-                    "author_query": {"add_author_query", "replace_comment"}, "drop": set()}.get(d["action"])
+                    "author_query": {"add_author_query", "replace_comment"},
+                    "internal_repair": {"internal_repair"}, "drop": set()}.get(d["action"])
         if required is None or (required and not actual & required):
             raise AstraReviewError("Finding exception has no executable matching disposition")
     for d in review.get("issue_decisions", []):
@@ -138,6 +138,7 @@ def _replay(source, output, frozen, review, date):
     from docproof.reassembler import _Comments, apply_replacement
     from docproof.utils.xml_helpers import DocxPackage, qn, set_text, walk_package
     _plan(review)
+    finding_explanation_repairs(review, frozen)
     pkg = DocxPackage(source)
     paras = {p.para_id: p for p in walk_package(pkg)}
     source_text = {pid: _views(p.element)[0] for pid, p in paras.items()}
@@ -251,6 +252,25 @@ def _replay(source, output, frozen, review, date):
     pkg.save(output)
 
 
+def _repaired_artifacts(frozen, review):
+    artifacts = copy.deepcopy(frozen["artifacts"])
+    repairs = finding_explanation_repairs(review, frozen)
+    for fid, row in zip(frozen["finding_ids"], artifacts["findings.json"]["findings"]):
+        if fid in repairs:
+            row["explanation"] = repairs[fid]
+    return artifacts
+
+
+def _check_unchanged_evidence(frozen, current, artifacts):
+    for key in ("book_context", "missing_artifacts", "finding_ids", "document_name",
+                "source_sha256", "review_contract_sha256", "issue_sha256", "issue_index"):
+        if frozen.get(key) != current.get(key):
+            raise AstraReviewError("Post-Astra review evidence changed outside the approved document plan")
+    if (current["artifacts"] != artifacts or
+            current["findings_sha256"] != _hash(artifacts["findings.json"]["findings"])):
+        raise AstraReviewError("Post-Astra review evidence changed outside the approved metadata plan")
+
+
 def _evidence(frozen, current, review):
     from galley.verify import accepted_fingerprint, paragraph_fingerprints
     before = {p["id"]: p["text"] for p in frozen["accepted_paragraphs"]}
@@ -263,11 +283,20 @@ def _evidence(frozen, current, review):
                for pid in before if before[pid] != after[pid]]
     if any(not p["action_ids"] for p in changes):
         raise AstraReviewError("Reconciled paragraph has no Astra authorization")
-    return {"original_accepted_sha256": accepted_fingerprint(before),
+    result = {"original_accepted_sha256": accepted_fingerprint(before),
             "current_accepted_sha256": accepted_fingerprint(after), "paragraph_changes": changes,
             "source_docx_sha256": frozen["document_sha256"],
             "current_docx_sha256": current["document_sha256"],
             "current_packet_sha256": current["packet_sha256"], "actions_sha256": _hash(review["actions"])}
+    if finding_explanation_repairs(review, frozen):
+        result["metadata_changes"] = [
+            {"action_id": a["id"], "finding_id": a["finding_ids"][0],
+             "artifact": "findings.json", "field": "explanation",
+             "before_sha256": _hash(a["quote"]), "after_sha256": _hash(a["replacement"])}
+            for a in review["actions"] if a["kind"] == "internal_repair"]
+        result["original_findings_sha256"] = frozen["findings_sha256"]
+        result["current_findings_sha256"] = current["findings_sha256"]
+    return result
 
 
 def validate_reconciliation(run_dir, receipt, frozen, current):
@@ -281,10 +310,7 @@ def validate_reconciliation(run_dir, receipt, frozen, current):
         raise AstraReviewError("Missing or mismatched Astra application receipt")
     if _hash({k: v for k, v in frozen.items() if k != "packet_sha256"}) != frozen["packet_sha256"]:
         raise AstraReviewError("Frozen Astra packet has changed")
-    for key in ("artifacts", "book_context", "missing_artifacts", "finding_ids", "findings_sha256",
-                "document_name", "source_sha256", "review_contract_sha256", "issue_sha256", "issue_index"):
-        if frozen.get(key) != current.get(key):
-            raise AstraReviewError("Post-Astra review evidence changed outside the approved document plan")
+    _check_unchanged_evidence(frozen, current, _repaired_artifacts(frozen, review))
     if current.get("coverage_issues"):
         raise AstraReviewError("Reconciled document has incomplete structural coverage")
     source = run / SOURCE_FILE
@@ -310,6 +336,16 @@ def validate_reconciliation(run_dir, receipt, frozen, current):
 def reconcile_run(run_dir, *, docx_path=None, context_paths=()):
     """Atomic, resumable local application; never calls or changes the model."""
     run = Path(run_dir).resolve()
+    with (run / ".astra-reconcile.lock").open("a+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise AstraReviewError("Another Astra reconciliation owns this run") from exc
+        return _reconcile_run(run, docx_path=docx_path, context_paths=context_paths)
+
+
+def _reconcile_run(run_dir, *, docx_path=None, context_paths=()):
+    run = Path(run_dir).resolve()
     receipt = _load(run / RECEIPT_FILE)
     if (receipt.get("status") != "completed" or receipt.get("model") != MODEL or
             receipt.get("reasoning_effort") != REASONING_EFFORT):
@@ -325,37 +361,55 @@ def reconcile_run(run_dir, *, docx_path=None, context_paths=()):
     target = _choose_docx(run, docx_path or inputs.get("docx_path"))
     context_paths = context_paths or inputs.get("context_paths", ())
     current = build_packet(run, docx_path=target, context_paths=context_paths)
-    if current["packet_sha256"] != frozen["packet_sha256"]:
+    previous = _load(run / RECONCILIATION_FILE) if (run / RECONCILIATION_FILE).exists() else {}
+    if previous and previous.get("review_sha256") != _hash(review):
+        raise AstraReviewError("Another Astra plan already owns reconciliation")
+    if current["packet_sha256"] != frozen["packet_sha256"] and previous.get("status") != "prepared":
         return validate_reconciliation(run, receipt, frozen, current)
+    artifacts = _repaired_artifacts(frozen, review)
+    # A prepared transaction may have installed either file before a crash.
+    # Accept only the full original or the full authorized metadata, never a
+    # third state or a partial edit of a finding.
+    if current["artifacts"] not in (frozen["artifacts"], artifacts):
+        raise AstraReviewError("Review evidence changed outside the approved metadata plan")
+    _check_unchanged_evidence(frozen, current, current["artifacts"])
     source = run / SOURCE_FILE
     if source.exists():
         if _sha(source) != frozen["document_sha256"]:
             raise AstraReviewError("Immutable reviewed source has changed")
     else:
+        if current["document_sha256"] != frozen["document_sha256"]:
+            raise AstraReviewError("Immutable Astra source is missing after document replacement")
         source.parent.mkdir(parents=True, exist_ok=True)
         with source.open("xb") as f:
             f.write(target.read_bytes())
             f.flush()
             os.fsync(f.fileno())
-    previous = _load(run / RECONCILIATION_FILE) if (run / RECONCILIATION_FILE).exists() else {}
-    if previous and previous.get("review_sha256") != _hash(review):
-        raise AstraReviewError("Another Astra plan already owns reconciliation")
     date = previous.get("applied_at") or _now()
     with tempfile.TemporaryDirectory(prefix=".astra-apply-", dir=run) as folder:
         candidate = Path(folder) / target.name
         _replay(source, candidate, frozen, review, date)
         after = build_packet(run, docx_path=candidate, context_paths=context_paths)
+        after["artifacts"] = artifacts
+        after["findings_sha256"] = _hash(artifacts["findings.json"]["findings"])
+        after["packet_sha256"] = _hash({k: v for k, v in after.items() if k != "packet_sha256"})
         if after.get("coverage_issues"):
             raise AstraReviewError("Astra application produced invalid comment or revision coverage")
         proof = {"schema_version": 1, "status": "prepared", "applied_at": date,
                  "review_sha256": _hash(review), "packet_sha256": frozen["packet_sha256"],
                  "docx_path": str(target), **_evidence(frozen, after, review)}
+        if previous.get("status") == "prepared" and previous != proof:
+            raise AstraReviewError("Prepared Astra application receipt differs from the exact replay")
+        if (_members(target) != _members(source) and _members(target) != _members(candidate)):
+            raise AstraReviewError("Document differs from the original or authorized Astra operations")
         # A durable plan before replacement lets a crash resume on either side
         # of the atomic file replacement without paying for another review.
         _atomic(run / RECONCILIATION_FILE, proof)
-        if build_packet(run, docx_path=target, context_paths=context_paths)["packet_sha256"] != frozen["packet_sha256"]:
+        if build_packet(run, docx_path=target, context_paths=context_paths)["packet_sha256"] != current["packet_sha256"]:
             raise AstraReviewError("Review evidence changed during reconciliation")
         os.replace(candidate, target)
+        if artifacts != frozen["artifacts"]:
+            _atomic(run / "findings.json", artifacts["findings.json"])
     proof["status"] = "completed"
     _atomic(run / RECONCILIATION_FILE, proof)
     final = build_packet(run, docx_path=target, context_paths=context_paths)
