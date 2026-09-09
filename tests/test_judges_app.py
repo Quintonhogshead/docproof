@@ -29,7 +29,8 @@ CONFIG = Path(__file__).parent.parent / "config" / "default.yaml"
 @pytest.fixture
 def runner(tmp_path):
     store = JobStore(Paths(tmp_path).ensure())
-    return store, JobRunner(store, Settings(), config_path=CONFIG)
+    return store, JobRunner(store, Settings(output_dir=str(tmp_path / "out")),
+                            config_path=CONFIG)
 
 
 @pytest.fixture

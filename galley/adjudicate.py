@@ -150,6 +150,7 @@ def screen_disputes(
     model: str,
     usage: Usage,
     spec_key: str = "fix",
+    should_cancel=None,
 ) -> tuple[list[Verdict], set[str]]:
     """Screen later-wave findings through the panel; return verdicts + rejects.
 
@@ -170,7 +171,8 @@ def screen_disputes(
     docfindings = [_to_docproof_finding(f) for f in screenable]
 
     report = screen(
-        docfindings, para_text, provider, spec=spec, model=model, usage=usage
+        docfindings, para_text, provider, spec=spec, model=model, usage=usage,
+        should_cancel=should_cancel,
     )
     withheld_ids = {f.finding_id for f in report.withheld}
     withheld_reason = {f.finding_id: f.explanation for f in report.withheld}
@@ -208,6 +210,7 @@ def adjudicate(
     model: str = "",
     usage: Usage | None = None,
     spec_key: str = "fix",
+    should_cancel=None,
 ) -> AdjudicationResult:
     """Full adjudication: arbitrate spans, then panel-screen later-wave survivors.
 
@@ -220,7 +223,8 @@ def adjudicate(
     if provider is not None and ms is not None:
         usage = usage if usage is not None else Usage()
         verdicts, rejected = screen_disputes(
-            result.kept, ms, provider, model=model, usage=usage, spec_key=spec_key
+            result.kept, ms, provider, model=model, usage=usage, spec_key=spec_key,
+            should_cancel=should_cancel,
         )
         result.verdicts.extend(verdicts)
         if rejected:

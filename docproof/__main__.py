@@ -2339,8 +2339,8 @@ def _galley_verify(args) -> int:
     _galley_over_budget(args, cost)
 
     from galley.verify import write_artifacts
-    # Share the artifact writer with settle to preserve build binding and
-    # merge partial-read coverage.
+    # Preserve disabled gates when an earlier artifact exists. The writer
+    # replaces a successful full read and merges only named-paragraph reads.
     walk_paras = sum(1 for t in accepted.values() if t.strip())
     if not changes.ran_changes and not args.walk_only and (
             out / "change_verify.json").exists() and not para_ids:

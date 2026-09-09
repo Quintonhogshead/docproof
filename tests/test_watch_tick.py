@@ -71,6 +71,39 @@ def uploads_in(opener) -> dict:
             if entry.get("appProperties", {}).get(OUTPUT_PROP)}
 
 
+@pytest.mark.parametrize("failure", ["verification", "refused", "transient"])
+def test_explicit_retry_downloads_fixed_manuscript(tmp_path, ws, provider, failure):
+    from app.jobs import Job, REFUSED
+    from app.watch import prep
+    from app.watch.state import FileRecord
+
+    old_source = tmp_path / "old.docx"
+    old_source.write_bytes(b"unusable old source")
+    store = JobStore(Paths(tmp_path).ensure())
+    store.save(Job(id="old-job", filename="Wolves.docx", source_path=str(old_source),
+                   model=ws.model, mode="now", kind="prep", state="failed",
+                   error="old failure", verified=False if failure == "verification" else None,
+                   error_kind=REFUSED if failure == "refused" else ""))
+    state = WatchState(tmp_path / "state.json")
+    rec = FileRecord(file_id="f-1", name="Wolves.docx", job_id="old-job",
+                     marked=FAILED, attempts=ws.max_attempts)
+    state.record(rec)
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx", props={
+        STATE_PROP: FAILED, JOB_PROP: "old-job"})), docx=MANUSCRIPT)
+
+    prep.clear_marker("token", rec, state, opener=opener)
+    result = run(tmp_path, ws, opener)
+
+    assert result.ok and result.prepped == ["Wolves.docx"]
+    current = WatchState.load(tmp_path / "state.json").get("f-1")
+    assert current.job_id != "old-job"
+    fresh_job = JobStore(Paths(tmp_path)).get(current.job_id)
+    assert fresh_job.state == "done" and fresh_job.verified
+    assert Path(fresh_job.source_path).read_bytes() == MANUSCRIPT
+    assert old_source.read_bytes() == b"unusable old source"
+    assert provider.calls
+
+
 # --- the ordinary case --------------------------------------------------------
 
 def test_a_new_manuscript_is_prepared_uploaded_and_marked(tmp_path, ws,

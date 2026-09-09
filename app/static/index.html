@@ -87,22 +87,65 @@
 <main>
   <!-- ── Drop ─────────────────────────────────────────────────────────── -->
   <section id="screen-drop" class="screen">
-    <div class="segmented" id="format-choice" role="radiogroup"
-         aria-label="What kind of document are you starting with?"></div>
+    <div class="drop-heading">
+      <div>
+        <p class="auto-eyebrow">Publishing workspace</p>
+        <h2>Drop documents</h2>
+        <p class="drop-lede">From manuscript to the next stage. Choose a task and add your files.</p>
+      </div>
+      <span class="drop-heading-note">Your next draft starts here.</span>
+    </div>
 
-    <div id="dropzone" tabindex="0" role="button"
-         aria-label="Drop documents here, or press Enter to choose files">
-      <p class="big">Drop your documents here</p>
-      <p class="muted">or <button type="button" id="pick" class="link">choose
-        files</button> — one at a time or a whole stack</p>
-      <p class="muted small" id="drop-formats">Word manuscripts and InDesign
-        layouts</p>
-      <input type="file" id="file-input" accept=".docx,.idml,.pdf" multiple hidden>
+    <fieldset class="field kinds drop-tasks">
+      <legend><span class="drop-step">1</span> Choose a task</legend>
+      <div class="drop-task-grid">
+        <label class="radio drop-task">
+          <input type="radio" name="kind" value="review" checked>
+          <span><strong>Review for errors</strong><small>Grammar and typos, returned as tracked changes.</small></span>
+        </label>
+        <label class="radio drop-task">
+          <input type="radio" name="kind" value="prep">
+          <span><strong>Format a manuscript</strong><small>A reading copy or a file ready for InDesign.</small><em id="prep-sheet-note" class="muted"></em></span>
+        </label>
+        <label class="radio drop-task">
+          <input type="radio" name="kind" value="promo">
+          <span><strong>Write promo copy</strong><small>A book teaser and twelve social posts.</small></span>
+        </label>
+        <label class="radio drop-task">
+          <input type="radio" name="kind" value="corrections">
+          <span><strong>Apply corrections</strong><small>Update an IDML from a marked-up PDF or Word proof.</small></span>
+        </label>
+        <label class="radio drop-task">
+          <input type="radio" name="kind" value="galley">
+          <span><strong>Galley proofread</strong><small>A thorough proofread within a budget you set.</small></span>
+        </label>
+      </div>
+      <p id="kind-warning" class="muted small" role="status" hidden></p>
+    </fieldset>
+
+    <div class="drop-upload">
+      <div class="drop-upload-head">
+        <h3><span class="drop-step">2</span> Add documents</h3>
+        <div class="segmented" id="format-choice" role="radiogroup"
+             aria-label="Document types to choose"></div>
+      </div>
+      <div id="dropzone">
+        <svg class="drop-file-icon" width="48" height="48" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+          <path d="M15 8H29L38 17V38A3 3 0 0 1 35 41H15A3 3 0 0 1 12 38V11A3 3 0 0 1 15 8Z" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M29 8V17H38M19 24H31M19 30H27M7 33V7A3 3 0 0 1 10 4H25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <p class="big">Drop your files here</p>
+        <p class="muted drop-upload-copy" id="drop-upload-copy">Add a manuscript, a layout, or a whole batch.</p>
+        <button type="button" id="pick" class="primary" aria-describedby="drop-formats">Choose files <span aria-hidden="true">↑</span></button>
+        <p class="muted small" id="drop-formats">Word manuscripts (.docx) and InDesign layouts (.idml)</p>
+        <input type="file" id="file-input" accept=".docx,.idml,.pdf" multiple hidden>
+      </div>
+      <p class="drop-upload-foot" id="drop-upload-foot">We’ll check your files first. Review the settings and estimate before you start.</p>
     </div>
 
     <!-- Outside #staged: a failed first drop must be visible even though the
          staged list never appeared. -->
-    <p id="drop-error" class="error" hidden></p>
+    <p id="drop-error" class="error" role="alert" hidden></p>
 
     <!-- A corrections proof (marked-up PDF / redlined Word) rides in the same drop
          but is not a staged job file, so its status shows here — above the staged
@@ -118,43 +161,16 @@
     </div>
 
     <div id="staged" hidden>
-      <h2 id="staged-title">Ready to go</h2>
-      <ul id="file-list"></ul>
-
-      <fieldset class="field kinds">
-        <legend>What should DocProof do with these?</legend>
-        <label class="radio">
-          <input type="radio" name="kind" value="review" checked>
-          <span><strong>Review for errors</strong> — grammar and typos, marked
-            up as tracked changes you accept or reject</span>
-        </label>
-        <label class="radio">
-          <input type="radio" name="kind" value="prep">
-          <span><strong>Format the manuscript</strong> — clean it up and tag
-            every paragraph, handed back as a book-styled reading copy or an
-            InDesign-ready file
-            <em id="prep-sheet-note" class="muted"></em></span>
-        </label>
-        <label class="radio">
-          <input type="radio" name="kind" value="promo">
-          <span><strong>Write promo copy</strong> — a teaser and twelve social
-            posts, drawn from the whole book; lands in the Promo tab</span>
-        </label>
-        <label class="radio">
-          <input type="radio" name="kind" value="corrections">
-          <span><strong>Apply corrections</strong> — take a finished InDesign
-            file (IDML) and a marked-up proof (PDF or redlined Word), apply the
-            corrections exactly, and check nothing else moved</span>
-        </label>
-        <label class="radio">
-          <input type="radio" name="kind" value="galley">
-          <span><strong>Galley proofread</strong> — a practitioner agent works
-            one manuscript in waves against a dollar budget, keeping its own
-            case file; lands in the Galley tab</span>
-        </label>
-        <p id="kind-warning" class="muted small" hidden></p>
-      </fieldset>
-
+      <div class="drop-workspace">
+      <div class="drop-documents">
+        <div class="drop-section-head">
+          <h3 id="staged-title">Your documents</h3>
+          <span id="drop-file-count" class="drop-count" aria-live="polite"></span>
+        </div>
+        <ul id="file-list"></ul>
+      </div>
+      <div class="drop-configuration">
+      <h3 class="drop-config-title"><span class="drop-step">3</span> Make it yours</h3>
       <div class="options">
         <!-- ── Effort tiers (simple view) ───────────────────────────────────
              A client-side macro over the controls in #advanced-options below.
@@ -166,38 +182,14 @@
              drawer opens flat instead. -->
         <div class="field review-only tier-picker" id="tier-picker"
              role="radiogroup" aria-label="How thorough should this review be?">
-          <span>How thorough should this review be?</span>
+          <span>Choose your review depth</span>
+          <p class="drop-field-help">Start with Standard, or choose the level your manuscript needs.</p>
           <div class="tier-cards">
-            <button type="button" class="tier-card is-detector"
-                    data-tier="detector" role="radio" aria-checked="false"
-                    tabindex="-1">
-              <span class="tier-badge tier-badge-ok">Tracked changes only</span>
-              <span class="tier-mark" aria-hidden="true">✍️</span>
-              <span class="tier-name">Detector only</span>
-              <span class="tier-blurb">Adds corrections as Word tracked
-                changes. No comments, silent cleanup, or extra passes. Selects
-                overnight batch pricing.</span>
-              <span class="tier-price" data-tier-price></span>
-            </button>
-
-            <button type="button" class="tier-card is-detector"
-                    data-tier="candidate" role="radio" aria-checked="false"
-                    tabindex="-1">
-              <span class="tier-badge tier-badge-ok">New detector alone</span>
-              <span class="tier-mark" aria-hidden="true">🎯</span>
-              <span class="tier-name">Candidate detector</span>
-              <span class="tier-blurb">Generates likely error sites, screens
-                them independently, then applies only validated corrections as
-                guarded Word tracked changes.</span>
-              <span class="tier-price" data-tier-price></span>
-            </button>
-
             <button type="button" class="tier-card" data-tier="light"
                     role="radio" aria-checked="false" tabindex="-1">
               <span class="tier-mark" aria-hidden="true">🪶</span>
               <span class="tier-name">Light touch</span>
-              <span class="tier-blurb">A fast single pass — grammar and typos,
-                nothing heavy. Cheapest.</span>
+              <span class="tier-blurb">One quick pass for grammar and typos. The lightest review.</span>
               <span class="tier-price" data-tier-price></span>
             </button>
 
@@ -207,8 +199,7 @@
               <span class="tier-badge">Recommended</span>
               <span class="tier-mark" aria-hidden="true">📘</span>
               <span class="tier-name">Standard</span>
-              <span class="tier-blurb">The house default — a considered pass
-                with the mechanical floor on.</span>
+              <span class="tier-blurb">A considered review with punctuation, spelling, and formatting checks.</span>
               <span class="tier-price" data-tier-price></span>
             </button>
 
@@ -216,8 +207,7 @@
                     role="radio" aria-checked="false" tabindex="-1">
               <span class="tier-mark" aria-hidden="true">🔎</span>
               <span class="tier-name">Hard</span>
-              <span class="tier-blurb">Two judged rounds, continuity and story
-                sheet, every change read for meaning.</span>
+              <span class="tier-blurb">Two rounds, continuity checks, and a meaning check on every change.</span>
               <span class="tier-price" data-tier-price></span>
             </button>
 
@@ -225,12 +215,31 @@
                     role="radio" aria-checked="false" tabindex="-1">
               <span class="tier-mark" aria-hidden="true">🔨</span>
               <span class="tier-name">The Hammer</span>
-              <span class="tier-blurb">Everything on — three rounds,
-                rewrite-and-compare, Sapling, both change gates.</span>
+              <span class="tier-blurb">Three rounds with the full set of review and verification passes.</span>
               <span class="tier-price" data-tier-price></span>
               <p class="tier-note" id="tier-hammer-sapling-note" hidden>Sapling
                 key missing — add one under Admin; the run continues without
                 it.</p>
+            </button>
+
+            <button type="button" class="tier-card is-detector"
+                    data-tier="detector" role="radio" aria-checked="false"
+                    tabindex="-1">
+              <span class="tier-badge tier-badge-ok">Tracked changes only</span>
+              <span class="tier-mark" aria-hidden="true">✍️</span>
+              <span class="tier-name">Detector only</span>
+              <span class="tier-blurb">Tracked corrections only, with no extra passes. Uses overnight pricing.</span>
+              <span class="tier-price" data-tier-price></span>
+            </button>
+
+            <button type="button" class="tier-card is-detector"
+                    data-tier="candidate" role="radio" aria-checked="false"
+                    tabindex="-1">
+              <span class="tier-badge tier-badge-ok">Focused review</span>
+              <span class="tier-mark" aria-hidden="true">🎯</span>
+              <span class="tier-name">Candidate detector</span>
+              <span class="tier-blurb">Finds likely errors and independently checks each correction.</span>
+              <span class="tier-price" data-tier-price></span>
             </button>
           </div>
         </div>
@@ -276,7 +285,7 @@
               <small id="model-blurb" class="muted"></small>
             </label>
 
-            <label class="field" id="glossary-field">
+            <label class="field review-only" id="glossary-field">
               <span>First-pass glossary reader</span>
               <select id="glossary-model"></select>
               <small class="muted">One whole-book read before the review — it
@@ -547,37 +556,30 @@
           </div>
         </div>
 
-        <fieldset class="field" id="prep-options" hidden>
-          <legend>What should it hand back?</legend>
+        <fieldset class="field drop-output" id="prep-options" hidden>
+          <legend>Choose your output</legend>
+          <div class="drop-output-grid">
           <label class="radio">
             <input type="radio" name="prep-output" value="book" checked>
-            <span><strong>A book-styled reading copy</strong> — the manuscript
-              cleaned up and dressed as a printed Atmosphere interior, for the
-              author and the developmental editors. Title-page lettering
-              follows the book's subject matter</span>
+            <span><strong>Reading copy</strong><small>A formatted Word manuscript for reading and editorial review.</small></span>
           </label>
           <label class="radio">
             <input type="radio" name="prep-output" value="indesign">
-            <span><strong>A file ready for InDesign</strong> — a clean Word
-              document whose paragraph styles are the template's own, so they
-              map when you place it</span>
+            <span><strong>Ready for InDesign</strong><small>A Word file with paragraph styles that map to your layout template.</small></span>
           </label>
           <label class="radio">
             <input type="radio" name="prep-output" value="tracked">
-            <span><strong>A tracked-changes Word file</strong> — the same
-              tagging as revisions, to walk in Word before anyone places
-              anything</span>
+            <span><strong>Tracked formatting</strong><small>Review the formatting changes as revisions in Word.</small></span>
           </label>
           <label class="radio">
             <input type="radio" name="prep-output" value="both">
-            <span><strong>InDesign + tracked</strong> — one costs no more than
-              the other; the work is in reading the manuscript</span>
+            <span><strong>InDesign + tracked</strong><small>Both Word versions, prepared in the same pass.</small></span>
           </label>
           <label class="radio">
             <input type="radio" name="prep-output" value="all">
-            <span><strong>All three</strong> — the reading copy, the InDesign
-              file and the redline together</span>
+            <span><strong>All three versions</strong><small>The reading copy, InDesign-ready Word file, and tracked formatting.</small></span>
           </label>
+          </div>
           <div class="options" id="book-options">
             <label class="field">
               <span>Subject matter</span>
@@ -753,19 +755,15 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
           </label>
         </fieldset>
 
-        <fieldset class="field review-only">
-          <legend>When?</legend>
+        <fieldset class="field review-only drop-timing">
+          <legend>Choose your timing</legend>
           <label class="radio">
             <input type="radio" name="mode" value="batch" checked>
-            <span><strong>Overnight</strong> — half price, ready within a
-              few hours
-              <small class="muted">Word manuscripts and InDesign layouts
-                alike.</small></span>
+            <span><strong>Overnight <span class="drop-saving">Save 50%</span></strong><small class="muted">Queued processing, usually ready within a few hours.</small></span>
           </label>
           <label class="radio">
             <input type="radio" name="mode" value="now">
-            <span><strong>Right now</strong> — ready in a few minutes, full
-              price</span>
+            <span><strong>Right now</strong><small class="muted">Starts immediately at the standard rate.</small></span>
           </label>
           <label class="sub" id="schedule-wrap">
             <input type="checkbox" id="schedule-on">
@@ -796,12 +794,16 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
           </div>
         </div>
       </div>
+      </div>
+      </div>
 
       <div class="start-bar">
+        <div class="drop-start-summary"><span class="auto-eyebrow">Ready when you are</span><span id="drop-task-summary">Review your documents</span></div>
         <span id="start-price" class="start-price muted"></span>
         <button id="start" class="primary big-button">Start review</button>
       </div>
       <p id="start-hint" class="muted" hidden></p>
+      <p id="start-error" class="error" role="alert" hidden></p>
     </div>
   </section>
 
@@ -980,73 +982,111 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
 
   <!-- ── DocWatch ─────────────────────────────────────────────────────── -->
   <section id="screen-watch" class="screen" hidden>
-    <h2>Automations</h2>
-    <p class="muted">Every "this happens → DocProof does that" rule in one place.
-      Each row below is one workflow — a trigger and the effect it fires. Turn one
-      on, open it to configure it, and DocProof runs it on every pass. The
-      connection to Google Drive and HubSpot lives under <strong>Connection</strong>;
-      when passes run, under <strong>Schedule</strong>.</p>
+    <div class="auto-heading">
+      <div>
+        <p class="auto-eyebrow">Publishing operations</p>
+        <h2>Automations</h2>
+        <p class="auto-lede">Keep manuscripts moving, from first draft to final delivery.</p>
+      </div>
+      <button type="button" class="auto-manage wf-jump" data-tab="schedule">
+        Manage schedule <span aria-hidden="true">↗</span>
+      </button>
+    </div>
+
+    <div class="auto-overview" id="wf-passes" aria-label="Automation overview">
+      <button type="button" class="auto-overview-item wf-jump" data-tab="connection">
+        <span class="auto-overview-label">Google Drive <span aria-hidden="true">↗</span></span>
+        <strong id="wf-connection-value">Loading…</strong>
+        <small id="wf-connection-detail">Checking the watched folder</small>
+      </button>
+      <button type="button" class="auto-overview-item wf-jump" data-tab="schedule">
+        <span class="auto-overview-label">Schedule <span aria-hidden="true">↗</span></span>
+        <strong id="wf-schedule-value">Loading…</strong>
+        <small id="wf-schedule-detail">One schedule for all enabled workflows</small>
+      </button>
+      <button type="button" class="auto-overview-item wf-jump" data-tab="history">
+        <span class="auto-overview-label">Last check <span aria-hidden="true">↗</span></span>
+        <strong id="wf-last-value">Loading…</strong>
+        <small id="wf-last-detail">View manuscript activity</small>
+      </button>
+    </div>
 
     <nav class="subtabs" id="auto-tabs" role="tablist" aria-label="Automations">
       <button class="subtab" id="autotab-workflows" data-tab="workflows"
-              role="tab" aria-selected="true" tabindex="0">Workflows</button>
+              role="tab" aria-controls="auto-panel-workflows" aria-selected="true" tabindex="0">Workflows</button>
       <button class="subtab" id="autotab-connection" data-tab="connection"
-              role="tab" aria-selected="false" tabindex="-1">Connection</button>
+              role="tab" aria-controls="auto-panel-connection" aria-selected="false" tabindex="-1">Connection</button>
       <button class="subtab" id="autotab-schedule" data-tab="schedule"
-              role="tab" aria-selected="false" tabindex="-1">Schedule</button>
+              role="tab" aria-controls="auto-panel-schedule" aria-selected="false" tabindex="-1">Schedule</button>
       <button class="subtab" id="autotab-history" data-tab="history"
-              role="tab" aria-selected="false" tabindex="-1">History</button>
+              role="tab" aria-controls="auto-panel-history" aria-selected="false" tabindex="-1">History</button>
     </nav>
 
     <div id="auto-panels">
       <!-- ── Workflows ─────────────────────────────────────────────── -->
       <div class="tabpanel is-active" id="auto-panel-workflows" data-tab="workflows"
            role="tabpanel" aria-labelledby="autotab-workflows">
-        <div class="card">
+        <div class="card auto-workflows-card">
+          <div class="wf-section-heading">
+            <div>
+              <h3>Your workflows <span id="wf-total" class="wf-count"></span></h3>
+              <p>Choose what happens when a manuscript is ready. Open a workflow to adjust its settings.</p>
+            </div>
+            <span id="wf-enabled-count" class="wf-enabled-count"></span>
+          </div>
           <div class="wf-toolbar">
-            <input type="search" id="wf-search" placeholder="Search workflows, triggers, effects…">
+            <label class="wf-search-field">
+              <span class="sr-only">Search workflows</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+              <input type="search" id="wf-search" placeholder="Search workflows…">
+            </label>
             <div class="wf-filters" id="wf-filters" role="group" aria-label="Filter workflows">
-              <button data-filter="all" class="active">All</button>
-              <button data-filter="on">On</button>
-              <button data-filter="off">Off</button>
-              <button data-filter="setup">Needs setup</button>
+              <button type="button" data-filter="all" class="active" aria-pressed="true">All <span data-count="all"></span></button>
+              <button type="button" data-filter="on" aria-pressed="false">On <span data-count="on"></span></button>
+              <button type="button" data-filter="off" aria-pressed="false">Off <span data-count="off"></span></button>
+              <button type="button" data-filter="setup" aria-pressed="false">Needs setup <span data-count="setup"></span></button>
             </div>
             <label class="field sub" style="margin:0">
               <select id="wf-sort" aria-label="Sort workflows">
-                <option value="status">Sort: Status</option>
-                <option value="name">Sort: Name</option>
-                <option value="effect">Sort: Effect</option>
+                <option value="status">Status first</option>
+                <option value="name">Name A–Z</option>
+                <option value="effect">Output A–Z</option>
               </select>
             </label>
           </div>
 
-          <p class="wf-passes" id="wf-passes"></p>
+          <p class="sr-only" id="wf-results-count" role="status" aria-live="polite"></p>
 
           <div class="wf-layout" id="wf-layout">
             <div class="wf-tablewrap">
               <table class="table" id="wf-registry">
+                <caption class="sr-only">Automation workflows, their triggers, outputs, and status</caption>
                 <thead>
                   <tr>
-                    <th scope="col"><span class="sr-only">Enabled</span></th>
                     <th scope="col">Workflow</th>
-                    <th scope="col">Trigger</th>
-                    <th scope="col">Effect</th>
+                    <th scope="col">When this happens</th>
+                    <th scope="col">DocProof creates</th>
                     <th scope="col">Status</th>
                   </tr>
                 </thead>
                 <tbody id="wf-rows"></tbody>
               </table>
-              <p id="wf-empty" class="muted" hidden>No workflows match.</p>
+              <div id="wf-empty" class="wf-empty" hidden>
+                <strong>No workflows found</strong>
+                <p>Try a different search or show all workflows.</p>
+                <button type="button" id="wf-reset">Clear filters</button>
+              </div>
             </div>
 
-            <aside class="wf-drawer" id="wf-drawer" hidden aria-live="polite">
+            <aside class="wf-drawer" id="wf-drawer" hidden aria-labelledby="wf-drawer-title">
               <div class="wf-drawer-head">
                 <div>
-                  <strong id="wf-drawer-title">Workflow</strong>
+                  <span class="auto-eyebrow">Workflow settings</span>
+                  <h3 id="wf-drawer-title">Workflow</h3>
                   <small id="wf-drawer-sub"></small>
                 </div>
                 <button class="wf-drawer-close" id="wf-drawer-close"
-                        aria-label="Close">×</button>
+                        aria-label="Close workflow settings">×</button>
               </div>
 
               <!-- Format on arrival -->
@@ -1091,7 +1131,7 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                 </label>
 
                 <div class="job-actions">
-                  <button id="wf-prep-save" class="primary">Save</button>
+                  <button id="wf-prep-save" class="primary">Save formatting settings</button>
                 </div>
                 <p id="wf-prep-note" class="action-note" hidden></p>
               </div>
@@ -1099,19 +1139,16 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
               <!-- Proofread (Galley) -->
               <div class="wf-config" id="wf-config-proof" hidden>
                 <div class="wf-setup" id="wf-proof-setup" hidden></div>
-                <p class="wf-hint">Reads
-                  <code>&lt;surname&gt; - Book 1.docx</code> in each author's
-                  folder at <em>Ready for Proofing</em>; puts back
-                  <code>&lt;surname&gt; - Book 2.docx</code> with its letter,
-                  style sheet, outcome and decision log beside it; then flips the
-                  HubSpot status to <em>Proofing Complete</em> or
-                  <em>Needs Human PR</em>.</p>
+                <p class="wf-hint">Reads the author's <em>Book 1</em> and returns
+                  <em>Book 2</em> with tracked corrections and review reports.
+                  The HubSpot values below control when proofreading starts
+                  and which status follows the review.</p>
 
                 <label class="checkbox">
                   <input type="checkbox" id="proof-enabled">
                   Proofread automatically
-                  <small class="muted">Off by default. Nothing is read, and no
-                    CRM record moves, until this is on.</small>
+                  <small class="muted">Runs on the shared schedule when the
+                    manuscript reaches the starting status below.</small>
                 </label>
 
                 <label class="field">
@@ -1124,19 +1161,17 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                 </label>
 
                 <label class="field">
-                  <span>HubSpot status value that means "proofread this now"</span>
+                  <span>Start when the HubSpot status is</span>
                   <input type="text" id="proof-ready"
                          placeholder="Ready for Proofing">
                 </label>
                 <label class="field">
-                  <span>Status value to set when the proofread comes back
-                    clean</span>
+                  <span>Status after a clean review</span>
                   <input type="text" id="proof-done"
                          placeholder="Proofing Complete">
                 </label>
                 <label class="field">
-                  <span>Status value to set when the book needs a human
-                    proofreader</span>
+                  <span>Status when human review is needed</span>
                   <input type="text" id="proof-needs-human"
                          placeholder="Needs Human PR">
                   <small class="muted">Leave this blank and DocProof writes
@@ -1146,7 +1181,7 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                 </label>
 
                 <div class="job-actions">
-                  <button id="wf-proof-save" class="primary">Save</button>
+                  <button id="wf-proof-save" class="primary">Save proofreading settings</button>
                 </div>
                 <p id="wf-proof-note" class="action-note" hidden></p>
 
@@ -1190,7 +1225,7 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                   <input type="checkbox" id="corrections-enabled">
                   Apply interior corrections automatically
                   <small class="muted">Off by default. Needs HubSpot and
-                    per-author subfolders (set from the CLI).</small>
+                    a separate Drive folder for each author.</small>
                 </label>
                 <label class="field">
                   <span>HubSpot status value the form workflow sets</span>
@@ -1228,7 +1263,7 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                 </label>
 
                 <div class="job-actions">
-                  <button id="wf-corrections-save" class="primary">Save</button>
+                  <button id="wf-corrections-save" class="primary">Save correction settings</button>
                 </div>
                 <p id="wf-corrections-note" class="action-note" hidden></p>
               </div>
@@ -1239,9 +1274,8 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                   value, DocProof writes its copy and — depending on the setting
                   below — either delivers the two documents to the Drive folder or
                   holds them for approval.</p>
-                <p id="promo-auto-needs-hubspot" class="muted" hidden>HubSpot is
-                  off in Connection, so this cannot run yet. Turn it on there
-                  first.</p>
+                <p id="promo-auto-needs-hubspot" class="muted" hidden>HubSpot workflows
+                  aren't enabled. Ask your administrator to finish the HubSpot setup.</p>
                 <label class="checkbox">
                   <input type="checkbox" id="promo-enabled">
                   Write promo copy automatically
@@ -1276,8 +1310,8 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                   manuscript, the blurbs, and the publicity-questionnaire answers —
                   writes the plan, delivers it to the folder, and moves the
                   property on. Flat watched folder only for now.</p>
-                <p id="plan-auto-needs-hubspot" class="muted" hidden>HubSpot is off
-                  in Connection, so this cannot run yet. Turn it on there first.</p>
+                <p id="plan-auto-needs-hubspot" class="muted" hidden>HubSpot workflows
+                  aren't enabled. Ask your administrator to finish the HubSpot setup.</p>
                 <label class="checkbox">
                   <input type="checkbox" id="plan-enabled">
                   Write marketing plans automatically
@@ -1346,6 +1380,10 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
       <!-- ── Connection ────────────────────────────────────────────── -->
       <div class="tabpanel" id="auto-panel-connection" data-tab="connection"
            role="tabpanel" aria-labelledby="autotab-connection">
+    <div class="auto-panel-intro">
+      <h3>Connect your publishing tools</h3>
+      <p>Choose where manuscripts arrive, where outputs are saved, and which records trigger work.</p>
+    </div>
     <div class="card">
       <h3>Google Drive</h3>
       <p id="watch-signin" class="muted">Checking…</p>
@@ -1388,9 +1426,22 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
       </label>
 
       <div class="job-actions">
-        <button id="watch-save" class="primary">Save</button>
+        <button id="watch-save" class="primary">Save folder</button>
       </div>
       <p id="watch-save-note" class="action-note" hidden></p>
+    </div>
+
+    <div class="card">
+      <div class="wf-integration-head">
+        <h3>HubSpot workflows</h3>
+        <span class="pill" id="wf-hubspot-value">Checking…</span>
+      </div>
+      <p class="muted small">HubSpot status changes can trigger proofreading,
+        corrections, promo copy, and marketing plans. Set the trigger and
+        completion values in each workflow.</p>
+      <p class="muted small">HubSpot access and author folders are managed by
+        your administrator.</p>
+      <button type="button" class="link wf-jump" data-tab="workflows">View workflows →</button>
     </div>
 
     <div class="card">
@@ -1422,7 +1473,7 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
       </label>
 
       <div class="job-actions">
-        <button id="watch-archive-save" class="primary">Save</button>
+        <button id="watch-archive-save" class="primary">Save archive settings</button>
       </div>
       <p id="watch-archive-note" class="action-note" hidden></p>
     </div>
@@ -1432,16 +1483,18 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
       <!-- ── Schedule ──────────────────────────────────────────────── -->
       <div class="tabpanel" id="auto-panel-schedule" data-tab="schedule"
            role="tabpanel" aria-labelledby="autotab-schedule">
+    <div class="auto-panel-intro">
+      <h3>Choose when DocProof checks for work</h3>
+      <p>Each check looks for new manuscripts and runs the workflows you've enabled.</p>
+    </div>
     <div class="card">
-      <h3>Run a pass now</h3>
-      <p class="muted small">A pass looks at the watched folder once and runs
-        every enabled workflow against what it finds.</p>
+      <h3>Check on demand</h3>
+      <p class="muted small">Preview the next check, or run enabled workflows now.</p>
       <p id="watch-run-state" class="muted">—</p>
       <div class="bar" id="watch-progress" hidden><i></i></div>
       <div class="job-actions">
-        <button id="watch-run" class="primary">Look now</button>
-        <button id="watch-preview" class="quiet">Show me what a pass would
-          do</button>
+        <button id="watch-run" class="primary">Run enabled workflows</button>
+        <button id="watch-preview" class="quiet">Preview next check</button>
         <button id="watch-test-email" class="quiet">Send a test email</button>
       </div>
       <p id="watch-run-note" class="action-note" hidden></p>
@@ -1449,7 +1502,7 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
     </div>
 
     <div class="card">
-      <h3>Automatic passes</h3>
+      <h3>Automatic checks</h3>
       <p class="muted" id="watch-schedule-intro">Two clocks, and they can't
         collide: whichever starts first claims the folder and the other stands
         aside.</p>
@@ -1477,11 +1530,11 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
 
       <div id="watch-inapp-schedule" class="sub" hidden>
         <div class="segmented" id="watch-mode" role="radiogroup"
-             aria-label="How the in-app clock decides when to look">
+             aria-label="When to check for new work">
           <label><input type="radio" name="watch-mode" value="times">
             At set times</label>
           <label><input type="radio" name="watch-mode" value="interval">
-            Every so often</label>
+            At regular intervals</label>
         </div>
 
         <div id="watch-times-editor">
@@ -1514,14 +1567,14 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
       <div class="tabpanel" id="auto-panel-history" data-tab="history"
            role="tabpanel" aria-labelledby="autotab-history">
         <div class="card">
-          <h3>What it has done</h3>
-          <p class="muted small">Every finished run, newest first — filter to find
-            one among many.</p>
+          <h3>Manuscript activity</h3>
+          <p class="muted small">See what happened, find delivered files, and retry manuscripts that need attention.</p>
           <label class="field" style="margin:0 0 0.6rem">
+            <span class="sr-only">Search manuscript activity</span>
             <input type="search" id="watch-files-filter"
                    placeholder="Filter by book name or status…">
           </label>
-          <p id="watch-files-empty" class="muted" hidden>Nothing yet.</p>
+          <p id="watch-files-empty" class="muted" hidden>No manuscript activity yet. Completed work will appear here after the first check.</p>
           <p id="watch-files-note" class="action-note" hidden></p>
           <table class="table" id="watch-files"></table>
         </div>

@@ -318,6 +318,12 @@ def clear_marker(token: str, rec: FileRecord, state: WatchState, *,
     was = rec.marked
     rec.marked = ""
     rec.attempts = 0
+    # An explicit retry must read the current Drive file, not replay a terminal
+    # refusal or verification failure against the previous downloaded copy.
+    rec.job_id = ""
+    rec.uploaded = {}
+    rec.hubspot_done = False
+    rec.completion_emailed = False
     state.record(rec)
     removed = list(MARKER_PROPS)
     log.info("Cleared the '%s' marker on %s (%s): removed %s; attempts reset "

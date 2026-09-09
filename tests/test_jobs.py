@@ -29,7 +29,8 @@ CONFIG = FIXTURES.parent.parent / "config" / "default.yaml"
 def runner(tmp_path):
     paths = Paths(tmp_path).ensure()
     store = JobStore(paths)
-    r = JobRunner(store, Settings(), config_path=CONFIG)
+    r = JobRunner(store, Settings(output_dir=str(tmp_path / "out")),
+                  config_path=CONFIG)
     return store, r
 
 
@@ -89,6 +90,24 @@ def test_per_run_features_reach_the_run_config(runner):
     cfg = r.config_for(_job(store, features={"storysheet": True, "rewrite": True}))
     assert cfg.storysheet.enabled is True
     assert cfg.rewrite.enabled is True
+
+
+@pytest.mark.parametrize("source", ["app", "watch"])
+def test_formatting_disables_storysheet_even_from_a_stale_proofing_switch(runner, source):
+    store, r = runner
+    job = _job(store, kind="prep", source=source, features={"storysheet": True})
+    assert r.config_for(job).storysheet.enabled is False
+    assert job.to_api()["features"]["storysheet"] is False
+    # Rendering the corrected metadata does not mutate the stored legacy input.
+    assert job.features["storysheet"] is True
+
+
+@pytest.mark.parametrize("kind", ["review", "galley"])
+def test_proofing_keeps_requested_storysheet(runner, kind):
+    store, r = runner
+    job = _job(store, kind=kind, features={"storysheet": True})
+    assert r.config_for(job).storysheet.enabled is True
+    assert job.to_api()["features"]["storysheet"] is True
 
 
 def test_candidate_detector_switch_combines_with_a_regular_review(runner):

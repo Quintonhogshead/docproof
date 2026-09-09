@@ -12,13 +12,13 @@ import json
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from docproof.batch import pass_prompts
 from docproof.checkpoint import Checkpoint
 from docproof.config import Config
 from docproof.models import CoverageLedger, Usage
-from docproof.pipeline import finish, prepare, run_sync
+from docproof.pipeline import JobCancelled, finish, prepare, run_sync
 from docproof.providers import cost_of_usage
 
 from galley.adapters import AdapterResult, Scope
@@ -134,6 +134,13 @@ class DocproofLadderAdapter:
     error_dir: str | Path = DEFAULT_ERROR_DIR
     calibration: Any = None
     name: str = "docproof_ladder"
+    should_cancel: Callable[[], bool] | None = None
+    checkpoint_cost_receipts: dict[str, float] = field(default_factory=dict,
+                                                       init=False)
+
+    def _check_cancel(self, _phase: str = "") -> None:
+        if self.should_cancel and self.should_cancel():
+            raise JobCancelled()
 
     def _run_dir(self) -> Path:
         if self.workspace is not None:
@@ -186,27 +193,48 @@ class DocproofLadderAdapter:
         budget_usd: float,
         usage: Usage,
     ) -> AdapterResult:
+        self.checkpoint_cost_receipts.clear()
+        self._check_cancel()
         run_dir = self._run_dir()
 
         prepared = prepare(self.cfg, str(self.source_path), self.error_dir)
+        self._check_cancel()
         coverage = CoverageLedger()
         checkpoint = self._checkpoint(prepared, run_dir)
-        findings, run_usage = run_sync(
-            self.cfg, prepared, self.provider, coverage=coverage,
-            checkpoint=checkpoint,
-        )
-        outputs = finish(
-            prepared,
-            findings,
-            run_usage,
-            self.cfg,
-            out_dir=run_dir,
-            source_path=self.source_path,
-            coverage=coverage,
-        )
 
-        # Thread the whole run's spend onto the shared usage object.
-        _accumulate(usage, run_usage)
+        def record_checkpoint_usage(key: str, recorded: dict) -> None:
+            receipt_id = getattr(checkpoint, "receipt_id", "")
+            if not receipt_id:
+                return
+            cost = cost_of_usage(recorded, fallback_model=self.cfg.api.model) or 0.0
+            cost += recorded.get("sapling_cost", 0.0)
+            self.checkpoint_cost_receipts[f"{receipt_id}:{key}"] = cost
+
+        try:
+            findings, run_usage = run_sync(
+                self.cfg, prepared, self.provider, coverage=coverage,
+                checkpoint=checkpoint, should_cancel=self.should_cancel,
+                on_phase=self._check_cancel,
+                on_checkpoint_usage=record_checkpoint_usage,
+            )
+        except JobCancelled as exc:
+            if exc.usage is not None:
+                _accumulate(usage, exc.usage)
+            raise
+        try:
+            self._check_cancel()
+            outputs = finish(
+                prepared,
+                findings,
+                run_usage,
+                self.cfg,
+                out_dir=run_dir,
+                source_path=self.source_path,
+                coverage=coverage,
+                on_phase=self._check_cancel,
+            )
+        finally:
+            _accumulate(usage, run_usage)
 
         gfindings, dropped = gfindings_from_json(
             outputs.findings_json, wave=self.wave, model=self.cfg.api.model

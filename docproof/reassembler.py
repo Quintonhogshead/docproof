@@ -126,6 +126,40 @@ def _ensure_boundary(p, off: int) -> None:
             return
 
 
+def _isolate_selected_content(covered: list[etree._Element]) -> list[etree._Element]:
+    """Return runs containing only the selected character-bearing children.
+
+    A run can also hold an image, footnote reference, or field marker. Text
+    boundaries alone do not separate those children: a correction at the end
+    of a run would otherwise delete a following image along with the typo.
+    Split around unselected children, leaving them in their original order and
+    outside the revision. Every fragment retains the original run properties.
+    """
+    selected = set(covered)
+    runs: list[etree._Element] = []
+    for r in dict.fromkeys(t.getparent() for t in covered):
+        children = [c for c in r if c.tag != RPR_TAG]
+        if all(c in selected for c in children):
+            runs.append(r)
+            continue
+        parent, at = r.getparent(), r.getparent().index(r)
+        template = copy.deepcopy(r)
+        for child in list(template):
+            if child.tag != RPR_TAG:
+                template.remove(child)
+        for is_selected, group in itertools.groupby(
+                children, key=lambda c: c in selected):
+            fragment = copy.deepcopy(template)
+            for child in group:
+                fragment.append(child)
+            parent.insert(at, fragment)
+            at += 1
+            if is_selected:
+                runs.append(fragment)
+        parent.remove(r)
+    return runs
+
+
 
 _VIRTUAL_SPLIT = re.compile(r"([\n\t])")
 
@@ -151,10 +185,14 @@ def _rev_el(tag: str, ids, author: str, date: str) -> etree._Element:
                                    qn("w:date"): date})
 
 
-def apply_replacement(p, a: Anchor, author: str, date: str, ids
+def apply_replacement(p, a: Anchor, author: str, date: str, ids, *,
+                      insertion_rpr: etree._Element | None = None
                       ) -> tuple[etree._Element, etree._Element]:
     """Apply one validated anchor to paragraph `p` as a tracked change.
-    Returns (first, last) inserted revision elements, for comment anchoring."""
+    Returns (first, last) inserted revision elements, for comment anchoring.
+    `insertion_rpr` overrides preceding-run inheritance for a pure insertion,
+    such as a missing initial character in a title being formatted.
+    """
     dels: list[etree._Element] = []
     rpr = None
 
@@ -164,7 +202,7 @@ def apply_replacement(p, a: Anchor, author: str, date: str, ids
         spans = _text_spans(p)
         covered = [t for (t, s, e) in spans
                    if s >= a.start and e <= a.end and e > s]
-        runs = list(dict.fromkeys(t.getparent() for t in covered))
+        runs = _isolate_selected_content(covered)
 
         groups: list[tuple[etree._Element, list]] = []
         for r in runs:                               # adjacency grouping —
@@ -203,6 +241,8 @@ def apply_replacement(p, a: Anchor, author: str, date: str, ids
                 break
         if prev_run is not None:
             rpr = prev_run.find(RPR_TAG)
+        if insertion_rpr is not None:
+            rpr = insertion_rpr
 
     ins = None
     if a.insert_text:
@@ -277,17 +317,20 @@ def apply_format_change(p, a: Anchor, mark: str, author: str, date: str, ids
         for nested in old.findall(qn("w:rPrChange")):
             old.remove(nested)
 
-        # One insertion point, then step forward: computing it afresh per tag
-        # would put w:iCs in front of w:i, which the schema forbids.
+        # Remove existing toggles first, including explicit false values, then
+        # restore both as enabled in schema order. The revision's old properties
+        # above retain the original values for Reject Change.
+        for tag in tags:
+            for existing in rpr.findall(qn(tag)):
+                rpr.remove(existing)
         at = len(rpr)
         for i, child in enumerate(rpr):
             if child.tag not in _BEFORE_ITALIC:
                 at = i
                 break
         for tag in tags:
-            if rpr.find(qn(tag)) is None:
-                rpr.insert(at, etree.Element(qn(tag)))
-                at += 1
+            rpr.insert(at, etree.Element(qn(tag)))
+            at += 1
 
         change = _rev_el("w:rPrChange", ids, author, date)
         change.append(old)
@@ -685,14 +728,20 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                 else:
                     unplaced.append(f.finding_id)
 
-            # Descending start, so edits never shift the offsets of the ones
-            # still to come — and descending end within a start, so a deletion
-            # goes before a pure insertion at the same offset. The validator
-            # lets that pair coexist; applied the other way round, the
+            # Formatting must precede text edits: the validator permits a typo
+            # correction inside a title's formatting span. Marking the original
+            # runs first preserves its anchor and lets replacement text inherit
+            # the new properties rather than invalidating the title's slice.
+            # Within each channel use descending start, so edits never shift
+            # the offsets still to come — and descending end within a start,
+            # so a deletion precedes a pure insertion at the same offset when
+            # a caller supplies that pair. Applied the other way round, the
             # inserted text lands inside the slice the deletion re-checks
             # below, and a validated edit is silently skipped.
+            formatted_starts: dict[int, etree._Element] = {}
             for f in sorted((x for x in plist if x.status == "validated"),
-                            key=lambda x: (x.anchor.start, x.anchor.end),
+                            key=lambda x: (bool(x.format), x.anchor.start,
+                                           x.anchor.end),
                             reverse=True):
                 a = f.anchor
                 if paragraph_text(p)[a.start:a.end] != a.delete_text:
@@ -704,12 +753,24 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                 if f.format:
                     marked = apply_format_change(p, a, f.format,
                                                  author, date, ids)
+                    # A missing initial character belongs to the title being
+                    # marked, even though normal insertion inheritance would
+                    # take the roman run immediately before the title.
+                    first_content = next(
+                        (t for t, start, end in _text_spans(p)
+                         if start == a.start and end > start), None)
+                    if first_content is not None:
+                        rpr = first_content.getparent().find(RPR_TAG)
+                        if rpr is not None:
+                            formatted_starts[a.start] = copy.deepcopy(rpr)
                     if marked is None:
                         already.append(f.finding_id)
                         continue
                     first, last = marked
                 else:
-                    first, last = apply_replacement(p, a, author, date, ids)
+                    first, last = apply_replacement(
+                        p, a, author, date, ids,
+                        insertion_rpr=formatted_starts.get(a.start))
                 applied.append(f.finding_id)
                 if cfg.comments and not f.silent and in_body_flow:
                     if comments is None:

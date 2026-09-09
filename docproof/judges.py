@@ -553,7 +553,7 @@ class Judge:
 
 
 def _judge_paragraph(judge: Judge, para_text: str, findings: Sequence[Finding],
-                     flag_unsure: bool):
+                     flag_unsure: bool, should_cancel=None):
     """One paragraph's changes to a fixpoint. Returns (verdicts_by_index,
     results) — the verdicts keyed by offset into `findings`, and every raw
     result so the caller can bill each API call's usage serially.
@@ -571,7 +571,7 @@ def _judge_paragraph(judge: Judge, para_text: str, findings: Sequence[Finding],
     kept = set(range(len(findings)))
     to_judge = set(kept)
     for _ in range(_MAX_COHORT_ROUNDS):
-        if not to_judge:
+        if not to_judge or (should_cancel and should_cancel()):
             break
         result = judge.fetch(para_text, findings, to_judge)
         results.append(result)
@@ -605,6 +605,7 @@ def screen(findings: Sequence[Finding], para_text: dict[str, str],
            instructions: str = "", context: str = "", max_tokens: int = 4000,
            concurrency: int = 8, flag_unsure: bool = True,
            bypass_trivial: bool = False,
+           should_cancel=None,
            usage: Usage) -> JudgeReport:
     """Put every change in `findings` to one judge and return the ones it will
     not vouch for.
@@ -617,7 +618,14 @@ def screen(findings: Sequence[Finding], para_text: dict[str, str],
     `flag_unsure` treats an "unsure" verdict as a withhold, which is the default
     and the safe reading: these gates exist to stop a silent change, and a judge
     that cannot vouch for one has not vouched for it."""
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import CancelledError, ThreadPoolExecutor
+    from .pipeline import JobCancelled
+
+    def check_cancel():
+        if should_cancel and should_cancel():
+            raise JobCancelled(usage=usage)
+
+    check_cancel()
 
     # Findings are grouped by paragraph but tracked by position, so a verdict
     # always lands back on the finding that was judged.
@@ -643,16 +651,49 @@ def screen(findings: Sequence[Finding], para_text: dict[str, str],
     # Verdicts come back keyed by their offset in the batch, which maps straight
     # onto the caller's positions — no finding_id anywhere in the round trip.
     verdicts: dict[int, dict] = {}
+
+    def read_paragraph(pid, items):
+        check_cancel()
+        return _judge_paragraph(judge, para_text[pid],
+                                [f for _, f in items], flag_unsure,
+                                should_cancel=should_cancel)
+
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
-        pending = [(items, pool.submit(_judge_paragraph, judge, para_text[pid],
-                                       [f for _, f in items], flag_unsure))
+        pending = [(items, pool.submit(read_paragraph, pid, items))
                    for pid, items in by_para.items()]
-        for items, fut in pending:   # fold serially: usage.add is not thread-safe
-            para_verdicts, results = fut.result()
-            for r in results:        # a paragraph may take more than one call
-                usage.add(r.usage, model=model)
-            for offset, v in para_verdicts.items():
-                verdicts[items[offset][0]] = v
+        metered = set()
+        try:
+            for items, fut in pending:   # fold serially: usage.add is not thread-safe
+                para_verdicts, results = fut.result()
+                for r in results:        # a paragraph may take more than one call
+                    usage.add(r.usage, model=model)
+                metered.add(fut)
+                for offset, v in para_verdicts.items():
+                    verdicts[items[offset][0]] = v
+                check_cancel()
+        except JobCancelled:
+            for _, fut in pending:
+                fut.cancel()
+            # Started calls cannot be recalled. Drain their results so the
+            # cancellation ledger includes everything billed, without starting
+            # another paragraph or a survivor-recheck call.
+            for _, fut in pending:
+                if fut in metered:
+                    continue
+                try:
+                    _, results = fut.result()
+                except (CancelledError, JobCancelled):
+                    continue
+                except Exception:
+                    log.debug("Judge call failed while cancelling", exc_info=True)
+                    continue
+                for r in results:
+                    usage.add(r.usage, model=model)
+            raise
+        except Exception:
+            for _, fut in pending:
+                fut.cancel()
+            raise
 
     withheld: list[Finding] = []
     positions: list[int] = []

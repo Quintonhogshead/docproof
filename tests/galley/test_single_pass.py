@@ -68,6 +68,31 @@ def _fixture_manuscript() -> Manuscript:
     return Manuscript(paragraphs=paragraphs, order=order)
 
 
+def test_single_pass_cancel_stops_later_passes_and_keeps_usage():
+    from docproof.pipeline import JobCancelled
+
+    cancelled = False
+
+    class CancellingProvider:
+        calls = 0
+
+        def complete_structured(self, **kwargs):
+            nonlocal cancelled
+            self.calls += 1
+            cancelled = True
+            return ProviderResult(parsed={"findings": []}, usage=_U)
+
+    provider = CancellingProvider()
+    adapter = SinglePassAdapter(FIXTURE, _lean_cfg(), provider,
+                                should_cancel=lambda: cancelled)
+    usage = Usage()
+    with pytest.raises(JobCancelled):
+        adapter.run(_fixture_manuscript(), Scope(para_ids=(TEH_PARA,), passes=2),
+                    100, usage)
+    assert provider.calls == 1
+    assert usage.api_calls == 1 and usage.input_tokens == 20
+
+
 def _para_blocks(user: str) -> dict[str, str]:
     """Parse the reviewed paragraphs (after the context block) out of a prompt."""
     tail = user.split("</context>")[-1]

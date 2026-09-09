@@ -246,14 +246,14 @@ def finish(prepared: PreparedPrep, tags: list[Tag], usage: Usage, cfg: Config,
                     "The InDesign output needs the house template; "
                     "cfg.prep.indesign_template did not resolve to a file.")
                 continue
-            stats[kind] = write_indesign_idml(
-                pkg, prepared.structure, plan, prepared.sheet, path,
-                template_path=template,
-                strip_formatting=cfg.prep.strip_direct_formatting)
-            if not cfg.prep.verify:
-                written[kind] = path
-                continue
             try:
+                stats[kind] = write_indesign_idml(
+                    pkg, prepared.structure, plan, prepared.sheet, path,
+                    template_path=template,
+                    strip_formatting=cfg.prep.strip_direct_formatting)
+                if not cfg.prep.verify:
+                    written[kind] = path
+                    continue
                 checks.extend(verify_idml(
                     prepared.structure, path, plan.glyph,
                     discover_body_story(template,

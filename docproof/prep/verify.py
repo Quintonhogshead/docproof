@@ -19,6 +19,7 @@ from ..utils.xml_helpers import (DocxPackage, TEXTBOX_LOCATION, paragraph_text,
                                  walk_package)
 from .ingest import BODY_PART
 from .model import Structure
+from .nontext import protected_content
 
 log = logging.getLogger("docproof.prep.verify")
 
@@ -149,6 +150,11 @@ def verify_output(structure: Structure, path: str | Path, glyph: str, *,
     source = source_stream(structure, glyph)
     results = [compare(source, output_stream(path, glyph, view=view), view=view)
                for view in views]
+    output_objects = protected_content(DocxPackage(Path(path)).tree(BODY_PART))
+    if output_objects != structure.protected_content:
+        raise VerificationFailed(
+            f"{Path(path).name} changed or removed a picture, embedded object, "
+            "or equation and was not kept.")
     for result in results:
         if result.ok:
             log.info("Verified %s — %s", Path(path).name, result.describe())

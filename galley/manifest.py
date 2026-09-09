@@ -789,6 +789,14 @@ def _binding_problem(run: Path, artifact: str, payload: dict[str, Any]
                 f"({recorded[:12]}… vs this build's "
                 f"{fp['accepted_sha256'][:12]}…) — the deliverable changed "
                 f"after verify; re-run `galley verify`")
+    if "paragraph_sha256" in payload:
+        covered = payload.get("paragraph_sha256") or {}
+        missing = [pid for pid, digest in fp["paragraph_sha256"].items()
+                   if covered.get(pid) != digest]
+        if missing:
+            return (f"{len(missing)} paragraph(s) lack verification for their "
+                    f"current text ({', '.join(missing[:5])}) — re-run "
+                    f"`galley verify` on the whole book or those paragraphs")
     return ""
 
 

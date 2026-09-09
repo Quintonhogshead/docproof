@@ -317,7 +317,8 @@ def test_adapter_exception_persists_the_ledger_mid_wave(tmp_path):
     assert "g-3" in {f.id for f in disk.findings}
 
 
-def test_resume_continues_an_interrupted_wave_without_rerunning_wave_one(tmp_path):
+@pytest.mark.parametrize("tier", ["T2", "T3"])
+def test_resume_continues_an_interrupted_wave_without_rerunning_wave_one(tmp_path, tier):
     ladder = _ladder()
     reread = FakeDetector(
         name="reread", scripted=[gfinding("g-3", "body-0003", "gamma", "G")],
@@ -327,7 +328,7 @@ def test_resume_continues_an_interrupted_wave_without_rerunning_wave_one(tmp_pat
 
     with pytest.raises(RuntimeError):
         run_galley(
-            _ms(), "T3", budget_usd=100.0, out_dir=tmp_path, adapters=adapters,
+            _ms(), tier, budget_usd=100.0, out_dir=tmp_path, adapters=adapters,
             plan_wave=_plan_once(Dispatch("reread", Scope()),
                                  Dispatch("boom", Scope())),
             clock=FIXED_CLOCK,
@@ -336,7 +337,7 @@ def test_resume_continues_an_interrupted_wave_without_rerunning_wave_one(tmp_pat
     # Resume: the crash is fixed (no boom dispatch). The interrupted wave is
     # continued under its own index; the ladder does not re-run.
     cf = run_galley(
-        _ms(), "T3", budget_usd=100.0, out_dir=tmp_path, adapters=adapters,
+        _ms(), tier, budget_usd=100.0, out_dir=tmp_path, adapters=adapters,
         plan_wave=_plan_once(Dispatch("reread", Scope())), clock=FIXED_CLOCK,
     )
     assert len(ladder.calls) == 1
@@ -385,3 +386,70 @@ def test_auditor_that_declares_a_governor_is_handed_one(tmp_path):
     assert [c.label for c in cf.budget.charges] == \
         ["wave1:docproof_ladder", "audit:wave1"]
     assert cf.budget.spent_usd == pytest.approx(0.55)
+
+
+def test_cancel_before_first_dispatch_spends_nothing(tmp_path):
+    from docproof.pipeline import JobCancelled
+    ladder = _ladder()
+    with pytest.raises(JobCancelled):
+        run_galley(_ms(), "T2", 10, tmp_path,
+                   adapters={"docproof_ladder": ladder},
+                   should_cancel=lambda: True)
+    assert ladder.calls == []
+    assert CaseFile.load(tmp_path / "casefile.json").budget.spent_usd == 0
+
+
+def test_cancel_after_dispatch_preserves_findings_and_charge(tmp_path):
+    from docproof.pipeline import JobCancelled
+    ladder = _ladder()
+    audit_calls = []
+    with pytest.raises(JobCancelled):
+        run_galley(_ms(), "T2", 10, tmp_path,
+                   adapters={"docproof_ladder": ladder},
+                   audit=lambda *a: audit_calls.append(a) or [],
+                   should_cancel=lambda: bool(ladder.calls))
+    cf = CaseFile.load(tmp_path / "casefile.json")
+    assert cf.budget.spent_usd == 0.5
+    assert {f.id for f in cf.findings} == {"g-1", "g-2"}
+    assert audit_calls == []
+
+
+def test_cancel_during_audit_preserves_charge_and_skips_planning(tmp_path):
+    from docproof.pipeline import JobCancelled
+    cancelled = False
+    planned = []
+
+    def audit(cf, ms, governor):
+        nonlocal cancelled
+        governor.charge(0.05, "audit")
+        cancelled = True
+        return []
+
+    with pytest.raises(JobCancelled):
+        run_galley(_ms(), "T2", 10, tmp_path,
+                   adapters={"docproof_ladder": _ladder()}, audit=audit,
+                   plan_wave=lambda *a: planned.append(a) or [],
+                   should_cancel=lambda: cancelled)
+    assert planned == []
+    assert CaseFile.load(tmp_path / "casefile.json").budget.spent_usd == \
+        pytest.approx(0.55)
+
+
+def test_cancelled_adapter_accrued_usage_is_charged(tmp_path):
+    from docproof.pipeline import JobCancelled
+    from docproof.providers import cost_of_usage
+    from tests.galley.test_cost_audit import AuditDetector
+
+    class CancelledDetector(AuditDetector):
+        def run(self, *args):
+            super().run(*args)
+            raise JobCancelled()
+
+    ladder = CancelledDetector("docproof_ladder", 1500, 300)
+    with pytest.raises(JobCancelled):
+        run_galley(_ms(), "T2", 10, tmp_path,
+                   adapters={"docproof_ladder": ladder})
+    cf = CaseFile.load(tmp_path / "casefile.json")
+    assert cf.budget.spent_usd == pytest.approx(
+        cost_of_usage(ladder.threaded, fallback_model=""))
+    assert len(cf.budget.charges) == 1

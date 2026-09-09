@@ -393,3 +393,24 @@ def test_render_all_without_evidence_keeps_the_ledger_letter(tmp_path):
     text = letter.read_text("utf-8")
     assert "# Editorial letter" in text and "## Open queries" in text
     assert "Proofreading letter" not in text
+
+
+def test_letter_groups_checkpoint_receipts_into_readable_charges(tmp_path):
+    cf, ms = _scripted_casefile()
+    cf.budget.charges = [
+        Charge("wave1:docproof_ladder:receipt:cache-one:chunk-a", 0.10, wave=1),
+        Charge("wave1:docproof_ladder:receipt:cache-one:chunk-b", 0.15, wave=1),
+        Charge("wave1:docproof_ladder", 0.05, wave=1),
+        Charge("wave2:docproof_ladder:receipt:cache-two:chunk-a", 0.10, wave=2),
+        Charge("screen:adjudicate", 0.10, wave=2),
+    ]
+    text = render_letter(cf, tmp_path, ms=ms).read_text("utf-8")
+
+    assert "- wave 1: wave1:docproof_ladder — $0.30" in text
+    assert text.count("- wave 1: wave1:docproof_ladder") == 1
+    assert "- wave 2: wave2:docproof_ladder — $0.10" in text
+    assert "- wave 2: screen:adjudicate — $0.10" in text
+    assert "**Total spend: $0.50**" in text
+    assert ":receipt:" not in text
+    assert "cache-one" not in text
+    assert len(cf.budget.charges) == 5
