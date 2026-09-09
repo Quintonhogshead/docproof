@@ -14,6 +14,7 @@ from ...utils.xml_helpers import (P_TAG, RPR_TAG, R_TAG, SDT_CONTENT, SDT_TAG,
                                   T_TAG, iter_text_elements, qn, set_text,
                                   walk_package)
 from ..ingest import BODY_PART
+from ..nontext import PROTECTED_TAGS
 
 PPR_TAG = qn("w:pPr")
 PSTYLE_TAG = qn("w:pStyle")
@@ -225,7 +226,8 @@ def clean_content_controls(pkg) -> int:
             continue
         has_text = any((t.text or "").strip() for t in content.iter(T_TAG))
         has_paragraph = content.find(P_TAG) is not None
-        if not has_text and not has_paragraph:
+        has_object = any(node.tag in PROTECTED_TAGS for node in content.iter())
+        if not has_text and not has_paragraph and not has_object:
             parent.remove(sdt)
             removed += 1
             continue

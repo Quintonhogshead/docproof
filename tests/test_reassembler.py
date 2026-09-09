@@ -1,3 +1,4 @@
+import docx
 from lxml import etree
 
 from docproof.config import Config
@@ -52,7 +53,21 @@ def test_edit_inside_a_textbox_roundtrips_without_a_shape_comment(tmp_path, cfg)
     unreliable in Word — no margin note is written even with comments on, so no
     comments part is created at all."""
     cfg = cfg.model_copy(update={"comments": True})
-    pkg = preflight(FIXTURES / "textbox.docx", "abort")
+    # Keep this regression independent of the manuscript used by other tests.
+    source = tmp_path / "textbox.docx"
+    document = docx.Document()
+    document.add_paragraph("Cover")
+    p = document.add_paragraph()._p
+    r = etree.SubElement(p, _w("r"))
+    pict = etree.SubElement(r, _w("pict"))
+    shape = etree.SubElement(pict, "{urn:schemas-microsoft-com:vml}shape")
+    textbox = etree.SubElement(shape, "{urn:schemas-microsoft-com:vml}textbox")
+    story = etree.SubElement(textbox, _w("txbxContent"))
+    inner_p = etree.SubElement(story, _w("p"))
+    inner_r = etree.SubElement(inner_p, _w("r"))
+    etree.SubElement(inner_r, _w("t")).text = _BOX
+    document.save(source)
+    pkg = preflight(source, "abort")
     doc = build_document_model(pkg, cfg)
 
     pid = "body-0001-tb0-p0"

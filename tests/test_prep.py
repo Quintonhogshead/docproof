@@ -342,6 +342,15 @@ def test_table_words_still_flow_into_the_idml(cfg, tmp_path):
     its words must: the word-for-word check reads the IDML back against every
     paragraph of the manuscript, tables included."""
     path, prepared = _prepared_table_doc(cfg, tmp_path)
+    # Graphics cannot be represented by the text-only IDML writer. Exercise
+    # the supported table-text path without the fixture's separate image.
+    pkg = DocxPackage(path)
+    drawing = pkg.tree(BODY_PART).find(f".//{qn('w:drawing')}")
+    paragraph = drawing.getparent().getparent()
+    paragraph.getparent().remove(paragraph)
+    pkg.mark_modified(BODY_PART)
+    pkg.save(path)
+    prepared = preplib.prepare(cfg, path, config_dir=CONFIG_DIR)
     tags, usage = preplib.run_mock(prepared)
     outputs = preplib.finish(prepared, tags, usage, cfg, out_dir=tmp_path,
                              source_path=path, outputs=["indesign"])
@@ -684,11 +693,11 @@ def test_a_manuscript_with_a_textbox_survives_verification(cfg, tmp_path):
     prepared = preplib.prepare(cfg, FIXTURES / "textbox.docx",
                                config_dir=CONFIG_DIR)
     tags, usage = preplib.run_mock(prepared, {})
-    # Clean (book/indesign) and accept+reject (tracked) — every view reads the
+    # Clean (book) and accept+reject (tracked) — every view reads the
     # written file back, so every one has to agree the box is not running text.
     outputs = preplib.finish(prepared, tags, usage, cfg, out_dir=tmp_path,
                              source_path=FIXTURES / "textbox.docx",
-                             outputs=["indesign", "tracked"])
+                             outputs=["book", "tracked"])
     assert {c.view for c in outputs.verifications} == {"clean", "accept",
                                                        "reject"}
     assert all(check.ok for check in outputs.verifications)

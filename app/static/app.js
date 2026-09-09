@@ -82,6 +82,8 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 // re-render mid-run (a read filling the list, files clearing)
                 // can't hand the button back before the job is away.
                 startBusy: false,
+                startError: '',
+                stagingCount: 0,
                 // The Promo tab stages its file on selection (not at run time)
                 // so it can price it before the run; this holds that staged
                 // entry, with its preflight token counts, until the run uses it.
@@ -136,7 +138,22 @@ const isCorrections = () => kind() === 'corrections';
 const isGalley = () => kind() === 'galley';
 
 document.querySelectorAll('input[name="kind"]').forEach((r) =>
-  r.addEventListener('change', () => { renderFiles(); renderKind(); }));
+  r.addEventListener('change', changeDropKind));
+
+function changeDropKind() {
+  state.startError = '';
+  // Formatting and promo can be the first task selected. Entering Review
+  // later must apply its initial tier, or reflect any model changes made away.
+  if (kind() === 'review') {
+    if (state.tier === null) maybeInitTier();
+    else reEvaluateTier();
+  }
+  renderFiles(); renderKind();
+}
+['galley-tier', 'galley-budget'].forEach((id) => {
+  const field = $(id);
+  if (field) field.addEventListener('input', renderCost);
+});
 document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
   r.addEventListener('change', () => { renderBookOptions(); renderCost(); }));
 // The last tier is on by default with the second look — checking one checks the
@@ -669,7 +686,7 @@ function renderKind() {
   // While the model is still reading, the button says so rather than offering
   // to apply a list that is only part read — renderCost keeps it greyed out to
   // match.
-  $('start').textContent = promo ? 'Write promo copy'
+  if (!state.startBusy) $('start').textContent = promo ? 'Write promo copy'
     : prep ? 'Format the manuscript'
     : galley ? 'Start galley proofread'
     : corrections ? (state.correctionsReading ? 'Reading corrections…'
@@ -680,7 +697,7 @@ function renderKind() {
     : galley ? 'Ready to proofread'
     : corrections ? 'Ready to correct' : 'Ready to review';
   document.querySelectorAll('details.sections').forEach((el) => {
-    el.hidden = prep || promo || corrections;   // all read the whole document
+    el.hidden = prep || promo || corrections || galley;
   });
 
   // The custom drawer: for a review it is collapsed behind the Customize toggle
@@ -709,29 +726,43 @@ function renderKind() {
     warning.textContent = blocked
       .map((f) => `${f.filename}: ${reasonBlocked(f)}`).join(' · ');
   }
+  renderDropFormats();
   renderCost();
 }
 
-const canRun = (f) => {
+function canRun(f) {
   if (isPromo()) return f.can_promo !== false;
   if (isCorrections()) return f.can_correct !== false;
+  if (isGalley()) return (f.filename || '').toLowerCase().endsWith('.docx')
+    && f.can_review !== false;
   return isPrep() ? f.can_prep !== false : f.can_review !== false;
-};
-const reasonBlocked = (f) =>
-  (isPromo() ? f.promo_error : isCorrections() ? f.correct_error
-   : isPrep() ? f.prep_error : f.review_error)
-  || 'cannot be used for this.';
+}
+
+function reasonBlocked(f) {
+  if (isGalley() && !(f.filename || '').toLowerCase().endsWith('.docx')) {
+    return 'Galley needs a Word manuscript (.docx). Choose Review for an InDesign layout.';
+  }
+  return (isPromo() ? f.promo_error : isCorrections() ? f.correct_error
+    : isPrep() ? f.prep_error : f.review_error) || 'cannot be used for this.';
+}
 
 
 const zone = $('dropzone');
 const input = $('file-input');
 
 $('pick').addEventListener('click', (e) => { e.stopPropagation(); input.click(); });
-zone.addEventListener('click', () => input.click());
-zone.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); }
+zone.addEventListener('click', (e) => {
+  if (e.target !== input && !e.target.closest('button, a, input')) input.click();
 });
-input.addEventListener('change', () => upload([...input.files]));
+input.addEventListener('change', pickDroppedFiles);
+
+function pickDroppedFiles() {
+  const files = [...input.files];
+  // Browsers suppress change when the same file is picked twice. Clearing the
+  // field lets someone remove a document and immediately choose it again.
+  input.value = '';
+  return upload(files);
+}
 
 ['dragenter', 'dragover'].forEach((evt) =>
   zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.add('hot'); }));
@@ -752,14 +783,13 @@ function routeCorrectionsDrop(files) {
   const bookPresent = idmls.length > 0
     || usableFiles().some((f) => f.can_correct);
   // A PDF is unambiguous — nothing else uses one, so it is always the proof. A
-  // Word file is claimed as a proof only when a book is present to correct;
-  // even under the corrections kind, a lone .docx must stay a staged file so it
-  // shows in the list with the kind picker live — otherwise it vanishes into the
-  // proof slot and the run is stuck behind a missing IDML with no way to reroute
-  // it to review, prep, or promo. Once a book lands, a Word drop is a proof again.
-  const intent = pdfs.length > 0 || (bookPresent && docxs.length > 0);
+  // Word proof can arrive before its book when Corrections was chosen first.
+  // Otherwise the accompanying/staged InDesign book supplies the intent;
+  // a lone Word upload under Review remains a manuscript.
+  const wantsWordProof = isCorrections() || bookPresent;
+  const intent = pdfs.length > 0 || (wantsWordProof && docxs.length > 0);
   if (!intent) return files;
-  const source = pdfs[0] || (bookPresent ? docxs[0] : null);
+  const source = pdfs[0] || (wantsWordProof ? docxs[0] : null);
   if (!source) return files;
   if (pdfs.length > 1) {
     fail(`One proof at a time — reading ${source.name}, ignoring the other PDF(s).`);
@@ -773,7 +803,9 @@ function routeCorrectionsDrop(files) {
 
 function setCorrectionsKind() {
   const radio = document.querySelector('input[name="kind"][value="corrections"]');
-  if (radio && !radio.checked) { radio.checked = true; renderKind(); }
+  if (radio && !radio.checked) {
+    radio.checked = true; state.startError = ''; renderFiles(); renderKind();
+  }
 }
 
 function attachCorrectionsSource(file) {
@@ -848,12 +880,15 @@ function renderCorrectionsSource() {
   const pdfField = $('corrections-pdf');
   if (pdfField) pdfField.addEventListener('change', () => {
     const f = (pdfField.files || [])[0];
+    pdfField.value = '';
+    if (state.startBusy) { fail('Wait for this run to start before changing the proof.'); return; }
     if (f) attachCorrectionsSource(f);
   });
 })();
 
 async function upload(files) {
   if (!files.length) return;
+  if (state.startBusy) { fail('Wait for this run to start before adding documents.'); return; }
   $('drop-error').hidden = true;
 
   // A marked-up PDF or a redlined Word file is a corrections *source*, not a job
@@ -891,9 +926,9 @@ async function upload(files) {
     // loadModels, which is a separate, slower fetch that enriches the cost
     // figures. Leaving it up through that made the spinner linger beside the
     // list that had already appeared.
-    hideStaging();
+    hideStaging(files.length);
   }
-  await loadModels();
+  try { await loadModels(); } catch (err) { fail(err.message); }
   // Once a review file is staged, open on Standard (the first stage only, so a
   // later tier or Custom choice survives a re-stage); a re-stage just resyncs
   // the highlight and price, in case model availability moved.
@@ -904,21 +939,27 @@ async function upload(files) {
   // The book just landed — refresh the proof note (its wording depends on whether
   // a correctable file is staged) and re-sync the corrections panel/button.
   renderCorrectionsSource();
-  if (isCorrections()) renderKind();
+  renderKind();
 }
 
 // The spinner that fills the gap between a drop and the list below it. The
 // server stages and preflights every file — and may convert one first — so
 // this can run for a few seconds with otherwise nothing on screen.
 function showStaging(count) {
-  $('staging-text').textContent = count === 1
+  state.stagingCount += count;
+  $('staging-text').textContent = state.stagingCount === 1
     ? 'Reading your document…'
-    : `Reading your ${count} documents…`;
+    : `Reading your ${state.stagingCount} documents…`;
   $('staging').hidden = false;
+  renderStartState();
 }
 
-function hideStaging() {
-  $('staging').hidden = true;
+function hideStaging(count) {
+  state.stagingCount = Math.max(0, state.stagingCount - count);
+  $('staging').hidden = state.stagingCount === 0;
+  if (state.stagingCount) $('staging-text').textContent = state.stagingCount === 1
+    ? 'Reading your document…' : `Reading your ${state.stagingCount} documents…`;
+  renderStartState();
 }
 
 // Shared by the compare report below and the designer-notes report further
@@ -1578,15 +1619,23 @@ function renderFiles() {
     meta.className = 'file-meta';
     meta.textContent = f.ok ? fileSummary(f) : f.error;
     const drop = document.createElement('button');
+    drop.type = 'button';
     drop.textContent = 'Remove';
+    drop.setAttribute('aria-label', `Remove ${f.filename}`);
+    drop.disabled = state.startBusy;
     drop.addEventListener('click', () => {
+      if (state.startBusy) return;
       state.selected.delete(f.id);
-      state.files.splice(i, 1); renderFiles(); loadModels();
+      state.files.splice(i, 1); renderFiles(); renderKind();
+      const next = $('file-list').querySelectorAll('button[aria-label]')[
+        Math.min(i, state.files.length - 1)];
+      (next || $('pick')).focus();
+      loadModels().catch((err) => fail(err.message));
     });
     li.append(name, meta, drop);
     // Only a review picks sections. An .idml is preflighted for review too, so
     // it carries chunks — but under prep/promo/corrections it is read whole.
-    if (f.ok && !isPrep() && !isPromo() && !isCorrections()
+    if (f.ok && kind() === 'review'
         && f.chunks && f.chunks.length > 1) {
       li.append(sectionPicker(f));
     }
@@ -1599,7 +1648,7 @@ function renderFiles() {
     list.append(li);
   });
   $('staged').hidden = state.files.length === 0;
-  $('start').disabled = usableIds().length === 0;
+  renderCost();
 }
 
 function fileSummary(f) {
@@ -1616,6 +1665,10 @@ function fileSummary(f) {
     return `${p.paragraphs} paragraphs, ${p.words.toLocaleString()} words`
       + `, ${p.blank_lines} blank line${p.blank_lines === 1 ? '' : 's'} to sort out${revs}`;
   }
+  if (isPromo()) return f.can_promo === false ? f.promo_error || 'Cannot write copy from this file.'
+    : `${((f.promo || {}).words || 0).toLocaleString()} words · whole document`;
+  if (isGalley()) return !canRun(f) ? reasonBlocked(f)
+    : `${f.paragraphs} paragraphs · whole book`;
   if (!f.can_review) return f.review_error || 'cannot be reviewed.';
   const kept = keptFor(f).size;
   const all = f.chunks ? f.chunks.length : f.sections;
@@ -1702,9 +1755,10 @@ const usableIds = () => usableFiles().map((f) => f.id);
 
 // Files with nothing ticked are simply left out of the run — as are files this
 // job can't be done to at all, like an InDesign layout you asked to prep.
-const filesToRun = () => usableFiles().filter(
-  (f) => canRun(f) && (isPrep() || isPromo() || isCorrections()
-                       || keptFor(f).size > 0));
+function filesToRun() {
+  return usableFiles().filter((f) => canRun(f)
+    && (kind() !== 'review' || keptFor(f).size > 0));
+}
 
 function selectionPayload() {
   const out = {};
@@ -2969,6 +3023,7 @@ function syncBatchAvailability(m) {
 
 function renderCost() {
   updateAdvancedSummary();
+  renderDropSummary();
   const m = state.models.find((x) => x.id === $('model').value);
   $('model-blurb').textContent = m ? m.blurb : '';
   syncBatchAvailability(m);
@@ -2977,7 +3032,7 @@ function renderCost() {
 
   if (isPromo()) {
     renderPromoCost(m, money);
-    modelHint(m);
+    renderStartState();
     return;
   }
 
@@ -2989,10 +3044,8 @@ function renderCost() {
         + `${m.display} costs ${money(pricePrep(m))}. Asking for both files `
         + `costs no more than asking for one.`
       : '';
-    const ready = m && m.available && files.length > 0;
-    $('start').disabled = !ready;
     setStartPrice(m && files.length ? pricePrep(m) : null);
-    modelHint(m);
+    renderStartState();
     return;
   }
 
@@ -3001,21 +3054,20 @@ function renderCost() {
     // cost, taken on the button). The button waits on one correctable file plus
     // something to apply: an edit list, an attached proof, or a typed list —
     // the latter two read into a list on the button itself.
-    const hasList = (($('corrections-input') || {}).value || '').trim().length > 0;
-    const hasSource = !!state.correctionsSource;
-    const hasTyped = (($('corrections-list-text') || {}).value || '')
-      .trim().length > 0;
-    // …and stays greyed out while a read is in flight: a PDF fills the list a
-    // batch at a time, so until the last one lands "Apply" would mean applying
-    // the corrections the model has read and silently dropping the rest.
-    // A failed read locks it the same way, for the same reason.
-    $('start').disabled = state.startBusy
-                          || state.correctionsReading > 0
-                          || state.correctionsReadFailed
-                          || !(filesToRun().length > 0
-                               && (hasList || hasSource || hasTyped));
-    correctionsHint();
-    setStartPrice(null);
+    setStartNote('');
+    renderStartState();
+    return;
+  }
+
+  if (isGalley()) {
+    // The server's Galley tier owns its models and budget. A hidden review
+    // model, section selection or overnight estimate cannot price this run.
+    const budget = galleyBudget();
+    setStartNote(!filesToRun().length ? '' : budget === null
+      ? `${($('galley-tier') || {}).value || 'T2'} default budget`
+      : Number.isFinite(budget) && budget > 0
+        ? `$${budget.toLocaleString('en-US', {maximumFractionDigits: 2})} budget limit` : '');
+    renderStartState();
     return;
   }
 
@@ -3030,13 +3082,11 @@ function renderCost() {
   // staged files, the chosen timing, and the Sapling key.
   updateTierPrices();
 
-  const ready = m && m.available && filesToRun().length > 0;
-  $('start').disabled = !ready;
   // The sticky echo follows the chosen timing — overnight or now — since that
   // is the price the button is about to spend.
   setStartPrice(mode() === 'batch' ? price.batch : price.now,
                 { approx: price.approx });
-  modelHint(m);
+  renderStartState();
 }
 
 // The drop-time promo estimate: what this book costs to turn into a teaser and
@@ -3054,7 +3104,6 @@ function renderPromoCost(m, money) {
     line.textContent = '';
     compare.hidden = true;
     warn.hidden = true;
-    $('start').disabled = true;
     setStartPrice(null);
     return;
   }
@@ -3101,48 +3150,85 @@ function renderPromoCost(m, money) {
     ok.checked = false;
   }
 
-  $('start').disabled = !(m && m.available && (!over || ok.checked));
   setStartPrice(m ? pricePromo(m) : null);
 }
 
-// A disabled button with no explanation is the worst first-run experience
-// there is. Say what's missing and where to fix it.
-function modelHint(m) {
-  const hint = $('start-hint');
-  if (m && !m.available) {
-    hint.innerHTML = '';
-    hint.append(`${m.display} needs an API key. `);
-    const go = document.createElement('button');
-    go.className = 'link';
-    go.textContent = 'Add one in Settings';
-    go.addEventListener('click', () => show('settings'));
-    hint.append(go, ' — or pick a reviewer you already have a key for.');
-    hint.hidden = false;
-  } else {
-    hint.hidden = true;
-  }
+function setStartNote(text) {
+  const el = $('start-price');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.remove('pending');
 }
 
-// Why a greyed-out Apply is greyed out. Corrections never reaches modelHint (it
-// runs no model), so it says its own piece in the same place: locked while the
-// model is still reading, and locked after a read that failed — with where to
-// go from there, since a part-read list looks perfectly fine on screen.
-function correctionsHint() {
-  const hint = $('start-hint');
-  if (!hint) return;
-  if (state.correctionsReading > 0) {
-    hint.textContent = 'The model is still reading the corrections — Apply '
-      + 'unlocks when the last one is in.';
-    hint.hidden = false;
-  } else if (state.correctionsReadFailed) {
-    hint.textContent = 'That read didn’t finish, so the list below is only part '
-      + 'of the proof. Read it again — Apply stays locked until a read completes.';
-    hint.hidden = false;
-  } else {
-    hint.hidden = true;
-  }
+function galleyBudget() {
+  const field = $('galley-budget');
+  if (field && field.validity && field.validity.badInput) return NaN;
+  const raw = (field && field.value || '').trim();
+  return raw === '' ? null : Number(raw);
 }
 
+// One gate serves both the visible button and the click handler. Renderers and
+// asynchronous reads may run during submission, but none can enable it early.
+function dropStartIssue({ignoreBusy = false} = {}) {
+  if (state.startBusy && !ignoreBusy) return 'Starting your run…';
+  if (state.stagingCount > 0) return 'Wait while your documents are checked.';
+  const files = filesToRun();
+  if (!state.files.length) return isCorrections()
+    ? 'Add the InDesign file (.idml) you want to correct.'
+    : 'Add a document to get started.';
+  if (!files.length) {
+    if (kind() === 'review' && usableFiles().some(canRun)) {
+      return 'Choose at least one section to review.';
+    }
+    return 'No documents are ready for this task. Check the notes beside each file.';
+  }
+  if ((isCorrections() || isGalley()) && files.length > 1) {
+    return `${isGalley() ? 'Galley proofreads' : 'Corrections apply to'} one book at a time. `
+      + 'Remove the extra books before starting.';
+  }
+  if (isGalley()) {
+    const budget = galleyBudget();
+    return budget !== null && (!Number.isFinite(budget) || budget <= 0)
+      ? 'Enter a budget greater than $0, or leave it blank for the tier default.' : '';
+  }
+  if (isCorrections()) {
+    if (state.correctionsReading > 0) return 'The corrections are still being read. Apply unlocks when the read finishes.';
+    if (state.correctionsReadFailed) return 'That read did not finish. Read the proof again before applying corrections.';
+    const hasList = (($('corrections-input') || {}).value || '').trim();
+    const hasTyped = (($('corrections-list-text') || {}).value || '').trim();
+    return hasList || hasTyped || state.correctionsSource ? ''
+      : 'Attach a marked proof or add a corrections list before applying.';
+  }
+  const m = state.models.find((x) => x.id === $('model').value);
+  if (!m) return 'Choose an available model to continue.';
+  if (!m.available) return `${m.display} needs a key. Add one in Settings or choose an available model.`;
+  if (isPromo() && files.some((f) => f.promo && f.promo.over_limit)
+      && !$('promo-oversize-ok').checked) return 'Confirm the document size below before writing promo copy.';
+  return '';
+}
+
+function renderStartState() {
+  const issue = dropStartIssue();
+  $('start').disabled = !!issue;
+  $('start').setAttribute('aria-busy', String(state.startBusy));
+  const hint = $('start-hint');
+  if (hint) { hint.textContent = issue; hint.hidden = !issue; }
+  const error = $('start-error');
+  if (error) { error.textContent = state.startError || ''; error.hidden = !state.startError; }
+}
+
+function renderDropSummary() {
+  const count = $('drop-file-count');
+  if (count) count.textContent = `${state.files.length} document${state.files.length === 1 ? '' : 's'}`;
+  const summary = $('drop-task-summary');
+  if (!summary) return;
+  const task = {review: 'Review', prep: 'Format', promo: 'Write promo copy for',
+    corrections: 'Apply corrections to', galley: 'Proofread'}[kind()];
+  const n = filesToRun().length;
+  summary.textContent = n ? `${task} ${n} document${n === 1 ? '' : 's'}`
+    : state.files.length ? 'No documents ready for this task.'
+      : 'Add a document, then review your settings.';
+}
 
 $('schedule-on').addEventListener('change', () => {
   $('schedule-at').disabled = !$('schedule-on').checked;
@@ -3155,13 +3241,25 @@ document.querySelectorAll('input[name="mode"]').forEach((r) =>
 
 const mode = () => document.querySelector('input[name="mode"]:checked').value;
 
-$('start').addEventListener('click', async () => {
+$('start').addEventListener('click', startDocuments);
+
+async function startDocuments() {
+  if (state.startBusy) return;
+  state.startError = '';
+  const issue = dropStartIssue();
+  if (issue) {
+    state.startError = issue;
+    renderStartState();
+    if (!$('start-error')) fail(issue, {scroll: false});
+    return;
+  }
   const button = $('start');
-  const label = button.textContent;
+  const runKind = kind();
+  const submittedFiles = filesToRun().slice();
   // The read below re-renders the button as it fills the edit list; this keeps
   // that from handing it back mid-flight.
   state.startBusy = true;
-  button.disabled = true;
+  renderStartState();
   button.textContent = 'Starting…';
   try {
     // One-button corrections: read the attached proof (a marked-up PDF or
@@ -3181,6 +3279,13 @@ $('start').addEventListener('click', async () => {
         button.textContent = 'Applying…';
       }
     }
+    // A source read can take time. Changing the task or removing its book
+    // during that read must not turn the original click into a different run.
+    if (kind() !== runKind || submittedFiles.some((f) => !filesToRun().includes(f))) {
+      throw new Error('Your task or documents changed. Review the settings and start again.');
+    }
+    const changedIssue = dropStartIssue({ignoreBusy: true});
+    if (changedIssue) throw new Error(changedIssue);
     // A marked-PDF read attaches the proof's page texts (and its comments)
     // beside the list, but they live only on this page — a reload discards
     // them while the list itself can be re-supplied. Running a page-citing
@@ -3213,7 +3318,7 @@ $('start').addEventListener('click', async () => {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          file_ids: filesToRun().map((f) => f.id),
+          file_ids: submittedFiles.map((f) => f.id),
           model: $('model').value,
           effort: effortValue(),
           allow_oversize: $('promo-oversize-ok').checked,
@@ -3224,19 +3329,13 @@ $('start').addEventListener('click', async () => {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          // Corrections and galley each run one manuscript at a time — the list
-          // or the budget is specific to its book — so only the first goes even
-          // if several are staged.
-          file_ids: (isCorrections() || isGalley()
-            ? filesToRun().slice(0, 1) : filesToRun()).map((f) => f.id),
-          model: $('model').value,
-          kind: kind(),
+          file_ids: submittedFiles.map((f) => f.id),
+          model: isGalley() ? '' : $('model').value,
+          kind: runKind,
           // Galley only: the practitioner tier and the dollar budget (blank =>
           // the tier's own default). Ignored on every other kind.
           tier: isGalley() ? ($('galley-tier') || {}).value || 'T2' : '',
-          budget_usd: (isGalley()
-            && (($('galley-budget') || {}).value || '').trim() !== '')
-            ? Number($('galley-budget').value) : null,
+          budget_usd: isGalley() ? galleyBudget() : null,
           corrections: isCorrections()
             ? (($('corrections-input') || {}).value || '') : '',
           // The reviewer comments the edits were read from (a marked-up PDF), so
@@ -3277,8 +3376,8 @@ $('start').addEventListener('click', async () => {
             ? ((resolveTier(state.tier) || {}).profile || '') : ''),
           variant: ($('variant') || {}).value || '',
           effort: effortValue(),
-          glossary_model: $('glossary-model').value,
-          features: collectFeatures(),
+          glossary_model: isPrep() ? 'off' : $('glossary-model').value,
+          features: isPrep() ? {...collectFeatures(), storysheet: false} : collectFeatures(),
           category_knobs: collectCategoryKnobs(),
           rounds: Number($('rounds').value),
           judge_prompt: $('judge-prompt').value,
@@ -3302,35 +3401,37 @@ $('start').addEventListener('click', async () => {
           preset: kind() === 'review' ? (state.tier || '') : '',
           proposer_restraint: ($('proposer-restraint') || {}).value || 'restrained',
           judge_harshness: ($('judge-harshness') || {}).value || 'strict',
-          selections: isPrep() ? {} : selectionPayload(),
+          selections: kind() === 'review' ? selectionPayload() : {},
         }),
       });
     }
-    state.files = [];
-    state.selected.clear();
-    clearCorrectionsSource();
+    const submittedIds = new Set(submittedFiles.map((f) => f.id));
+    state.files = state.files.filter((f) => !submittedIds.has(f.id));
+    submittedIds.forEach((id) => state.selected.delete(id));
+    if (runKind === 'corrections') clearCorrectionsSource();
     renderFiles();
     show(promoRun ? 'promo' : 'jobs');
   } catch (err) {
-    fail(err.message);
+    state.startError = err.message;
+    renderStartState();
+    if (!$('start-error')) fail(err.message, {scroll: false});
   } finally {
     state.startBusy = false;
-    button.disabled = false;
-    button.textContent = label;
     // Re-gate off the real state: a failed corrections read leaves a part-read
     // list behind, and the label/greying should say so rather than sit on
     // whatever it read as the click began.
-    if (isCorrections()) { renderKind(); renderCost(); }
+    renderFiles();
+    renderKind();
   }
-});
+}
 
-function fail(message) {
+function fail(message, {scroll = true} = {}) {
   const box = $('drop-error');
   box.textContent = message;
   box.hidden = false;
   // The box sits above the staged list; whoever failed — a drop with nothing
   // staged yet, or Start at the bottom of the page — should still see it.
-  box.scrollIntoView({ block: 'nearest' });
+  if (scroll) box.scrollIntoView({ block: 'nearest' });
 }
 
 
@@ -3486,7 +3587,7 @@ async function refreshJobs({ tick = false } = {}) {
 // cancelled — kept so the button reads "Aborting…" across the polls in between
 // instead of springing back to "Abort".
 const aborting = new Set();
-const TERMINAL_STATES = ['done', 'failed', 'cancelled'];
+const TERMINAL_STATES = ['done', 'needs_human', 'failed', 'cancelled'];
 
 // The steps a review moves through, in the order the pipeline runs them, with a
 // one-line label and a plain-English quip for what each is actually doing. The
@@ -7394,8 +7495,12 @@ async function loadWatch({ quiet = false } = {}) {
       loadPromoSettings().catch(() => {}),
       loadPlanSettings().catch(() => {}),
     ]);
+    renderRegistryPreservingFocus();
+  } else {
+    // Keep the shared clock current without replacing keyboard-focused row
+    // controls every five seconds. renderWatch handles actual row changes.
+    renderPassesSummary();
   }
-  renderRegistry();
 }
 
 // The inputs are filled only on a deliberate load — opening the tab, or
@@ -7419,10 +7524,15 @@ function renderWatch(body, quiet) {
     const signature = JSON.stringify([w.folder_id, w.signed_in, w.hubspot_enabled,
                                       w.proofing_enabled, w.proof_runner,
                                       w.hubspot_proof_ready_value,
-                                      w.hubspot_proof_done_value]);
+                                      w.hubspot_proof_done_value,
+                                      w.corrections_enabled, w.subfolders_enabled,
+                                      w.hubspot_corrections_ready_value,
+                                      w.hubspot_corrections_done_value,
+                                      w.hubspot_corrections_file_property,
+                                      w.hubspot_corrections_text_property]);
     if (signature !== state.wfWatchSignature) {
       state.wfWatchSignature = signature;
-      renderRegistry();
+      renderRegistryPreservingFocus();
     }
   }
   applyWatchSchedule(body.can_schedule);
@@ -7491,11 +7601,11 @@ function applyWatchSchedule(canSchedule) {
   $('watch-closed-schedule').hidden = !canSchedule;
   if (canSchedule) return;
   $('watch-schedule-intro').textContent =
-    'DocProof looks on its own while it is running.';
-  $('watch-auto-label').textContent = 'Look automatically';
+    'Check for ready manuscripts at the times you choose.';
+  $('watch-auto-label').textContent = 'Run on a schedule';
   $('watch-auto-hint').textContent =
-    'Checks the folder on a schedule and prepares anything new. Turning this '
-    + 'off pauses the automatic passes — Look now still works.';
+    'Checks the folder and runs enabled workflows. Pause this at any time; '
+    + 'you can still run a check on demand.';
 }
 
 function renderWatchSignIn(body) {
@@ -7694,12 +7804,16 @@ function watchTrouble(last) {
 
 function renderWatchFiles(files) {
   const table = $('watch-files');
+  const signature = JSON.stringify(files);
+  if (signature === state.wfHistorySignature) return;
+  state.wfHistorySignature = signature;
   table.innerHTML = '';
   $('watch-files-empty').hidden = files.length > 0;
-  if (!files.length) return;
+  if (!files.length) { applyWatchFilesFilter(); return; }
 
-  table.append(headRow(['Manuscript', 'What happened', 'Put back', 'Cost',
-                        '']));
+  const headings = headRow(['Manuscript', 'What happened', 'Delivered files', 'Cost', '']);
+  headings.className = 'wf-history-head';
+  table.append(headings);
   files.forEach((f) => {
     // One put-back file per line. Joined with commas on one no-wrap line, a
     // book that got all of its outputs made this column wider than the card,
@@ -7707,6 +7821,10 @@ function renderWatchFiles(files) {
     // scrollbar macOS does not draw — "I don't see the button".
     const tr = bodyRow([f.name, f.plain_state,
                         f.uploaded.join('\n') || '—', money(f.cost)]);
+    tr.className = 'wf-history-row';
+    ['Manuscript', 'Status', 'Delivered files', 'Cost'].forEach((label, i) => {
+      tr.children[i].dataset.label = label;
+    });
     const td = document.createElement('td');
     if (f.marked === 'failed') {
       // "Needs attention" is a marker on the file in Drive, and the marker is
@@ -8830,7 +8948,7 @@ async function loadFormats() {
   // One button per format the server reads, plus the answer most people want,
   // which is "I have both and I would rather not sort them".
   [...d.formats.map((f) => ({ value: f.suffix, label: `${f.kind}s` })),
-   { value: 'all', label: 'Both' }]
+   { value: 'all', label: 'All documents' }]
     .forEach(({ value, label }) => {
       const wrap = document.createElement('label');
       const radio = document.createElement('input');
@@ -8861,32 +8979,34 @@ function allowedSuffixes() {
 
 function applyFormatChoice(choice) {
   state.formatChoice = choice;
+  renderDropFormats();
+
+  // The task is an explicit choice. A document filter should not silently
+  // change formatting into a paid review; incompatible files explain why.
+  renderFiles();
+  renderKind();
+}
+
+function renderDropFormats() {
   // Corrections proofs ride in the same drop, so the picker offers PDFs too — a
   // chosen PDF is sorted to the corrections source by routeCorrectionsDrop, never
   // staged as a manuscript.
-  input.accept = [...allowedSuffixes(), '.pdf'].join(',');
-
-  const format = state.formats.find((f) => f.suffix === choice);
-  const converts = ` — plus ${state.extraSuffixes.slice(0, -1).join(', ')} and `
-    + `${state.extraSuffixes.slice(-1)} manuscripts, if LibreOffice is installed`;
-  if (format) {
-    $('drop-formats').textContent = `${format.kind}s (${format.suffix})`
-      + (choice === '.idml' ? '' : converts);
-  } else {
-    const names = state.formats.map((f) => `${f.kind}s (${f.suffix})`);
-    $('drop-formats').textContent =
-      (names.length > 1
-        ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
-        : names[0]) + converts;
-  }
-
-  // A layout cannot be prepped — prep is the step that gets a manuscript INTO
-  // InDesign — so choosing one answers the next question too.
-  if (choice === '.idml' && isPrep()) {
-    document.querySelector('input[name="kind"][value="review"]').checked = true;
-    renderKind();
-  }
-  renderFiles();
+  const suffixes = [...new Set([...allowedSuffixes(), ...(isCorrections() ? ['.idml'] : [])])];
+  input.accept = [...new Set([...suffixes, '.pdf', ...(isCorrections() ? ['.docx'] : [])])].join(',');
+  const formats = $('drop-formats');
+  if (formats) formats.textContent = isCorrections()
+    ? 'InDesign book (.idml) + marked PDF or Word proof (.pdf, .docx)'
+    : `${suffixes.length ? suffixes.join(', ') : 'Word and InDesign documents'} · PDF proofs open Corrections`;
+  const copy = $('drop-upload-copy');
+  if (copy) copy.textContent = isCorrections()
+    ? 'Add one IDML and its marked-up PDF or Word proof.'
+    : isGalley() ? 'Add one Word manuscript (.docx).'
+      : 'Add a manuscript, a layout, or a whole batch.';
+  const foot = $('drop-upload-foot');
+  if (foot) foot.textContent = isCorrections()
+    ? 'Word proofs are read automatically; PDFs are read when you start. Model reads may add a small cost.'
+    : isGalley() ? 'We’ll check your manuscript first. Review the tier and budget before you start.'
+      : 'We’ll check your files first. Review the settings and estimate before you start.';
 }
 
 // Which output the user last chose is a preference, so it comes from Settings
@@ -9449,7 +9569,8 @@ async function loadAdmin() {
 // from a small descriptor model built off the watch status and the promo/plan
 // settings; a new workflow becomes a new descriptor, not new markup.
 
-const wfUI = { search: '', filter: 'all', sort: 'status', selected: null };
+const wfUI = { search: '', filter: 'all', sort: 'status', selected: null,
+               pending: new Set(), errors: new Map() };
 
 function automationWorkflows() {
   const w = state.watchStatus || {};
@@ -9472,8 +9593,8 @@ function automationWorkflows() {
   // to fix it: a `target` tab jumps straight there, `self` opens the drawer
   // whose own fields are the fix, and a null target means the blocker is a
   // server credential no button here can set.
-  const hubspotMissing = { hint: 'HubSpot isn’t connected — set HUBSPOT_TOKEN '
-    + 'on the server to enable it', target: null };
+  const hubspotMissing = { hint: 'HubSpot workflows aren’t enabled. Ask your '
+    + 'administrator to finish the HubSpot setup.', target: 'connection' };
   return [
     {
       id: 'prep', name: 'Format on arrival', sub: 'Prepare new manuscripts',
@@ -9520,9 +9641,12 @@ function automationWorkflows() {
       // workflow copies the submission into. The CLI sets the rest.
       setup: (!w.corrections_enabled || corrReady) ? null
         : (w.hubspot_enabled
-            ? { hint: 'Run `docproof-watch init --enable-corrections` to name '
-                + 'the form properties (and turn subfolders on).',
-                target: null }
+            ? (w.subfolders_enabled
+                ? { hint: 'Add the trigger, completion status, and at least one '
+                    + 'corrections form property below.', target: 'self' }
+                : { hint: 'This workflow needs a separate Drive folder for each '
+                    + 'author. Ask your administrator to enable author folders.',
+                    target: 'connection' })
             : hubspotMissing),
     },
     {
@@ -9583,10 +9707,20 @@ function wfLastLook() {
                                 hour: '2-digit', minute: '2-digit' });
 }
 
+function wfNeedsAttention(file) {
+  // The status endpoint reports formatting, proofreading, and corrections
+  // independently. A successful format does not clear a later human verdict.
+  return Boolean(file.error || file.marked === 'failed'
+    || file.proof_marked === 'human' || file.proof_marked === 'failed'
+    || file.proof_outcome === 'needs_human'
+    || file.corrections_marked === 'failed');
+}
+
 function renderRegistry() {
   const rowsEl = $('wf-rows');
   if (!rowsEl) return;
-  let items = automationWorkflows();
+  const all = automationWorkflows();
+  let items = all;
   const q = wfUI.search.trim().toLowerCase();
   if (q) {
     items = items.filter((x) =>
@@ -9604,56 +9738,69 @@ function renderRegistry() {
   rowsEl.innerHTML = '';
   items.forEach((x) => rowsEl.append(registryRow(x)));
   $('wf-empty').hidden = items.length > 0;
+  $('wf-total').textContent = all.length;
+  const enabled = all.filter((x) => x.enabled).length;
+  $('wf-enabled-count').textContent = `${enabled} enabled`;
+  $('wf-results-count').textContent = `${items.length} of ${all.length} workflows shown`;
+  $('wf-filters').querySelectorAll('button').forEach((button) => {
+    const filter = button.dataset.filter;
+    button.classList.toggle('active', filter === wfUI.filter);
+    button.setAttribute('aria-pressed', String(filter === wfUI.filter));
+    button.querySelector('[data-count]').textContent = filter === 'all'
+      ? all.length : all.filter((x) => x.status === filter).length;
+  });
   renderPassesSummary();
   applyDrawer();
 }
 
-// One shared line above the table. "Last look" and "Next" are properties of the
-// single pass clock, not of any one workflow — showing them per row implied each
-// ran on its own schedule. Here they belong to the clock, with a jump to set it.
+// These are shared connection/clock facts. Keep the buttons mounted while
+// polling so a clock update cannot take keyboard focus away.
 function renderPassesSummary() {
-  const el = $('wf-passes');
-  if (!el) return;
-  el.innerHTML = '';
-  const w = state.watchStatus || {};
-  const anyEnabled = automationWorkflows().some((x) => x.enabled);
-  if (!anyEnabled) {
-    el.append(document.createTextNode('Nothing runs yet. Turn a workflow on, '
-      + 'then choose when passes run under '));
-    el.append(wfJump('Schedule', 'schedule'), document.createTextNode('.'));
-    return;
+  if (!$('wf-passes') || !state.watchStatus) return;
+  const w = state.watchStatus;
+  const connected = !!(w.folder_id && w.signed_in);
+  $('wf-connection-value').textContent = connected ? 'Folder connected'
+    : !w.signed_in ? 'Sign in required' : 'Choose a folder';
+  $('wf-connection-value').className = connected ? 'is-ready' : 'is-attention';
+  $('wf-connection-detail').textContent = connected
+    ? 'Ready for the next check' : 'Finish your Google Drive setup';
+  const schedule = wfScheduleSummary(w);
+  $('wf-schedule-value').textContent = schedule.value;
+  $('wf-schedule-detail').textContent = schedule.detail;
+  $('wf-last-value').textContent = w.last_tick_at ? wfLastLook() : 'No checks yet';
+  const files = w.files || [];
+  const attention = files.filter(wfNeedsAttention).length;
+  $('wf-last-detail').textContent = attention
+    ? `${attention} manuscript${attention === 1 ? '' : 's'} need${attention === 1 ? 's' : ''} attention`
+    : files.length ? `${files.length} manuscript${files.length === 1 ? '' : 's'} in history`
+      : 'Activity appears after the first check';
+  $('wf-last-value').className = attention ? 'is-attention' : '';
+  if ($('wf-hubspot-value')) {
+    $('wf-hubspot-value').textContent = w.hubspot_enabled ? 'Enabled' : 'Not enabled';
+    $('wf-hubspot-value').className = 'pill ' + (w.hubspot_enabled ? 'on' : 'off');
   }
-  let nextClause;
-  if (w.times && w.times.length) nextClause = `next at ${w.times.join(', ')}`;
-  else if (w.auto_ticks) nextClause = 'next on the in-app timer';
-  else nextClause = 'no automatic passes scheduled';
-  el.append(document.createTextNode(
-    `Passes run on one shared clock — last looked ${wfLastLook()}, `
-    + `${nextClause}. `));
-  el.append(wfJump('Change under Schedule', 'schedule'),
-            document.createTextNode('.'));
+}
+
+function wfScheduleSummary(w) {
+  if (w.auto_ticks) {
+    const times = w.tick_at_times || [];
+    const value = times.length ? times.join(' · ')
+      : `Every ${w.tick_every_minutes || 60} minutes`;
+    let detail = 'One schedule for all enabled workflows';
+    if (times.length && w.tick_timezone) detail = w.tick_timezone.replaceAll('_', ' ');
+    if (w.times && w.times.length) detail += ` · also at ${w.times.join(', ')}`;
+    return { value, detail };
+  }
+  if (w.times && w.times.length) {
+    return { value: w.times.join(' · '), detail: 'Scheduled on this computer' };
+  }
+  return { value: 'Manual only', detail: 'No automatic checks scheduled' };
 }
 
 function registryRow(x) {
   const tr = document.createElement('tr');
   tr.dataset.wf = x.id;
   if (wfUI.selected === x.id) tr.classList.add('selected');
-
-  const tdToggle = document.createElement('td');
-  const tog = document.createElement('button');
-  tog.type = 'button';
-  tog.className = 'wf-toggle' + (x.enabled ? ' on' : '');
-  tog.setAttribute('role', 'switch');
-  tog.setAttribute('aria-checked', x.enabled ? 'true' : 'false');
-  tog.setAttribute('aria-label', (x.enabled ? 'Disable ' : 'Enable ') + x.name);
-  if (x.toggleable) {
-    tog.addEventListener('click', (e) => { e.stopPropagation(); toggleWorkflow(x); });
-  } else {
-    tog.disabled = true;
-    tog.title = 'Runs whenever the folder is connected';
-  }
-  tdToggle.append(tog);
-  tr.append(tdToggle);
 
   // The name is a real button — the row's keyboard-reachable "open this
   // workflow" control (the bare <tr> click is a mouse convenience on top).
@@ -9662,25 +9809,43 @@ function registryRow(x) {
   const open = document.createElement('button');
   open.type = 'button';
   open.className = 'wf-open';
+  open.setAttribute('aria-controls', 'wf-drawer');
   open.setAttribute('aria-expanded', wfUI.selected === x.id ? 'true' : 'false');
+  const icon = document.createElement('span');
+  icon.className = `wf-icon wf-icon-${x.id}`;
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = { prep: 'Aa', proof: '✓', corrections: '↳', promo: '“', plan: '≡' }[x.id];
+  const name = document.createElement('span');
   const b = document.createElement('b'); b.textContent = x.name;
   const small = document.createElement('small'); small.textContent = x.sub;
-  open.append(b, small);
+  name.append(b, small);
+  open.append(icon, name);
   open.addEventListener('click', (e) => { e.stopPropagation(); openDrawer(x.id); });
   tdName.append(open);
   tr.append(tdName);
 
-  tr.append(chipCell(x.trigger.text, x.trigger.hs));
-  tr.append(chipCell(x.effect, false));
+  tr.append(chipCell(x.trigger.text, x.trigger.hs, 'When'));
+  tr.append(chipCell(x.effect, false, 'Creates'));
 
   const tdStatus = document.createElement('td');
-  if (x.status === 'setup') {
+  tdStatus.className = 'wf-row-status';
+  const status = document.createElement('div');
+  status.className = 'wf-state';
+  const pending = wfUI.pending.has(x.id);
+  if (pending) {
+    const saving = document.createElement('span');
+    saving.className = 'wf-saving';
+    saving.setAttribute('role', 'status');
+    saving.textContent = 'Saving…';
+    status.append(saving);
+  } else if (x.status === 'setup') {
     // The pill is the call to action: it jumps to whatever needs finishing —
     // another tab, or this workflow's own drawer.
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'pill setup actionable';
-    btn.textContent = 'Needs setup →';
+    btn.textContent = 'Needs setup';
+    btn.setAttribute('aria-label', `Set up ${x.name}`);
     if (x.setup && x.setup.hint) btn.title = x.setup.hint;
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -9688,12 +9853,36 @@ function registryRow(x) {
       if (t && t !== 'self') window.__activateAutoTab(t);
       else openDrawer(x.id);
     });
-    tdStatus.append(btn);
+    status.append(btn);
   } else {
     const pill = document.createElement('span');
     pill.className = 'pill ' + x.status;
     pill.textContent = WF_STATUS_LABEL[x.status];
-    tdStatus.append(pill);
+    status.append(pill);
+  }
+  if (x.toggleable) {
+    const tog = document.createElement('button');
+    tog.type = 'button';
+    tog.className = 'wf-toggle' + (x.enabled ? ' on' : '');
+    tog.setAttribute('role', 'switch');
+    tog.setAttribute('aria-checked', String(x.enabled));
+    tog.setAttribute('aria-label', `${x.name} automation`);
+    tog.disabled = pending;
+    tog.addEventListener('click', (e) => { e.stopPropagation(); toggleWorkflow(x); });
+    status.append(tog);
+  } else {
+    const automatic = document.createElement('small');
+    automatic.className = 'wf-auto-label';
+    automatic.textContent = 'Follows connection';
+    status.append(automatic);
+  }
+  tdStatus.append(status);
+  if (wfUI.errors.has(x.id)) {
+    const error = document.createElement('p');
+    error.className = 'wf-row-error';
+    error.setAttribute('role', 'alert');
+    error.textContent = wfUI.errors.get(x.id);
+    tdStatus.append(error);
   }
   tr.append(tdStatus);
 
@@ -9706,8 +9895,10 @@ function registryRow(x) {
   return tr;
 }
 
-function chipCell(text, hs) {
+function chipCell(text, hs, label) {
   const td = document.createElement('td');
+  td.className = 'wf-flow-cell';
+  td.dataset.label = label;
   const chip = document.createElement('span');
   chip.className = 'wf-chip' + (hs ? ' hs' : '');
   chip.textContent = text;
@@ -9734,11 +9925,10 @@ function openDrawer(id) {
   if (drawer && !drawer.hidden) {
     const close = $('wf-drawer-close');
     if (close) close.focus({ preventScroll: true });
-    // Stacked under the table on a narrow screen, the drawer opens off-screen —
-    // bring it into view so a tap visibly does something.
-    if (window.matchMedia('(max-width: 60rem)').matches) {
-      drawer.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
+    // Bring the settings header into view even when the selected row is far
+    // down the list. On small screens the settings appear above the rows.
+    drawer.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      ? 'instant' : 'smooth', block: 'start' });
   }
 }
 
@@ -9766,13 +9956,6 @@ function applyDrawer() {
   });
   drawer.hidden = !x;
   layout.classList.toggle('with-drawer', !!x);
-  // Widen the whole Automations surface only while the Workflows tab is showing
-  // a drawer — otherwise the wide class leaked onto Connection/Schedule/History
-  // and stretched their prose to unreadable line lengths.
-  const screen = $('screen-watch');
-  const wfActive = ($('auto-panel-workflows') || {}).classList
-    && $('auto-panel-workflows').classList.contains('is-active');
-  if (screen) screen.classList.toggle('wf-wide', !!x && wfActive);
   // A drawer's setup banner: what's still missing, and a jump to fix it. Only
   // the drawers that have one are listed; a `self` target has no jump, because
   // the fields under the banner are the fix.
@@ -9796,37 +9979,70 @@ function applyDrawer() {
   }
 }
 
+function renderRegistryPreservingFocus() {
+  const rows = $('wf-rows');
+  const active = document.activeElement;
+  const row = rows && rows.contains(active) ? active.closest('[data-wf]') : null;
+  const id = row && row.dataset.wf;
+  const selector = row && active.classList.contains('wf-toggle') ? '.wf-toggle'
+    : row && active.classList.contains('wf-open') ? '.wf-open'
+    : 'button.pill.setup';
+  renderRegistry();
+  if (!id) return;
+  const current = [...rows.querySelectorAll('[data-wf]')]
+    .find((item) => item.dataset.wf === id);
+  if (!current) {
+    // Switching a workflow off can remove it from the active On filter.
+    $('wf-search').focus({ preventScroll: true });
+    return;
+  }
+  let next = current.querySelector(selector);
+  // A pending switch may be disabled, or a setup action may disappear when
+  // the connection is fixed. Keep focus on that workflow's open button.
+  if (!next || next.disabled) next = current.querySelector('.wf-open');
+  if (next) next.focus({ preventScroll: true });
+}
+
 async function toggleWorkflow(x) {
+  if (wfUI.pending.has(x.id)) return;
+  wfUI.pending.add(x.id);
+  wfUI.errors.delete(x.id);
+  renderRegistryPreservingFocus();
   try {
     if (x.id === 'proof') {
-      renderWatch(await api('/api/watch', {
+      const body = await api('/api/watch', {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ proofing_enabled: !x.enabled }),
-      }));
+      });
+      renderWatch(body, true);
+      $('proof-enabled').checked = !!body.watch.proofing_enabled;
     } else if (x.id === 'promo') {
-      await api('/api/promo/settings', {
+      state.promoSettings = await api('/api/promo/settings', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ promo_enabled: !x.enabled }),
       });
-      await loadPromoSettings();
+      $('promo-enabled').checked = !!state.promoSettings.promo_enabled;
     } else if (x.id === 'corrections') {
-      renderWatch(await api('/api/watch', {
+      const body = await api('/api/watch', {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ corrections_enabled: !x.enabled }),
-      }));
+      });
+      renderWatch(body, true);
+      $('corrections-enabled').checked = !!body.watch.corrections_enabled;
     } else if (x.id === 'plan') {
-      await api('/api/promo/plan-settings', {
+      state.planSettings = await api('/api/promo/plan-settings', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ plan_enabled: !x.enabled }),
       });
-      await loadPlanSettings();
+      $('plan-enabled').checked = !!state.planSettings.plan_enabled;
     }
   } catch (e) {
-    // A toggle that would not save says so where the workflow's own settings
-    // are, not in a corner of the table — that is where somebody looks next.
-    const note = $({ proof: 'wf-proof-note', promo: 'promo-settings-status' }[x.id]
-                   || 'plan-settings-status');
-    if (note) { note.hidden = false; note.textContent = e.message; }
+    // The switch is operated in the registry, so its failure belongs beside
+    // that same row, including when no configuration drawer is open.
+    wfUI.errors.set(x.id, e.message || 'Could not save. Please try again.');
+  } finally {
+    wfUI.pending.delete(x.id);
+    renderRegistryPreservingFocus();
   }
 }
 
@@ -9838,6 +10054,7 @@ async function toggleWorkflow(x) {
   if (!tabs || !panels) return;
   const btns = () => [...tabs.querySelectorAll('.subtab')];
   function activate(btn, focus) {
+    if (!btn) return;
     btns().forEach((b) => {
       const on = b === btn;
       b.setAttribute('aria-selected', on ? 'true' : 'false');
@@ -9878,6 +10095,15 @@ async function toggleWorkflow(x) {
     const btn = tabs.querySelector(`[data-tab="${name}"]`);
     if (btn) activate(btn, false);
   };
+  // The signed-in web header can wrap onto another row. Keep settings below
+  // its actual height rather than hiding their close button behind it.
+  const header = document.querySelector('body > header');
+  if (header && screen) {
+    const measureHeader = () => screen.style.setProperty(
+      '--auto-header-height', `${header.getBoundingClientRect().height}px`);
+    measureHeader();
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(measureHeader).observe(header);
+  }
 })();
 
 // The registry's search / filter / sort, and the drawer close.
@@ -9894,6 +10120,13 @@ $('wf-filters').addEventListener('click', (e) => {
   $('wf-filters').querySelectorAll('button').forEach((b) =>
     b.classList.toggle('active', b === btn));
   renderRegistry();
+});
+$('wf-reset').addEventListener('click', () => {
+  wfUI.search = '';
+  wfUI.filter = 'all';
+  $('wf-search').value = '';
+  renderRegistry();
+  $('wf-search').focus();
 });
 $('wf-drawer-close').addEventListener('click', closeDrawer);
 $('wf-drawer').addEventListener('keydown', (e) => {
@@ -9989,6 +10222,10 @@ function applyWatchFilesFilter() {
     if (idx === 0) return;               // the header row always stays
     tr.hidden = !!q && !tr.textContent.toLowerCase().includes(q);
   });
+  const empty = $('watch-files-empty');
+  empty.hidden = rows.slice(1).some((tr) => !tr.hidden);
+  empty.textContent = rows.length > 1 ? 'No manuscripts match your search.'
+    : 'No manuscript activity yet. Completed work will appear here after the first check.';
 }
 $('watch-files-filter').addEventListener('input', applyWatchFilesFilter);
 

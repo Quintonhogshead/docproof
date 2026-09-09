@@ -104,7 +104,9 @@ def _payload(*, structure, plan, sheet, stats, checks, usage, cfg, written,
             "table_paragraphs": sum(1 for p in structure.paragraphs
                                     if p.location == "table"),
             "image_lines": sum(1 for p in structure.paragraphs
-                               if p.preserved and p.location != "table"),
+                               if p.preserved and p.has_image
+                               and p.location != "table"),
+            "equation_paragraphs": sum(p.has_math for p in structure.paragraphs),
         },
         "styles": plan.style_counts,
         "book": (dataclasses.asdict(meta) if meta is not None else None),

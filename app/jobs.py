@@ -452,6 +452,9 @@ class Job:
 
     def to_api(self) -> dict:
         d = asdict(self)
+        if self.is_prep:
+            # Older formatting records inherited the proofing panel's switch.
+            d["features"]["storysheet"] = False
         d["plain_state"] = self.plain_state()
         d["ready"] = self.state == "done"
         d["is_prep"] = self.is_prep
@@ -837,7 +840,10 @@ class JobRunner:
 
     def config_for(self, job: Job) -> Config:
         cfg = load_config(self.config_path)
-        cfg.api.model = job.model
+        # Galley jobs leave the model blank so the configured adapter default
+        # can choose it. An empty override must not erase that default.
+        if job.model:
+            cfg.api.model = job.model
         cfg.api.effort = job.effort
         cfg.min_confidence = job.min_confidence
         # Which English to hold the book to. Empty keeps the config's own
@@ -927,6 +933,8 @@ class JobRunner:
         # Prompts the user has edited win over the shipped ones, per key.
         cfg.error_type_override_dir = str(self.store.paths.prompts)
         if job.is_prep:
+            # Narrative context belongs to proofreading, not style tagging.
+            cfg.storysheet.enabled = False
             cfg.prep.outputs = PREP_OUTPUTS.get(job.prep_output, ["book"])
             # The book output is a plain reading copy by default — Times New
             # Roman, 12pt, US Letter, no ornaments — for manual runs and the
@@ -1876,14 +1884,17 @@ class JobRunner:
         # The same observed-cost store the planner prices from, so each
         # adapter can answer the orchestrator's pre-flight estimate.
         calibration = read_calibration(self._galley_calibration_path())
+        should_cancel = lambda: self._cancel_pending(job.id)
         return {
             "docproof_ladder": DocproofLadderAdapter(
                 source_path=job.source_path, cfg=cfg, provider=provider,
                 calibration=calibration,
+                should_cancel=should_cancel,
             ),
             "single_pass": SinglePassAdapter(
                 source_path=job.source_path, cfg=cfg, provider=provider,
                 calibration=calibration,
+                should_cancel=should_cancel,
             ),
         }
 
@@ -2010,7 +2021,17 @@ class JobRunner:
             cf = run_galley(ms, tier, budget, out, adapters=adapters,
                             notify=notify, book=job.filename,
                             stop_threshold=DEFAULT_MARGINAL_STOP_USD,
+                            should_cancel=lambda: self._cancel_pending(job_id),
                             **run_kwargs)
+        except JobCancelled:
+            # The orchestrator saves completed work and charges before stopping.
+            from galley.casefile import CaseFile
+
+            if (out / "casefile.json").is_file():
+                stopped = CaseFile.load(out / "casefile.json")
+                self.store.update(job_id, cost=stopped.budget.spent_usd)
+            self._abort(job_id)
+            return
         except Exception:                     # noqa: BLE001 - re-raised below
             self._release_results_dir(job_id)
             raise
@@ -2030,9 +2051,17 @@ class JobRunner:
         # into the brain's usage for the job record.
         screen_provider = self._galley_screen_provider(cfg, cf)
         screen_usage = Usage()
-        adjudication = adjudicate(cf.findings, ms, screen_provider,
-                                  model=cfg.api.model, usage=screen_usage)
-        cf.verdicts = adjudication.verdicts
+        cancelled = False
+        try:
+            if self._cancel_pending(job_id):
+                raise JobCancelled()
+            adjudication = adjudicate(
+                cf.findings, ms, screen_provider, model=cfg.api.model,
+                usage=screen_usage,
+                should_cancel=lambda: self._cancel_pending(job_id))
+            cf.verdicts = adjudication.verdicts
+        except JobCancelled:
+            cancelled = True
         screen_cost = cost_of_usage(screen_usage,
                                     fallback_model=cfg.api.model) or 0.0
         if screen_cost > 0:
@@ -2043,6 +2072,11 @@ class JobRunner:
         # Token counts for the brain (audit + screen) ride the record; the
         # final `cost` below is the whole ledger, adapters included.
         self._record_usage_inline(job_id, brain_usage, audit_model)
+
+        if cancelled or self._cancel_pending(job_id):
+            self.store.update(job_id, cost=cf.budget.spent_usd)
+            self._abort(job_id)
+            return
 
         # The reviewed manuscript: adjudicated kept findings, driven through
         # DocProof's own finish() at $0. build_manuscript_deliverable guards

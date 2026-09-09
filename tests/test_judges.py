@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from docproof.judges import FIX, MEANING, Judge, default_prompt, screen
 from docproof.models import DocumentModel, Finding, ParagraphRef, Usage
 from docproof.providers.base import ProviderResult
@@ -47,6 +49,67 @@ def _screen(findings, para_text, provider, **kw):
     kw.setdefault("model", "claude-fable-5")
     kw.setdefault("usage", Usage())
     return screen(findings, para_text, provider, **kw)
+
+
+def test_cancelled_screen_meters_all_inflight_calls_and_skips_queued_work():
+    from threading import Barrier, Event, Lock
+    from docproof.pipeline import JobCancelled
+
+    entered = Barrier(2)
+    cancelled = Event()
+    lock = Lock()
+
+    class InflightProvider:
+        calls = 0
+
+        def complete_structured(self, **kwargs):
+            with lock:
+                self.calls += 1
+            entered.wait(timeout=5)
+            cancelled.set()
+            return _verdicts({"item": 1, "verdict": "keep", "reason": ""})
+
+    provider = InflightProvider()
+    usage = Usage()
+    findings = [_edit(f"f-{i}", "cat", "dog", pid=f"p{i}") for i in range(6)]
+    with pytest.raises(JobCancelled) as stopped:
+        _screen(findings, {f"p{i}": "cat" for i in range(6)}, provider,
+                concurrency=2, should_cancel=cancelled.is_set, usage=usage)
+    assert provider.calls == 2
+    assert usage.api_calls == 2
+    assert usage.input_tokens == 2 * USAGE.input_tokens
+    assert stopped.value.usage is usage
+
+
+def test_cancelled_screen_does_not_pay_for_survivor_recheck():
+    from threading import Event
+    from docproof.models import Anchor
+    from docproof.pipeline import JobCancelled
+
+    cancelled = Event()
+    text = "There were 2 and 3 owls."
+    findings = [
+        replace(_edit("f-1", text, "There were two and 3 owls."),
+                status="validated", anchor=Anchor(11, 12, "2", "two")),
+        replace(_edit("f-2", text, "There were 2 and three owls."),
+                status="validated", anchor=Anchor(17, 18, "3", "three")),
+    ]
+
+    class CancellingProvider(FakeProvider):
+        def complete_structured(self, **kwargs):
+            result = super().complete_structured(**kwargs)
+            cancelled.set()
+            return result
+
+    provider = CancellingProvider([_verdicts(
+        {"item": 1, "verdict": "keep", "reason": ""},
+        {"item": 2, "verdict": "withhold", "reason": "Inconsistent."})])
+    usage = Usage()
+    with pytest.raises(JobCancelled):
+        _screen(findings, {"body-0001": text}, provider, usage=usage,
+                should_cancel=cancelled.is_set)
+    assert len(provider.calls) == 1
+    assert usage.api_calls == 1 and usage.input_tokens == USAGE.input_tokens
 
 
 # --- deterministic meaning-gate bypass ---------------------------------------

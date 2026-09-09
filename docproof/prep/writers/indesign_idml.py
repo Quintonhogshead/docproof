@@ -48,7 +48,6 @@ NORMAL_STYLE = "ParagraphStyle/$ID/NormalParagraphStyle"
 
 PSTYLE_TAG = qn("w:pStyle")
 PPR_TAG = qn("w:pPr")
-I_TAG = qn("w:i")
 VAL = qn("w:val")
 
 
@@ -56,6 +55,7 @@ VAL = qn("w:val")
 class _Run:
     text: str
     italic: bool
+    bold: bool = False
 
 
 @dataclass(frozen=True)
@@ -81,6 +81,12 @@ def write_indesign_idml(pkg, structure: Structure, plan: PrepPlan,
     package, exactly as it does for the other writers. Nothing is written to
     `pkg`'s own path — the IDML is a new file built from a copy of the template.
     """
+    if structure.protected_content or any(p.has_image or p.has_math
+                                          for p in structure.paragraphs):
+        raise VerificationFailed(
+            "The InDesign output cannot preserve this manuscript's pictures, "
+            "embedded objects, or native Word equations. Use the Word output "
+            "and place those objects in InDesign before exporting an IDML.")
     # Capture the body elements before the clean transform mutates them: the
     # clean writer drops and rebuilds paragraphs in place, so these same element
     # objects carry the final content afterward. Dropped paragraphs are detached
@@ -88,7 +94,9 @@ def write_indesign_idml(pkg, structure: Structure, plan: PrepPlan,
     elements = element_map(pkg)
     stats = write_clean(pkg, structure, plan, sheet,
                         strip_formatting=strip_formatting)
-    paras = _read_cleaned_body(elements, structure, plan, sheet)
+    styles = {s.get(qn("w:styleId")): s
+              for s in pkg.tree("word/styles.xml").findall(qn("w:style"))}
+    paras = _read_cleaned_body(elements, structure, plan, sheet, styles)
     _emit_idml(paras, sheet, Path(template_path), Path(out_path))
     return stats
 
@@ -174,20 +182,21 @@ def _applied_style_count(story_xml: bytes, style_name: str) -> int:
 
 
 def _read_cleaned_body(elements: dict, structure: Structure, plan: PrepPlan,
-                       sheet: StyleSheet) -> list[_Para]:
+                       sheet: StyleSheet, source_styles: dict) -> list[_Para]:
     """One _Para per surviving paragraph, in document order: its house style
     name (mapped from the Word styleId the clean writer set) and its runs with
-    italic preserved.
+    bold and italic preserved.
 
     Iterating the structure — not every body paragraph of the file — is what
     keeps hand-placed layout the ingest set aside (textboxes, headers) out of
     the flowed book, exactly as the clean writer does. Dropped paragraphs are
     skipped; glyph and styled paragraphs were mutated in place, so their
-    element carries the final content. A preserved paragraph (a table's cells,
-    an image on its own line) has no plan item and was never touched: its
+    element carries the final content. A preserved table paragraph has no plan
+    item and was never touched: its
     words still flow — the word-for-word check answers for them — but in the
-    template's default style, because IDML text carries no table and no image;
-    rebuilding those in InDesign stays the designer's job."""
+    template's default style, because this writer carries table text without
+    its layout. Documents with images or equations are refused before this
+    transform, since their content cannot survive a text-only export."""
     id_to_name = {s.id: s.name for s in sheet.styles}
     body_role = sheet.roles.get("body", "")
     items = plan.by_id()
@@ -200,11 +209,11 @@ def _read_cleaned_body(elements: dict, structure: Structure, plan: PrepPlan,
         if p is None:
             continue
         if item is None:                     # preserved: left as it arrived
-            out.append(_Para(style="", runs=_runs_of(p)))
+            out.append(_Para(style="", runs=_runs_of(p, source_styles)))
             continue
         style_id = _paragraph_style_id(p)
         name = id_to_name.get(style_id, body_role)
-        out.append(_Para(style=name, runs=_runs_of(p)))
+        out.append(_Para(style=name, runs=_runs_of(p, source_styles)))
     return out
 
 
@@ -216,46 +225,61 @@ def _paragraph_style_id(p) -> str | None:
     return pstyle.get(VAL) if pstyle is not None else None
 
 
-def _runs_of(p) -> tuple[_Run, ...]:
-    """The paragraph's text as italic/non-italic runs, in document order.
+def _runs_of(p, styles: dict) -> tuple[_Run, ...]:
+    """The paragraph's text with character emphasis, in document order.
 
     Built from the same content elements paragraph_text walks — w:t text plus
     the tab and break elements that each render as one virtual character — so
     the words come out identical to what verification reads on the source side.
     A tab lost here would glue a table-of-contents entry to its page number
     ("One" + "1" -> "One1") and fail every file with one. Adjacent runs of the
-    same slant are merged, matching what InDesign itself exports."""
+    same emphasis are merged, matching what InDesign itself exports."""
     runs: list[_Run] = []
     for el in iter_content_elements(p):
-        italic = _element_italic(el)
+        italic = _element_emphasis(el, styles, "w:i")
+        bold = _element_emphasis(el, styles, "w:b")
         text = (el.text or "") if el.tag == T_TAG else VIRTUAL_CHARS[el.tag]
         if not text:
             continue
-        if runs and runs[-1].italic == italic:
-            runs[-1] = _Run(text=runs[-1].text + text, italic=italic)
+        if runs and (runs[-1].italic, runs[-1].bold) == (italic, bold):
+            runs[-1] = _Run(text=runs[-1].text + text, italic=italic, bold=bold)
         else:
-            runs.append(_Run(text=text, italic=italic))
+            runs.append(_Run(text=text, italic=italic, bold=bold))
     return tuple(runs)
 
 
-def _element_italic(el) -> bool:
-    """Whether the run containing this content element is italic."""
+def _element_emphasis(el, styles: dict, tag: str) -> bool:
+    """Resolve character-style inheritance, then the run's direct override.
+
+    Bold and italic are toggle properties inside a Word style chain; a true
+    value toggles the inherited state. A direct run property sets it absolutely.
+    """
     node = el.getparent()
-    while node is not None:
-        if node.tag == R_TAG:
-            return _is_italic(node)
+    while node is not None and node.tag != R_TAG:
         node = node.getparent()
-    return False
-
-
-def _is_italic(r) -> bool:
-    rpr = r.find(RPR_TAG)
+    if node is None:
+        return False
+    rpr = node.find(RPR_TAG)
     if rpr is None:
         return False
-    i = rpr.find(I_TAG)
-    if i is None:
-        return False
-    return (i.get(VAL) or "true").lower() not in ("0", "false", "off")
+    ref = rpr.find(qn("w:rStyle"))
+    sid = ref.get(VAL) if ref is not None else None
+    seen = set()
+    value = False
+    while sid in styles and sid not in seen:
+        seen.add(sid)
+        style = styles[sid]
+        prop = style.find(f"{RPR_TAG}/{qn(tag)}")
+        if prop is not None and _on(prop):
+            value = not value
+        base = style.find(qn("w:basedOn"))
+        sid = base.get(VAL) if base is not None else None
+    direct = rpr.find(qn(tag))
+    return _on(direct) if direct is not None else value
+
+
+def _on(prop) -> bool:
+    return (prop.get(VAL) or "true").lower() not in ("0", "false", "off")
 
 
 # Writing the IDML.
@@ -361,8 +385,8 @@ def _style_attrs(attrs: dict, fmt: dict) -> str:
 def _build_story_xml(paras: list[_Para], body_story: str,
                      style_self: dict[str, str]) -> str:
     """One ParagraphStyleRange per paragraph, each terminated by a Br except the
-    last — InDesign's own convention. Italic runs become their own
-    CharacterStyleRange with a local FontStyle; everything else is plain."""
+    last — InDesign's own convention. Emphasized runs become their own
+    CharacterStyleRange with a local FontStyle."""
     lines = [
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
         f'<idPkg:Story xmlns:idPkg="{IDML_NS}" DOMVersion="21.4">',
@@ -381,7 +405,9 @@ def _build_story_xml(paras: list[_Para], body_story: str,
         lines.append(
             f'\t\t<ParagraphStyleRange AppliedParagraphStyle="{_attr(applied)}">')
         for run in para.runs or (_Run(text="", italic=False),):
-            fs = ' FontStyle="Italic"' if run.italic else ""
+            font_style = ("Bold Italic" if run.bold and run.italic else
+                          "Bold" if run.bold else "Italic" if run.italic else "")
+            fs = f' FontStyle="{font_style}"' if font_style else ""
             lines.append(
                 f'\t\t\t<CharacterStyleRange '
                 f'AppliedCharacterStyle="{NO_CHAR_STYLE}"{fs}>')

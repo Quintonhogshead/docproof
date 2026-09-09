@@ -32,6 +32,7 @@ class StructureParagraph:
     # rather than from the words, because "Chapter One" in a contents list and
     # "Chapter One" forty pages later are the same eleven characters.
     is_toc: bool = False
+    has_math: bool = False
 
     @property
     def words(self) -> int:
@@ -40,13 +41,13 @@ class StructureParagraph:
     @property
     def preserved(self) -> bool:
         """Left exactly as it arrived: everything inside a table, and an image
-        sitting on its own line. A table's layout and an image's placement are
+        or equation sitting on its own line. Their layout and placement are
         the author's, not running text to restyle — so these paragraphs are
         never tagged, never restripped, never dropped as blank. (A prose
         paragraph that happens to hold an inline image is still prose; the
         image element itself is untouched by every writer.)"""
         return self.location == "table" or (
-            self.has_image and not self.text.strip())
+            (self.has_image or self.has_math) and not self.text.strip())
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,8 @@ class Structure:
     # Tracked changes the manuscript arrived with, accepted before anything
     # was read: (part, how many revision elements). Empty for a clean file.
     accepted_revisions: tuple[tuple[str, int], ...] = ()
+    # Graphics and native equations are not visible to the word comparison.
+    protected_content: tuple[str, ...] = ()
 
     @property
     def taggable(self) -> tuple[StructureParagraph, ...]:
