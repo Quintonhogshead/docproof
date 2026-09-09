@@ -160,6 +160,60 @@ def test_ready_with_comment_repair_is_not_delivery_ready(run):
     assert receipt["repair_required"] and not receipt["delivery_ready"]
 
 
+def _comment_quote_review(run, kind="remove_comment"):
+    package = DocxPackage(run / "book.docx")
+    package.tree("word/comments.xml").find(".//" + qn("w:t")).text = (
+        "Is Sadie the warrior? Please clarify her identity.")
+    package.mark_modified("word/comments.xml")
+    package.save(run / "book.docx")
+    packet = ar.build_packet(run)
+    review = good(packet)
+    review["comment_decisions"][0]["action"] = "drop" if kind == "remove_comment" else "replace_question"
+    review["actions"] = [{"id": "comment-operation", "kind": kind, "para_id": "body-0000",
+        "quote": packet["comments"][0]["text"],
+        "replacement": "Which arrival is intended?" if kind == "replace_comment" else "",
+        "reason": "The source resolves the identity question.", "revision_ids": [],
+        "comment_ids": ["7"], "finding_ids": [], "issue_ids": []}]
+    return packet, review
+
+
+@pytest.mark.parametrize("kind", ["remove_comment", "replace_comment"])
+@pytest.mark.parametrize("quote_source", ["comment", "paragraph", "empty"])
+def test_comment_operations_accept_exact_comment_body_or_empty_quotes(run, kind, quote_source):
+    packet, review = _comment_quote_review(run, kind)
+    if quote_source == "comment":
+        assert review["actions"][0]["quote"] not in packet["accepted_paragraphs"][0]["text"]
+    else:
+        review["actions"][0]["quote"] = packet["accepted_paragraphs"][0]["text"] if quote_source == "paragraph" else ""
+    assert ar.validate_review(review, packet) == review
+
+
+@pytest.mark.parametrize("change,expected", [
+    ({"quote": "Is Sadie the warrior?"}, "quote is absent"),
+    ({"quote": "Is Sadie the warrior? Please clarify her identity. "}, "quote is absent"),
+    ({"comment_ids": ["unknown"]}, "unknown evidence IDs"),
+    ({"comment_ids": []}, "explicit comment IDs"),
+    ({"para_id": "body-0001"}, "different paragraph"),
+])
+@pytest.mark.parametrize("kind", ["remove_comment", "replace_comment"])
+def test_comment_quote_requires_exact_text_named_id_and_correct_anchor(run, change, expected, kind):
+    packet, review = _comment_quote_review(run, kind)
+    review["actions"][0].update(change)
+    with pytest.raises(ar.AstraReviewError, match=expected):
+        ar.validate_review(review, packet)
+
+
+@pytest.mark.parametrize("kind", ["edit_text", "add_author_query", "revert_revision", "internal_repair"])
+def test_comment_quote_cannot_substitute_for_other_action_body_quotes(run, kind):
+    packet, review = _comment_quote_review(run)
+    action = review["actions"][0]
+    action.update(kind=kind, replacement="A proposed replacement.")
+    if kind == "revert_revision":
+        action["revision_ids"] = [packet["revisions"][0]["id"]]
+    with pytest.raises(ar.AstraReviewError, match="quote is absent"):
+        ar.validate_review(review, packet)
+
+
 def test_budget_and_context_fail_before_generation(run, monkeypatch):
     fake = Fake()
     with pytest.raises(ar.AstraReviewError, match="budget"):
