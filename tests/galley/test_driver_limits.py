@@ -253,7 +253,11 @@ def test_a_quiet_settle_round_finishes_the_book(book, tmp_path):
     assert spawn.phases == list(gd.MECHANICAL_PHASES)
 
 
-def test_a_still_noisy_third_round_ends_the_run_as_needs_human(book, tmp_path):
+def test_a_still_noisy_third_round_is_needs_human_but_still_delivers(
+        book, tmp_path):
+    """A book that will not converge is needs_human — and still ships. The
+    proofreader who picks it up needs the manuscript Galley edited, not a
+    verdict about it, so certify and deliver run and the hand-off is whole."""
     ws = _ws(book, tmp_path)
     _deliverable(ws)
 
@@ -265,14 +269,23 @@ def test_a_still_noisy_third_round_ends_the_run_as_needs_human(book, tmp_path):
             return super().__call__(spec)
 
     spawn = NeverSettles(ws)
-    result = _driver(book, tmp_path, spawn=spawn).run()
+    result = _driver(book, tmp_path, spawn=spawn,
+                     handoff_dir=tmp_path / "handoff").run()
     assert result.outcome == "needs_human"
-    assert result.stopped_at == "settle"
+    assert result.stopped_at is None          # not a stop: a verdict
     assert "still finding errors after 3 round(s): 9 in the last round" \
         in result.reason
     assert "needs a human proofreader" in result.reason
-    assert spawn.phases[-1] == "settle"       # certify/deliver never ran
-    outcome = json.loads((ws / "runs" / "outcome.json").read_text("utf-8"))
+    assert spawn.phases == list(gd.MECHANICAL_PHASES)   # certify/deliver ran
+    # The whole hand-off, with the verdict in it.
+    names = {p.name for p in result.handoff}
+    assert "Ford - Book 2.docx" in names
+    assert "Ford - Book 2 - clean.docx" in names
+    assert "Ford - Book 2 - outcome.json" in names
+    outcome = json.loads(
+        (tmp_path / "handoff" / "Ford - Book 2 - outcome.json"
+         ).read_text("utf-8"))
+    assert outcome["outcome"] == "needs_human"
     assert "still finding errors after 3 round(s)" in outcome["reason"]
     # …and the decision log carries the same reason.
     log = (ws / "deliverable" / gd.DECISION_LOG_NAME).read_text("utf-8")

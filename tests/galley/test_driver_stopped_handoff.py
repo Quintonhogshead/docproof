@@ -135,6 +135,64 @@ def test_no_drive_folder_means_the_files_are_just_written(book, tmp_path):
     assert (tmp_path / "handoff" / "Ford - Book 2 - outcome.json").is_file()
 
 
+# --- the book itself rides out with the verdict --------------------------------
+
+def test_a_stop_after_the_build_still_hands_over_the_manuscript(book, tmp_path):
+    """Bradshaw, 2026-09-09: the run edited the book, stopped before deliver,
+    and posted an outcome and a decision log — the 4.7MB manuscript it had
+    just produced stayed on the machine. A stop hands over what the run
+    built."""
+    ws = _ws(book, tmp_path)
+    run = ws / "runs" / "final"
+    run.mkdir(parents=True, exist_ok=True)
+    (run / "findings.json").write_text(json.dumps({"findings": []}), "utf-8")
+    (run / "Ford - Atmosphere Press Proofreader.docx").write_bytes(
+        FIXTURE.read_bytes())
+    (run / "Ford - Atmosphere Press Proofreader Change Log.docx").write_bytes(
+        b"not the manuscript")
+
+    uploaded: list[str] = []
+    result = _driver(book, tmp_path, spawn=_failing(ws, "certify", rc=4),
+                     drive_folder_id="folder-A",
+                     upload=lambda files, folder: uploaded.extend(
+                         p.name for p in files) or ["id-0"],
+                     handoff_dir=tmp_path / "handoff").run()
+
+    assert result.outcome == "needs_human"
+    assert result.stopped_at == "certify"
+    # The manuscript and its reading copy, not just the paperwork.
+    assert "Ford - Book 2.docx" in uploaded
+    assert "Ford - Book 2 - clean.docx" in uploaded
+    assert "Ford - Book 2 - outcome.json" in uploaded
+    # …and the letters the run never got to render.
+    assert "Ford - Book 2 - letter.md" in uploaded
+    assert "Ford - Book 2 - style-sheet.md" in uploaded
+    assert "Ford - Book 2 - verification.md" in uploaded
+    assert "Ford - Book 2 - Author Letter.docx" in uploaded
+    # The change log is not the manuscript and never ships as one.
+    assert (tmp_path / "handoff" / "Ford - Book 2.docx").stat().st_size == \
+        FIXTURE.stat().st_size
+
+
+def test_salvage_never_overwrites_what_the_run_delivered(book, tmp_path):
+    """A run that got as far as deliver keeps its own files: salvage fills
+    gaps, it does not second-guess the deliver phase."""
+    ws = _ws(book, tmp_path)
+    _deliverable(ws)
+    run = ws / "runs" / "final"
+    run.mkdir(parents=True, exist_ok=True)
+    (run / "findings.json").write_text(json.dumps({"findings": []}), "utf-8")
+    (run / "Ford - Atmosphere Press Proofreader.docx").write_bytes(b"newer")
+    letter = ws / "deliverable" / "letter.md"
+
+    _driver(book, tmp_path, spawn=_failing(ws, "deliver", rc=4),
+            handoff_dir=tmp_path / "handoff").run()
+
+    assert letter.read_text("utf-8") == "# Letter\n"
+    assert (tmp_path / "handoff" / "Ford - Book 2.docx").stat().st_size == \
+        FIXTURE.stat().st_size
+
+
 # --- build_handoff's two modes ------------------------------------------------
 
 def test_a_partial_handoff_ships_what_exists(book, tmp_path):
