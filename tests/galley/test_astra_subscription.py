@@ -4,7 +4,9 @@ import json
 
 import docx
 import pytest
+from lxml import etree
 
+from docproof.utils.xml_helpers import DocxPackage, qn
 from galley import astra_review as ar
 from galley import astra_subscription as sub
 
@@ -22,6 +24,55 @@ def run(tmp_path):
         (path / name).write_text(json.dumps(value))
     (path / "DECISIONS.md").write_text("Sadie is a different character from Saide. The magic path is called Straight.")
     return path
+
+
+@pytest.fixture
+def cross_book_run(tmp_path):
+    """Match the live context-review failure: two revisions and comment 0."""
+    path = tmp_path / "cross-book"
+    path.mkdir()
+    book = docx.Document()
+    book.add_paragraph("Sadie and Saide are different people.")
+    paragraph = book.add_paragraph("The ")
+    for kind, text in (("del", "curent"), ("ins", "current")):
+        change = etree.SubElement(paragraph._p, qn("w:" + kind), {qn("w:id"): "1" if kind == "del" else "2"})
+        run_node = etree.SubElement(change, qn("w:r"))
+        etree.SubElement(run_node, qn("w:delText" if kind == "del" else "w:t")).text = text
+    paragraph.add_run(" flows north.")
+    book.add_paragraph("The current current, if you will.")
+    anchor = book.add_paragraph("The records distinguish Sadie from Saide.")
+    anchor._p.insert(0, etree.Element(qn("w:commentRangeStart"), {qn("w:id"): "0"}))
+    etree.SubElement(anchor._p, qn("w:commentRangeEnd"), {qn("w:id"): "0"})
+    etree.SubElement(etree.SubElement(anchor._p, qn("w:r")), qn("w:commentReference"), {qn("w:id"): "0"})
+    book.add_paragraph("Sadie returns to the river.")
+    book.save(path / "book.docx")
+    package = DocxPackage(path / "book.docx")
+    # This citation fixture needs no unused factory style definitions.
+    styles = package.tree("word/styles.xml")
+    for child in list(styles):
+        styles.remove(child)
+    package.mark_modified("word/styles.xml")
+    comments = etree.Element(qn("w:comments"))
+    comment = etree.SubElement(comments, qn("w:comment"), {qn("w:id"): "0"})
+    text = etree.SubElement(etree.SubElement(etree.SubElement(comment, qn("w:p")), qn("w:r")), qn("w:t"))
+    text.text = "Is Sadie the same person as Saide?"
+    package.add_part("word/comments.xml", comments)
+    package.save(path / "book.docx")
+    for name in ar.REQUIRED_ARTIFACTS:
+        data = {"findings": [{"para_id": "body-0004", "state": "dropped", "original_text": "Sadie"}]} if name == "findings.json" else {}
+        (path / name).write_text(json.dumps(data))
+    return path
+
+
+def cross_book_context(plan):
+    chunk = next(c for c in plan["chunks"] if c["phase"] == "context")
+    review = chunk_good(chunk)
+    assert chunk["owned_ids"]["supplemental"] == ["evidence-000001"]
+    review["investigations"] = [{
+        "question": "Check the two tracked revisions and whether the name comment is answered elsewhere.",
+        "evidence_ids": ["evidence-000001", "revision-000001", "revision-000002", "0"],
+        "para_ids": ["body-0000", "body-0001", "body-0003"]}]
+    return chunk, review
 
 
 def chunk_good(chunk):
@@ -218,3 +269,97 @@ def test_final_must_resolve_each_cross_book_investigation(run):
             review["investigation_resolutions"] = []
     with pytest.raises(ar.AstraReviewError, match="every cross-book investigation"):
         sub.review_run(run, runner=Runner(ar.build_packet(run), mutate=mutate))
+
+
+def test_context_investigation_accepts_real_cross_book_revision_and_comment_citations(cross_book_run):
+    packet = ar.build_packet(cross_book_run)
+    plan = sub.plan_review(packet)
+    context, review = cross_book_context(plan)
+    original_hash = ar._hash(review)
+    assert sub._validate_chunk(review, context, packet, known_citation_ids=sub._citation_ids(plan)) == review
+    assert ar._hash(review) == original_hash
+    reviews = [review if c == context else chunk_good(c) for c in plan["chunks"]]
+    proof = sub._manifest(packet, plan, reviews)
+    assert proof["counts"] == plan["counts"]
+    assert not review["reviewed_ids"]["revisions"] and not review["reviewed_ids"]["comments"]
+
+
+def test_manuscript_guide_can_cite_prior_shared_context(cross_book_run):
+    packet = ar.build_packet(cross_book_run)
+    plan = sub.plan_review(packet)
+    chunk = next(c for c in plan["chunks"] if c["phase"] == "manuscript")
+    review = chunk_good(chunk)
+    review["guide_notes"] = [{"claim": "The shared context supports keeping both distinct names.",
+                              "evidence_ids": ["evidence-000001"], "para_ids": ["body-0000"]}]
+    assert not chunk["owned_ids"]["supplemental"]
+    sub._validate_chunk(review, chunk, packet, known_citation_ids=sub._citation_ids(plan))
+
+
+@pytest.mark.parametrize("field,unknown", [("evidence_ids", "revision-999999"),
+    ("evidence_ids", "evidence-999999"), ("evidence_ids", "missing-comment"),
+    ("evidence_ids", "body-9999"), ("para_ids", "body-9999")])
+def test_cross_book_citations_still_reject_nonexistent_ids(cross_book_run, field, unknown):
+    packet = ar.build_packet(cross_book_run)
+    plan = sub.plan_review(packet)
+    chunk, review = cross_book_context(plan)
+    review["investigations"][0][field].append(unknown)
+    with pytest.raises(ar.AstraReviewError, match="unknown evidence"):
+        sub._validate_chunk(review, chunk, packet, known_citation_ids=sub._citation_ids(plan))
+
+
+def test_cross_book_citation_does_not_expand_review_ownership(cross_book_run):
+    packet = ar.build_packet(cross_book_run)
+    plan = sub.plan_review(packet)
+    chunk, review = cross_book_context(plan)
+    review["reviewed_ids"]["revisions"] = ["revision-000001"]
+    with pytest.raises(ar.AstraReviewError, match="revisions coverage"):
+        sub._validate_chunk(review, chunk, packet, known_citation_ids=sub._citation_ids(plan))
+
+
+@pytest.mark.parametrize("action", [
+    {"kind": "remove_comment", "para_id": "body-0003", "quote": "", "replacement": "",
+     "comment_ids": ["0"]},
+    {"kind": "edit_text", "para_id": "body-0002", "quote": "current current", "replacement": "current"},
+])
+def test_cross_book_citation_does_not_authorize_unowned_actions(cross_book_run, action):
+    packet = ar.build_packet(cross_book_run)
+    plan = sub.plan_review(packet)
+    chunk, review = cross_book_context(plan)
+    review["actions"] = [{"id": chunk["chunk_id"] + "-1", "reason": "A proposed change needs its owning review.",
+                          **{k: [] for k in ("revision_ids", "comment_ids", "finding_ids", "issue_ids")}, **action}]
+    with pytest.raises(ar.AstraReviewError, match="unknown evidence IDs|owning chunk"):
+        sub._validate_chunk(review, chunk, packet, known_citation_ids=sub._citation_ids(plan))
+
+
+def test_previously_completed_cross_book_response_resumes_without_regeneration(cross_book_run, monkeypatch):
+    packet = ar.build_packet(cross_book_run)
+    plan = sub.plan_review(packet)
+    context, context_review = cross_book_context(plan)
+    def mutate(result):
+        if result.get("chunk_id") == context["chunk_id"]:
+            result.update(copy.deepcopy(context_review))
+        elif "review" in result:
+            result["review"]["comment_decisions"] = [{"comment_id": "0", "action": "retain_author_question",
+                                                      "reason": "Final test disposition."}]
+    generated = Runner(packet, mutate=mutate)
+    cache = {}
+    def cached_runner(prompt, schema, **kwargs):
+        key = kwargs["request_id"]
+        if key not in cache:
+            cache[key] = (prompt, copy.deepcopy(schema), generated(prompt, schema, **kwargs))
+        old_prompt, old_schema, result = cache[key]
+        assert prompt == old_prompt and schema == old_schema
+        return copy.deepcopy(result)
+    def previous_validator(*args, **kwargs):
+        raise ar.AstraReviewError("Subscription guide/investigation cites unreviewed evidence")
+    with monkeypatch.context() as previous:
+        previous.setattr(sub, "_validate_chunk", previous_validator)
+        with pytest.raises(ar.AstraReviewError, match="unreviewed evidence"):
+            sub.review_run(cross_book_run, runner=cached_runner)
+    assert len(generated.calls) == 1
+    result = sub.review_run(cross_book_run, runner=cached_runner)
+    assert result["delivery_ready"]
+    first_request = generated.calls[0][2]["request_id"]
+    assert sum(call[2]["request_id"] == first_request for call in generated.calls) == 1
+    assert len(generated.calls) == len(plan["chunks"]) + 1
+    assert sub.validate_coverage_receipt(cross_book_run, result, packet) == result

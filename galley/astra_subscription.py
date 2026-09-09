@@ -289,7 +289,13 @@ def _local_packet(chunk, packet, extra_para_ids=()):
     return local
 
 
-def _validate_chunk(review, chunk, packet):
+def _citation_ids(plan):
+    """Book-wide citations are separate from a chunk's exact review ownership."""
+    return {record_id for chunk in plan["chunks"] for ids in chunk["owned_ids"].values()
+            for record_id in ids}
+
+
+def _validate_chunk(review, chunk, packet, *, known_citation_ids):
     ar._schema_check(review, CHUNK_SCHEMA, "chunk review")
     if review["chunk_id"] != chunk["chunk_id"] or review["chunk_sha256"] != chunk["chunk_sha256"]:
         raise ar.AstraReviewError("Subscription chunk response does not match its frozen evidence")
@@ -306,11 +312,12 @@ def _validate_chunk(review, chunk, packet):
                           **local["counts"], "full_manuscript_read": True},
              **{k: review[k] for k in ("revision_review", "comment_decisions", "finding_review", "issue_decisions", "actions")}}
     ar.validate_review(proof, local)
-    owned_all = set().union(*(set(v) for v in chunk["owned_ids"].values()))
     visible = {p["id"] for p in packet["accepted_paragraphs"]}
     for row in review["guide_notes"] + review["investigations"]:
-        if set(row["evidence_ids"]) - owned_all or set(row["para_ids"]) - visible:
-            raise ar.AstraReviewError("Subscription guide/investigation cites unreviewed evidence")
+        # The prompt permits inspecting the complete frozen book and shared
+        # context. Citing that evidence does not claim ownership or approve edits.
+        if set(row["evidence_ids"]) - known_citation_ids or set(row["para_ids"]) - visible:
+            raise ar.AstraReviewError("Subscription guide/investigation cites unknown evidence")
         if not row["evidence_ids"] and not row["para_ids"]:
             raise ar.AstraReviewError("Subscription guide/investigation needs source evidence")
         if not (row.get("claim") or row.get("question") or "").strip():
@@ -345,8 +352,9 @@ def _manifest(packet, plan, reviews):
                 "supplemental": [r["id"] for c in plan["chunks"] for r in c["records"] if r["kind"] == "supplemental" ]}
     actual = {k: [] for k in expected}
     receipts = []
+    known_citation_ids = _citation_ids(plan)
     for chunk, review in zip(plan["chunks"], reviews):
-        _validate_chunk(review, chunk, packet)
+        _validate_chunk(review, chunk, packet, known_citation_ids=known_citation_ids)
         for kind in actual:
             actual[kind].extend(review["reviewed_ids"][kind])
         receipts.append({"chunk_id": chunk["chunk_id"], "chunk_sha256": chunk["chunk_sha256"], "review_sha256": ar._hash(review)})
@@ -476,6 +484,7 @@ def review_run(run_dir, *, docx_path=None, context_paths=(), max_chunk_bytes=DEF
                 raise ar.AstraReviewError("Cannot change chunk planning while a subscription review is pending")
         packet = ar.build_packet(run, docx_path=docx_path, context_paths=context_paths)
         plan = plan_review(packet, max_chunk_bytes=max_chunk_bytes)
+        known_citation_ids = _citation_ids(plan)
         if prior and prior.get("packet_sha256") != packet["packet_sha256"]:
             raise ar.AstraReviewError("Review evidence changed since the subscription job started")
         pending = prior or {"schema_version": 1, "status": "pending", "transport": TRANSPORT,
@@ -520,7 +529,7 @@ def review_run(run_dir, *, docx_path=None, context_paths=(), max_chunk_bytes=DEF
                 chunk_path = directory / (chunk["chunk_id"] + ".json")
                 ar._atomic(chunk_path, chunk)
                 if path.exists():
-                    review = _validate_chunk(ar._load(path), chunk, packet)
+                    review = _validate_chunk(ar._load(path), chunk, packet, known_citation_ids=known_citation_ids)
                 else:
                     evidence = {"chunk": chunk, "shared_context_guide": context_guide,
                                 "frozen_complete_packet_path": str(run / ar.PACKET_FILE),
@@ -535,7 +544,7 @@ def review_run(run_dir, *, docx_path=None, context_paths=(), max_chunk_bytes=DEF
                         raw_prompt = CHUNK_PROMPT + "\nEVIDENCE\n" + ar._json(evidence)
                     prompt = _bounded_prompt(raw_prompt, CHUNK_SCHEMA, max_chunk_bytes)
                     review = _run(runner, prompt, CHUNK_SCHEMA, directory, chunk["chunk_id"] + "-" + chunk["chunk_sha256"][:16], timeout_seconds, codex_bin)
-                    _validate_chunk(review, chunk, packet)
+                    _validate_chunk(review, chunk, packet, known_citation_ids=known_citation_ids)
                     ar._atomic(path, review)
                 reviews.append(review)
                 if chunk["phase"] == "context":
