@@ -454,6 +454,7 @@ def validate_review(review: dict, packet: dict) -> dict:
     paras = {p["id"]: p["text"] for p in packet["accepted_paragraphs"]}
     revision_paras = {r["id"]: set(r["para_ids"]) for r in packet["revisions"]}
     comment_paras = {c["id"]: {a["para_id"] for a in c["anchors"]} for c in packet["comments"]}
+    comment_text = {c["id"]: c["text"] for c in packet["comments"]}
     action_ids = set()
     for action in review["actions"]:
         if not action["id"] or action["id"] in action_ids:
@@ -472,7 +473,11 @@ def validate_review(review: dict, packet: dict) -> dict:
             raise AstraReviewError("Astra comment operation needs explicit comment IDs")
         if action["kind"] in {"replace_comment", "add_author_query"} and not action["replacement"].strip():
             raise AstraReviewError("Astra new/replacement comment needs question text")
-        if action["quote"] and action["quote"] not in paras[action["para_id"]]:
+        # Comment operations target the already checked ID and paragraph anchor;
+        # their supporting quote may name that exact comment instead of body text.
+        quoted_comment = (action["kind"] in {"remove_comment", "replace_comment"}
+                          and any(action["quote"] == comment_text[c] for c in action["comment_ids"]))
+        if action["quote"] and action["quote"] not in paras[action["para_id"]] and not quoted_comment:
             raise AstraReviewError("Astra action quote is absent from accepted paragraph")
         if action["kind"] == "edit_text" and (not action["quote"] or
                 paras[action["para_id"]].count(action["quote"]) != 1):

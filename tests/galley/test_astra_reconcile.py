@@ -157,10 +157,16 @@ def _edit(review, packet):
     review["actions"] = [_action("edit_text", "body-0002", quote="eror", replacement="error")]
 
 
-def test_drop_exact_comment_preserves_other_comment_revisions_and_all_text(run):
+@pytest.mark.parametrize("quote_comment", [False, True])
+def test_drop_exact_comment_preserves_other_comment_revisions_and_all_text(run, quote_comment):
     from galley.astra_reconcile import reconcile_run
 
-    frozen, _ = _freeze(run, _drop)
+    def configure(review, packet):
+        _drop(review, packet)
+        if quote_comment:
+            review["actions"][0]["quote"] = packet["comments"][0]["text"]
+            assert review["actions"][0]["quote"] not in packet["accepted_paragraphs"][0]["text"]
+    frozen, _ = _freeze(run, configure)
     before = _parts(run / "book.docx")
     original_text = _paragraphs(run / "book.docx")
     original_source = _paragraphs(run / "book.docx", reject=True)
@@ -180,6 +186,17 @@ def test_drop_exact_comment_preserves_other_comment_revisions_and_all_text(run):
     assert {k: v for k, v in after_parts.items() if k not in {"word/document.xml", "word/comments.xml"}} == {
         k: v for k, v in before.items() if k not in {"word/document.xml", "word/comments.xml"}
     }
+
+
+def test_comment_quote_must_belong_to_an_explicitly_named_comment(run):
+    packet = ar.build_packet(run)
+    review = _review(packet)
+    _drop(review, packet)
+    review["actions"][0]["quote"] = packet["comments"][1]["text"]
+    assert review["actions"][0]["comment_ids"] == ["7"]
+    assert packet["comments"][1]["id"] == "8"
+    with pytest.raises(ar.AstraReviewError, match="quote is absent"):
+        ar.validate_review(review, packet)
 
 
 def test_text_repair_is_tracked_preserving_source_formatting_and_prior_revisions(run):
