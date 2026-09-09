@@ -1218,6 +1218,32 @@ def _run_driver(**kwargs: Any) -> Any:
         if settings["transport"] == "codex":
             from galley.codex_runner import check_login
             check_login()
+    # Format before seed_workspace records the source hash and before any
+    # paragraph ids, findings or verification evidence are created. The intake
+    # preserves the Book 1 filename and caches the verified bytes on resume.
+    from galley.intake import DEFAULT_MODEL as formatting_model, format_for_proof
+    from galley.manifest import sha256_file
+    from galley.state_machine import RunStateMachine
+
+    driver._progress("phase_start", phase="formatting",
+                     model=formatting_model, effort=None)
+    driver.log("Formatting Book 1 before proofreading.")
+    try:
+        formatted = format_for_proof(driver.book, driver.workspace,
+            progress=lambda done, total: driver.log(
+                f"Formatting: labelled window {done} of {total}."))
+    except Exception:
+        driver._progress("phase_end", phase="formatting", ok=False)
+        raise
+    state_path = driver.workspace / "state.json"
+    if state_path.is_file():
+        previous = RunStateMachine.load(state_path)
+        if previous.source_sha256 != sha256_file(formatted):
+            # A changed Book 1 creates a new revision; its proofread starts
+            # at profile, never at the old manuscript's interrupted phase.
+            driver.start_phase = None
+    driver.book = formatted
+    driver._progress("phase_end", phase="formatting", ok=True)
     return driver.run()
 
 
