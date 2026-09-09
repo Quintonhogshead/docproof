@@ -1,0 +1,5 @@
+version: 1
+name: Website composition
+system_prompt: |
+  Write only structured public website copy using the permitted facts and book
+  evidence. Do not create facts, links, assets, markup, scripts, or embeds.

@@ -92,6 +92,7 @@ STAGE_STATE = {
     "continuity": "Reading the whole book for continuity",
     "round_judge": "Putting this round's corrections to the judge",
     "verify": "Cross-checking the detectors' findings",
+    "astra_review": "Astra is reviewing the complete book and every change",
     "sapling": "Running the Sapling grammar check",
     "low_confidence": "Second look at the softer catches",
     "smoothing": "Reading for line-editing suggestions",
