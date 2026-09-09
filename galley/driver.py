@@ -1502,6 +1502,10 @@ class Driver:
             self._write_ledger(result)
             self.write_decision_log()
             self._stopped_handoff(result)
+            if result.outcome == "blocked":
+                # Packaging can fail before a retryable upload package exists.
+                # Keep the claim resumable instead of announcing completion.
+                return result
             self._progress("finished", phase=phase, outcome=verdict.outcome,
                            reason=verdict.reason[:600])
             return result
@@ -1704,6 +1708,12 @@ class Driver:
                     package, self.drive_folder_id, self._driver_dir() / "delivery.json",
                     source_id=self.source_id or "", upload=self.upload, verify=self.verify_upload)
         except Exception as e:                              # noqa: BLE001
+            if not result.handoff:
+                self._block(result, "deliver",
+                            "Astra's human-review verdict is recorded, but its "
+                            f"diagnostic package could not be prepared ({e}); "
+                            "the handoff remains pending.")
+                return
             self.log(f"Astra's human-review verdict is recorded; its diagnostic "
                      f"delivery is pending ({e})")
 

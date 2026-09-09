@@ -362,6 +362,53 @@ def test_human_review_diagnostics_use_verified_frozen_delivery_on_retry(snapshot
     assert json.loads((ws / "runs" / "driver" / "delivery.json").read_text())["status"] == "delivered"
 
 
+def test_human_review_packaging_failure_keeps_agent_claim_resumable(snapshot, tmp_path, monkeypatch):
+    from galley import agent as ga
+    book, ws, run = snapshot
+    install_review(monkeypatch, receipt("needs_human", repair=True))
+    make_diagnostics = gd.build_diagnostics
+    progress = []
+
+    def fail_package(*args, **kwargs):
+        raise OSError("diagnostics storage temporarily unavailable")
+
+    monkeypatch.setattr(gd, "build_diagnostics", fail_package)
+    result = _driver(book, tmp_path, astra_review=True, start_phase="astra_review",
+                     drive_folder_id="folder", progress=progress.append).run()
+    assert result.outcome == "blocked" and result.exit_code == 8
+    assert result.stopped_at == "deliver" and result.handoff == []
+    assert not (ws / "runs" / "driver" / "package.json").exists()
+    assert go.Outcome.load(run).outcome == "needs_human"
+    assert go.Outcome.load(run).reason == "Astra's final editorial judgment."
+    assert any(event.get("event") == "blocked" for event in progress)
+    assert not any(event.get("event") == "finished" for event in progress)
+
+    # Feed the actual blocked driver result through the agent's completion
+    # path: it must preserve the claim, rather than record terminal FAILED.
+    monkeypatch.setattr(ga, "slug_for", lambda *args: ws.name)
+    agent = ga.Agent(env=ga.AgentEnv("https://example.invalid", "test", "test"),
+                     workspace_root=ws.parent, heartbeat_interval_s=0,
+                     download=lambda *_args: book, run_driver=lambda **_kwargs: result,
+                     log=lambda _message: None)
+    monkeypatch.setattr(agent, "_beat", lambda **_kwargs: None)
+    ledger = ga.Ledger(tmp_path / "agent-ledger.json")
+    report = ga.RunReport()
+    agent.run_book(ga.AwaitingBook("source-book", book.name, "folder", "Ford"), ledger, report)
+    assert ledger.state("source-book") == ga.CLAIMED
+    assert ledger.pending() == ["source-book"]
+    assert ledger.claimed("source-book")["operational_status"] == "blocked"
+    assert report.outcome == "blocked"
+
+    # Once local packaging works again, the existing Astra verdict can produce
+    # its diagnostic handoff through a delivery-only resume.
+    monkeypatch.setattr(gd, "build_diagnostics", make_diagnostics)
+    resumed = _driver(book, tmp_path, astra_review=True, start_phase="deliver",
+                      drive_folder_id="folder", upload=lambda paths, _folder: ["id-" + paths[0].name],
+                      verify_upload=lambda *_args: True).run()
+    assert resumed.outcome == "needs_human" and resumed.uploaded
+    assert json.loads((ws / "runs" / "driver" / "package.json").read_text())["kind"] == "human_review"
+
+
 def test_default_workspace_enrollment_blocks_early_heuristic_verdict(snapshot, tmp_path, monkeypatch):
     book, ws, run = snapshot
     monkeypatch.setattr(ar, "validate_receipt", lambda *a, **kw: (_ for _ in ()).throw(
