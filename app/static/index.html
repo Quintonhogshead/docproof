@@ -1210,16 +1210,51 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
               <!-- Interior corrections -->
               <div class="wf-config" id="wf-config-corrections" hidden>
                 <div class="wf-setup" id="wf-corrections-setup" hidden></div>
-                <p class="wf-hint">When the author's Pre-Proof Interior Design
-                  Corrections Form comes in and a workflow flips the status to
-                  <em>Ready for Corrections</em>, DocProof opens the author's
-                  <em>Interior Design</em> folder, takes the highest
-                  <code>&lt;surname&gt; - Book N.idml</code>, applies what it can,
-                  and puts back <code>&lt;surname&gt; - Book N.5.idml</code> with
-                  a two-sheet spreadsheet — <em>Applied</em> / <em>Not
-                  applied</em>, every correction on exactly one of them, pages
-                  as the file's own folios — then flips the status to
-                  <em>Corrections Applied</em> for the designer.</p>
+                <p class="wf-hint">Read the author's uploaded corrections and Additional Notes,
+                  find the latest book in Interior Design, and keep a report of every instruction.
+                  Native InDesign uses Astra and this Mac to save the next numbered INDD,
+                  verify it, and flag any remaining designer work.</p>
+                <label class="field"><span>Correction workflow</span>
+                  <select id="corrections-engine"><option value="idml">IDML and designer handoff</option>
+                    <option value="native">Astra and InDesign on this Mac</option></select></label>
+                <label class="checkbox"><input type="checkbox" id="corrections-native-upload">
+                  Upload verified native results to Drive</label>
+                <label class="checkbox"><input type="checkbox" id="corrections-native-partial">
+                  Also upload completed work when a designer is needed</label>
+                <details><summary>Native workflow connections</summary>
+                  <p class="muted">Use HubSpot's internal property names and option values. The job log always keeps the full outcome.</p>
+                  <label class="field"><span>HubSpot app token</span><input id="corrections-hubspot-token" type="password" autocomplete="new-password" placeholder="Stored securely; never shown again"></label>
+                  <button type="button" id="corrections-hubspot-connect">Save HubSpot connection</button>
+                  <p id="corrections-hubspot-note" class="muted" aria-live="polite"></p>
+
+                  <label class="field"><span>Correction form ID</span><input id="corrections-native-form" type="text"></label>
+                  <label class="checkbox"><input id="corrections-native-form-poll" type="checkbox">
+                    Read correction form submissions directly (does not require the Ready status)</label>
+                  <label class="field"><span>Read submissions after</span>
+                    <input id="corrections-native-start-after" type="text" placeholder="ISO timestamp, for example 2026-01-01T00:00:00Z">
+                    <small class="muted">Use a UTC timestamp so an existing submission is not processed again.</small>
+                  </label>
+                  <p class="muted small">These are HubSpot's internal form field names. The supplied form uses
+                    <code>firstname</code>, <code>lastname</code>, and
+                    <code>which_book_are_these_corrections_for_</code>.</p>
+                  <label class="field"><span>Form first-name field</span><input id="corrections-native-form-first" type="text" placeholder="firstname"></label>
+                  <label class="field"><span>Form last-name field</span><input id="corrections-native-form-last" type="text" placeholder="lastname"></label>
+                  <label class="field"><span>Form book field</span><input id="corrections-native-form-book" type="text" placeholder="which_book_are_these_corrections_for_"></label>
+                  <label class="field"><span>Form file-upload field</span><input id="corrections-native-form-file" type="text" placeholder="interior_design_corrections_documents"></label>
+                  <label class="field"><span>Form notes field</span><input id="corrections-native-form-notes" type="text" placeholder="anything_else_"></label>
+                  <label class="field"><span>Project ID property</span><input id="corrections-native-project-id" type="text" placeholder="Optional Projects property"></label>
+                  <label class="field"><span>Project book property</span><input id="corrections-native-project-book" type="text" placeholder="Optional Projects property"></label>
+                  <label class="field"><span>Book's Drive folder property</span><input id="corrections-native-folder" type="text"></label>
+                  <label class="field"><span>Submission identifier property</span><input id="corrections-native-submission" type="text"></label>
+                  <label class="field"><span>Outcome property</span><input id="corrections-native-status" type="text"></label>
+                  <label class="field"><span>Designer needed property</span><input id="corrections-native-designer" type="text"></label>
+                  <label class="field"><span>Reason property</span><input id="corrections-native-reason" type="text"></label>
+                  <label class="field"><span>Output link property</span><input id="corrections-native-output" type="text"></label>
+                  <label class="field"><span>Verified outcome value</span><input id="corrections-native-verified-value" type="text"></label>
+                  <label class="field"><span>Designer needed outcome value</span><input id="corrections-native-designer-value" type="text"></label>
+                  <label class="field"><span>Clarification needed outcome value</span><input id="corrections-native-clarification-value" type="text"></label>
+                  <label class="field"><span>Technical block outcome value</span><input id="corrections-native-technical-value" type="text"></label>
+                </details>
 
                 <label class="checkbox">
                   <input type="checkbox" id="corrections-enabled">
@@ -1233,7 +1268,7 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                          placeholder="Ready for Corrections">
                 </label>
                 <label class="field">
-                  <span>Status value to set once the Book N.5 is back</span>
+                  <span>Legacy IDML completion status</span>
                   <input type="text" id="corrections-done"
                          placeholder="Corrections Applied">
                 </label>
@@ -1251,7 +1286,7 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                          placeholder="e.g. corrections_text">
                 </label>
                 <label class="field">
-                  <span>Author subfolder that holds the designer's IDML</span>
+                  <span>Author subfolder that holds the InDesign files</span>
                   <input type="text" id="corrections-folder"
                          placeholder="Interior Design">
                 </label>
@@ -1266,6 +1301,20 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                   <button id="wf-corrections-save" class="primary">Save correction settings</button>
                 </div>
                 <p id="wf-corrections-note" class="action-note" hidden></p>
+                <div class="wf-readout" id="native-worker-readout" aria-live="polite">
+                  <h4>Mac native worker</h4>
+                  <p id="native-worker-line" class="small"></p>
+                  <p id="native-worker-detail" class="muted small"></p>
+                  <p id="native-worker-error" class="small wf-agent-error" hidden></p>
+                </div>
+                <div class="wf-readout" id="native-intake-readout" aria-live="polite" hidden>
+                  <h4>Unmatched correction submissions</h4>
+                  <p id="native-intake-line" class="small"></p>
+                  <ul id="native-intake-list"></ul>
+                  <p id="native-intake-error" class="small wf-agent-error" hidden></p>
+                </div>
+                <p class="hint">If private HubSpot file access is unavailable, a waiting submission will let you supply its downloaded attachment here. Files and correction results stay local while Drive uploads are blocked.</p>
+                <div id="native-correction-jobs" aria-live="polite"></div>
               </div>
 
               <!-- Promo copy -->

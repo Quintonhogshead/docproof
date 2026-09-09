@@ -55,6 +55,7 @@ def test_quiet_poll_updates_clock_without_rebuilding_unchanged_rows():
         renderPassesSummary: () => { clock++; },
         renderWatchSignIn: noop, renderWatchRun: noop, renderWatchBanner: noop,
         renderWatchFiles: noop, renderProofReadout: noop, applyWatchSchedule: noop,
+        renderNativeWorker: noop, renderNativeIntake: noop,
         renderWatchNextRun: noop,
       });
       vm.runInContext(source, context);

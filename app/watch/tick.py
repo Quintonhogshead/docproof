@@ -1639,6 +1639,11 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     rather than doubled, and the tests drive `tick` without one."""
     root = Path(home)
     report = TickReport(dry_run=dry_run)
+    if ws.corrections_native_worker_only:
+        if dry_run or mock:
+            return report
+        from docproof.interior.poller import poll_once
+        return poll_once(root, get_key=get_key, opener=opener, local_only=True)
     # Both of these resolve here rather than in the signature. A default
     # argument binds once, at import, to the function it was written next to —
     # so a caller that swaps the name gets the old one anyway, and the way you
@@ -1749,29 +1754,65 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
                 + " is not set. Run `docproof-watch init` to fill it in.")
 
     if ws.corrections_enabled:
-        # Interior corrections are driven by a value of the same dropdown and
-        # find the designer's IDML through the author's folder, so both HubSpot
-        # and subfolder mode must be on, and the form's properties named —
-        # half-configured would find no corrections to apply and say nothing.
-        if not ws.hubspot_enabled or not ws.subfolders_enabled:
-            raise NotConfigured(
-                "Interior corrections are switched on but HubSpot or per-author "
-                "subfolders are not. The form flips a HubSpot status and the "
-                "IDML lives in the author's folder, so both have to be on. Run "
-                "`docproof-watch init`, or turn corrections off.")
-        blanks = [name for name, value in (
-            ("hubspot_corrections_ready_value", ws.hubspot_corrections_ready_value),
-            ("hubspot_corrections_done_value", ws.hubspot_corrections_done_value),
-            ("corrections_folder_name", ws.corrections_folder_name),
-        ) if not value]
-        if not (ws.hubspot_corrections_file_property
-                or ws.hubspot_corrections_text_property):
-            blanks.append("hubspot_corrections_file_property or "
-                          "hubspot_corrections_text_property")
-        if blanks:
-            raise NotConfigured(
-                "Interior corrections are switched on but " + ", ".join(blanks)
-                + " is not set. Run `docproof-watch init` to fill it in.")
+        if getattr(ws, "corrections_engine", "idml") == "native":
+            if not ws.hubspot_enabled:
+                raise NotConfigured(
+                    "Native corrections are switched on but HubSpot is not. "
+                    "Run `docproof-watch init`, or turn corrections off.")
+            blanks = [] if ws.corrections_native_form_poll else [name for name, value in (
+                ("hubspot_corrections_ready_value", ws.hubspot_corrections_ready_value),
+                ("corrections_native_status_property", ws.corrections_native_status_property
+                 or ws.hubspot_status_property),
+            ) if not value]
+            if ws.corrections_native_form_poll and not ws.corrections_native_start_after:
+                blanks.append("corrections_native_start_after")
+            if ws.corrections_native_form_poll and bool(ws.corrections_native_form_book_property) != bool(ws.corrections_native_project_book_property):
+                blanks.append("corrections_native_form_book_property and corrections_native_project_book_property")
+            # A folder property is sufficient on a flat install.  The legacy
+            # first/last route remains available when it is not configured.
+            if not ws.corrections_native_folder_property:
+                native_project_first = (getattr(ws, "corrections_native_project_first_property", "")
+                                        or ws.hubspot_first_property)
+                native_project_last = (getattr(ws, "corrections_native_project_last_property", "")
+                                       or ws.hubspot_last_property)
+                blanks.extend(name for name, value in (
+                    ("corrections_native_project_first_property", native_project_first),
+                    ("corrections_native_project_last_property", native_project_last),
+                ) if not value)
+            elif ws.corrections_native_form_poll:
+                native_project_first = (getattr(ws, "corrections_native_project_first_property", "")
+                                        or ws.hubspot_first_property)
+                native_project_last = (getattr(ws, "corrections_native_project_last_property", "")
+                                       or ws.hubspot_last_property)
+                blanks.extend(name for name, value in (
+                    ("corrections_native_project_first_property", native_project_first),
+                    ("corrections_native_project_last_property", native_project_last),
+                ) if not value)
+            if blanks:
+                raise NotConfigured(
+                    "Native corrections are switched on but " + ", ".join(blanks)
+                    + " is not set. Run `docproof-watch init`, or turn corrections off.")
+        else:
+            # Legacy IDML mode retains its original configuration contract.
+            if not ws.hubspot_enabled or not ws.subfolders_enabled:
+                raise NotConfigured(
+                    "Interior corrections are switched on but HubSpot or per-author "
+                    "subfolders are not. The form flips a HubSpot status and the "
+                    "IDML lives in the author's folder, so both have to be on. Run "
+                    "`docproof-watch init`, or turn corrections off.")
+            blanks = [name for name, value in (
+                ("hubspot_corrections_ready_value", ws.hubspot_corrections_ready_value),
+                ("hubspot_corrections_done_value", ws.hubspot_corrections_done_value),
+                ("corrections_folder_name", ws.corrections_folder_name),
+            ) if not value]
+            if not (ws.hubspot_corrections_file_property
+                    or ws.hubspot_corrections_text_property):
+                blanks.append("hubspot_corrections_file_property or "
+                              "hubspot_corrections_text_property")
+            if blanks:
+                raise NotConfigured(
+                    "Interior corrections are switched on but " + ", ".join(blanks)
+                    + " is not set. Run `docproof-watch init` to fill it in.")
 
     if ws.subfolders_enabled:
         # Routing into per-author subfolders needs a name to route by, and that

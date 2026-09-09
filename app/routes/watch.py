@@ -18,9 +18,9 @@ from pathlib import Path
 from dataclasses import asdict
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, Field
+from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File
+from fastapi.responses import RedirectResponse, FileResponse
+from pydantic import BaseModel, Field, SecretStr
 
 from docproof.providers import lookup
 
@@ -71,6 +71,29 @@ class WatchUpdate(BaseModel):
     hubspot_corrections_text_property: str | None = None
     corrections_folder_name: str | None = None
     corrections_model_passes: bool | None = None
+    corrections_engine: str | None = None
+    corrections_native_auto_upload: bool | None = None
+    corrections_native_partial_upload: bool | None = None
+    corrections_native_folder_property: str | None = None
+    corrections_native_submission_property: str | None = None
+    corrections_native_form_id: str | None = None
+    corrections_native_form_poll: bool | None = None
+    corrections_native_start_after: str | None = None
+    corrections_native_form_first_property: str | None = None
+    corrections_native_form_last_property: str | None = None
+    corrections_native_form_book_property: str | None = None
+    corrections_native_form_file_property: str | None = None
+    corrections_native_form_notes_property: str | None = None
+    corrections_native_project_id_property: str | None = None
+    corrections_native_project_book_property: str | None = None
+    corrections_native_designer_property: str | None = None
+    corrections_native_reason_property: str | None = None
+    corrections_native_output_property: str | None = None
+    corrections_native_status_property: str | None = None
+    corrections_native_verified_value: str | None = None
+    corrections_native_designer_value: str | None = None
+    corrections_native_clarification_value: str | None = None
+    corrections_native_technical_value: str | None = None
     # Bounds so a slip in the UI cannot spend a morning's worth of manuscripts
     # in one pass, or set a clock that never stops going off.
     max_files_per_tick: int | None = Field(default=None, ge=1, le=50)
@@ -93,6 +116,10 @@ class WatchAuth(BaseModel):
 
     client_id: str | None = None
     client_secret: str | None = None
+
+
+class HubSpotConnection(BaseModel):
+    token: SecretStr
 
 
 class WatchSchedule(BaseModel):
@@ -174,6 +201,82 @@ def register(app: FastAPI) -> None:
     # guide use. The desktop build has one user and no gate, so it passes.
     may_manage = common.admin_gate(
         app, "Only an administrator can manage DocWatch.")
+
+    @app.post("/api/watch/hubspot-connection", dependencies=[Depends(may_manage)])
+    def hubspot_connection(body: HubSpotConnection):
+        token = body.token.get_secret_value().strip()
+        if not token or len(token) > 4096 or any(c.isspace() for c in token):
+            raise HTTPException(400, "Enter a valid HubSpot private app token.")
+        try:
+            if app.state.web:
+                app.state.keystore.set("hubspot", token)
+            else:
+                settingslib.set_api_key("hubspot", token)
+            os.environ[ENV_VARS["hubspot"]] = token
+        except Exception:
+            raise HTTPException(500, "The connection could not be stored. Check the local credential store.") from None
+        return {"configured": True}
+
+    @app.get("/api/watch/native/jobs/{job_id}/file/{which}", dependencies=[Depends(may_manage)])
+    def native_job_file(job_id: str, which: str):
+        """Serve only saved deliverables inside the selected native job."""
+        import re
+        keys = {"indd": "output_indd", "pdf": "output_pdf", "package": "output_package", "report": "report"}
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", job_id) or which not in keys:
+            raise HTTPException(404, "Correction file not found.")
+        folder = (Path(app.state.watch.home) / "native_jobs" / job_id).resolve()
+        try:
+            receipt = json.loads((folder / "job.json").read_text())
+            value = (receipt.get("result") or {}).get(keys[which])
+            if not value:
+                raise ValueError("No saved output")
+            path = Path(value).resolve()
+            if not path.is_relative_to(folder) or not path.is_file():
+                raise ValueError("Output is not in this job")
+        except (OSError, ValueError, TypeError):
+            raise HTTPException(404, "Correction file is not available.") from None
+        return FileResponse(path, filename=path.name)
+
+    @app.post("/api/watch/native/jobs/{job_id}/attachment/{file_id}", dependencies=[Depends(may_manage)])
+    async def native_manual_attachment(job_id: str, file_id: str, attachment: UploadFile = File(...)):
+        """Supply a legitimately downloaded file for this exact frozen submission."""
+        import re
+        import tempfile
+        from ..watch import native_files
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", job_id) or not file_id.isdecimal():
+            raise HTTPException(404, "Correction submission not found.")
+        home = Path(app.state.watch.home)
+        try:
+            job = json.loads((home / "native_jobs" / job_id / "job.json").read_text())
+        except (OSError, ValueError):
+            raise HTTPException(404, "Correction submission not found.") from None
+        allowed = {native_files.file_id(url) for url in job.get("submission_urls", [])}
+        if file_id not in allowed:
+            raise HTTPException(400, "This file does not belong to the selected submission.")
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False) as output:
+                temporary = Path(output.name)
+                total = 0
+                while chunk := await attachment.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > 200 * 1024 * 1024:
+                        raise HTTPException(413, "The downloaded correction file must be under 200 MB.")
+                    output.write(chunk)
+            if not total:
+                raise HTTPException(400, "The correction file is empty.")
+            native_files.store_manual_file(temporary, home / "manual-attachments", file_id,
+                                           filename=attachment.filename or "submission")
+        except HTTPException:
+            raise
+        except (ValueError, native_files.HubSpotError) as exc:
+            raise HTTPException(400, str(exc)) from None
+        finally:
+            await attachment.close()
+            if temporary:
+                temporary.unlink(missing_ok=True)
+        return {"saved": True, "file_id": file_id,
+                "message": "Saved locally. The worker can resume this submission on its next check."}
 
     def callback_uri(request: Request) -> str:
         """Where Google sends the browser back to, on this same server.
@@ -281,6 +384,15 @@ def register(app: FastAPI) -> None:
                                          "reads the book) or 'external' (a "
                                          "practitioner does).")
             ws.proof_runner = update.proof_runner
+        if update.corrections_engine is not None:
+            if update.corrections_engine not in ("idml", "native"):
+                raise HTTPException(400, "Choose IDML or native InDesign corrections.")
+            ws.corrections_engine = update.corrections_engine
+        for name in WatchUpdate.model_fields:
+            if name.startswith("corrections_native_"):
+                value = getattr(update, name)
+                if value is not None:
+                    setattr(ws, name, value.strip() if isinstance(value, str) else value)
         # The proofing values are trimmed, and a blank one is a real value: it
         # means "write nothing for that verdict", which `_finish_hubspot_proof`
         # already honours by refusing to PATCH rather than blanking the status.

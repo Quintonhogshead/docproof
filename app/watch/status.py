@@ -11,6 +11,7 @@ and a question should not make folders.
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -121,6 +122,11 @@ def status(home: str | Path, *, get_key=None,
         "hubspot_proof_needs_human_value": ws.hubspot_proof_needs_human_value,
         # The interior-corrections stage, whole, for the panel's drawer.
         "corrections_enabled": ws.corrections_enabled,
+        "corrections_engine": ws.corrections_engine,
+        **{key: value for key, value in vars(ws).items() if key.startswith("corrections_native_")},
+        "native_correction_jobs": native_correction_jobs(home),
+        "native_worker": native_worker(root),
+        "native_intake": native_intake(root),
         "hubspot_corrections_ready_value": ws.hubspot_corrections_ready_value,
         "hubspot_corrections_done_value": ws.hubspot_corrections_done_value,
         "hubspot_corrections_file_property": ws.hubspot_corrections_file_property,
@@ -150,6 +156,104 @@ def status(home: str | Path, *, get_key=None,
 
 
 AGENT_STATUS_FILE = "agent-status.json"
+
+NATIVE_WORKER_FILE = "native-worker.json"
+NATIVE_INTAKE_FILE = "native-intake.json"
+
+
+def _receipt_text(value, *, limit: int = 500) -> str | None:
+    """Keep status receipts useful without exposing arbitrary payloads."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text[:limit] if text else None
+
+
+def _receipt_count(report: dict, name: str) -> int:
+    value = report.get(name, 0)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, list):
+        return len(value)
+    return 0
+
+
+def native_worker(home: str | Path) -> dict:
+    """Return the last Mac native-worker heartbeat without its raw report.
+
+    This is deliberately separate from ``last_tick_at``: the native worker is
+    an opt-in process on the Mac and may be checked while the general Drive
+    watcher is stopped.  Only state, timestamps, bounded error text and report
+    counts leave the local receipt.
+    """
+    path = Path(home) / NATIVE_WORKER_FILE
+    empty = {"state": "paused", "started_at": None, "finished_at": None,
+             "error": None, "report": {}}
+    try:
+        payload = json.loads(path.read_text("utf-8"))
+    except FileNotFoundError:
+        return empty
+    except (OSError, ValueError):
+        return {**empty, "state": "error",
+                "error": "The native worker status receipt could not be read."}
+    if not isinstance(payload, dict):
+        return {**empty, "state": "error",
+                "error": "The native worker status receipt is invalid."}
+    state = payload.get("state")
+    if state not in {"paused", "checking", "idle", "error", "attention"}:
+        state = "error"
+    raw_report = payload.get("report")
+    report = raw_report if isinstance(raw_report, dict) else {}
+    counts = {name: _receipt_count(report, name) for name in (
+        "listed", "waiting", "corrected", "uploaded", "failed",
+        "needs_human")}
+    return {"state": state,
+            "local_only": payload.get("local_only") is True,
+            "drive_uploads_enabled": payload.get("drive_uploads_enabled") is True,
+            "started_at": _receipt_text(payload.get("started_at"), limit=100),
+            "finished_at": _receipt_text(payload.get("finished_at"), limit=100),
+            "error": _receipt_text(payload.get("error")),
+            "report": counts}
+
+
+def _native_intake_row(row: dict) -> dict:
+    """Copy only display fields from an unmatched submission receipt."""
+    allowed = ("id", "submission_id", "conversion_id", "first_name",
+               "last_name", "book", "identity", "reason", "submitted_at",
+               "received_at", "file_name")
+    result = {}
+    for key in allowed:
+        value = _receipt_text(row.get(key))
+        if value:
+            result[key] = value
+    if not result:
+        result["reason"] = "Unmatched correction submission needs review."
+    return result
+
+
+def native_intake(home: str | Path) -> dict:
+    """Return unmatched native-form submissions for the corrections panel."""
+    empty = {"unmatched": [], "count": 0, "checked_at": None, "error": None}
+    path = Path(home) / NATIVE_INTAKE_FILE
+    try:
+        payload = json.loads(path.read_text("utf-8"))
+    except FileNotFoundError:
+        return empty
+    except (OSError, ValueError):
+        return {**empty, "error": "The native intake receipt could not be read."}
+    if not isinstance(payload, dict):
+        return {**empty, "error": "The native intake receipt is invalid."}
+    rows = payload.get("unmatched")
+    if not isinstance(rows, list):
+        rows = payload.get("items") if isinstance(payload.get("items"), list) else []
+    unmatched = [_native_intake_row(row) for row in rows if isinstance(row, dict)]
+    return {"unmatched": unmatched, "count": len(unmatched),
+            "checked_at": _receipt_text(payload.get("checked_at")
+                                         or payload.get("last_checked_at")
+                                         or payload.get("finished_at"), limit=100),
+            "error": _receipt_text(payload.get("error"))}
 #: A heartbeat older than this is shown as stale: the machine is down, the
 #: token changed, or it cannot reach us. Three polls plus slack.
 AGENT_STALE_AFTER_S = 20 * 60
@@ -339,3 +443,30 @@ def _jobs(root: Path) -> list:
     except OSError as e:                  # noqa: BLE001 - a status is not the job
         log.warning("Could not read what the watcher has done (%s)", e)
         return []
+
+
+def native_correction_jobs(home) -> list[dict]:
+    """Compact, nonsecret correction receipts for the Automations panel."""
+    import json
+    rows = []
+    for path in Path(home).glob("native_jobs/*/job.json"):
+        try:
+            data = json.loads(path.read_text())
+            result = data.get("result") or {}
+            rows.append({"job_id": data.get("job_id", path.parent.name),
+                         "book": data.get("source_name", "Book"),
+                         "status": data.get("status", "queued"),
+                         "needs_designer": result.get("needs_designer"),
+                         "reasons": result.get("reasons", []) or ([data["reason"]] if data.get("reason") else []),
+                         "counts": result.get("counts", {}),
+                         "missing_attachments": [{"file_id": str(item.get("file_id", "")),
+                                                   "filename": str(item.get("filename", "Downloaded correction file"))}
+                                                  for item in data.get("missing_attachments", []) if isinstance(item, dict)],
+                         "outputs": [name for name, key in {"indd": "output_indd", "pdf": "output_pdf", "package": "output_package", "report": "report"}.items() if result.get(key)],
+                         "uploaded": data.get("uploaded", {}),
+                         "created_at": data.get("created_at", "")})
+        except (ValueError, OSError):
+            rows.append({"job_id": path.parent.name, "book": "Unreadable job receipt",
+                         "status": "technical_block", "needs_designer": None,
+                         "reasons": ["Inspect the saved job receipt before resuming."]})
+    return sorted(rows, key=lambda row: row.get("created_at", ""), reverse=True)[:100]

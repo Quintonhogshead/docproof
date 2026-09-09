@@ -252,8 +252,17 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
         query = urllib.parse.parse_qs(parsed.query)
         path = parsed.path
 
+        if ("hubspotusercontent" in (parsed.hostname or "")
+                and request.get_method() == "GET"):
+            return Response(content.get(path.rsplit("/", 1)[-1], b""))
+
         if "api.hubapi.com" in request.full_url:
             if request.get_method() == "GET":
+                if path.startswith("/files/v3/files/") and path.endswith("/signed-url"):
+                    file_id = path.split("/")[-2]
+                    return Response(json.dumps({
+                        "url": f"https://f.hubspotusercontent00.net/{file_id}"
+                    }).encode())
                 # A form-uploaded file, served by the id at the end of the path;
                 # `content` holds its bytes under that id, like a Drive file.
                 _maybe_fail("hubspot_file")
