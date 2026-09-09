@@ -352,6 +352,14 @@ def run_stage(token: str, home: Path, ws: WatchSettings, state: WatchState,
     guard so one bad book never stops the pass."""
     if not ws.corrections_enabled or not hs_token:
         return
+    if getattr(ws, "corrections_engine", "idml") == "native":
+        # Native InDesign packages have a separate durable ledger and lock;
+        # keeping the dispatch here means existing IDML jobs retain exactly
+        # their old state and upload semantics.
+        from . import native_corrections
+        return native_corrections.run_stage(
+            token, home, ws, state, runner, store, mock=mock, opener=opener,
+            hs_token=hs_token, report=report)
     works = discover(hs_token, token, ws, state, opener=opener, report=report)
     works.sort(key=lambda w: (w.idml.modified_time, w.idml.name))
     if len(works) > ws.max_files_per_tick:

@@ -343,6 +343,53 @@ class WatchSettings:
     # match manual mode; off is deterministic and free but flags more.
     corrections_model_passes: bool = True
 
+    # The corrections stage originally operated on an exported IDML.  Native
+    # InDesign files are opt-in so an existing watch configuration keeps the
+    # old, deterministic behaviour.
+    corrections_engine: str = "idml"
+    # Native files are held locally until publishing is explicitly enabled.
+    corrections_native_auto_upload: bool = False
+    # Dedicated local review homes must not run unrelated watcher stages from
+    # the shared interface's manual-check button.
+    corrections_native_worker_only: bool = False
+    # A native pass may still hand a designer its partially applied Book N+1.
+    # This is useful for the default local workflow, where a person finishes
+    # the remaining layout work before publishing.
+    corrections_native_partial_upload: bool = True
+    # Optional CRM mappings.  Empty values mean DocProof does not touch that
+    # property; no CRM property is invented by the native adapter.
+    corrections_native_folder_property: str = ""
+    corrections_native_submission_property: str = ""
+    # The HubSpot form that owns native correction submissions.  The field is
+    # metadata for adapters that poll submission events; the CRM property names
+    # above remain the only values this watcher writes.
+    corrections_native_form_id: str = "2be3b465-b0d6-4bab-b32e-6bd74dcca403"
+    # Form event polling requires HubSpot's form-submissions read scope. Keep
+    # it explicit so a configured CRM file/notes property works without a
+    # surprise 403 on every watch tick.
+    corrections_native_form_poll: bool = False
+    corrections_native_start_after: str = ""
+    corrections_native_form_first_property: str = "firstname"
+    corrections_native_form_last_property: str = "lastname"
+    corrections_native_form_book_property: str = ""
+    corrections_native_form_file_property: str = "interior_design_corrections_documents"
+    corrections_native_form_notes_property: str = "anything_else_"
+    # Project identity fields can differ from the form's firstname/lastname
+    # fields (the production Projects object uses author_* names). Empty
+    # values fall back to the existing HubSpot first/last settings.
+    corrections_native_project_first_property: str = ""
+    corrections_native_project_last_property: str = ""
+    corrections_native_project_id_property: str = ""
+    corrections_native_project_book_property: str = ""
+    corrections_native_designer_property: str = ""
+    corrections_native_reason_property: str = ""
+    corrections_native_output_property: str = ""
+    corrections_native_status_property: str = ""
+    corrections_native_verified_value: str = ""
+    corrections_native_designer_value: str = ""
+    corrections_native_clarification_value: str = ""
+    corrections_native_technical_value: str = ""
+
     @classmethod
     def load(cls, home: str | Path) -> "WatchSettings":
         path = Path(home) / WATCH_SETTINGS

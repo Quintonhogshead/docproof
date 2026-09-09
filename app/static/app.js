@@ -1,4 +1,5 @@
 'use strict';
+const nativeCorrectionFields = {"corrections-native-form": "corrections_native_form_id", "corrections-native-start-after": "corrections_native_start_after", "corrections-native-form-first": "corrections_native_form_first_property", "corrections-native-form-last": "corrections_native_form_last_property", "corrections-native-form-book": "corrections_native_form_book_property", "corrections-native-form-file": "corrections_native_form_file_property", "corrections-native-form-notes": "corrections_native_form_notes_property", "corrections-native-project-id": "corrections_native_project_id_property", "corrections-native-project-book": "corrections_native_project_book_property", "corrections-native-folder": "corrections_native_folder_property", "corrections-native-submission": "corrections_native_submission_property", "corrections-native-status": "corrections_native_status_property", "corrections-native-designer": "corrections_native_designer_property", "corrections-native-reason": "corrections_native_reason_property", "corrections-native-output": "corrections_native_output_property", "corrections-native-verified-value": "corrections_native_verified_value", "corrections-native-designer-value": "corrections_native_designer_value", "corrections-native-clarification-value": "corrections_native_clarification_value", "corrections-native-technical-value": "corrections_native_technical_value"};
 
 // Language rule for everything the user reads: no "chunks", no "tokens", no
 // "batch", no "API" outside the Settings key fields. Sections, reviews, cost.
@@ -7473,6 +7474,75 @@ function promptCard(t) {
 }
 
 
+function nativeReceiptTime(iso) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  return isNaN(date) ? '' : date.toLocaleString();
+}
+
+function renderNativeWorker(w) {
+  const block = $('native-worker-readout');
+  if (!block) return;
+  const worker = w.native_worker || {state: 'paused'};
+  const labels = {
+    paused: 'Paused', checking: 'Checking', idle: 'Idle',
+    error: 'Error', attention: 'Attention'
+  };
+  const state = labels[worker.state] || 'Attention';
+  const line = $('native-worker-line');
+  const detail = $('native-worker-detail');
+  const error = $('native-worker-error');
+  line.textContent = `${state} — Mac native worker`;
+  const bits = [];
+  if (worker.local_only) bits.push('Local review only — Drive uploads blocked');
+  if (worker.state === 'checking') {
+    bits.push('Checking HubSpot and Drive now');
+    if (worker.started_at) bits.push(`started ${nativeReceiptTime(worker.started_at)}`);
+  } else if (worker.finished_at) {
+    bits.push(`Last native check ${nativeReceiptTime(worker.finished_at)}`);
+  } else if (worker.state === 'paused') {
+    bits.push('No native check has run yet');
+  }
+  const report = worker.report || {};
+  const countBits = [['corrected', 'corrected'], ['uploaded', 'uploaded'],
+    ['waiting', 'waiting'], ['needs_human', 'need review'], ['failed', 'failed']]
+    .filter(([key]) => Number(report[key] || 0) > 0)
+    .map(([key, label]) => `${Number(report[key]).toLocaleString()} ${label}`);
+  if (countBits.length) bits.push(countBits.join(', '));
+  detail.textContent = bits.join(' · ');
+  detail.hidden = !bits.length;
+  error.textContent = worker.error || '';
+  error.hidden = !worker.error;
+}
+
+function renderNativeIntake(w) {
+  const block = $('native-intake-readout');
+  if (!block) return;
+  const intake = w.native_intake || {unmatched: [], count: 0};
+  const rows = Array.isArray(intake.unmatched) ? intake.unmatched : [];
+  block.hidden = w.corrections_engine !== 'native' && !rows.length && !intake.error;
+  if (block.hidden) return;
+  const line = $('native-intake-line');
+  const list = $('native-intake-list');
+  const error = $('native-intake-error');
+  const checked = nativeReceiptTime(intake.checked_at);
+  line.textContent = rows.length
+    ? `${rows.length.toLocaleString()} correction submission${rows.length === 1 ? '' : 's'} need review${checked ? ` · checked ${checked}` : ''}.`
+    : (intake.error || (checked ? `No unmatched correction submissions · checked ${checked}.` : 'No native intake check has completed yet.'));
+  list.replaceChildren();
+  for (const row of rows) {
+    const item = document.createElement('li');
+    const identity = row.identity || [row.first_name, row.last_name].filter(Boolean).join(' ')
+      || row.submission_id || row.id || 'Book identity not supplied';
+    const book = row.book || 'Book not identified';
+    const reason = row.reason || 'No matching book identity was found.';
+    item.textContent = `${identity} · ${book} — ${reason}`;
+    list.append(item);
+  }
+  error.textContent = intake.error || '';
+  error.hidden = !intake.error;
+}
+
 async function loadWatch({ quiet = false } = {}) {
   const body = await api('/api/watch');
   // Refreshed on every deliberate load, kept on the five-second poll: a key
@@ -7516,6 +7586,8 @@ function renderWatch(body, quiet) {
   // What proofing has been doing — safe to redraw on the five-second poll,
   // because nothing in it is a field anybody types into.
   renderProofReadout(w);
+  renderNativeWorker(w);
+  renderNativeIntake(w);
   // The workflow registry reads the watch status too (the Format and Proofread
   // rows), so it has to follow a change here. Only when something it shows
   // actually moved, though: rebuilding the table every five seconds would take
@@ -7570,6 +7642,30 @@ function renderWatch(body, quiet) {
   $('corrections-text-prop').value = w.hubspot_corrections_text_property ?? '';
   $('corrections-folder').value = w.corrections_folder_name ?? '';
   $('corrections-model-passes').checked = w.corrections_model_passes !== false;
+  $('corrections-engine').value = w.corrections_engine || 'idml';
+  $('corrections-native-upload').checked = !!w.corrections_native_auto_upload;
+  $('corrections-native-partial').checked = w.corrections_native_partial_upload !== false;
+  $('corrections-native-form-poll').checked = !!w.corrections_native_form_poll;
+  for (const [id, key] of Object.entries(nativeCorrectionFields)) $(id).value = w[key] ?? '';
+  const nativeJobs = $('native-correction-jobs');
+  nativeJobs.replaceChildren();
+  for (const job of w.native_correction_jobs || []) {
+    const card = document.createElement('div');
+    const label = {verified: 'Verified', designer_needed: 'Designer needed', clarification_needed: 'Clarification needed', technical_block: 'Technical block', queued: 'Queued', awaiting_attachment: 'Downloaded attachment needed'}[job.status] || job.status;
+    card.textContent = `${job.book}: ${label}${job.reasons?.length ? ' — ' + job.reasons.join('; ') : ''}`;
+    for (const kind of job.outputs || []) {
+      const link = document.createElement('a');
+      link.href = `/api/watch/native/jobs/${encodeURIComponent(job.job_id)}/file/${encodeURIComponent(kind)}`;
+      link.textContent = {indd: 'InDesign', pdf: 'PDF', package: 'Complete package', report: 'Correction report'}[kind] || kind;
+      link.style.marginLeft = '0.8em';
+      card.append(link);
+    }
+    for (const attachment of job.missing_attachments || []) {
+      card.append(nativeAttachmentUpload(job, attachment));
+    }
+    nativeJobs.append(card);
+  }
+
   $('watch-archive-enabled').checked = w.archive_enabled;
   $('watch-archive-folder').value = w.archive_folder_id || '';
   $('watch-archive-source').checked = w.archive_include_source;
@@ -7590,6 +7686,33 @@ function renderWatch(body, quiet) {
     picker.append(option);
   });
   picker.value = w.model;
+}
+
+function nativeAttachmentUpload(job, attachment) {
+  const box = document.createElement('div');
+  const name = document.createElement('p');
+  name.textContent = `Download this file from HubSpot, then select it here: ${attachment.filename}`;
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.setAttribute('aria-label', `Downloaded file: ${attachment.filename}`);
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = 'Use downloaded file';
+  const note = document.createElement('span');
+  button.addEventListener('click', async () => {
+    if (!input.files?.length) { note.textContent = 'Select the downloaded correction file first.'; return; }
+    button.disabled = true;
+    try {
+      const body = new FormData();
+      body.append('attachment', input.files[0]);
+      const result = await api(`/api/watch/native/jobs/${encodeURIComponent(job.job_id)}/attachment/${encodeURIComponent(attachment.file_id)}`, {method: 'POST', body});
+      note.textContent = result.message;
+      input.value = '';
+    } catch (error) { note.textContent = error.message; }
+    finally { button.disabled = false; }
+  });
+  box.append(name, input, button, note);
+  return box;
 }
 
 function applyWatchSchedule(canSchedule) {
@@ -9584,7 +9707,12 @@ function automationWorkflows() {
                        && pl.hubspot_plan_done_value);
   const proofReady = !!(w.hubspot_enabled && w.hubspot_proof_ready_value
                         && w.hubspot_proof_done_value);
-  const corrReady = !!(w.hubspot_enabled && w.subfolders_enabled
+  const nativeCorrections = w.corrections_engine === 'native';
+  const corrReady = nativeCorrections
+    ? !!(folderReady && w.hubspot_enabled && w.corrections_native_form_id
+         && w.corrections_native_start_after
+         && (w.corrections_native_form_file_property || w.corrections_native_form_notes_property))
+    : !!(w.hubspot_enabled && w.subfolders_enabled
                        && w.hubspot_corrections_ready_value
                        && w.hubspot_corrections_done_value
                        && (w.hubspot_corrections_file_property
@@ -9599,8 +9727,8 @@ function automationWorkflows() {
     {
       id: 'prep', name: 'Format on arrival', sub: 'Prepare new manuscripts',
       trigger: { text: 'Folder arrival', hs: false }, effect: 'Prep / format',
-      config: 'wf-config-prep', enabled: folderReady, toggleable: false,
-      status: folderReady ? 'on' : 'setup',
+      config: 'wf-config-prep', enabled: folderReady && !w.corrections_native_worker_only, toggleable: false,
+      status: w.corrections_native_worker_only ? 'off' : (folderReady ? 'on' : 'setup'),
       setup: folderReady ? null : { hint: 'Connect a Google Drive folder to '
         + 'switch this on.', target: 'connection' },
     },
@@ -9626,13 +9754,13 @@ function automationWorkflows() {
     },
     {
       id: 'corrections', name: 'Interior corrections',
-      sub: 'Author form → Book N.5 IDML + spreadsheet',
+      sub: nativeCorrections ? 'Author form → InDesign correction and review' : 'Author form → Book N.5 IDML + spreadsheet',
       trigger: {
-        text: w.hubspot_corrections_ready_value
+        text: nativeCorrections && w.corrections_native_form_poll ? 'Pre-Proof correction form' : w.hubspot_corrections_ready_value
           ? 'HubSpot: ' + w.hubspot_corrections_ready_value : 'HubSpot status',
         hs: true,
       },
-      effect: 'Book N.5 + Applied / Not applied sheet',
+      effect: nativeCorrections ? 'Book N+1 INDD + PDF + report' : 'Book N.5 + Applied / Not applied sheet',
       config: 'wf-config-corrections',
       enabled: !!w.corrections_enabled, toggleable: true,
       status: !w.corrections_enabled ? 'off' : (corrReady ? 'on' : 'setup'),
@@ -10201,6 +10329,11 @@ $('wf-corrections-save').addEventListener('click', async () => {
         hubspot_corrections_text_property: $('corrections-text-prop').value,
         corrections_folder_name: $('corrections-folder').value,
         corrections_model_passes: $('corrections-model-passes').checked,
+        corrections_engine: $('corrections-engine').value,
+        corrections_native_auto_upload: $('corrections-native-upload').checked,
+        corrections_native_partial_upload: $('corrections-native-partial').checked,
+        corrections_native_form_poll: $('corrections-native-form-poll').checked,
+        ...Object.fromEntries(Object.entries(nativeCorrectionFields).map(([id, key]) => [key, $(id).value])),
       }),
     });
     renderWatch(body);
@@ -10230,3 +10363,16 @@ function applyWatchFilesFilter() {
 $('watch-files-filter').addEventListener('input', applyWatchFilesFilter);
 
 boot();
+
+$('corrections-hubspot-connect')?.addEventListener('click', async () => {
+  const input = $('corrections-hubspot-token');
+  const note = $('corrections-hubspot-note');
+  const button = $('corrections-hubspot-connect');
+  button.disabled = true;
+  try {
+    await api('/api/watch/hubspot-connection', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({token: input.value})});
+    input.value = '';
+    note.textContent = 'HubSpot connection saved securely.';
+  } catch (error) { note.textContent = error.message; }
+  finally { button.disabled = false; }
+});
