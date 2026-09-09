@@ -41,6 +41,10 @@ class JobCancelled(Exception):
     mark the job cancelled rather than failed. Not an error: nothing went
     wrong, the work was called off."""
 
+    def __init__(self, *, usage: Usage | None = None):
+        super().__init__()
+        self.usage = usage
+
 
 @dataclass(frozen=True)
 class PassRun:
@@ -862,7 +866,7 @@ def _split_for_retry(chunk: Chunk) -> list[Chunk]:
 
 
 def _retry_failed(analyzer: Analyzer, chunk: Chunk, result, usage: Usage,
-                  *, response_id: str | None = None
+                  *, response_id: str | None = None, should_cancel=None
                   ) -> tuple[list, bool]:
     """One bounded semantic retry for a (pass, chunk) the provider did not
     answer, so a single hiccup no longer drops a whole section silently.
@@ -877,6 +881,8 @@ def _retry_failed(analyzer: Analyzer, chunk: Chunk, result, usage: Usage,
     checkpoint to re-call on the next run and are recorded as a coverage gap in
     the meantime. Bounded to one level so a failing chunk cannot loop; every
     attempt's tokens are counted into `usage`."""
+    if should_cancel and should_cancel():
+        return [], False
     if result.stop_reason == "max_tokens":
         parts = _split_for_retry(chunk)
         if not parts:
@@ -884,6 +890,8 @@ def _retry_failed(analyzer: Analyzer, chunk: Chunk, result, usage: Usage,
         out: list = []
         ok_any = False
         for part in parts:
+            if should_cancel and should_cancel():
+                break
             found, ok = analyzer.process_result(
                 analyzer.fetch(part), part, usage, response_id=response_id)
             out.extend(found)
@@ -893,6 +901,8 @@ def _retry_failed(analyzer: Analyzer, chunk: Chunk, result, usage: Usage,
                      "truncation", chunk.chunk_id, analyzer.label)
         return out, ok_any
     if result.stop_reason == "refusal":
+        if should_cancel and should_cancel():
+            return [], False
         found, ok = analyzer.process_result(
             analyzer.fetch(chunk), chunk, usage, response_id=response_id)
         if ok:
@@ -937,7 +947,8 @@ def _ckpt_key(pass_index: int, chunk_id: str, detector: int) -> str:
 
 def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
              *, progress=None, checkpoint=None, should_cancel=None,
-             coverage=None, provider_factory=None, on_phase=None
+             coverage=None, provider_factory=None, on_phase=None,
+             on_checkpoint_usage=None
              ) -> tuple[list, Usage]:
     """Review every chunk now, one API call per (pass, chunk, detector).
 
@@ -966,13 +977,16 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     `checkpoint` (a docproof.checkpoint.Checkpoint, already loaded) makes the
     run resumable: each completed call's findings land in it as they arrive, in
     order, and calls it already holds are replayed instead of paid for again.
+    `on_checkpoint_usage`, if supplied, receives each folded checkpoint key and
+    its cumulative usage dictionary, so a caller can distinguish prior receipts
+    from newly billed work when resuming its own cost ledger.
 
     `should_cancel`, if given, is polled once per folded call; when it first
     returns true the run raises `JobCancelled` and cancels every call not yet
     started, so an abort stops paying for the tail of the document. Calls
     already in flight (at most `cfg.concurrency_for()`) still finish — a thread
-    pool can't recall them — but their results are dropped."""
-    from concurrent.futures import ThreadPoolExecutor
+    pool can't recall them — and are metered and checkpointed without retries."""
+    from concurrent.futures import CancelledError, ThreadPoolExecutor
 
     from .checkpoint import (add_usage, finding_from_dict, finding_to_dict,
                              snapshot, usage_delta)
@@ -1025,11 +1039,59 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                 key, analyzer.keys, chunk.paragraphs)
 
     usage = Usage()
+    if on_phase is not None:
+        phase_callback = on_phase
+
+        def on_phase(phase):
+            try:
+                phase_callback(phase)
+            except JobCancelled as exc:
+                # Phase callbacks can stop a ladder after earlier detector or
+                # whole-document calls completed. Carry their meter to the
+                # adapter just as cancellation inside the detector loop does.
+                exc.usage = usage
+                raise
+
     findings: list = []
     total = prepared.request_count
     # Coverage is per (pass, chunk), not per call: a section is reviewed if ANY
     # detector answered for it, and a gap only when every detector failed it.
     covered: dict = {}
+
+    def check_cancel():
+        if should_cancel and should_cancel():
+            raise JobCancelled(usage=usage)
+
+    def fetch_chunk(analyzer, chunk):
+        check_cancel()             # queued work must not start another paid call
+        return analyzer.fetch(chunk)
+
+    def fold_result(item, result, *, retry: bool):
+        analyzer, chunk, key, detector, _pass_i = item
+        before = snapshot(usage)
+        # Include earlier failed attempts in this key's cumulative checkpoint.
+        burned = checkpoint.burned(key) if checkpoint else None
+        if burned:
+            add_usage(usage, burned)
+        found, ok = analyzer.process_result(result, chunk, usage, response_id=key)
+        if not ok and retry:
+            found, ok = _retry_failed(
+                analyzer, chunk, result, usage, response_id=key,
+                should_cancel=should_cancel)
+        if ensemble:
+            found = [dataclasses.replace(f, detector=detector) for f in found]
+        findings.extend(found)
+        if checkpoint:
+            metadata = (prepared.examination.checkpoint_metadata(key)
+                        if prepared.examination is not None and phase_two
+                        else None)
+            delta = usage_delta(before, usage)
+            checkpoint.put(
+                key, items=[finding_to_dict(f) for f in found],
+                usage=delta, ok=ok, metadata=metadata)
+            if on_checkpoint_usage:
+                on_checkpoint_usage(key, dataclasses.asdict(delta))
+        return ok
 
     if on_phase:
         on_phase("reviewing")
@@ -1044,67 +1106,56 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
         # network and gets no future.
         futures = [
             None if (checkpoint and checkpoint.get(key) is not None)
-            else pool.submit(analyzer.fetch, chunk)
+            else pool.submit(fetch_chunk, analyzer, chunk)
             for analyzer, chunk, key, _, _ in work]
+        metered = set()
+        try:
+            for done, (item, future) in enumerate(zip(work, futures), start=1):
+                analyzer, chunk, key, _d, pass_i = item
+                check_cancel()
+                if future is None:                  # replay a cached call
+                    cached = checkpoint.get(key)
+                    findings.extend(finding_from_dict(x) for x in cached.items)
+                    add_usage(usage, cached.usage)
+                    if on_checkpoint_usage:
+                        on_checkpoint_usage(key, cached.usage)
+                    if prepared.examination is not None and phase_two:
+                        prepared.examination.restore_production_response(
+                            key, cached.metadata)
+                    ok = True                       # only ok calls are cached
+                else:
+                    result = future.result()
+                    metered.add(future)
+                    ok = fold_result(item, result, retry=True)
+                if coverage is not None:
+                    pc = (pass_i, chunk.chunk_id)
+                    prev = covered.get(pc)
+                    covered[pc] = (analyzer.label, chunk,
+                                   (prev[2] if prev else False) or ok)
+                if progress:
+                    progress(done, total)
+        except JobCancelled as exc:
+            for future in futures:
+                if future is not None:
+                    future.cancel()
+            # Calls already received or in flight still cost money. Fold them
+            # once, retaining successful answers for resume but never retrying
+            # a refusal or truncation after cancellation.
+            for item, future in zip(work, futures):
+                if future is None or future in metered:
+                    continue
+                try:
+                    result = future.result()
+                except (CancelledError, JobCancelled):
+                    continue
+                except Exception:
+                    log.debug("Detector call failed while cancelling", exc_info=True)
+                    continue
+                fold_result(item, result, retry=False)
+            exc.usage = usage
+            raise
 
-        for done, ((analyzer, chunk, key, d, pass_i), future) in enumerate(
-                zip(work, futures), start=1):
-            if should_cancel and should_cancel():
-                # Drop every call not already running so the abort stops the
-                # spend, not just the folding. The with-block's shutdown waits
-                # out the few still in flight; we raise past it.
-                for pending in futures:
-                    if pending is not None:
-                        pending.cancel()
-                raise JobCancelled()
-            if future is None:                       # replay a cached call
-                cached = checkpoint.get(key)
-                findings.extend(finding_from_dict(x) for x in cached.items)
-                add_usage(usage, cached.usage)
-                if prepared.examination is not None and phase_two:
-                    prepared.examination.restore_production_response(
-                        key, cached.metadata)
-                ok = True                            # only ok calls are cached
-            else:
-                before = snapshot(usage)
-                # A failed earlier attempt at this call still paid for its
-                # tokens. Folding them in ahead of the snapshot makes the
-                # retry's entry cumulative, so the spend survives on disk and
-                # in the totals however many resumes it takes.
-                burned = checkpoint.burned(key) if checkpoint else None
-                if burned:
-                    add_usage(usage, burned)
-                # .result() blocks only until THIS call lands; later ones keep
-                # fetching in the pool meanwhile. Bookkeeping stays in order.
-                result = future.result()
-                found, ok = analyzer.process_result(
-                    result, chunk, usage, response_id=key)
-                # A provider non-answer used to drop the whole (pass, chunk)
-                # here with only a log line. One bounded retry recovers most of
-                # them; whatever it can't is recorded below as a coverage gap.
-                if not ok:
-                    found, ok = _retry_failed(
-                        analyzer, chunk, result, usage, response_id=key)
-                if ensemble:
-                    found = [dataclasses.replace(f, detector=d) for f in found]
-                findings.extend(found)
-                if checkpoint:
-                    metadata = (
-                        prepared.examination.checkpoint_metadata(key)
-                        if prepared.examination is not None and phase_two
-                        else None)
-                    checkpoint.put(
-                        key, items=[finding_to_dict(f) for f in found],
-                        usage=usage_delta(before, usage), ok=ok,
-                        metadata=metadata)
-            if coverage is not None:
-                pc = (pass_i, chunk.chunk_id)
-                prev = covered.get(pc)
-                covered[pc] = (analyzer.label, chunk,
-                               (prev[2] if prev else False) or ok)
-            if progress:
-                progress(done, total)
-
+    check_cancel()
     if coverage is not None:
         for label, chunk, ok in covered.values():
             coverage.record(label, chunk, ok)
@@ -1297,7 +1348,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                     checkpoint=checkpoint, should_cancel=should_cancel)
                 add_usage(usage, dataclasses.asdict(shadow_usage))
             except JudgmentCancelled:
-                raise JobCancelled()
+                raise JobCancelled(usage=usage)
             except Exception as exc:  # shadow lane never blocks a review
                 prepared.examination.record_failure("judgment", exc)
                 log.exception("Examination judgment failed outside a packet; "
@@ -1319,7 +1370,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                 should_cancel=should_cancel)
             add_usage(usage, dataclasses.asdict(candidate_usage))
         except CandidateScreeningCancelled:
-            raise JobCancelled()
+            raise JobCancelled(usage=usage)
         except Exception as exc:
             prepared.candidate_screening.record_failure("judgment", exc)
             # Preserve any usage incurred before an unexpected orchestration

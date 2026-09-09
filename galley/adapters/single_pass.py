@@ -12,12 +12,12 @@ import hashlib
 import itertools
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from docproof.chunker import chunk_document
 from docproof.config import Config
 from docproof.models import Usage
-from docproof.pipeline import build_analyzers, prepare
+from docproof.pipeline import JobCancelled, build_analyzers, prepare
 from docproof.providers import cost_of_usage
 from docproof.validator import validate_findings
 
@@ -66,6 +66,11 @@ class SinglePassAdapter:
     # from the observed single_pass rate. None = no honest estimate.
     calibration: Any = None
     name: str = "single_pass"
+    should_cancel: Callable[[], bool] | None = None
+
+    def _check_cancel(self) -> None:
+        if self.should_cancel and self.should_cancel():
+            raise JobCancelled()
 
     def estimate_usd(self, ms: Manuscript, scope: Scope) -> float | None:
         """A pre-flight price for re-reading ``scope`` from the calibrated
@@ -104,6 +109,7 @@ class SinglePassAdapter:
         budget_usd: float,
         usage: Usage,
     ) -> AdapterResult:
+        self._check_cancel()
         group_keys = self._group_keys(scope)
 
         # A working copy of the config: honour scope.model without mutating the
@@ -146,15 +152,19 @@ class SinglePassAdapter:
 
         collected = []
         passes = max(1, scope.passes)
-        for _ in range(passes):
-            for analyzer in analyzers:
-                for chunk in chunks:
-                    # fetch is pure/network; process_result advances the shared
-                    # id counter and meters tokens, so it runs serially.
-                    result = analyzer.fetch(chunk)
-                    found, _answered = analyzer.process_result(
-                        result, chunk, local_usage)
-                    collected.extend(found)
+        try:
+            for _ in range(passes):
+                for analyzer in analyzers:
+                    for chunk in chunks:
+                        self._check_cancel()
+                        # Meter each completed call before checking cancellation.
+                        result = analyzer.fetch(chunk)
+                        found, _answered = analyzer.process_result(
+                            result, chunk, local_usage)
+                        collected.extend(found)
+            self._check_cancel()
+        finally:
+            _merge_usage(usage, local_usage)
 
         # Anchor and channel the raw findings. prepared.doc (full) is the anchor
         # source so paragraph lookups always resolve.
@@ -211,7 +221,6 @@ class SinglePassAdapter:
 
         # Thread this call's spend onto the shared usage, then price the local
         # meter alone for a clean per-call cost.
-        _merge_usage(usage, local_usage)
         cost = cost_of_usage(local_usage, fallback_model=model) or 0.0
 
         return AdapterResult(findings=gfindings, coverage_notes=notes,

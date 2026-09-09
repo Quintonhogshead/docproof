@@ -263,7 +263,7 @@ def test_a_failed_book_is_never_retried(env, tmp_path):
 
     def crash(**kwargs):
         ran.append(kwargs)
-        raise RuntimeError("the ladder died")
+        return FakeResult("needs_human", "Astra found extensive editorial work.")
 
     agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
                    download=_downloader(tmp_path), run_driver=crash,
@@ -288,7 +288,7 @@ def test_a_needs_human_run_is_recorded_as_failed_but_not_an_error(env, tmp_path)
 
 # --- failures come back with an answer ----------------------------------------
 
-def test_a_crashed_driver_uploads_a_needs_human_outcome(env, tmp_path):
+def test_a_crashed_driver_blocks_without_an_editorial_verdict(env, tmp_path):
     uploaded: list[tuple[str, str]] = []
 
     def upload(files, folder_id):
@@ -303,22 +303,14 @@ def test_a_crashed_driver_uploads_a_needs_human_outcome(env, tmp_path):
                    upload=upload)
     report = agent.poll_once()
 
-    assert report.outcome == "needs_human"
+    assert report.outcome == "blocked"
     assert "the ladder died" in report.reason
-    # The verdict reached the author's folder under the Book 2 name DocWatch
-    # looks for, so the next tick moves the book on.
-    names = [n for n, _f in uploaded]
-    assert "Test - Book 2 - outcome.json" in names
-    assert {f for _n, f in uploaded} == {"folder-A"}
-    written = json.loads(
-        (tmp_path / "ws" / "test-drive-1" / "runs" / "outcome.json"
-         ).read_text("utf-8"))
-    assert written["outcome"] == "needs_human"
-    assert written["set_by"] == "galley agent"
-    assert written["hubspot"]["value"] == DEFAULT_NEEDS_HUMAN_VALUE
+    assert uploaded == []
+    assert agent.ledger().state("drive-1") == ga.CLAIMED
+    assert not (tmp_path / "ws" / "test-drive-1" / "runs" / "outcome.json").exists()
 
 
-def test_a_failed_download_also_comes_back_with_a_verdict(env, tmp_path):
+def test_a_failed_download_blocks_without_a_manuscript_verdict(env, tmp_path):
     uploaded: list[str] = []
 
     def download(_book, _dest):
@@ -329,11 +321,11 @@ def test_a_failed_download_also_comes_back_with_a_verdict(env, tmp_path):
                    upload=lambda files, folder: uploaded.extend(
                        p.name for p in files) or ["id-0"])
     report = agent.poll_once()
-    assert report.outcome == "needs_human"
+    assert report.outcome == "blocked"
     assert "could not download" in report.reason
-    assert "Test - Book 2 - outcome.json" in uploaded
+    assert uploaded == []
     entry = ga.Ledger.load(agent.ledger_path).books["drive-1"]
-    assert entry["state"] == ga.FAILED
+    assert entry["state"] == ga.CLAIMED
 
 
 def test_an_undeliverable_verdict_is_owed_not_lost(env, tmp_path):
@@ -346,10 +338,16 @@ def test_an_undeliverable_verdict_is_owed_not_lost(env, tmp_path):
     def upload(_files, _folder):
         raise RuntimeError("Drive is down")
 
+    artifact = tmp_path / "Test - Book 2 - outcome.json"
+    artifact.write_text('{"outcome":"needs_human"}')
+    def reviewed(**kwargs):
+        result = FakeResult("needs_human", "Astra requests an editor.", uploaded=())
+        result.handoff = [artifact]
+        return result
+
     agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
                    download=_downloader(tmp_path),
-                   run_driver=lambda **kw: (_ for _ in ()).throw(
-                       RuntimeError("boom")),
+                   run_driver=reviewed,
                    upload=upload, log=said.append)
     agent.poll_once()
     entry = ga.Ledger.load(agent.ledger_path).books["drive-1"]
@@ -426,9 +424,9 @@ def test_resume_phase_reads_the_state_machine(env, tmp_path):
     agent = _agent(env, tmp_path)
     assert agent.resume_phase("nothing-here") == ""
     _state(agent.root, "s1", "settled")
-    assert agent.resume_phase("s1") == "certify"
+    assert agent.resume_phase("s1") == "astra_review"
     _state(agent.root, "s2", "delivered")
-    assert agent.resume_phase("s2") == ""      # nothing left to do
+    assert agent.resume_phase("s2") == "deliver"  # delivery-only recovery
 
 
 # --- the ledger ---------------------------------------------------------------
@@ -604,14 +602,11 @@ def test_a_crashed_run_beats_its_reason_and_ships_the_evidence(env, tmp_path):
 
     last = obs.beats[-1]
     assert last["state"] == "idle"
-    assert last["last_outcome"] == "needs_human"
+    assert last["last_outcome"] == "blocked"
     assert "the ladder died" in last["last_reason"]
-    assert "Test - Book 2 - diagnostics.zip" in uploaded
-    bundle = tmp_path / "ws" / "test-drive-1" / "handoff" / \
-        "Test - Book 2 - diagnostics.zip"
-    names = set(zipfile.ZipFile(bundle).namelist())
-    assert {"runs/driver/ladder.log", "runs/outcome.json", "PLAN.md",
-            "agent.log"} <= names
+    assert uploaded == []
+    # Diagnostics remain locally available without an invented author verdict.
+    assert (tmp_path / "ws" / "test-drive-1" / "runs" / "driver" / "ladder.log").exists()
 
 
 def test_an_abandoned_delivery_is_shouted_about(env, tmp_path):

@@ -380,6 +380,26 @@ def _galley_parser(sub) -> None:
                        "missed errors, write the editorial letter, gauge recall")
     gsub = gal.add_subparsers(dest="galley_cmd", required=True)
 
+    gar = gsub.add_parser(
+        "astra-review", help="final gpt-6-astra/high subscription review of the whole "
+                             "edited book, revisions, comments, and issues")
+    gar.add_argument("run", help="the final run directory, containing the tracked DOCX")
+    gar.add_argument("--docx", help="explicit tracked DOCX to review")
+    gar.add_argument("--context", action="append", default=[],
+                     help="additional style/context file (repeatable)")
+    gar.add_argument("--transport", choices=["codex", "api"], default=None,
+                     help="review transport (default: Codex subscription; saved requests retain their transport)")
+    gar.add_argument("--chunk-bytes", type=int, default=None,
+                     help="subscription evidence chunk limit (default 180000 bytes)")
+    gar.add_argument("--budget", type=float, default=25.0, metavar="USD",
+                     help="explicit API transport ceiling (default $25); estimate "
+                          "must fit before a request is submitted")
+    gar.add_argument("--max-output-tokens", type=int, default=32768,
+                     help="API response token ceiling including reasoning (default 32768)")
+    gar.add_argument("--dry-run", action="store_true",
+                     help="plan full evidence coverage offline; make no model or API call")
+    gar.add_argument("--json", action="store_true", help="print the receipt/estimate as JSON")
+
     ga = gsub.add_parser(
         "audit", help="read a finished run for likely MISSED errors — one model "
                       "call over the quietest chapters, where a miss hides")
@@ -1022,6 +1042,17 @@ def _galley_parser(sub) -> None:
                      help="the API ceiling in USD for the whole book "
                           "(default: $10). Frozen into approval.json as "
                           "max_spend_usd, so every paid verb refuses past it")
+    gdr.add_argument("--astra-budget", type=float, default=25.0, metavar="USD",
+                     help="separate ceiling for explicit Astra API transport (default $25)")
+    gdr.add_argument("--astra-transport", choices=["codex", "api"], default=None,
+                     help="final review transport (default Codex subscription; resume saved routing)")
+    gdr.add_argument("--astra-chunk-bytes", type=int, default=None,
+                     help="subscription evidence chunk limit (default 180000 bytes)")
+    gdr.add_argument("--astra-max-output-tokens", type=int, default=32768,
+                     help="final Astra response ceiling including reasoning (default 32768)")
+    gdr.add_argument("--no-astra-review", action="store_true",
+                     help="explicit legacy workflow without final Astra review; "
+                          "cannot bypass an already enrolled run's certificate")
     gdr.add_argument("--approve", choices=["auto", "email", "manual"],
                      default="auto",
                      help="the plan gate: `auto` approves a priced, "

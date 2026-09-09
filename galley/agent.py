@@ -423,6 +423,7 @@ class Agent:
     download: Callable[[AwaitingBook, Path], Path] | None = None
     run_driver: Callable[..., Any] | None = None
     upload: Callable[[list[Path], str], list[str]] | None = None
+    verify_upload: Callable[[Path, str, str], bool] | None = None
     sleep: Callable[[float], None] = time.sleep
     log: Callable[[str], None] = log.info
     #: Observability seams. `heartbeat` receives the whole status dict each
@@ -717,11 +718,9 @@ class Agent:
             local = self.fetch_book(book)
         except Exception as e:                              # noqa: BLE001
             log.exception("Could not download %s", book.name)
-            self.give_up(book, ledger, report, slug, folder,
-                         f"DocProof could not download {book.name} from Drive "
-                         f"({e}), so the proofread never started. The book "
-                         f"needs a human proofreader, or a fixed Google "
-                         f"sign-in on the practitioner's Mac.")
+            self._operational_block(book, ledger, report, slug, folder,
+                                    f"DocProof could not download {book.name} "
+                                    f"from Drive ({e}); the proofread has not started.")
             return
 
         self._file_id = book.file_id
@@ -736,18 +735,50 @@ class Agent:
             return
         except Exception as e:                              # noqa: BLE001
             log.exception("The proofread of %s crashed", book.name)
-            self.give_up(book, ledger, report, slug, folder,
-                         f"The proofreading run over {book.name} crashed "
-                         f"({e}). Nothing was delivered; the book needs a "
-                         f"human proofreader.")
+            self._operational_block(book, ledger, report, slug, folder,
+                                    f"The proofreading run over {book.name} "
+                                    f"crashed ({e}); recovery is pending.")
             return
 
         outcome = getattr(result, "outcome", "needs_human")
         reason = getattr(result, "reason", "")
         report.outcome, report.reason = outcome, reason
+        if outcome == "blocked":
+            # Infrastructure, missing evidence, or pending Astra repairs are
+            # not a human-proofreader verdict. Keep the claim for safe resume.
+            package_path = self.root / slug / "runs" / "driver" / "package.json"
+            if (getattr(result, "stopped_at", None) == "deliver" and folder
+                    and package_path.is_file() and getattr(result, "handoff", None)):
+                package = json.loads(package_path.read_text("utf-8"))
+                ledger.record(
+                    book.file_id, PENDING_DELIVERY, name=book.name, slug=slug,
+                    folder_id=folder, outcome=package["outcome"], reason=package["reason"],
+                    handoff_files=[item["path"] for item in package["artifacts"]],
+                    verified_publication=True, delivery_attempts=1,
+                    next_delivery_at=time.time() + self.poll_interval_s,
+                    delivery_error=reason[:300], uploaded_names={})
+                self._beat(state="idle", phase=None, last_outcome="blocked",
+                           last_reason=reason[:600], last_book=book.name,
+                           delivery="pending")
+            else:
+                self._operational_block(book, ledger, report, slug, folder, reason)
+            return
         uploaded = list(getattr(result, "uploaded", []) or [])
         handoff = [Path(p) for p in (getattr(result, "handoff", []) or [])]
         if folder and handoff and not uploaded:
+            package_path = self.root / slug / "runs" / "driver" / "package.json"
+            if package_path.is_file():
+                package = json.loads(package_path.read_text("utf-8"))
+                ledger.record(
+                    book.file_id, PENDING_DELIVERY, name=book.name, slug=slug,
+                    folder_id=folder, outcome=package["outcome"], reason=package["reason"],
+                    handoff_files=[item["path"] for item in package["artifacts"]],
+                    verified_publication=True, delivery_attempts=1,
+                    next_delivery_at=time.time() + self.poll_interval_s,
+                    delivery_error="The verified driver upload is pending.", uploaded_names={})
+                self._beat(state="idle", phase=None, last_outcome=outcome,
+                           last_reason=reason[:600], last_book=book.name, delivery="pending")
+                return
             # Queue a failed handoff upload before marking the book
             # finished.
             self.owe_delivery(book, ledger, slug, folder, outcome, reason,
@@ -765,6 +796,17 @@ class Agent:
                    last_reason=reason[:600], last_book=book.name,
                    finished_at=_now(), delivery="uploaded" if uploaded
                    else "none")
+
+    def _operational_block(self, book: AwaitingBook, ledger: Ledger,
+                           report: RunReport, slug: str, folder: str,
+                           reason: str) -> None:
+        report.outcome, report.reason = "blocked", reason
+        ledger.record(book.file_id, CLAIMED, name=book.name, slug=slug,
+                      folder_id=folder, operational_status="blocked",
+                      reason=reason[:400])
+        self._beat(state="idle", phase=None, last_outcome="blocked",
+                   last_reason=reason[:600], last_book=book.name,
+                   delivery="pending")
 
     def fetch_book(self, book: AwaitingBook) -> Path:
         """The Book 1, on this Mac, as a .docx."""
@@ -788,6 +830,8 @@ class Agent:
         kwargs: dict[str, Any] = {}
         if self.budget_usd is not None:
             kwargs["budget_usd"] = self.budget_usd
+        if self.verify_upload is not None:
+            kwargs["verify_upload"] = self.verify_upload
         if resume:
             # Resume claimed work from its recorded state.
             start = self.resume_phase(slug)
@@ -838,7 +882,9 @@ class Agent:
             return ""
         last = done[-1]
         after = MECHANICAL_PHASES.index(last) + 1
-        return MECHANICAL_PHASES[after] if after < len(MECHANICAL_PHASES) else ""
+        # A crash after delivered but before the agent's completion ledger must
+        # retry only delivery, never fall back to profile and repeat the book.
+        return MECHANICAL_PHASES[after] if after < len(MECHANICAL_PHASES) else "deliver"
 
     def driver_env(self) -> dict[str, str]:
         """Combine the process environment and credential file, supplying
@@ -983,7 +1029,11 @@ class Agent:
                 self._beat(last_error=f"{name}: delivery abandoned")
                 continue
             uploaded_names = dict(entry.get("uploaded_names") or {})
-            if self._upload_missing(files, folder, uploaded_names):
+            if entry.get("verified_publication"):
+                ok = self._retry_verified_publication(entry, folder, uploaded_names)
+            else:
+                ok = self._upload_missing(files, folder, uploaded_names)
+            if ok:
                 ledger.record(file_id, FINISHED if outcome == "done" else FAILED,
                               uploaded=list(uploaded_names.values()),
                               uploaded_names=uploaded_names,
@@ -1002,6 +1052,51 @@ class Agent:
                           delivery_error=self._last_delivery_error[:300])
             self.log(f"{name}: delivery retry {attempts} failed; next in "
                      f"{wait / 60:.0f} min.")
+
+    def _retry_verified_publication(self, entry: dict[str, Any], folder: str,
+                                    uploaded_names: dict[str, str]) -> bool:
+        """Use the same durable, verified uploader as the default driver."""
+        from galley.astra_review import validate_receipt
+        from galley.driver import publish_verified_handoff
+        from galley.manifest import sha256_file
+        from galley.state_machine import RunStateMachine
+        from galley.verify import deliverable_docx
+        ws = self.root / str(entry["slug"])
+        driver_dir = ws / "runs" / "driver"
+        try:
+            package = json.loads((driver_dir / "package.json").read_text("utf-8"))
+            run = Path(package["run"])
+            receipt = validate_receipt(run)
+            manuscript = deliverable_docx(run)
+            human = (package.get("kind") == "human_review"
+                     and receipt["review"]["editorial_verdict"] == "needs_human")
+            if ((not receipt.get("delivery_ready") and not human) or manuscript is None
+                    or receipt["packet_sha256"] != package["packet_sha256"]
+                    or sha256_file(manuscript) != package["build_sha256"]):
+                raise AgentError("The pending package no longer matches its reviewed build.")
+            publish_verified_handoff(
+                package, folder, driver_dir / "delivery.json",
+                source_id=package["source_id"], upload=self.upload,
+                verify=self.verify_upload)
+            machine = RunStateMachine.load(ws / "state.json")
+            if not machine.reached("delivered"):
+                previous = machine.history[-1]
+                machine.advance("delivered", by="galley verified delivery retry",
+                                source_sha256=machine.source_sha256,
+                                config_sha256=previous.config_sha256)
+                machine.save(ws / "state.json")
+            return True
+        except Exception as e:                              # noqa: BLE001
+            self._last_delivery_error = str(e)
+            return False
+        finally:
+            try:
+                state = json.loads((driver_dir / "delivery.json").read_text("utf-8"))
+                uploaded_names.update({name: row["file_id"] for name, row in
+                                       state.get("artifacts", {}).items()
+                                       if row.get("verified")})
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
 
     def write_failure(self, slug: str, source_name: str,
                       reason: str) -> list[Path]:
@@ -1113,6 +1208,16 @@ def _run_driver(**kwargs: Any) -> Any:
     driver = Driver(approve="auto", mechanical_only=True, **kwargs)
     if upload is not None:
         driver.upload = upload
+    # A missing final-review login is an operational setup problem. Detect it
+    # before spending Claude allowance on a book that cannot finish its handoff.
+    if driver.astra_review:
+        from galley.driver import astra_review_settings
+        settings = astra_review_settings(driver._final_run() or driver.workspace,
+                                         transport=driver.astra_transport,
+                                         max_chunk_bytes=driver.astra_chunk_bytes)
+        if settings["transport"] == "codex":
+            from galley.codex_runner import check_login
+            check_login()
     return driver.run()
 
 

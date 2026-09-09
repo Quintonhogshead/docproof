@@ -1427,6 +1427,7 @@ def cmd_galley(args) -> int:
     """Dispatch the `galley` sub-verbs. Kept apart from the review commands: these
     read a finished run rather than producing one."""
     return {"audit": _galley_audit, "verify": _galley_verify,
+            "astra-review": _galley_astra_review,
             "letter": _galley_letter,
             "seed": _galley_seed, "score": _galley_score,
             "ask": _galley_ask,
@@ -1450,6 +1451,53 @@ def cmd_galley(args) -> int:
             "journal": _galley_journal,
             "plan-line": _galley_plan_line,
             "outcome": _galley_outcome}[args.galley_cmd](args)
+
+
+def _galley_astra_review(args) -> int:
+    """Review through saved routing; never fall back from subscription to API."""
+    from galley.astra_review import build_packet, estimate_review
+    from galley.driver import astra_review_settings
+    from galley.outcome import astra_outcome
+    run = Path(args.run)
+    try:
+        settings = astra_review_settings(run, transport=args.transport,
+                                         max_chunk_bytes=args.chunk_bytes)
+        if args.dry_run:
+            packet = build_packet(run, docx_path=args.docx, context_paths=args.context)
+            if settings["transport"] == "codex":
+                from galley.astra_subscription import plan_review
+                payload = plan_review(packet, max_chunk_bytes=settings["max_chunk_bytes"])
+            else:
+                payload = {"transport": "api", **estimate_review(packet, max_output_tokens=args.max_output_tokens)}
+        else:
+            run.mkdir(parents=True, exist_ok=True)
+            settings = astra_review_settings(run, transport=args.transport,
+                max_chunk_bytes=args.chunk_bytes, persist=True)
+            if settings["transport"] == "api":
+                from galley.astra_review import review_run
+                payload = review_run(run, budget_usd=args.budget,
+                                     max_output_tokens=args.max_output_tokens,
+                                     docx_path=args.docx, context_paths=args.context)
+            else:
+                from galley.astra_subscription import review_run
+                payload = review_run(run, max_chunk_bytes=settings["max_chunk_bytes"],
+                                     docx_path=args.docx, context_paths=args.context)
+            if (payload["review"]["editorial_verdict"] == "ready"
+                    and payload.get("repair_required")):
+                from galley.astra_reconcile import reconcile_run
+                payload = reconcile_run(run, docx_path=args.docx,
+                                        context_paths=args.context)
+            # Pending or unsupported repairs never fall back to heuristics.
+            verdict = astra_outcome(run)
+            verdict.save(run)
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False))
+        else:
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0 if args.dry_run or payload["review"]["editorial_verdict"] == "ready" else 7
+    except Exception as e:                                  # noqa: BLE001
+        print(f"Astra review blocked: {e}", file=sys.stderr)
+        return 8
 
 
 def _galley_journal(args) -> int:
@@ -1686,14 +1734,22 @@ def _galley_drive(args) -> int:
         start_phase=args.from_phase, only_phases=args.phases,
         drive_folder_id=args.drive_folder_id,
         state_gate=not args.no_state_gate,
-        question_gate=not args.no_question_gate, **kwargs)
+        question_gate=not args.no_question_gate,
+        astra_review=not args.no_astra_review,
+        astra_budget_usd=args.astra_budget,
+        astra_transport=args.astra_transport,
+        astra_chunk_bytes=args.astra_chunk_bytes,
+        astra_max_output_tokens=args.astra_max_output_tokens, **kwargs)
 
     if args.dry_run:
         try:
             ws = gd.seed_workspace(drv.book, drv.slug,
                                    workspace_root=drv.workspace_root)
             phases = gd.select_phases(mechanical_only=mechanical_only,
-                                      start=args.from_phase, only=args.phases)
+                                      start=args.from_phase, only=args.phases,
+                                      astra_review=drv.astra_review)
+            review_settings = gd.astra_review_settings(drv._final_run() or ws,
+                transport=drv.astra_transport, max_chunk_bytes=drv.astra_chunk_bytes)
         except gd.DriverError as e:
             print(f"error: {e}", file=sys.stderr)
             return 2
@@ -1714,6 +1770,10 @@ def _galley_drive(args) -> int:
                               "brains": brains,
                               "approve": args.approve,
                               "budget_usd": drv.budget_usd,
+                              "astra_budget_usd": drv.astra_budget_usd,
+                              "astra_transport": review_settings["transport"],
+                              "astra_chunk_bytes": review_settings["max_chunk_bytes"],
+                              "astra_max_output_tokens": drv.astra_max_output_tokens,
                               "mechanical_only": mechanical_only},
                              ensure_ascii=False))
         return 0
@@ -1746,7 +1806,7 @@ def _galley_settle(args) -> int:
     outcome.json. Exit 0 when every item is terminal; nonzero only on an
     engine error."""
     from galley.outcome import (DEFAULT_DONE_VALUE, DEFAULT_NEEDS_HUMAN_VALUE,
-                                assess)
+                                assess, requires_astra_review)
     from galley.settle import (DEFAULT_ROUNDS as DEFAULT_SETTLE_ROUNDS,
                                HARD_MAX_ROUNDS, SettleOptions, Settler,
                                kept_rows, open_items, resolve)
@@ -1857,10 +1917,12 @@ def _galley_settle(args) -> int:
     cost = cost_of_usage(result.usage, fallback_model=model or None) or 0.0
     _galley_over_budget(args, cost)
 
-    outcome = assess(run, done_value=args.done_value or DEFAULT_DONE_VALUE,
-                     needs_human_value=(args.needs_human_value
-                                        or DEFAULT_NEEDS_HUMAN_VALUE))
-    outcome.save(run)
+    outcome = None
+    if not requires_astra_review(run) or (run / "astra-review.json").exists():
+        outcome = assess(run, done_value=args.done_value or DEFAULT_DONE_VALUE,
+                         needs_human_value=(args.needs_human_value
+                                            or DEFAULT_NEEDS_HUMAN_VALUE))
+        outcome.save(run)
     st = result.settlement
     counts = st.counts()
     print(f"\nsettle: {len(items)} open item(s) at start → "
@@ -1871,13 +1933,17 @@ def _galley_settle(args) -> int:
           f"{' — mechanical only' if mechanical_only else ''}.")
     for note in st.notes[-(st.rounds + 1):]:
         print(f"  {note}")
-    print(f"  outcome: {outcome.outcome} — {outcome.reason[:200]}")
-    print(f"\n  {run / 'settlement.json'}\n  {run / 'outcome.json'}")
+    if outcome is not None:
+        print(f"  outcome: {outcome.outcome} — {outcome.reason[:200]}")
+        print(f"\n  {run / 'settlement.json'}\n  {run / 'outcome.json'}")
+    else:
+        print("  editorial outcome: pending the final Astra review")
+        print(f"\n  {run / 'settlement.json'}")
     if args.json:
         print(json.dumps(_envelope(findings=(), usage=result.usage,
                                    model=model or cfg.api.model,
                                    extra={"settlement": st.to_json(),
-                                          "outcome": outcome.to_json()}),
+                                          "outcome": outcome.to_json() if outcome else None}),
                          ensure_ascii=False))
     return 0 if not st.open else 1
 
@@ -1953,9 +2019,23 @@ def _galley_plan_line(args) -> int:
 
 
 def _galley_outcome(args) -> int:
+    from galley.astra_review import AstraReviewError
+    try:
+        return _galley_outcome_impl(args)
+    except AstraReviewError as e:
+        print(f"Outcome blocked: {e}", file=sys.stderr)
+        return 8
+
+
+def _galley_outcome_impl(args) -> int:
     from galley.outcome import (DEFAULT_DONE_VALUE, DEFAULT_NEEDS_HUMAN_VALUE,
                                 Outcome, Thresholds, assess, hubspot_fields)
     run = Path(args.run)
+    from galley.outcome import requires_astra_review
+    if args.set and requires_astra_review(run):
+        print("error: an enrolled run's editorial verdict belongs to its final "
+              "Astra review; --set cannot override it", file=sys.stderr)
+        return 2
     done_value = args.done_value or DEFAULT_DONE_VALUE
     needs_value = args.needs_human_value or DEFAULT_NEEDS_HUMAN_VALUE
     if args.set:
@@ -2339,8 +2419,8 @@ def _galley_verify(args) -> int:
     _galley_over_budget(args, cost)
 
     from galley.verify import write_artifacts
-    # Share the artifact writer with settle to preserve build binding and
-    # merge partial-read coverage.
+    # Preserve disabled gates when an earlier artifact exists. The writer
+    # replaces a successful full read and merges only named-paragraph reads.
     walk_paras = sum(1 for t in accepted.values() if t.strip())
     if not changes.ran_changes and not args.walk_only and (
             out / "change_verify.json").exists() and not para_ids:
@@ -3642,7 +3722,7 @@ def _galley_approve(args) -> int:
 
 
 def _galley_certify(args) -> int:
-    from galley.manifest import certify_run
+    from galley.manifest import certify_run, write_certificate_receipt
 
     manifest = None
     if getattr(args, "approval", None):
@@ -3661,6 +3741,9 @@ def _galley_certify(args) -> int:
     try:
         cert = certify_run(args.run, manifest=manifest, cfg=cfg,
                            source=getattr(args, "source", None))
+        from galley.outcome import requires_astra_review
+        if requires_astra_review(args.run):
+            write_certificate_receipt(args.run, cert)
     except (FileNotFoundError, OSError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

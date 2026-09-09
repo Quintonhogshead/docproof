@@ -37,6 +37,7 @@ import dataclasses
 import json
 import logging
 import re
+import uuid
 from pathlib import Path
 
 from .models import Anchor, Finding, Usage
@@ -94,6 +95,7 @@ class Checkpoint:
         self.path = Path(path)
         self.fingerprint = {"version": VERSION, **fingerprint}
         self._entries: dict[str, Entry] = {}
+        self.receipt_id = uuid.uuid4().hex
 
 
     def load(self) -> int:
@@ -122,6 +124,16 @@ class Checkpoint:
                      self.path)
             self.delete()
             return 0
+        receipt_id = header.get("receipt_id")
+        if isinstance(receipt_id, str) and receipt_id:
+            self.receipt_id = receipt_id
+        else:
+            # Upgrade a valid older checkpoint once so receipts remain stable
+            # across resumes, including after more entries are appended.
+            from .utils.files import write_atomic
+            header["receipt_id"] = self.receipt_id
+            write_atomic(self.path, json.dumps(header) + "\n"
+                         + "\n".join(lines[1:]) + "\n")
         for n, line in enumerate(lines[1:], start=2):
             if not line.strip():
                 continue
@@ -168,6 +180,7 @@ class Checkpoint:
 
     def delete(self) -> None:
         self._entries = {}
+        self.receipt_id = uuid.uuid4().hex
         self.path.unlink(missing_ok=True)
 
 
@@ -202,7 +215,8 @@ class Checkpoint:
         size = self._size()
         with open(self.path, "a", encoding="utf-8") as fh:
             if not size:
-                fh.write(json.dumps({"fingerprint": self.fingerprint}) + "\n")
+                fh.write(json.dumps({"fingerprint": self.fingerprint,
+                                     "receipt_id": self.receipt_id}) + "\n")
             elif not self._ends_cleanly():
                 fh.write("\n")
             fh.write(json.dumps({"key": key, **dataclasses.asdict(entry)}) + "\n")

@@ -32,6 +32,7 @@ PHASE_TITLES: dict[str, str] = {
     "reread": "Wave-2 re-read",
     "verify": "Verify — reading the finished text for sense",
     "settle": "Settle — closing every open item",
+    "astra_review": "Astra — final editorial decision",
     "certify": "Certify — the delivery gate",
     "deliver": "Deliver — the verdict and what shipped",
 }
@@ -749,6 +750,22 @@ def _section_deliver(doc: _Doc, src: JournalSources) -> None:
         doc.line("")
 
 
+def _section_astra_review(doc: _Doc, src: JournalSources) -> None:
+    receipt = _load(src.run_dir / "astra-review.json")
+    if not isinstance(receipt, dict):
+        _not_run(doc, "no Astra review receipt; this may be a legacy run")
+        return
+    review = receipt.get("review") or {}
+    doc.para(f"Receipt status: **{receipt.get('status', '?')}**. "
+             f"Model: `{receipt.get('model', '?')}`, "
+             f"reasoning: `{receipt.get('reasoning_effort', '?')}`.")
+    if review:
+        doc.para(f"**{review.get('editorial_verdict', '?')}** — "
+                 f"{_clip(review.get('verdict_reason'), 1000)}")
+        doc.para(f"Recorded repair actions: {len(review.get('actions') or [])}. "
+                 f"Ready for delivery: {bool(receipt.get('delivery_ready'))}.")
+
+
 _SECTIONS = {
     "profile": _section_profile,
     "approve": _section_approve,
@@ -759,6 +776,7 @@ _SECTIONS = {
     "reread": _section_reread,
     "verify": _section_verify,
     "settle": _section_settle,
+    "astra_review": _section_astra_review,
     "certify": _section_certify,
     "deliver": _section_deliver,
 }

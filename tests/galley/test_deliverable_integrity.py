@@ -129,7 +129,7 @@ APPLIED = [
      "original_text": "all of the sudden", "corrected_text": "all of a sudden",
      "anchor": {"delete_text": "of the sudden", "insert_text": "of a sudden"}},
     {"finding_id": "f-3", "para_id": "p3", "applied": True, "status": "validated",
-     "format": True, "original_text": "", "corrected_text": ""},
+     "format": True, "error_type": "speaker_split", "original_text": "", "corrected_text": ""},
 ]
 COMMENTS = [
     {"finding_id": "q-1", "para_id": "p4", "status": "query", "queried": True,
@@ -147,7 +147,7 @@ COMMENTS = [
 def test_edit_shapes_are_counted_not_asserted():
     from galley.letter import edit_shapes
     assert edit_shapes(APPLIED) == {"single_word": 1, "multiword": 1,
-                                    "paragraph_marks": 1}
+                                    "paragraph_marks": 1, "formatting": 0}
 
 
 def test_the_summary_separates_corrections_from_paragraph_breaks(tmp_path):

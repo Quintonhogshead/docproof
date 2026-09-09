@@ -100,6 +100,15 @@ class ResidualFinding:
 
 
 
+def manuscript_docx_files(run_dir: str | Path) -> list[Path]:
+    """Exclude supporting documents and the immutable pre-reconciliation copy."""
+    return sorted(p for p in Path(run_dir).glob("*.docx")
+                  if not p.name.startswith("~$")
+                  and "change log" not in p.name.lower()
+                  and p.name.lower() not in ("astra-reviewed-source.docx", "author-letter.docx")
+                  and not p.name.lower().endswith((" - author letter.docx", " - clean.docx")))
+
+
 def deliverable_docx(run_dir: str | Path) -> Path | None:
     """The manuscript deliverable in a finished run dir, or None.
 
@@ -107,9 +116,7 @@ def deliverable_docx(run_dir: str | Path) -> Path | None:
     is neither a Word lock file nor the change-log document (which quotes the
     pre-fix text on purpose)."""
     run = Path(run_dir)
-    docs = sorted(p for p in run.glob("*.docx")
-                  if not p.name.startswith("~$")
-                  and "change log" not in p.name.lower())
+    docs = manuscript_docx_files(run)
     return docs[0] if docs else None
 
 
@@ -723,9 +730,10 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
     the BUILD BINDING: `build_sha256` / `accepted_sha256` /
     `paragraph_sha256` of the deliverable the read was made against).
 
-    `merge=True` replaces rows for re-read paragraphs, preserves other rows, and
-    updates unread coverage. It never upgrades a failed read or build binding
-    until nothing remains unread or unverified."""
+    `merge=True` preserves earlier evidence for gates that did not run. A
+    successful full read replaces its gate's rows and coverage; a named-
+    paragraph read replaces only those paragraphs. Build binding advances
+    only when current paragraph fingerprints show complete coverage."""
     from datetime import datetime, timezone
 
     from docproof.contract import build_envelope
@@ -738,17 +746,26 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
     fp = build_fingerprints(run)
     old_cv = _load_artifact(cv_path) if merge else {}
     old_fw = _load_artifact(fw_path) if merge else {}
+    partial = para_ids is not None
 
     problems = [p.to_json() for p in changes.problems]
     unread_batches = list(UNREAD_BATCHES)
-    if merge and old_cv:
-        problems = _merge_rows(old_cv.get("problems") or [], problems, ids,
+    read_changes = ids - {str(pid) for b in unread_batches
+                          for pid in b.get("para_ids", [])} \
+        if changes.ran_changes else set()
+    if merge and old_cv and (partial or not changes.ran_changes):
+        problems = _merge_rows(old_cv.get("problems") or [], problems, read_changes,
                                "para_id")
-        # a previously unread batch whose paragraphs were all re-read is
-        # covered now; a batch lost this time is added
-        prior = [b for b in (old_cv.get("unread_batches") or [])
-                 if isinstance(b, dict)
-                 and not set(b.get("para_ids") or []) <= ids]
+        # A batch may be recovered across several paragraph rereads. Retain
+        # only its still-unread paragraphs; a skipped gate recovers nothing.
+        prior = []
+        for b in old_cv.get("unread_batches") or []:
+            if not isinstance(b, dict):
+                continue
+            remaining = [pid for pid in (b.get("para_ids") or [])
+                         if str(pid) not in read_changes]
+            if remaining or not b.get("para_ids"):
+                prior.append({**b, "para_ids": remaining})
         unread_batches = prior + unread_batches
     ran_changes = changes.ran_changes or bool(merge and old_cv.get("ran"))
     reason_cv = changes.reason if changes.ran_changes else \
@@ -768,10 +785,10 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
 
     residuals = [r.to_json() for r in walk.residuals]
     unread = list(UNREAD)
-    if merge and old_fw:
-        residuals = _merge_rows(old_fw.get("residuals") or [], residuals, ids,
+    if merge and old_fw and (partial or not walk.ran_walk):
+        read_ok = ids - set(unread) if walk.ran_walk else set()
+        residuals = _merge_rows(old_fw.get("residuals") or [], residuals, read_ok,
                                 "para_id")
-        read_ok = ids - set(unread)
         prior_unread = [p for p in (old_fw.get("unread_paragraphs") or [])
                         if p not in read_ok]
         unread = sorted(set(prior_unread) | set(unread))
@@ -790,25 +807,38 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
                                  fallback_model=model)["cost"]}
     fw.pop("settled", None)
 
-    for payload, complete in ((cv, ran_changes and not unread_batches),
-                              (fw, ran_walk and not unread)):
-        unverified = [p for p in (payload.get("unverified_paragraphs") or [])
-                      if p not in ids] if merge else []
-        payload["unverified_paragraphs"] = unverified
-        if fp and complete and not unverified and (not merge or ids or
-                                                   payload.get("ran")):
-            # A full read, or a partial one that leaves nothing unread and
-            # nothing unverified: the artifact now describes THIS build.
-            if not merge or not payload.get("accepted_sha256") or ids:
-                payload["build_sha256"] = fp["build_sha256"]
-                payload["accepted_sha256"] = fp["accepted_sha256"]
-        if fp:
-            per = dict(payload.get("paragraph_sha256") or {}) if merge else {}
-            read = ids if merge else set(fp["paragraph_sha256"])
-            for pid in read:
-                if pid in fp["paragraph_sha256"] and pid not in unread:
-                    per[pid] = fp["paragraph_sha256"][pid]
-            payload["paragraph_sha256"] = per
+    unread_changes = {str(pid) for batch in unread_batches
+                      for pid in batch.get("para_ids", [])}
+    for payload, old, ran, failed in (
+            (cv, old_cv, changes.ran_changes, unread_changes),
+            (fw, old_fw, walk.ran_walk, set(unread))):
+        dirty = set(old.get("unverified_paragraphs") or [])
+        if not fp:
+            payload["unverified_paragraphs"] = sorted(dirty)
+            continue
+        current = fp["paragraph_sha256"]
+        per = dict(old.get("paragraph_sha256") or {})
+        # Legacy full-read artifacts had only a book hash. They cover the
+        # paragraphs only while that complete accepted text still matches.
+        if ("paragraph_sha256" not in old
+                and old.get("accepted_sha256") == fp["accepted_sha256"]):
+            per = dict(current)
+        read = (set(ids) if partial else set(current)) if ran else set()
+        read -= failed
+        for pid in read & current.keys():
+            per[pid] = current[pid]
+        dirty -= read
+        dirty |= {pid for pid, digest in current.items()
+                  if per.get(pid) != digest}
+        # Removed paragraphs need no reread. A changed paragraph outside a
+        # delta remains dirty even if no caller explicitly marked it so.
+        dirty &= current.keys()
+        payload["unverified_paragraphs"] = sorted(dirty)
+        payload["paragraph_sha256"] = {pid: digest for pid, digest in per.items()
+                                      if pid in current}
+        if ran and not failed and not dirty:
+            payload["build_sha256"] = fp["build_sha256"]
+            payload["accepted_sha256"] = fp["accepted_sha256"]
     cv_path.write_text(json.dumps(cv, indent=2, ensure_ascii=False),
                        encoding="utf-8")
     fw_path.write_text(json.dumps(fw, indent=2, ensure_ascii=False),

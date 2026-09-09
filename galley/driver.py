@@ -32,12 +32,16 @@ REQUIRED_STATE: dict[str, str] = {
     "ladder": "mechanical_complete",
     "audit": "audited",
     "settle": "settled",
+    "astra_review": "astra_reviewed",
     "certify": "certified",
     "deliver": "delivered",
 }
 
 # API spending ceiling recorded in approval.json.
 DEFAULT_BUDGET_USD = 10.0
+DEFAULT_ASTRA_BUDGET_USD = 25.0
+DEFAULT_ASTRA_MAX_OUTPUT_TOKENS = 32768
+DEFAULT_ASTRA_CHUNK_BYTES = 180000
 DEFAULT_MODEL = "claude-fable-5-1"
 #: The cheaper, faster brain for the phases that follow a script.
 MECHANICAL_MODEL = "claude-opus-5"
@@ -159,6 +163,58 @@ log = logging.getLogger("galley.driver")
 
 class DriverError(RuntimeError):
     """Invalid driver configuration."""
+
+
+def astra_review_settings(run_dir, *, transport=None, max_chunk_bytes=None,
+                          persist=False) -> dict[str, Any]:
+    """Resolve the saved transport before dispatch; never change an owned job.
+
+    An older receipt without a transport field is an API request. An omitted
+    option resumes that request; an explicitly conflicting option is an error.
+    """
+    from docproof.utils.files import write_atomic
+    from galley.outcome import ASTRA_REQUIRED_NAME
+    run = Path(run_dir)
+
+    def read(path):
+        if not path.exists():
+            return {}
+        try:
+            value = json.loads(path.read_text("utf-8"))
+        except (OSError, ValueError) as e:
+            raise DriverError(f"Unreadable Astra routing evidence: {path.name}") from e
+        if not isinstance(value, dict):
+            raise DriverError(f"Invalid Astra routing evidence: {path.name}")
+        return value
+
+    marker = read(run / ASTRA_REQUIRED_NAME)
+    inherited = read(run.parent.parent / ASTRA_REQUIRED_NAME) if run.parent.name == "runs" else {}
+    receipt_path = run / "astra-review.json"
+    receipt = read(receipt_path)
+    owned = receipt_path.exists()
+    saved = (receipt.get("transport") or "api") if owned else marker.get("transport") or inherited.get("transport")
+    if transport not in {None, "api", "codex"} or saved not in {None, "api", "codex"}:
+        raise DriverError("Astra transport must be codex or api.")
+    if owned and (transport is not None and transport != saved):
+        raise DriverError("A submitted Astra review already owns another transport; resume its saved transport.")
+    if owned and marker.get("transport") not in {None, saved}:
+        raise DriverError("Astra receipt and enrolled transport disagree; operator recovery is required.")
+    selected = transport or saved or "codex"
+    stored_chunk_bytes = receipt.get("max_chunk_bytes", marker.get("max_chunk_bytes",
+        inherited.get("max_chunk_bytes", DEFAULT_ASTRA_CHUNK_BYTES)))
+    if owned and selected == "codex" and marker.get("max_chunk_bytes") not in {None, stored_chunk_bytes}:
+        raise DriverError("Astra receipt and enrolled chunk size disagree; operator recovery is required.")
+    chunk_bytes = stored_chunk_bytes if max_chunk_bytes is None else max_chunk_bytes
+    if type(chunk_bytes) is not int or chunk_bytes <= 0:
+        raise DriverError("Astra chunk bytes must be a positive integer.")
+    if owned and selected == "codex" and max_chunk_bytes is not None and chunk_bytes != stored_chunk_bytes:
+        raise DriverError("A submitted Astra review has a frozen chunk size; resume without changing it.")
+    settings = {**marker, "schema_version": 1, "model": "gpt-6-astra",
+                "reasoning_effort": "high", "transport": selected,
+                "max_chunk_bytes": chunk_bytes}
+    if persist:
+        write_atomic(run / ASTRA_REQUIRED_NAME, json.dumps(settings, indent=2))
+    return settings
 
 
 class CredentialsError(DriverError):
@@ -382,6 +438,11 @@ def phase_prompt(phase: str, book: str, *, mechanical_only: bool = True,
     """Build a phase prompt using the source basename and API budget. Reject
     phases excluded by mechanical mode.
     """
+    if phase == "astra_review":
+        return ("Final editorial review: gpt-6-astra at "
+                "high reasoning over the complete edited manuscript, revisions, "
+                "comments, and verification issues. This phase runs directly; "
+                "it does not start a Claude session.")
     if phase not in _PROMPTS:
         raise DriverError(
             f"unknown phase {phase!r} — expected one of {', '.join(ALL_PHASES)}")
@@ -417,12 +478,15 @@ def phases_for(mechanical_only: bool = True) -> tuple[str, ...]:
 
 
 def select_phases(*, mechanical_only: bool = True, start: str | None = None,
-                  only: Sequence[str] | None = None) -> list[str]:
+                  only: Sequence[str] | None = None,
+                  astra_review: bool = True) -> list[str]:
     """The phases this invocation will run, in order.
 
     ``only`` names them explicitly (still ordered, still scope-checked);
     ``start`` slices the default order from that phase onward."""
     order = phases_for(mechanical_only)
+    if not astra_review:
+        order = tuple(p for p in order if p != "astra_review")
     if only:
         unknown = [p for p in only if p not in ALL_PHASES]
         if unknown:
@@ -1030,7 +1094,7 @@ class DriveResult:
     """What the driver did, and where it stopped."""
     workspace: Path
     phases: list[PhaseResult] = field(default_factory=list)
-    outcome: str = "done"                 # "done" | "needs_human"
+    outcome: str = "done"                 # "done" | "needs_human" | "blocked"
     reason: str = ""
     stopped_at: str | None = None
     gate: dict[str, Any] = field(default_factory=dict)
@@ -1039,7 +1103,7 @@ class DriveResult:
 
     @property
     def exit_code(self) -> int:
-        return 0 if self.outcome == "done" else 7
+        return 0 if self.outcome == "done" else (8 if self.outcome == "blocked" else 7)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -1069,6 +1133,14 @@ class Driver:
     slug: str
     workspace_root: Path = Path(DEFAULT_WORKSPACE_ROOT)
     budget_usd: float = DEFAULT_BUDGET_USD
+    # A separate, explicit ceiling for the one final API review. It does not
+    # consume or silently enlarge the legacy detector approval's budget.
+    astra_review: bool = True
+    astra_budget_usd: float = DEFAULT_ASTRA_BUDGET_USD
+    astra_max_output_tokens: int = DEFAULT_ASTRA_MAX_OUTPUT_TOKENS
+    astra_transport: str | None = None  # None resumes saved routing, else codex.
+    astra_chunk_bytes: int | None = None
+    astra_client: Any = None
     approve: str = "auto"                       # auto | email | manual
     mechanical_only: bool = True
     start_phase: str | None = None
@@ -1110,6 +1182,7 @@ class Driver:
     spawn: Callable[[PhaseSpec], PhaseResult] | None = None
     ask: Callable[[str, str, str], str] | None = None
     upload: Callable[[list[Path], str], list[str]] | None = None
+    verify_upload: Callable[[Path, str, str], bool] | None = None
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
     log: Callable[[str], None] = print
@@ -1117,9 +1190,8 @@ class Driver:
     #: as a dict with an "event" key — the agent turns these into heartbeats.
     #: A reporter that raises never sinks the run.
     progress: Callable[[dict[str, Any]], None] | None = None
-    #: Set when settlement ran out of rounds while still finding errors. The
-    #: book is needs_human, but the run keeps going: the verdict rides out
-    #: with the finished hand-off rather than in place of it.
+    # Legacy runs still hand over their edited book when settlement is noisy.
+    # Enrolled runs delegate the editorial verdict to the final Astra receipt.
     unconverged: str = field(default="", init=False, repr=False)
 
 
@@ -1177,6 +1249,10 @@ class Driver:
         return int(round(base * self.length_factor_for(phase)))
 
     def model_for(self, phase: str) -> str:
+        if phase == "astra_review":
+            return "gpt-6-astra"
+        if self.astra_review and phase in ("certify", "deliver"):
+            return "deterministic"
         if phase in self.model_by_phase:
             return str(self.model_by_phase[phase])
         if self.model:
@@ -1185,6 +1261,10 @@ class Driver:
 
     def effort_for(self, phase: str) -> str | None:
         """The session's --effort, or None to leave Claude Code's default."""
+        if phase == "astra_review":
+            return "high"
+        if self.astra_review and phase in ("certify", "deliver"):
+            return None
         if phase in self.effort_by_phase:
             level = self.effort_by_phase[phase]
         elif self.effort:
@@ -1278,6 +1358,16 @@ class Driver:
     def _final_run(self) -> Path | None:
         """The run directory the build ended in: the newest `runs/*` holding a
         findings envelope."""
+        pin = self.workspace / "runs" / DRIVER_DIR / "final-run.json"
+        if pin.is_file():
+            try:
+                rel = json.loads(pin.read_text("utf-8"))["run"]
+                run = (self.workspace / rel).resolve()
+                run.relative_to(self.workspace.resolve())
+                if (run / "findings.json").is_file():
+                    return run
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
         runs = sorted((self.workspace / "runs").glob("*/findings.json"),
                       key=lambda p: p.stat().st_mtime, reverse=True)
         return runs[0].parent if runs else None
@@ -1304,13 +1394,14 @@ class Driver:
 
     def _stop(self, result: DriveResult, phase: str | None, reason: str
               ) -> DriveResult:
+        if self.astra_review:
+            return self._block(result, phase, reason)
         result.outcome = "needs_human"
         result.reason = reason
         result.stopped_at = phase
         self._write_outcome(reason)
         self._write_ledger(result)
-        # Preserve the decision log for a stopped run, and hand over the book
-        # itself if the run got far enough to edit one.
+        # Preserve the decision log for a stopped run.
         self.salvage_deliverable()
         self.write_decision_log()
         # Return a stopped run's outcome even when no manuscript was
@@ -1321,10 +1412,218 @@ class Driver:
                        reason=reason[:600])
         return result
 
+    def _block(self, result: DriveResult, phase: str | None, reason: str
+               ) -> DriveResult:
+        """Keep an operational failure out of the manuscript's CRM verdict."""
+        from docproof.utils.files import write_atomic
+        result.outcome, result.reason, result.stopped_at = "blocked", reason, phase
+        self._write_ledger(result)
+        write_atomic(self._driver_dir() / "blocked.json", json.dumps({
+            "schema_version": 1, "phase": phase, "reason": reason,
+            "generated_at": _now(), "editorial_verdict_unchanged": True,
+        }, indent=2))
+        self.write_decision_log()
+        self.log(f"BLOCKED at {phase or 'the plan gate'}: {reason}")
+        self._progress("blocked", phase=phase, outcome="blocked", reason=reason[:600])
+        return result
+
+    def _review_snapshot_available(self) -> bool:
+        from galley.verify import deliverable_docx
+        run = self._final_run()
+        return bool(run and deliverable_docx(run)
+                    and all((run / name).is_file() for name in
+                            ("findings.json", "change_verify.json", "finished_walk.json")))
+
+    def _enroll_astra(self) -> Path:
+        from docproof.utils.files import write_atomic
+        run = self._final_run()
+        if run is None:
+            raise DriverError("No final findings/build is available for Astra review.")
+        astra_review_settings(run, transport=self.astra_transport,
+                              max_chunk_bytes=self.astra_chunk_bytes, persist=True)
+        write_atomic(self._driver_dir() / "final-run.json", json.dumps({
+            "run": str(run.relative_to(self.workspace)),
+        }, indent=2))
+        return run
+
+    def _run_astra_review(self, result: DriveResult) -> DriveResult | None:
+        """The final review; a durable receipt, not a session exit, decides."""
+        from galley.outcome import astra_outcome
+        from galley.state_machine import RunStateMachine
+        phase = "astra_review"
+        path = self._driver_dir() / f"{phase}.log"
+        self._progress("phase_start", phase=phase, model="gpt-6-astra", effort="high")
+        try:
+            run = self._enroll_astra()
+            settings = astra_review_settings(run)
+            if settings["transport"] == "api":
+                from galley.astra_review import review_run
+                receipt = review_run(run, budget_usd=self.astra_budget_usd,
+                                     max_output_tokens=self.astra_max_output_tokens,
+                                     client=self.astra_client)
+            else:
+                from galley.astra_subscription import review_run
+                receipt = review_run(run, max_chunk_bytes=settings["max_chunk_bytes"])
+            if (receipt["review"]["editorial_verdict"] == "ready"
+                    and receipt.get("repair_required")):
+                from galley.astra_reconcile import reconcile_run
+                receipt = reconcile_run(run)
+            path.write_text(json.dumps({
+                "model": "gpt-6-astra", "reasoning_effort": "high",
+                "transport": settings["transport"],
+                "response_id": receipt.get("response_id", ""),
+                "packet_sha256": receipt["packet_sha256"],
+                "review": receipt["review"], "usage": receipt.get("usage", {}),
+            }, indent=2, ensure_ascii=False), encoding="utf-8")
+            # assess validates the receipt again; pending repairs cannot write done.
+            verdict = astra_outcome(run)
+            verdict.save(run)
+        except Exception as e:                              # noqa: BLE001
+            path.write_text(str(e) + "\n", encoding="utf-8")
+            result.phases.append(PhaseResult(phase, 8, path, str(e)))
+            self._progress("phase_end", phase=phase, ok=False, returncode=8)
+            return self._block(result, phase, str(e))
+        state_path = self.workspace / "state.json"
+        machine = RunStateMachine.load(state_path)
+        if not machine.reached("astra_reviewed"):
+            previous = machine.history[-1] if machine.history else None
+            machine.advance("astra_reviewed", by="gpt-6-astra (final editorial review)",
+                            source_sha256=machine.source_sha256,
+                            config_sha256=previous.config_sha256 if previous else "")
+            machine.save(state_path)
+        result.phases.append(PhaseResult(phase, 0, path))
+        self._progress("phase_end", phase=phase, ok=True, returncode=0)
+        self._write_ledger(result)
+        if verdict.outcome == "needs_human":
+            # This is an editorial escalation, so publish Astra's actual reason.
+            result.outcome, result.reason = verdict.outcome, verdict.reason
+            result.stopped_at = phase
+            verdict.save(self.workspace / "runs")
+            self._write_ledger(result)
+            self.write_decision_log()
+            self._stopped_handoff(result)
+            self._progress("finished", phase=phase, outcome=verdict.outcome,
+                           reason=verdict.reason[:600])
+            return result
+        return None
+
+    def _run_final_phase(self, phase: str, result: DriveResult
+                         ) -> DriveResult | None:
+        """After Astra, certification and packaging are deterministic commands."""
+        from galley.manifest import certify_run, sha256_file, write_certificate_receipt
+        from galley.outcome import astra_outcome
+        from galley.state_machine import RunStateMachine
+        from galley.verify import build_fingerprints, deliverable_docx
+        path = self._driver_dir() / f"{phase}.log"
+        self._progress("phase_start", phase=phase, model=None, effort=None)
+        try:
+            run = self._enroll_astra()
+            verdict = astra_outcome(run)
+            if verdict.outcome != "done":
+                # A delivery-only resume of a legitimate editorial escalation
+                # reuses its receipt and diagnostic package, never reruns a book.
+                return self._run_astra_review(result)
+            verdict.save(run)
+            if phase == "certify":
+                from types import SimpleNamespace
+                from docproof.__main__ import _effective_cfg
+                approval = json.loads((self.workspace / "approval.json").read_text("utf-8"))
+                config_path = Path(approval["config_path"])
+                if not config_path.is_absolute():
+                    config_path = self.workspace / config_path
+                cfg = _effective_cfg(SimpleNamespace(
+                    config=str(config_path), stage=approval.get("stage"),
+                    genre=approval.get("genre")))
+                cert = certify_run(run, manifest=approval, cfg=cfg, source=self.book)
+                write_certificate_receipt(run, cert)
+                lines = [f"Certificate for {run}:"]
+                for check in cert.checks:
+                    glyph = "PASS" if check.status == "pass" else check.status.upper()
+                    lines.append(f"  [{glyph}] {check.name} — {check.detail}")
+                lines.append("PASSED" if cert.passed else "FAILED")
+                (self.workspace / "runs" / "certify.txt").write_text(
+                    "\n".join(lines) + "\n", encoding="utf-8")
+                if not cert.passed:
+                    reasons = [c.detail for c in cert.checks
+                               if c.status == "fail" or (c.required and c.status != "pass")]
+                    raise DriverError("Structural certification blocked delivery: " + "; ".join(reasons))
+                machine = RunStateMachine.load(self.workspace / "state.json")
+                if not machine.reached("certified"):
+                    previous = machine.history[-1]
+                    machine.advance("certified", by="galley certify",
+                                    source_sha256=machine.source_sha256,
+                                    config_sha256=previous.config_sha256)
+                    machine.save(self.workspace / "state.json")
+            else:
+                certificate = json.loads((run / "certificate.json").read_text("utf-8"))
+                fingerprints = build_fingerprints(run)
+                if (not certificate.get("passed") or not fingerprints
+                        or certificate.get("build_sha256") != fingerprints["build_sha256"]):
+                    raise DriverError("No passing certificate covers the exact final manuscript.")
+                if not self._packaged_files():
+                    self._render_final_reports(run)
+                final_docx = deliverable_docx(run)
+                copied = deliverable_docx(self.workspace / "deliverable")
+                if not final_docx or not copied or sha256_file(final_docx) != sha256_file(copied):
+                    raise DriverError("The delivery copy does not match the certified manuscript.")
+            path.write_text(f"{phase} completed deterministically\n", encoding="utf-8")
+            result.phases.append(PhaseResult(phase, 0, path))
+            self._write_ledger(result)
+            self._progress("phase_end", phase=phase, ok=True, returncode=0)
+            return None
+        except Exception as e:                              # noqa: BLE001
+            path.write_text(str(e) + "\n", encoding="utf-8")
+            result.phases.append(PhaseResult(phase, 8, path, str(e)))
+            self._progress("phase_end", phase=phase, ok=False, returncode=8)
+            return self._block(result, phase, str(e))
+
+    def _render_final_reports(self, run: Path) -> None:
+        from galley.casefile import CaseFile
+        from galley.casefile_synth import casefile_from_run, workspace_waves
+        from galley.letter import (render_all, render_author_letter,
+                                   render_verification_report, run_evidence)
+        from galley.outcome import astra_outcome
+        from galley.astra_review import validate_receipt
+        from galley.verify import deliverable_docx
+        out = self.workspace / "deliverable"
+        out.mkdir(parents=True, exist_ok=True)
+        manuscript = deliverable_docx(run)
+        if manuscript is None:
+            raise DriverError("No certified manuscript exists to deliver.")
+        # Remove an older manuscript candidate before copying the pinned build;
+        # supporting DOCX files are preserved and regenerated separately.
+        existing = deliverable_docx(out)
+        if existing and existing.name != manuscript.name:
+            existing.unlink()
+        shutil.copy2(manuscript, out / manuscript.name)
+        verdict = astra_outcome(run)
+        verdict.save(run)
+        verdict.save(out)
+        casefile = run / "casefile.json"
+        cf = CaseFile.load(casefile) if casefile.exists() else casefile_from_run(run)
+        waves = workspace_waves(self.workspace)
+        if waves:
+            cf.waves = list(waves)
+            cf.budget.charges = []
+            for wave in waves:
+                cf.budget.charge(f"run {wave.index}", wave.spend_usd, wave=wave.index)
+        receipt = validate_receipt(run)
+        if receipt.get("actual_cost_usd") is not None:
+            cf.budget.charge("Final Astra review (uncached list-rate estimate)",
+                             float(receipt["actual_cost_usd"]))
+        evidence = run_evidence(run, self.workspace)
+        title = handoff_base(self.book.name)
+        render_all(cf, out, evidence=evidence, title=title)
+        render_verification_report(evidence, out, cf=cf, title=title)
+        render_author_letter(cf, out, evidence=evidence, title=title)
+
     def _stopped_handoff(self, result: DriveResult) -> None:
         """Build and upload available artifacts after a stopped run. Log
         handoff failures without replacing the original error.
         """
+        if self.astra_review:
+            self._astra_stopped_handoff(result)
+            return
         out = Path(self.handoff_dir) if self.handoff_dir \
             else self.workspace / "handoff"
         try:
@@ -1355,17 +1654,63 @@ class Driver:
                      f"{self.drive_folder_id} by hand, or re-run the deliver "
                      f"phase once Google sign-in is working")
 
-    def salvage_deliverable(self) -> None:
-        """Fill deliverable/ from the run's own artifacts when a stop cut the
-        deliver phase short.
+    def _astra_stopped_handoff(self, result: DriveResult) -> None:
+        """Freeze editorial escalation evidence without publishing a ready book."""
+        from docproof.utils.files import write_atomic
+        from galley.astra_review import validate_receipt
+        from galley.manifest import sha256_file
+        from galley.outcome import astra_outcome
+        from galley.verify import deliverable_docx
+        out = Path(self.handoff_dir) if self.handoff_dir else self.workspace / "handoff"
+        try:
+            run = self._final_run()
+            if run is None:
+                raise DriverError("No pinned final review is available.")
+            verdict, receipt = astra_outcome(run), validate_receipt(run)
+            if verdict.outcome != "needs_human":
+                raise DriverError("A diagnostic escalation requires Astra's human-review verdict.")
+            files = self._packaged_files()
+            if not files:
+                out.mkdir(parents=True, exist_ok=True)
+                base = handoff_base(self.book.name)
+                pairs = [(run / "outcome.json", f"{base} - outcome.json"),
+                         (run / "astra-review.json", f"{base} - astra-review.json"),
+                         (run / "findings.json", f"{base} - findings.json")]
+                journal = self.workspace / "deliverable" / DECISION_LOG_NAME
+                if journal.is_file():
+                    pairs.append((journal, f"{base} - decision-log.md"))
+                for source, name in pairs:
+                    dest = out / name
+                    shutil.copy2(source, dest)
+                    files.append(dest)
+                bundle = build_diagnostics(self.workspace, self.book.name, out)
+                if bundle is not None:
+                    files.append(bundle)
+                manuscript = deliverable_docx(run)
+                if manuscript is None:
+                    raise DriverError("The reviewed manuscript is missing.")
+                write_atomic(self._driver_dir() / "package.json", json.dumps({
+                    "schema_version": 1, "kind": "human_review",
+                    "packet_sha256": receipt["packet_sha256"], "run": str(run),
+                    "source_id": self.source_id or "", "build_sha256": sha256_file(manuscript),
+                    "outcome": verdict.outcome, "reason": verdict.reason,
+                    "artifacts": [{"path": str(path), "name": path.name,
+                                   "sha256": sha256_file(path)} for path in files],
+                }, indent=2, ensure_ascii=False))
+            result.handoff = files
+            if self.drive_folder_id:
+                package = json.loads((self._driver_dir() / "package.json").read_text("utf-8"))
+                result.uploaded = publish_verified_handoff(
+                    package, self.drive_folder_id, self._driver_dir() / "delivery.json",
+                    source_id=self.source_id or "", upload=self.upload, verify=self.verify_upload)
+        except Exception as e:                              # noqa: BLE001
+            self.log(f"Astra's human-review verdict is recorded; its diagnostic "
+                     f"delivery is pending ({e})")
 
-        A run that stopped after the book was edited still edited the book.
-        Handing back an outcome and a decision log leaves the manuscript —
-        the thing the next person actually works from — stranded in the
-        workspace, so copy the built tracked-changes file over and render the
-        letters that explain it. Every failure here is logged and swallowed:
-        the verdict ships either way.
-        """
+    def salvage_deliverable(self) -> None:
+        """Preserve production's edited-book recovery for explicit legacy runs."""
+        if self.astra_review:
+            return
         run = self._final_run()
         if run is None:
             return
@@ -1377,41 +1722,33 @@ class Driver:
             if built is not None:
                 try:
                     shutil.copy2(built, out / built.name)
-                    self.log(f"salvaged the edited manuscript from "
-                             f"runs/{run.name} for the stopped run")
-                except OSError as e:                        # noqa: PERF203
+                    self.log(f"salvaged the edited manuscript from runs/{run.name} for the stopped run")
+                except OSError as e:
                     self.log(f"could not salvage the manuscript ({e})")
         self.salvage_letters(run, out)
 
     def salvage_letters(self, run: Path, out: Path) -> None:
-        """Render the letter, style sheet, verification report and author
-        letter for a run that never reached deliver. Anything already there
-        was rendered by the run itself and is left alone."""
-        want = ((_LETTER_NAMES, "letter"), (_STYLE_NAMES, "style sheet"),
-                (_VERIFICATION_NAMES, "verification report"),
-                (_AUTHOR_LETTER_NAMES, "author letter"))
-        if all(_first_existing(out, names) for names, _label in want):
+        """Recover production reports when a legacy run never reached deliver."""
+        want = (_LETTER_NAMES, _STYLE_NAMES, _VERIFICATION_NAMES, _AUTHOR_LETTER_NAMES)
+        if all(_first_existing(out, names) for names in want):
             return
         try:
             from galley.casefile_synth import casefile_from_run, workspace_waves
             from galley.letter import (render_all, render_author_letter,
                                        render_verification_report, run_evidence)
             cf = casefile_from_run(run)
-            # The real spend is the workspace's, not this one run's.
             waves = workspace_waves(self.workspace)
             if waves:
                 cf.waves = list(waves)
                 cf.budget.charges = []
                 for wave in waves:
-                    cf.budget.charge(f"run {wave.index}", wave.spend_usd,
-                                     wave=wave.index)
+                    cf.budget.charge(f"run {wave.index}", wave.spend_usd, wave=wave.index)
             evidence = run_evidence(run, self.workspace)
             title = handoff_base(self.book.name)
             render_all(cf, out, evidence=evidence, title=title)
             render_verification_report(evidence, out, cf=cf, title=title)
             render_author_letter(cf, out, evidence=evidence, title=title)
-            self.log(f"rendered the letters for the stopped run from "
-                     f"runs/{run.name}")
+            self.log(f"rendered the letters for the stopped run from runs/{run.name}")
         except Exception as e:                              # noqa: BLE001
             self.log(f"no letters for the stopped run ({e})")
 
@@ -1431,10 +1768,10 @@ class Driver:
             return None
 
     def _write_outcome(self, reason: str, where: Path | None = None) -> Path:
-        """Write the driver's verdict and its reason to runs/outcome.json, or
-        to `where` — the deliverable, when the driver overrules a verdict the
-        run wrote for itself and the hand-off must carry the correction."""
+        """Write the driver failure and its reason to runs/outcome.json."""
         from galley.outcome import Outcome, hubspot_fields
+        if self.astra_review:
+            raise DriverError("An enrolled Astra verdict cannot be overwritten by a driver heuristic.")
         runs = Path(where) if where is not None else self.workspace / "runs"
         runs.mkdir(parents=True, exist_ok=True)
         return Outcome(outcome="needs_human", reason=reason,
@@ -1562,17 +1899,42 @@ class Driver:
         # Invalid setup raises without writing an outcome for the
         # manuscript.
         phases = select_phases(mechanical_only=self.mechanical_only,
-                               start=self.start_phase, only=self.only_phases)
+                               start=self.start_phase, only=self.only_phases,
+                               astra_review=self.astra_review)
         ws = seed_workspace(self.book, self.slug,
                             workspace_root=self.workspace_root,
                             source_id=self.source_id,
                             on_source_change=self.on_source_change)
-        env = build_env(self.env, wrapbin=self.wrapbin)
+        if not self.astra_review:
+            from galley.outcome import requires_astra_review
+            prior = self._final_run()
+            if prior is not None and requires_astra_review(prior):
+                raise DriverError("This run is enrolled in final Astra review; "
+                                  "--no-astra-review cannot bypass its evidence.")
+        else:
+            from docproof.utils.files import write_atomic
+            from galley.outcome import ASTRA_REQUIRED_NAME
+            settings = astra_review_settings(self._final_run() or ws,
+                transport=self.astra_transport, max_chunk_bytes=self.astra_chunk_bytes)
+            write_atomic(ws / ASTRA_REQUIRED_NAME, json.dumps(settings, indent=2))
+        direct = {"astra_review", "certify", "deliver"} if self.astra_review else set()
+        env = build_env(self.env, wrapbin=self.wrapbin) \
+            if any(p not in direct for p in phases) else {}
         result = DriveResult(workspace=ws)
 
         gate_due = "approve" in phases and not (
             self.approve == "manual" and "profile" not in phases)
         for phase in phases:
+            if phase == "astra_review":
+                stopped = self._run_astra_review(result)
+                if stopped is not None:
+                    return stopped
+                continue
+            if self.astra_review and phase in ("certify", "deliver"):
+                stopped = self._run_final_phase(phase, result)
+                if stopped is not None:
+                    return stopped
+                continue
             if phase == "approve" and gate_due:
                 if not self.run_gate(result):
                     return result
@@ -1590,17 +1952,22 @@ class Driver:
             asked_before = self._questions_text()
             outcome = self._spawner()(spec)
             result.phases.append(outcome)
+            # A completed snapshot can still reach the final editorial reader
+            # when a verification/settlement session ended abnormally. The
+            # subsequent certificate must still enforce all structural gates.
+            review_snapshot = (self.astra_review and phase in ("verify", "settle")
+                               and self._review_snapshot_available())
             self._progress("phase_end", phase=phase, ok=outcome.ok,
                            returncode=outcome.returncode, limit=outcome.limit,
                            num_turns=outcome.num_turns)
-            if outcome.limit == "timeout":
+            if outcome.limit == "timeout" and not review_snapshot:
                 return self._stop(
                     result, phase,
                     f"phase {phase} hit its wall-clock cap of "
                     f"{spec.timeout_s / 3600:.1f}h and was killed — a session "
                     f"that long is looping, not working; last lines of "
                     f"{outcome.log_path}:\n{outcome.tail}")
-            if outcome.limit == "max_turns":
+            if outcome.limit == "max_turns" and not review_snapshot:
                 return self._stop(
                     result, phase,
                     f"phase {phase} hit its turn cap of {spec.max_turns} "
@@ -1618,7 +1985,7 @@ class Driver:
                     f"subscription token (CLAUDE_CODE_OAUTH_TOKEN) is expired "
                     f"or revoked; last lines of {outcome.log_path}:\n"
                     f"{outcome.tail}")
-            if not outcome.ok:
+            if not outcome.ok and not review_snapshot:
                 return self._stop(
                     result, phase,
                     f"phase {phase} exited {outcome.returncode}; last lines of "
@@ -1631,19 +1998,14 @@ class Driver:
                     result, phase,
                     f"phase {phase} escalated a question and there is nobody "
                     f"to answer it:\n{asked[:1200]}")
-            if phase == "settle":
+            if phase == "settle" and not self.astra_review:
                 unconverged = self.settle_verdict()
                 if unconverged:
-                    # A book that will not converge is needs_human — but the
-                    # human who picks it up needs the edited manuscript, not a
-                    # log of one. Record the verdict and keep going: certify
-                    # and deliver still run, and the hand-off ships whole.
                     self.unconverged = unconverged
                     self.log(f"NOT CONVERGED at settle: {unconverged}")
-                    self._progress("unconverged", phase=phase,
-                                   reason=unconverged[:600])
+                    self._progress("unconverged", phase=phase, reason=unconverged[:600])
             need = REQUIRED_STATE.get(phase) if self.state_gate else None
-            if need and not self._state_reached(need):
+            if need and not self._state_reached(need) and not review_snapshot:
                 # Name the cause we have actually seen, because "did not
                 # advance the ledger" describes the symptom and cost four
                 # rounds of log archaeology to trace the first time.
@@ -1661,17 +2023,27 @@ class Driver:
                     f"phase would build on an unproven one.{extra}")
             self._write_ledger(result)
 
-        result.outcome, result.reason = self._final_verdict(result)
+        try:
+            result.outcome, result.reason = self._final_verdict(result)
+        except Exception as e:                               # noqa: BLE001
+            return self._block(result, "deliver", str(e))
         if "deliver" in phases:
             try:
                 result.handoff = self.run_handoff()
             except DriverError as e:
                 return self._stop(result, "deliver", f"hand-off failed: {e}")
             if self.drive_folder_id:
-                uploader = self.upload or _default_upload
                 try:
-                    result.uploaded = uploader(result.handoff,
-                                               self.drive_folder_id)
+                    if self.astra_review:
+                        package = json.loads((self._driver_dir() / "package.json").read_text("utf-8"))
+                        result.uploaded = publish_verified_handoff(
+                            package, self.drive_folder_id,
+                            self._driver_dir() / "delivery.json",
+                            source_id=self.source_id or self.slug,
+                            upload=self.upload, verify=self.verify_upload)
+                    else:
+                        uploader = self.upload or _default_upload
+                        result.uploaded = uploader(result.handoff, self.drive_folder_id)
                 except Exception as e:                      # noqa: BLE001
                     return self._stop(
                         result, "deliver",
@@ -1681,6 +2053,15 @@ class Driver:
                         f"auth`, then re-run `docproof galley drive … --from "
                         f"deliver`, or put the files in folder "
                         f"{self.drive_folder_id} by hand.")
+            if self.astra_review:
+                from galley.state_machine import RunStateMachine
+                machine = RunStateMachine.load(ws / "state.json")
+                if not machine.reached("delivered"):
+                    previous = machine.history[-1]
+                    machine.advance("delivered", by="galley handoff",
+                                    source_sha256=machine.source_sha256,
+                                    config_sha256=previous.config_sha256)
+                    machine.save(ws / "state.json")
         self._write_ledger(result)
         self._progress("finished", outcome=result.outcome,
                        reason=result.reason[:600])
@@ -1688,18 +2069,22 @@ class Driver:
         return result
 
     def _final_verdict(self, result: DriveResult) -> tuple[str, str]:
-        """Read the delivered outcome.json, preserving any needs_human verdict.
-
-        A settlement that never converged is needs_human whatever the run
-        wrote for itself: the driver counted the rounds."""
+        """Read the delivered outcome.json, preserving any needs_human verdict."""
         from galley.outcome import Outcome
+        if self.astra_review and any(p.phase in ("astra_review", "certify", "deliver")
+                                     for p in result.phases):
+            from galley.outcome import astra_outcome
+            run = self._final_run()
+            if run is None:
+                raise DriverError("No final Astra-reviewed run is available.")
+            verdict = astra_outcome(run)
+            return verdict.outcome, verdict.reason
         for candidate in self._outcome_sources():
             payload = Outcome.load(candidate.parent)
             if payload is not None and payload.outcome:
                 if self.unconverged and payload.outcome != "needs_human":
                     self._write_outcome(self.unconverged)
-                    self._write_outcome(self.unconverged,
-                                        self.workspace / "deliverable")
+                    self._write_outcome(self.unconverged, self.workspace / "deliverable")
                     return "needs_human", self.unconverged
                 return payload.outcome, payload.reason
         if self.unconverged:
@@ -1720,10 +2105,71 @@ class Driver:
     def run_handoff(self) -> list[Path]:
         out = Path(self.handoff_dir) if self.handoff_dir \
             else self.workspace / "handoff"
+        if self.astra_review:
+            from galley.outcome import astra_outcome
+            from galley.verify import deliverable_docx
+            from galley.manifest import sha256_file
+            run = self._enroll_astra()
+            verdict = astra_outcome(run)
+            frozen = self._packaged_files()
+            if frozen:
+                return frozen
+            original = deliverable_docx(run)
+            copied = deliverable_docx(self.workspace / "deliverable")
+            if not original or not copied or sha256_file(original) != sha256_file(copied):
+                raise DriverError("The handoff manuscript differs from the Astra-reviewed build.")
+            verdict.save(run)
+            verdict.save(self.workspace / "deliverable")
         # Render the log from the artifacts being handed off.
         self.write_decision_log()
-        return build_handoff(self.workspace, self.book.name, out,
-                             outcome_sources=self._outcome_sources())
+        files = build_handoff(self.workspace, self.book.name, out,
+                              outcome_sources=self._outcome_sources())
+        if self.astra_review:
+            from docproof.utils.files import write_atomic
+            from galley.astra_review import validate_receipt
+            receipt = validate_receipt(run)
+            write_atomic(self._driver_dir() / "package.json", json.dumps({
+                "schema_version": 1, "packet_sha256": receipt["packet_sha256"],
+                "run": str(run), "source_id": self.source_id or self.slug,
+                "build_sha256": sha256_file(original),
+                "outcome": verdict.outcome, "reason": verdict.reason,
+                "artifacts": [{"path": str(path), "name": path.name,
+                               "sha256": sha256_file(path)} for path in files],
+            }, indent=2, ensure_ascii=False))
+        return files
+
+    def _packaged_files(self) -> list[Path]:
+        """Reuse a committed, hash-checked package on delivery-only retries."""
+        path = self._driver_dir() / "package.json"
+        if not path.exists():
+            return []
+        from galley.astra_review import validate_receipt
+        from galley.manifest import sha256_file
+        from galley.verify import deliverable_docx
+        run = self._final_run()
+        if run is None:
+            raise DriverError("A packaged run has lost its final build identity.")
+        receipt = validate_receipt(run)
+        package = json.loads(path.read_text("utf-8"))
+        manuscript = deliverable_docx(run)
+        if (receipt["packet_sha256"] != package.get("packet_sha256")
+                or manuscript is None
+                or sha256_file(manuscript) != package.get("build_sha256")):
+            raise DriverError("The pinned package belongs to a different reviewed build.")
+        artifacts = package.get("artifacts") or []
+        human = package.get("kind") == "human_review"
+        if (human and receipt["review"]["editorial_verdict"] != "needs_human") or (
+                not human and not receipt.get("delivery_ready")):
+            raise DriverError("The pinned package conflicts with the final editorial verdict.")
+        if len(artifacts) < (3 if human else 8):
+            raise DriverError("The pinned package is incomplete.")
+        files = []
+        for item in artifacts:
+            artifact = Path(item["path"])
+            if not artifact.is_file() or sha256_file(artifact) != item["sha256"]:
+                raise DriverError(f"Packaged artifact changed or is missing: {artifact.name}")
+            files.append(artifact)
+        return files
 
 
 def _default_ask(subject: str, body: str, book: str) -> str:
@@ -1990,6 +2436,97 @@ def drive_token(*, get_key=None) -> str:
         raise DriverError("DocProof is not signed in to Google — run "
                           "`docproof-watch auth`")
     return drive.refresh_access_token(ws.client_id, ws.client_secret, refresh)
+
+
+def publish_verified_handoff(package: dict[str, Any], folder_id: str,
+                             ledger_path: Path, *, source_id: str,
+                             upload: Callable | None = None,
+                             verify: Callable | None = None) -> list[str]:
+    """Publish a frozen package once, checkpointing each verified remote file.
+
+    The outcome is the watcher's commit marker and is uploaded last. A retry
+    adopts matching remote files after an ambiguous response, then verifies
+    bytes before acknowledging delivery. Tests inject both upload and verify.
+    """
+    import hashlib
+    from app.watch import drive
+    from docproof.utils.files import write_atomic
+    from galley.manifest import sha256_file
+    packet = str(package["packet_sha256"])
+    records = list(package.get("artifacts") or [])
+    if not records:
+        raise DriverError("No package artifacts were recorded.")
+    records.sort(key=lambda row: row["name"].endswith(" - outcome.json"))
+    for row in records:
+        path = Path(row["path"])
+        if not path.is_file() or sha256_file(path) != row["sha256"]:
+            raise DriverError(f"The frozen artifact changed: {row['name']}")
+    if upload is not None and verify is None:
+        raise DriverError("A custom uploader must supply remote content verification.")
+    if ledger_path.exists():
+        ledger = json.loads(ledger_path.read_text("utf-8"))
+        if ledger.get("packet_sha256") != packet or ledger.get("folder_id") != folder_id:
+            raise DriverError("Delivery receipts belong to a different packet or folder.")
+    else:
+        ledger = {"schema_version": 1, "packet_sha256": packet,
+                  "folder_id": folder_id, "status": "pending", "artifacts": {}}
+    ledger["status"] = "pending"
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def save() -> None:
+        write_atomic(ledger_path, json.dumps(ledger, indent=2, ensure_ascii=False))
+
+    save()  # A pending delivery is durable before any network request.
+    token = drive_token() if upload is None else None
+    if upload is None and not token:
+        raise DriverError("Google Drive sign-in is unavailable for delivery.")
+    listing = drive.list_folder(token, folder_id) if token else []
+    by_id = {item.id: item for item in listing}
+    ids = []
+    for row in records:
+        path = Path(row["path"])
+        old = ledger["artifacts"].get(row["name"], {})
+        if old and old.get("sha256") != row["sha256"]:
+            raise DriverError(f"Delivery receipt hash changed for {row['name']}")
+        file_id = str(old.get("file_id") or "")
+        if token and file_id and file_id not in by_id:
+            raise DriverError(f"Previously uploaded file is no longer in the folder: {row['name']}")
+        if not file_id and token:
+            matches = [item for item in listing if item.name == row["name"]
+                       and item.app_properties.get("galley_packet") == packet
+                       and item.app_properties.get("galley_sha256") == row["sha256"]
+                       and item.app_properties.get("galley_source") == source_id]
+            if len(matches) > 1:
+                raise DriverError(f"Multiple remote copies match {row['name']}; reconcile them before retry.")
+            if matches:
+                file_id = matches[0].id
+        if not file_id:
+            if token:
+                file_id = drive.upload(
+                    token, folder_id, path, name=row["name"],
+                    mime_type=_MIME.get(path.suffix.lower(), "application/octet-stream"),
+                    app_properties={"galley_packet": packet,
+                                    "galley_sha256": row["sha256"],
+                                    "galley_source": source_id})
+            else:
+                uploaded = upload([path], folder_id)
+                if not uploaded or len(uploaded) != 1 or not str(uploaded[0]).strip():
+                    raise DriverError(f"No upload id returned for {row['name']}")
+                file_id = str(uploaded[0])
+        ledger["artifacts"][row["name"]] = {
+            "sha256": row["sha256"], "file_id": file_id, "verified": False}
+        save()  # Retain the id even if the subsequent read-back fails.
+        confirmed = (hashlib.sha256(drive.download_bytes(
+            token, file_id, what="verify a handoff artifact")).hexdigest() == row["sha256"]
+                     if token else bool(verify(path, file_id, folder_id)))
+        if not confirmed:
+            raise DriverError(f"Remote content verification failed for {row['name']}")
+        ledger["artifacts"][row["name"]]["verified"] = True
+        save()
+        ids.append(file_id)
+    ledger.update(status="delivered", acknowledged_at=_now())
+    save()
+    return ids
 
 
 def _default_upload(files: list[Path], folder_id: str) -> list[str]:

@@ -474,9 +474,12 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
 
     # 10. Require terminal finding states and resolved verification items.
     if envelope is not None:
-        cert.checks.append(_certify_terminal_states(envelope))
+        cert.checks.append(_certify_terminal_states(envelope, run))
     cert.checks.append(_required(_certify_settlement(run)))
     cert.checks.append(_required(_certify_outcome(run)))
+    astra_check = _certify_astra_review(run)
+    if astra_check is not None:
+        cert.checks.append(_required(astra_check))
 
     # 11. Enforce mechanical-only scope when declared in the approval.
     if manifest is not None and manifest.get("mechanical_only"):
@@ -500,6 +503,19 @@ def _workspace_of(run: Path) -> Path:
     return run.parent.parent if run.parent.name == "runs" else run.parent
 
 
+def write_certificate_receipt(run_dir: str | Path, cert: Certificate) -> Path:
+    """Persist the exact build checked, including failed gates, for finalization."""
+    from docproof.utils.files import write_atomic
+    from galley.verify import build_fingerprints
+    run = Path(run_dir)
+    payload = cert.to_json()
+    payload.update(build_fingerprints(run))
+    payload["schema_version"] = 1
+    path = run / "certificate.json"
+    write_atomic(path, json.dumps(payload, indent=2, ensure_ascii=False))
+    return path
+
+
 def _certify_plan_ledger(run: Path) -> Check:
     from galley.plan_ledger import LEDGER_NAME, check, load_ledger
     ws = _workspace_of(run)
@@ -516,6 +532,12 @@ def _certify_plan_ledger(run: Path) -> Check:
 def _certify_comment_premises(run: Path, envelope: dict[str, Any] | None
                               ) -> Check:
     from galley.premises import PREMISES, stale_queries
+    astra = _astra_editorial_snapshot(run)
+    if astra is not None:
+        receipt, packet = astra
+        return Check("comment premises", "pass",
+                     f"{len(packet['comments'])} actual comment(s) explicitly "
+                     "adjudicated by Astra; requested changes replay-verified")
     if envelope is None:
         return Check("comment premises", "skip", "no findings.json")
     try:
@@ -671,7 +693,46 @@ def _certify_mechanical_only(manifest: dict[str, Any], cfg: Any | None,
                  "no copy-edit lane in the config, findings, or artifacts")
 
 
-def _certify_terminal_states(envelope: dict[str, Any]) -> Check:
+def _astra_editorial_snapshot(run: Path | None) -> tuple[dict, dict] | None:
+    """Only completed, matching, reconciled decisions can replace prior flags.
+
+    Keep the original findings and verification artifacts immutable: their
+    exact contents were part of the review packet and remain audit evidence.
+    """
+    if run is None:
+        return None
+    from galley.outcome import requires_astra_review
+    if not requires_astra_review(run):
+        return None
+    try:
+        from galley.astra_review import PACKET_FILE, build_packet, validate_receipt
+        receipt = validate_receipt(run)
+        if not receipt.get("delivery_ready"):
+            return None
+        packet = _load_json(run / PACKET_FILE) or build_packet(run)
+        if packet.get("packet_sha256") != receipt["packet_sha256"]:
+            return None
+        return receipt, packet
+    except Exception:
+        return None  # The mandatory Astra gate reports the invalid receipt.
+
+
+def _astra_closed_collection(run: Path, artifact: str, collection: str) -> bool:
+    snapshot = _astra_editorial_snapshot(run)
+    if snapshot is None:
+        return False
+    receipt, packet = snapshot
+    rows = packet.get("artifacts", {}).get(artifact, {}).get(collection, [])
+    decisions = {item["issue_id"]: item["action"] for item in
+                 receipt["review"].get("issue_decisions", [])}
+    closed = {source["index"] for issue in packet.get("issue_index", [])
+              if decisions.get(issue["id"]) in ("drop", "edit", "author_query")
+              for source in issue["sources"]
+              if (source["artifact"], source["collection"]) == (artifact, collection)}
+    return closed == set(range(len(rows)))
+
+
+def _certify_terminal_states(envelope: dict[str, Any], run: Path | None = None) -> Check:
     """I1 — terminal states only. Every findings row must read as applied,
     dropped, or query; a `pending` row (never validated) or an explicitly
     non-terminal `state` fails."""
@@ -679,8 +740,14 @@ def _certify_terminal_states(envelope: dict[str, Any]) -> Check:
     rows = [r for r in (envelope.get("findings") or []) if isinstance(r, dict)]
     counts: dict[str, int] = {}
     bad: list[str] = []
-    for r in rows:
+    snapshot = _astra_editorial_snapshot(run)
+    exceptions = {item["finding_id"]: item["action"] for item in
+                  snapshot[0]["review"].get("finding_review", {}).get("exceptions", [])} \
+        if snapshot is not None else {}
+    for i, r in enumerate(rows):
         state, _reason = terminal_state(r)
+        action = exceptions.get(f"finding-{i + 1:06d}")
+        state = {"drop": "dropped", "edit": "applied", "author_query": "query"}.get(action, state)
         counts[state] = counts.get(state, 0) + 1
         # Rows with no status are legacy/unknown; reject only explicit
         # nonterminal states.
@@ -701,6 +768,12 @@ def _certify_settlement(run: Path) -> Check:
     verification evidence is absent.
     """
     from galley.settle import Settlement, unsettled
+    if all(_astra_closed_collection(run, artifact, collection) for artifact, collection in (
+            ("change_verify.json", "problems"), ("finished_walk.json", "residuals"),
+            ("settlement.json", "open"), ("settlement.json", "residuals_seen"))):
+        return Check("residual settlement", "pass",
+                     "Every recorded verification/settlement issue has an explicit "
+                     "Astra disposition; requested repairs replay-verified")
     have_walk = (run / "finished_walk.json").is_file()
     have_cv = (run / "change_verify.json").is_file()
     settlement = Settlement.load(run)
@@ -747,7 +820,35 @@ def _certify_outcome(run: Path) -> Check:
                      "settle`, which writes it) to record done / needs_human")
     if oc.outcome not in ("done", "needs_human"):
         return Check("outcome", "fail", f"unknown outcome {oc.outcome!r}")
+    from galley.outcome import astra_outcome, requires_astra_review
+    if requires_astra_review(run):
+        try:
+            expected = astra_outcome(run)
+        except Exception as e:
+            return Check("outcome", "fail", f"Astra review is not deliverable: {e}")
+        if (oc.outcome, oc.reason, oc.set_by) != (
+                expected.outcome, expected.reason, expected.set_by):
+            return Check("outcome", "fail",
+                         "outcome.json does not match the final Astra verdict")
     return Check("outcome", "pass", f"{oc.outcome}: {oc.reason[:160]}")
+
+
+def _certify_astra_review(run: Path) -> Check | None:
+    from galley.outcome import requires_astra_review
+    if not requires_astra_review(run):
+        return None  # Existing runs remain verifiable without a new paid call.
+    try:
+        from galley.astra_review import validate_receipt
+        receipt = validate_receipt(run)
+        if (receipt["review"]["editorial_verdict"] == "ready"
+                and not receipt.get("delivery_ready")):
+            return Check("Astra final review", "fail",
+                         "Astra requested repairs that have not been reconciled")
+        return Check("Astra final review", "pass",
+                     f"gpt-6-astra/high: {receipt['review']['editorial_verdict']}; "
+                     f"packet {receipt['packet_sha256'][:12]}…")
+    except Exception as e:
+        return Check("Astra final review", "fail", str(e))
 
 
 def _binding_problem(run: Path, artifact: str, payload: dict[str, Any]
@@ -784,11 +885,37 @@ def _binding_problem(run: Path, artifact: str, payload: dict[str, Any]
         return f"the deliverable could not be fingerprinted ({e})"
     if not fp:
         return "no deliverable .docx to bind the verification to"
+    approved_delta: dict[str, dict[str, Any]] = {}
     if fp["accepted_sha256"] != recorded:
-        return (f"{artifact} verified a different accepted text "
-                f"({recorded[:12]}… vs this build's "
-                f"{fp['accepted_sha256'][:12]}…) — the deliverable changed "
-                f"after verify; re-run `galley verify`")
+        # Only independently replay-validated Astra repairs supplement the
+        # old verifier. Never restamp a claim that it read the changed text.
+        try:
+            from galley.astra_review import validate_receipt
+            receipt = validate_receipt(run)
+            reconciliation = receipt.get("reconciliation") or {}
+            if (receipt.get("delivery_ready")
+                    and reconciliation.get("original_accepted_sha256") == recorded
+                    and reconciliation.get("current_accepted_sha256") == fp["accepted_sha256"]):
+                approved_delta = {change["para_id"]: change for change in
+                                  reconciliation.get("paragraph_changes", [])
+                                  if change.get("action_ids")}
+        except Exception:
+            approved_delta = {}
+        if not approved_delta:
+            return (f"{artifact} verified a different accepted text "
+                    f"({recorded[:12]}… vs this build's "
+                    f"{fp['accepted_sha256'][:12]}…) — the deliverable changed "
+                    f"after verify; re-run `galley verify`")
+    if "paragraph_sha256" in payload:
+        covered = payload.get("paragraph_sha256") or {}
+        missing = [pid for pid, digest in fp["paragraph_sha256"].items()
+                   if covered.get(pid) != digest and not (
+                       approved_delta.get(pid, {}).get("after_sha256") == digest
+                       and approved_delta.get(pid, {}).get("before_sha256") == covered.get(pid))]
+        if missing:
+            return (f"{len(missing)} paragraph(s) lack verification for their "
+                    f"current text ({', '.join(missing[:5])}) — re-run "
+                    f"`galley verify` on the whole book or those paragraphs")
     return ""
 
 
@@ -811,6 +938,10 @@ def _certify_change_verify(run: Path) -> Check:
         return Check("change verifier", "skip",
                      "no change_verify.json — run `galley verify` to re-read "
                      "every applied edit for meaning/grammar/voice damage")
+    if _astra_closed_collection(run, "change_verify.json", "problems"):
+        return Check("change verifier", "pass",
+                     "Astra reviewed every tracked revision in the exact final "
+                     "build and explicitly disposed of every prior flagged edit")
     stale = _is_stale(run, "change_verify.json", payload)
     if stale:
         return Check("change verifier", "fail", f"{stale}: {_STALE}")
@@ -823,6 +954,9 @@ def _certify_change_verify(run: Path) -> Check:
                      f"verify` without --walk-only before delivery")
     problems = [p for p in (payload.get("problems") or []) if isinstance(p, dict)]
     if problems:
+        if _astra_closed_collection(run, "change_verify.json", "problems"):
+            return _pass_if_bound(run, "change_verify.json", "change verifier", payload,
+                                  f"{len(problems)} flagged edit(s) explicitly adjudicated by Astra")
         from galley.settle import unsettled
         _res, open_prob = unsettled(run)
         if open_prob:
@@ -850,6 +984,10 @@ def _certify_finished_walk(run: Path) -> Check:
         return Check("finished-text walk", "skip",
                      "no finished_walk.json — run `galley verify` to proofread "
                      "the accepted text for residual errors")
+    if _astra_closed_collection(run, "finished_walk.json", "residuals"):
+        return Check("finished-text walk", "pass",
+                     "Astra read the complete exact final manuscript and "
+                     "explicitly disposed of every prior residual")
     stale = _is_stale(run, "finished_walk.json", payload)
     if stale:
         return Check("finished-text walk", "fail", f"{stale}: {_STALE}")
@@ -860,6 +998,9 @@ def _certify_finished_walk(run: Path) -> Check:
                      f"verify` without --changes-only before delivery")
     residuals = [r for r in (payload.get("residuals") or []) if isinstance(r, dict)]
     if residuals:
+        if _astra_closed_collection(run, "finished_walk.json", "residuals"):
+            return _pass_if_bound(run, "finished_walk.json", "finished-text walk", payload,
+                                  f"{len(residuals)} residual(s) explicitly adjudicated by Astra")
         from galley.settle import unsettled
         open_res, _prob = unsettled(run)
         if open_res:
@@ -914,9 +1055,8 @@ def _certify_text_hygiene(run: Path, source: str | Path | None = None) -> Check:
     """
     # Scan the accepted manuscript; the change log quotes pre-fix source
     # text.
-    docs = sorted(p for p in run.glob("*.docx")
-                  if not p.name.startswith("~$")
-                  and "change log" not in p.name.lower())
+    from galley.verify import manuscript_docx_files
+    docs = manuscript_docx_files(run)
     if not docs:
         return Check("delivered text hygiene", "skip",
                      "no manuscript .docx in the run directory")
@@ -1075,9 +1215,8 @@ def _revision_authors(run: Path) -> set[str] | None:
     """
     import zipfile
     from xml.sax.saxutils import unescape
-    docs = sorted(p for p in run.glob("*.docx")
-                  if not p.name.startswith("~$")
-                  and "change log" not in p.name.lower())
+    from galley.verify import manuscript_docx_files
+    docs = manuscript_docx_files(run)
     if not docs:
         return None
     authors: set[str] = set()
@@ -1170,10 +1309,10 @@ def _certify_run_state(run: Path) -> Check:
     """If a run state machine is present, a delivery certificate expects the run
     to have reached at least the audited state."""
     from galley.state_machine import RunStateMachine
-    # Look for state.json in both the results directory and workspace root.
-    path = run / "state.json"
+    # The workspace owns state; old result-local copies are legacy fallback.
+    path = _workspace_of(run) / "state.json"
     if not path.is_file():
-        path = run.parent / "state.json"
+        path = run / "state.json"
     if not path.is_file():
         return Check("run state", "skip", "no state.json for this run")
     try:
@@ -1364,9 +1503,8 @@ def _certify_field_results(run: Path) -> Check:
     """Report unresolved fields without blocking delivery; they require
     regenerating the TOC or other fields.
     """
-    docs = sorted(p for p in run.glob("*.docx")
-                  if not p.name.startswith("~$")
-                  and "change log" not in p.name.lower())
+    from galley.verify import manuscript_docx_files
+    docs = manuscript_docx_files(run)
     if not docs:
         return Check("unresolved fields", "skip",
                      "no manuscript .docx in the run directory")

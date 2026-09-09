@@ -102,6 +102,24 @@ run built: the driver copies the newest tracked-changes build out of
 phase never got to, so the folder holds the book and not only a verdict about
 it.
 
+## Final Astra review in enrolled driver workspaces
+
+When `astra-review-required.json` exists, the driver owns the final editorial
+verdict. Complete verification and settlement evidence, including unresolved
+items, and leave a valid tracked manuscript for Astra. Investigate book-wide
+questions internally; an unread passage or a technical repair is not an author
+question. Never turn a tool failure or a phase limit into `needs_human`.
+
+After Verify and settlement, the driver runs subscription-backed Astra high
+reviews with complete chunk coverage, then one final Astra adjudication. Astra
+reconciles comments and tracked changes and alone decides whether human
+proofreading is needed. Certification, exact authorized repairs, packaging, and
+upload are deterministic after that verdict; do not start another Claude review
+or manually replace the decision. Authentication, unsupported repairs, or delivery
+failures block completion while preserving the editorial verdict. The legacy
+human-review and stopped-handoff rules elsewhere in this manual apply only to
+workspaces without this enrollment marker.
+
 ## The prime directives
 
 1. **The author is the final gate.** Every edit ships as a rejectable tracked

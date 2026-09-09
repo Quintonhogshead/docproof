@@ -13,6 +13,7 @@ from galley import driver as gd
 from galley.state_machine import RunStateMachine
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "tiny_novel.docx"
+LEGACY_PHASES = [p for p in gd.MECHANICAL_PHASES if p != "astra_review"]
 
 MECH_PLAN = """# PLAN — Ford, Book 1 · general_fiction · 40,000 words
 
@@ -83,6 +84,7 @@ def book(tmp_path) -> Path:
 
 
 def _driver(book: Path, tmp_path: Path, **kw) -> gd.Driver:
+    kw.setdefault("astra_review", False)  # These fixtures exercise the explicit legacy flow.
     kw.setdefault("workspace_root", tmp_path / "ws")
     kw.setdefault("env", {"CLAUDE_CODE_OAUTH_TOKEN": "tok", "PATH": "/bin"})
     kw.setdefault("log", lambda _m: None)
@@ -103,7 +105,7 @@ def test_mechanical_order_omits_the_copyedit_phases():
 
 
 def test_from_phase_slices_the_order():
-    assert gd.select_phases(start="verify") == ["verify", "settle", "certify",
+    assert gd.select_phases(start="verify") == ["verify", "settle", "astra_review", "certify",
                                                 "deliver"]
 
 
@@ -222,7 +224,7 @@ def test_auto_gate_approves_and_runs_the_rest(book, tmp_path):
     result = _driver(book, tmp_path, spawn=spawn).run()
     assert result.outcome == "done", result.reason
     assert result.exit_code == 0
-    assert spawn.phases == list(gd.MECHANICAL_PHASES)
+    assert spawn.phases == LEGACY_PHASES
     assert result.gate["approved"] is True
     # The approval is recorded where the `approve` phase reads it back.
     assert "Approved by galley drive (auto)" in (ws / "PLAN.md").read_text()
@@ -307,7 +309,7 @@ def test_email_gate_sends_polls_and_proceeds_on_an_approved_reply(
     assert sent and sent[0][0] == "Plan gate — ford-book-1"
     assert gd.GATE_TOKEN_PREFIX in sent[0][1]
     assert result.gate["reply"] == "approved"
-    assert spawn.phases == list(gd.MECHANICAL_PHASES)
+    assert spawn.phases == LEGACY_PHASES
     assert result.outcome == "done"
 
 
@@ -411,7 +413,7 @@ def test_the_state_gate_can_be_turned_off(book, tmp_path):
     _plan(ws)
     spawn = FakeSpawner(ws, skip_state="ladder")
     result = _driver(book, tmp_path, spawn=spawn, state_gate=False).run()
-    assert spawn.phases == list(gd.MECHANICAL_PHASES)
+    assert spawn.phases == LEGACY_PHASES
     assert result.outcome == "done"
 
 
@@ -603,4 +605,4 @@ def test_the_email_gate_question_is_not_read_as_a_phase_escalation(book,
                      ask=lambda *_a: "someone@example.com", sleep=sleep,
                      poll_interval_s=0.0, reply_timeout_s=1e6).run()
     assert result.outcome == "done", result.reason
-    assert spawn.phases == list(gd.MECHANICAL_PHASES)
+    assert spawn.phases == LEGACY_PHASES
