@@ -96,7 +96,11 @@ the deliverable to DocWatch. Two things change for you inside such a session:
 
 A nonzero exit from any phase stops the driver, writes `runs/outcome.json` as
 `needs_human` with the phase and your last log lines, and leaves the workspace
-for a person. Nothing is retried around.
+for a person. Nothing is retried around. A stop still hands over whatever the
+run built: the driver copies the newest tracked-changes build out of
+`runs/<final>/`, derives its clean copy, and renders the letters the deliver
+phase never got to, so the folder holds the book and not only a verdict about
+it.
 
 ## The prime directives
 
@@ -222,6 +226,11 @@ for a person. Nothing is retried around.
    quarter of books at most), with the reason written to `outcome.json` for
    DocWatch to flip the HubSpot toggle. `galley outcome --set … --reason …`
    overrules with a stated reason.
+   **`needs_human` is a verdict, not a withholding.** A book that stops
+   converging still ships the whole hand-off — the proofreader who picks it
+   up works from the manuscript Galley edited, not from a decision log. So a
+   settle that runs out of rounds while still finding errors does not end the
+   run: record it and carry on to certify and deliver.
 
 ## The instrument rack
 

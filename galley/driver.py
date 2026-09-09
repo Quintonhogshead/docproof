@@ -1117,6 +1117,10 @@ class Driver:
     #: as a dict with an "event" key — the agent turns these into heartbeats.
     #: A reporter that raises never sinks the run.
     progress: Callable[[dict[str, Any]], None] | None = None
+    #: Set when settlement ran out of rounds while still finding errors. The
+    #: book is needs_human, but the run keeps going: the verdict rides out
+    #: with the finished hand-off rather than in place of it.
+    unconverged: str = field(default="", init=False, repr=False)
 
 
     @property
@@ -1305,7 +1309,9 @@ class Driver:
         result.stopped_at = phase
         self._write_outcome(reason)
         self._write_ledger(result)
-        # Preserve the decision log for a stopped run.
+        # Preserve the decision log for a stopped run, and hand over the book
+        # itself if the run got far enough to edit one.
+        self.salvage_deliverable()
         self.write_decision_log()
         # Return a stopped run's outcome even when no manuscript was
         # produced.
@@ -1349,6 +1355,66 @@ class Driver:
                      f"{self.drive_folder_id} by hand, or re-run the deliver "
                      f"phase once Google sign-in is working")
 
+    def salvage_deliverable(self) -> None:
+        """Fill deliverable/ from the run's own artifacts when a stop cut the
+        deliver phase short.
+
+        A run that stopped after the book was edited still edited the book.
+        Handing back an outcome and a decision log leaves the manuscript —
+        the thing the next person actually works from — stranded in the
+        workspace, so copy the built tracked-changes file over and render the
+        letters that explain it. Every failure here is logged and swallowed:
+        the verdict ships either way.
+        """
+        run = self._final_run()
+        if run is None:
+            return
+        out = self.workspace / "deliverable"
+        out.mkdir(parents=True, exist_ok=True)
+        from galley.verify import deliverable_docx
+        if deliverable_docx(out) is None:
+            built = deliverable_docx(run)
+            if built is not None:
+                try:
+                    shutil.copy2(built, out / built.name)
+                    self.log(f"salvaged the edited manuscript from "
+                             f"runs/{run.name} for the stopped run")
+                except OSError as e:                        # noqa: PERF203
+                    self.log(f"could not salvage the manuscript ({e})")
+        self.salvage_letters(run, out)
+
+    def salvage_letters(self, run: Path, out: Path) -> None:
+        """Render the letter, style sheet, verification report and author
+        letter for a run that never reached deliver. Anything already there
+        was rendered by the run itself and is left alone."""
+        want = ((_LETTER_NAMES, "letter"), (_STYLE_NAMES, "style sheet"),
+                (_VERIFICATION_NAMES, "verification report"),
+                (_AUTHOR_LETTER_NAMES, "author letter"))
+        if all(_first_existing(out, names) for names, _label in want):
+            return
+        try:
+            from galley.casefile_synth import casefile_from_run, workspace_waves
+            from galley.letter import (render_all, render_author_letter,
+                                       render_verification_report, run_evidence)
+            cf = casefile_from_run(run)
+            # The real spend is the workspace's, not this one run's.
+            waves = workspace_waves(self.workspace)
+            if waves:
+                cf.waves = list(waves)
+                cf.budget.charges = []
+                for wave in waves:
+                    cf.budget.charge(f"run {wave.index}", wave.spend_usd,
+                                     wave=wave.index)
+            evidence = run_evidence(run, self.workspace)
+            title = handoff_base(self.book.name)
+            render_all(cf, out, evidence=evidence, title=title)
+            render_verification_report(evidence, out, cf=cf, title=title)
+            render_author_letter(cf, out, evidence=evidence, title=title)
+            self.log(f"rendered the letters for the stopped run from "
+                     f"runs/{run.name}")
+        except Exception as e:                              # noqa: BLE001
+            self.log(f"no letters for the stopped run ({e})")
+
     def write_decision_log(self) -> Path | None:
         """Render deliverable/DECISION_LOG.md from available artifacts; log
         failures and continue.
@@ -1364,10 +1430,12 @@ class Driver:
             self.log(f"could not render the decision log ({e})")
             return None
 
-    def _write_outcome(self, reason: str) -> Path:
-        """Write the driver failure and its reason to runs/outcome.json."""
+    def _write_outcome(self, reason: str, where: Path | None = None) -> Path:
+        """Write the driver's verdict and its reason to runs/outcome.json, or
+        to `where` — the deliverable, when the driver overrules a verdict the
+        run wrote for itself and the hand-off must carry the correction."""
         from galley.outcome import Outcome, hubspot_fields
-        runs = self.workspace / "runs"
+        runs = Path(where) if where is not None else self.workspace / "runs"
         runs.mkdir(parents=True, exist_ok=True)
         return Outcome(outcome="needs_human", reason=reason,
                        evidence={"driver": True, "slug": self.slug},
@@ -1566,7 +1634,14 @@ class Driver:
             if phase == "settle":
                 unconverged = self.settle_verdict()
                 if unconverged:
-                    return self._stop(result, phase, unconverged)
+                    # A book that will not converge is needs_human — but the
+                    # human who picks it up needs the edited manuscript, not a
+                    # log of one. Record the verdict and keep going: certify
+                    # and deliver still run, and the hand-off ships whole.
+                    self.unconverged = unconverged
+                    self.log(f"NOT CONVERGED at settle: {unconverged}")
+                    self._progress("unconverged", phase=phase,
+                                   reason=unconverged[:600])
             need = REQUIRED_STATE.get(phase) if self.state_gate else None
             if need and not self._state_reached(need):
                 # Name the cause we have actually seen, because "did not
@@ -1586,6 +1661,7 @@ class Driver:
                     f"phase would build on an unproven one.{extra}")
             self._write_ledger(result)
 
+        result.outcome, result.reason = self._final_verdict(result)
         if "deliver" in phases:
             try:
                 result.handoff = self.run_handoff()
@@ -1605,7 +1681,6 @@ class Driver:
                         f"auth`, then re-run `docproof galley drive … --from "
                         f"deliver`, or put the files in folder "
                         f"{self.drive_folder_id} by hand.")
-        result.outcome, result.reason = self._final_verdict(result)
         self._write_ledger(result)
         self._progress("finished", outcome=result.outcome,
                        reason=result.reason[:600])
@@ -1613,12 +1688,23 @@ class Driver:
         return result
 
     def _final_verdict(self, result: DriveResult) -> tuple[str, str]:
-        """Read the delivered outcome.json, preserving any needs_human verdict."""
+        """Read the delivered outcome.json, preserving any needs_human verdict.
+
+        A settlement that never converged is needs_human whatever the run
+        wrote for itself: the driver counted the rounds."""
         from galley.outcome import Outcome
         for candidate in self._outcome_sources():
             payload = Outcome.load(candidate.parent)
             if payload is not None and payload.outcome:
+                if self.unconverged and payload.outcome != "needs_human":
+                    self._write_outcome(self.unconverged)
+                    self._write_outcome(self.unconverged,
+                                        self.workspace / "deliverable")
+                    return "needs_human", self.unconverged
                 return payload.outcome, payload.reason
+        if self.unconverged:
+            self._write_outcome(self.unconverged)
+            return "needs_human", self.unconverged
         return "done", (f"{len(result.phases)} phase(s) completed; no "
                         f"outcome.json was written by the run")
 
