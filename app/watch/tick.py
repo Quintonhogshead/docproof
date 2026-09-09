@@ -1088,7 +1088,7 @@ def proof_stage(ws: WatchSettings) -> DiscoveryStage:
         id_set=lambda r, v: setattr(r, "proof_hubspot_id", v),
         candidate=is_proof_candidate,
         already_done=lambda f: (f.app_properties.get(PROOF_PROP)
-                                in PROOF_TERMINAL),
+                                in (PROOF_DONE, PROOF_HUMAN)),
         already_failed=lambda f: (f.app_properties.get(PROOF_PROP)
                                   == PROOF_FAILED),
         in_flight=lambda r: r.proof_marked not in PROOF_TERMINAL,
@@ -1153,7 +1153,7 @@ def _discover(token: str, hs_token: str | None, ws: WatchSettings,
     for rec in list(state.files.values()):
         if (stage.id_get(rec) and stage.id_get(rec) not in seen_records
                 and rec.subfolder_id and stage.in_flight(rec)):
-            _adopt(token, rec.subfolder_id, listing, routes, stage=stage,
+            _adopt(token, rec.subfolder_id, rec.file_id, listing, routes, stage=stage,
                    opener=opener)
 
     uniq = {f.id: f for f in listing}     # a subfolder seen twice, deduped
@@ -1405,15 +1405,19 @@ def _report_failed_intake(author: str, file: DriveFile, *,
     report.needs_human.append((author, reason))
 
 
-def _adopt(token: str, subfolder_id: str, listing: list[DriveFile],
+def _adopt(token: str, subfolder_id: str, file_id: str, listing: list[DriveFile],
            routes: dict[str, str], *, stage: DiscoveryStage, opener) -> None:
-    """Re-list an in-flight book's recorded subfolder so the pass still sees it.
-    Route every candidate it holds back into it, the same as discovery."""
+    """Resume only the recorded source, keeping its outputs available.
+
+    A prior selection authorizes this file, not every manuscript subsequently
+    placed beside it. New sources must pass their own HubSpot discovery.
+    """
     contents = drive.list_folder(token, subfolder_id, opener=opener)
     for f in contents:
-        if stage.candidate(f):
+        if f.id == file_id and stage.candidate(f):
             routes[f.id] = subfolder_id
-    listing.extend(contents)
+    listing.extend(f for f in contents if f.id == file_id
+                   or not stage.candidate(f))
 
 
 def _one(token: str, home: Path, ws: WatchSettings, file: DriveFile,
@@ -1890,9 +1894,10 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     if dry_run:
         # Read-only by construction: nothing below this line has run, so no
         # folder was made, no manuscript downloaded and no model called.
-        report.new = sum(1 for _, stage in report.plan
-                         if stage == Stage.NEW_MANUSCRIPT.value)
-        report.plan = _preview_rows(ws, every, report.plan)
+        report.plan = _preview_rows(ws, listing, proof_listing,
+                                    routes=routes, proof_routes=proof_routes)
+        report.new = sum(stage.rstrip(PREVIEW_GATED) == Stage.NEW_MANUSCRIPT.value
+                         for _, stage in report.plan)
         acted_on = {name for name, _stage in report.plan}
         report.left_alone = sum(1 for f in every if f.name not in acted_on)
         return report
@@ -1949,19 +1954,17 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     return report
 
 
-# The `classify` answers a pass acts on. Everything else it leaves where it is.
-PREVIEW_ACTIONS = (Stage.NEW_MANUSCRIPT.value, Stage.PROOF_MANUSCRIPT.value)
-
-
 def _preview_rows(ws: WatchSettings, listing: list[DriveFile],
-                  rows: list[tuple[str, str]]) -> list[tuple[str, str]]:
+                  proof_listing: list[DriveFile], *,
+                  routes: dict[str, str],
+                  proof_routes: dict[str, str]) -> list[tuple[str, str]]:
     """What a dry run says a pass would do — for every automation, and only as
     far as a dry run can honestly say it.
 
-    `classify` answers for formatting and proofing, which is what `rows` already
-    holds. Promo and the marketing plan have their own candidate tests instead
-    of a `Stage`, so their rows are added here; without them a preview claimed
-    to speak for "a pass" while describing one workflow out of four.
+    Each stage uses its own candidates and listing. Discovery retains siblings
+    for delivery/recovery, but their presence does not authorize another pass.
+    In subfolder mode only sources routed by that stage may appear in its
+    preview. Proofing also respects its own completion marker and enable flag.
 
     Two honesties, both about the gate. A dry run lists a folder; it does not
     ask HubSpot which books are flagged — that question lives inside the
@@ -1987,8 +1990,14 @@ def _preview_rows(ws: WatchSettings, listing: list[DriveFile],
     Nothing here changes what a real pass does: `tick` returns before this on a
     real pass, and the only caller is the dry-run branch.
     """
-    rows = [(name, stage) for name, stage in rows
-            if stage in PREVIEW_ACTIONS]
+    rows = [(f.name, Stage.NEW_MANUSCRIPT.value) for f in listing
+            if classify(f) is Stage.NEW_MANUSCRIPT
+            and (not ws.subfolders_enabled or f.id in routes)
+            and (not ws.require_source_label or naming.has_source_label(f.name))]
+    if ws.proofing_enabled:
+        rows += [(f.name, Stage.PROOF_MANUSCRIPT.value) for f in proof_listing
+                 if is_proof_candidate(f)
+                 and (not ws.subfolders_enabled or f.id in proof_routes)]
     gated = ws.hubspot_enabled and not ws.subfolders_enabled
     if gated:
         rows = [(name, stage + PREVIEW_GATED) for name, stage in rows]
