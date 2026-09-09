@@ -166,13 +166,15 @@ def test_excluded_words_note_is_a_comment_at_the_top(tmp_path, cfg):
     pkg = preflight(FIXTURES / "styled.docx", "abort")
     doc = build_document_model(pkg, cfg)
     placed = annotate_excluded_words(
-        pkg, doc, ["Vorrenth", "Kaelith", "accross"],
-        "Atmosphere Press Proofreader")
+        pkg, doc, ["Vorrenth", "Kaelith", "accross"])
     assert placed is True
 
     out = tmp_path / "annotated.docx"
     pkg.save(out)
     re_pkg = DocxPackage(out)
+    note = re_pkg.tree("word/comments.xml")[0]
+    assert note.get(_w("author")) == "Atmosphere Press Proofreader"
+    assert note.get(_w("initials")) == "APP"
     # The comment part exists and carries the note, every word named...
     body = "".join(re_pkg.tree("word/comments.xml").itertext())
     assert "spell-check" in body
@@ -189,7 +191,7 @@ def test_excluded_words_note_is_skipped_when_there_is_nothing_to_say(tmp_path,
                                                                      cfg):
     pkg = preflight(FIXTURES / "styled.docx", "abort")
     doc = build_document_model(pkg, cfg)
-    assert annotate_excluded_words(pkg, doc, [], "Proofreader") is False
+    assert annotate_excluded_words(pkg, doc, []) is False
     assert not pkg.has("word/comments.xml")
 
 
@@ -252,8 +254,9 @@ def test_two_lane_findings_write_two_tracked_change_authors(tmp_path, cfg):
     assert all(el.get(_w("author")) is not None for el in body.iter(_w("ins")))
 
 
-def test_two_lane_findings_write_two_comment_authors(tmp_path, cfg):
-    cfg = cfg.model_copy(update={"comments": True})
+def test_all_generated_comments_use_house_author_despite_revision_overrides(tmp_path, cfg):
+    cfg = cfg.model_copy(update={"comments": True,
+                                 "revision_author": "Custom revision author"})
     pkg = preflight(FIXTURES / "styled.docx", "abort")
     doc = build_document_model(pkg, cfg)
     pid = _body2(doc)
@@ -263,16 +266,20 @@ def test_two_lane_findings_write_two_comment_authors(tmp_path, cfg):
     ce = Finding("f-2", "chunk-000", pid, "rewrite", _ORIG2, 1, "",
                 "A copy-edit rewrite.", "high", status="validated",
                 anchor=Anchor(26, 27, ",", ";"), lane="copyedit")
-    apply_tracked_changes(pkg, doc, [mech, ce], cfg)
+    query = Finding("q-1", "chunk-000", pid, "speaker_change", _ORIG2, 1, "",
+                    "Who is speaking?", "high", status="query",
+                    anchor=Anchor(0, len(_ORIG2), _ORIG2, ""), lane="copyedit")
+    apply_tracked_changes(pkg, doc, [mech, ce, query], cfg)
 
     out = tmp_path / "two_author_comments.docx"
     pkg.save(out)
     comments = DocxPackage(out).tree("word/comments.xml")
-    by_author = {c.get(_w("author")): "".join(c.itertext()) for c in comments}
-    assert set(by_author) == {"Atmosphere Press Proofreader",
-                              "Atmosphere Press Copy Editor"}
-    assert "mechanical fix" in by_author["Atmosphere Press Proofreader"]
-    assert "copy-edit rewrite" in by_author["Atmosphere Press Copy Editor"]
+    assert len(comments) == 3
+    assert {c.get(_w("author")) for c in comments} == {
+        "Atmosphere Press Proofreader"}
+    assert {c.get(_w("initials")) for c in comments} == {"APP"}
+    assert {"".join(c.itertext()) for c in comments} == {
+        "A mechanical fix.", "A copy-edit rewrite.", "Who is speaking?"}
 
 
 def test_lane_authors_config_is_the_only_thing_that_changes_attribution(cfg):

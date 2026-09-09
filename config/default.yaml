@@ -963,5 +963,6 @@ revision_author: Atmosphere Press Proofreader
 # change authors Word can filter between. A lane with no entry — including
 # every finding outside a merged run — falls back to revision_author, so
 # nothing here changes an ordinary run's output.
+# Generated comments and InDesign notes always use Atmosphere Press Proofreader.
 lane_authors:
   copyedit: Atmosphere Press Copy Editor

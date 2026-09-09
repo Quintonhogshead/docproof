@@ -17,6 +17,7 @@ from pathlib import Path
 
 from lxml import etree
 
+from docproof.attribution import PROOFREADER_AUTHOR, PROOFREADER_INITIALS
 from galley.astra_review import (AstraReviewError, MODEL, PACKET_FILE, RECEIPT_FILE,
                                 REASONING_EFFORT, _atomic, _hash, _load, _node,
                                 _now, _revision, _views, build_packet,
@@ -222,7 +223,8 @@ def _replay(source, output, frozen, review, date):
                 p = etree.SubElement(comment, qn("w:p"))
                 r = etree.SubElement(p, qn("w:r"))
                 set_text(etree.SubElement(r, qn("w:t")), action["replacement"])
-                comment.set(qn("w:author"), AUTHOR)
+                comment.set(qn("w:author"), PROOFREADER_AUTHOR)
+                comment.set(qn("w:initials"), PROOFREADER_INITIALS)
                 comment.set(qn("w:date"), date)
             else:
                 root.remove(comment)
@@ -243,7 +245,7 @@ def _replay(source, output, frozen, review, date):
                 raise AstraReviewError("Astra author question has no unambiguous surviving anchor")
             start, end = text.index(quote), text.index(quote) + len(quote)
             _safe_span(p, start, end)
-            comments = comments or _Comments(pkg, AUTHOR, date)
+            comments = comments or _Comments(pkg, date)
             if not comments.attach_to_span(p, start, end, action["replacement"]):
                 raise AstraReviewError("Astra author question could not be anchored")
             pkg.mark_modified(paras[action["para_id"]].part)

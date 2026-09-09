@@ -47,7 +47,7 @@ class DocumentFormat:
     # Anchor the top-of-document note naming the words left out of the spell
     # check. OOXML-comment-shaped, so a format without Word comments simply
     # skips it — the same facts still reach summary.md and the change log.
-    #   annotate_excluded_words(pkg, doc, words, author) -> bool
+    #   annotate_excluded_words(pkg, doc, words) -> bool
     annotate_excluded_words: Callable | None = None
     # Split a paragraph two speakers share, as a tracked change, before the
     # ingest snapshot. OOXML-shaped (a w:ins on the paragraph mark); a format

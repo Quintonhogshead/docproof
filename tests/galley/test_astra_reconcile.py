@@ -372,6 +372,8 @@ def test_author_question_changes_have_exact_text_and_valid_surviving_anchors(run
             "commentRangeStart", "commentRangeEnd", "commentReference",
         }
     assert comment["text"] == question
+    assert comment["data"]["attributes"]["w:author"] == "Atmosphere Press Proofreader"
+    assert comment["data"]["attributes"]["w:initials"] == "APP"
     assert not current["coverage_issues"]
 
 
