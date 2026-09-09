@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Author Website Preview</title>
+  <style>
+    :root { --ink:#16232e; --ink-soft:#304654; --paper:#f5f1e9; --paper-bright:#fffdfa; --line:#d8d3ca; --muted:#6e7779; --accent:#b5583d; --shadow:0 20px 50px rgba(22,35,46,.12); }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--paper); font:15px/1.45 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    button { font:inherit; }
+    button:focus-visible, a:focus-visible { outline:3px solid #d18d60; outline-offset:3px; }
+    .topbar { display:flex; align-items:center; justify-content:space-between; gap:1.25rem; padding:1rem clamp(1.25rem,4vw,4rem); border-bottom:1px solid var(--line); background:rgba(255,253,250,.88); }
+    .brand { font:800 1rem/1 Georgia,serif; color:var(--ink); letter-spacing:-.025em; }
+    .brand small { margin-left:.55rem; color:var(--muted); font:600 .72rem/1 ui-sans-serif,system-ui,sans-serif; letter-spacing:.05em; text-transform:uppercase; }
+    .download { border:1px solid var(--ink); border-radius:999px; color:white; background:var(--ink); padding:.58rem .9rem; cursor:pointer; font-size:.79rem; font-weight:750; white-space:nowrap; }
+    .download:hover { background:var(--ink-soft); }
+    main { max-width:1540px; margin:0 auto; padding:0 clamp(1rem,4vw,4rem) 3.5rem; }
+    .intro { padding:2rem 0 1.5rem; display:grid; grid-template-columns:minmax(0,1fr) minmax(250px,390px); gap:2rem 6vw; align-items:end; }
+    .eyebrow { margin:0 0 .7rem; color:var(--accent); font-size:.7rem; font-weight:800; letter-spacing:.15em; text-transform:uppercase; }
+    h1 { max-width:26ch; margin:0; font:clamp(2rem,3.3vw,3.2rem)/1.02 Georgia,"Times New Roman",serif; letter-spacing:-.045em; }
+    .intro-copy { margin:0 0 .2rem; color:var(--muted); font:1rem/1.62 Georgia,"Times New Roman",serif; }
+    .picker { padding:1.25rem 0 1.1rem; border-top:1px solid var(--line); }
+    .picker-heading { display:flex; justify-content:space-between; align-items:baseline; gap:1rem; margin-bottom:.75rem; }
+    .picker-heading h2 { margin:0; font:700 .76rem/1 ui-sans-serif,system-ui,sans-serif; letter-spacing:.1em; text-transform:uppercase; }
+    .selection-note { margin:0; color:var(--muted); font-size:.78rem; }
+    .theme-list { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:.65rem; }
+    .theme-card { position:relative; display:flex; align-items:center; min-height:74px; gap:.65rem; padding:.72rem; text-align:left; cursor:pointer; border:1px solid var(--line); border-radius:8px; color:var(--ink); background:var(--paper-bright); transition:border-color .15s, box-shadow .15s, transform .15s; }
+    .theme-card:hover { transform:translateY(-1px); border-color:#899299; }
+    .theme-card[aria-pressed="true"] { border-color:var(--ink); box-shadow:inset 0 0 0 1px var(--ink),0 3px 0 var(--ink); }
+    .theme-mark { width:25px; height:38px; flex:0 0 25px; border-radius:13px 13px 2px 2px; background:linear-gradient(155deg,#f0ece4 42%,#b5583d 43%); }
+    .theme-card:nth-child(2) .theme-mark { background:linear-gradient(155deg,#101921 44%,#e1b66e 45%); }
+    .theme-card:nth-child(3) .theme-mark { background:linear-gradient(155deg,#e1edf1 41%,#2d6691 42%); }
+    .theme-card:nth-child(4) .theme-mark { background:linear-gradient(155deg,#f0dfd2 44%,#c34f37 45%); }
+    .theme-card:nth-child(5) .theme-mark { background:linear-gradient(155deg,#dfeadf 43%,#dc7959 44%); }
+    .theme-card strong, .theme-card small { display:block; }
+    .theme-card strong { font:700 .84rem/1.1 Georgia,"Times New Roman",serif; }
+    .theme-card small { margin-top:.23rem; color:var(--muted); font-size:.67rem; line-height:1.18; }
+    .theme-check { position:absolute; right:.55rem; top:.5rem; width:15px; height:15px; border:1px solid #aab0ae; border-radius:3px; background:var(--paper-bright); }
+    .theme-card[aria-pressed="true"] .theme-check { border-color:var(--ink); background:var(--ink); }
+    .theme-card[aria-pressed="true"] .theme-check::after { content:""; display:block; width:7px; height:4px; margin:3px; border-left:1.5px solid white; border-bottom:1.5px solid white; transform:rotate(-45deg); }
+    .controls { display:flex; justify-content:space-between; gap:1rem; align-items:center; padding:1.15rem 0 .75rem; }
+    .control-group { display:flex; flex-wrap:wrap; gap:.35rem; }
+    .control-group button { padding:.47rem .78rem; border:1px solid var(--line); border-radius:999px; color:var(--muted); background:transparent; cursor:pointer; font-size:.78rem; font-weight:750; }
+    .control-group button[aria-selected="true"] { color:white; border-color:var(--ink); background:var(--ink); }
+    .preview-status { margin:0; color:var(--muted); font-size:.77rem; text-align:right; }
+    .gallery { display:grid; grid-template-columns:1fr; gap:1rem; }
+    .gallery.compare { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .preview-pane { min-width:0; padding:9px; border-radius:13px; background:#25343d; box-shadow:var(--shadow); }
+    .pane-bar { display:flex; align-items:center; min-height:25px; gap:5px; padding:0 7px; color:#d4dcdd; font:11px/1 ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .pane-bar i { width:7px; height:7px; border-radius:50%; background:#718088; }
+    .pane-title { overflow:hidden; margin-left:.45rem; font:600 10px/1 ui-sans-serif,system-ui,sans-serif; letter-spacing:.04em; text-overflow:ellipsis; text-transform:uppercase; white-space:nowrap; }
+    .viewport-stage { position:relative; overflow:hidden; width:100%; border-radius:4px; background:#fff; }
+    .native-viewport { position:absolute; top:0; left:0; transform-origin:top left; }
+    iframe { display:block; width:100%; height:100%; border:0; background:white; }
+    .preview-pane.mobile { width:min(100%,430px); margin:0 auto; border-radius:26px; padding:8px; }
+    .preview-pane.mobile .viewport-stage { border-radius:18px; }
+    .preview-pane.mobile .pane-bar { padding-left:9px; }
+    footer { display:flex; justify-content:space-between; gap:1rem; padding:1.35rem 0 0; color:var(--muted); border-top:1px solid var(--line); font-size:.76rem; }
+    @media (max-width:1000px) { .theme-list { grid-template-columns:repeat(3,minmax(0,1fr)); } .gallery.compare { grid-template-columns:1fr; } }
+    @media (max-width:700px) { .topbar { align-items:flex-start; flex-direction:column; } .intro { grid-template-columns:1fr; gap:.75rem; padding-top:2.4rem; } .intro-copy { max-width:43ch; } .theme-list { grid-template-columns:repeat(2,minmax(0,1fr)); } .controls { align-items:flex-start; flex-direction:column; } .preview-status { text-align:left; } footer { flex-direction:column; } }
+    @media (max-width:420px) { main { padding-inline:.75rem; } .theme-list { grid-template-columns:1fr; } .preview-pane { padding:5px; border-radius:7px; } .pane-bar { display:none; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">DocProof <small id="author-label">Author website preview</small></div>
+    <span class="selection-note">Interactive design review</span>
+  </header>
+  <main>
+    <section class="intro" aria-labelledby="gallery-title">
+      <div><p class="eyebrow">Website directions</p><h1 id="gallery-title">Choose a direction for this author’s website.</h1></div>
+      <p class="intro-copy">One file. Five themes. Four pages. Opens offline. Double-click the downloaded file to open it in a browser.</p>
+    </section>
+    <section class="picker" aria-label="Website preview controls">
+      <div class="picker-heading"><h2>Choose one or compare a few</h2><p class="selection-note" id="selection-note">1 theme selected</p></div>
+      <div class="theme-list" id="theme-list" role="group" aria-label="Website themes"></div>
+      <div class="controls">
+        <div class="control-group" id="page-tabs" role="tablist" aria-label="Preview page">
+          <button type="button" role="tab" aria-selected="true" data-page="home">Home</button>
+          <button type="button" role="tab" aria-selected="false" data-page="about">About</button>
+          <button type="button" role="tab" aria-selected="false" data-page="books">Books</button>
+          <button type="button" role="tab" aria-selected="false" data-page="contact">Contact</button>
+        </div>
+        <div class="control-group" id="screen-tabs" role="group" aria-label="Preview size">
+          <button type="button" aria-selected="true" data-screen="desktop">Desktop</button>
+          <button type="button" aria-selected="false" data-screen="mobile">Mobile</button>
+        </div>
+        <p class="preview-status" id="preview-status" aria-live="polite"></p>
+      </div>
+    </section>
+    <section class="gallery" id="gallery" aria-label="Website previews"></section>
+    <footer><span>Author website preview</span><span>Send the HTML file. Every theme, page, and image is included.</span></footer>
+  </main>
+
+  <script id="site-data" type="application/json">__DOCPROOF_SITE_DATA__</script>
+  <script>
+  (() => {
+    const pages = new Set(['home', 'about', 'books', 'contact']);
+    const dataNode = document.getElementById('site-data');
+    let data;
+    try { data = JSON.parse(dataNode.textContent); } catch (error) { data = { author:'Author', book_title:'', templates:[], pages:{}, assets:{} }; }
+    const templates = Array.isArray(data.templates) ? data.templates.filter(item => item && item.id) : [];
+    const availableIds = new Set(templates.map(item => item.id));
+    const preferred = availableIds.has(data.default_template) ? data.default_template : (availableIds.has('midnight-narrative') ? 'midnight-narrative' : templates[0]?.id);
+    const state = { selected: preferred ? [preferred] : [], page:'home', screen:'desktop' };
+    const gallery = document.getElementById('gallery');
+    const themeList = document.getElementById('theme-list');
+    const selections = document.getElementById('selection-note');
+    const status = document.getElementById('preview-status');
+    const activeFrames = [];
+    const childBridge = `<script>(function(){
+      var pages={home:1,about:1,books:1,contact:1};
+      document.addEventListener('click',function(event){
+        var target=event.target; var link=target && target.closest ? target.closest('a[href]') : null; if(!link) return;
+        var raw=link.getAttribute('href')||'';
+        var local=raw.match(/^#(home|about|books|contact)$/);
+        if(local){ event.preventDefault(); parent.postMessage({type:'author-preview:navigate',page:local[1],template:window.__docproofTemplate},'*'); return; }
+        if(/^(https?:|mailto:)/i.test(raw)){ link.target='_blank'; link.rel='noopener noreferrer'; }
+      },true);
+    })();<\/script>`;
+    const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:;">`;
+
+    function plural(count, word) { return `${count} ${word}${count === 1 ? '' : 's'}`; }
+    function escapeText(value) { const box = document.createElement('span'); box.textContent = value || ''; return box.innerHTML; }
+    function assetUrl(id) { return (data.assets && data.assets[id]) || ''; }
+    function preparePage(source, templateId) {
+      let html = String(source || '<!doctype html><html><body></body></html>');
+      html = html.replace(/__DOCPROOF_ASSETS__\/([A-Za-z0-9_.-]+)/g, (_, id) => assetUrl(id));
+      html = html.replace(/__DOCPROOF_BASE__\/(home|about|books|contact)\b/g, '#$1');
+      // The preview can open ordinary links, but it does not load any remote material by itself.
+      html = html.replace(/\s(?:src|poster)=(['"])(?:https?:)?\/\/[^'"]*\1/gi, '');
+      html = html.replace(/<link\b[^>]*\bhref=(['"])(?:https?:)?\/\/[^'"]*\1[^>]*>/gi, '');
+      html = html.replace(/<meta\b[^>]*http-equiv=(['"])refresh\1[^>]*>/gi, '');
+      html = html.replace(/<head([^>]*)>/i, `<head$1>${csp}`);
+      if (!/<head[\s>]/i.test(html)) html = csp + html;
+      const templateScript = `<script>window.__docproofTemplate=${JSON.stringify(templateId)};<\/script>`;
+      return /<\/body\s*>/i.test(html) ? html.replace(/<\/body\s*>/i, `${templateScript}${childBridge}</body>`) : `${html}${templateScript}${childBridge}`;
+    }
+    function selectedTemplates() { return templates.filter(item => state.selected.includes(item.id)); }
+    function updateThemeButtons() {
+      themeList.querySelectorAll('[data-template]').forEach(button => button.setAttribute('aria-pressed', String(state.selected.includes(button.dataset.template))));
+      selections.textContent = `${plural(state.selected.length, 'theme')} selected${state.selected.length > 1 ? ' · comparison view' : ''}`;
+    }
+    function updateControls() {
+      document.querySelectorAll('[data-page]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.page === state.page)));
+      document.querySelectorAll('[data-screen]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.screen === state.screen)));
+      const names = selectedTemplates().map(item => item.name).join(' and ');
+      status.textContent = names ? `${names} · ${state.page[0].toUpperCase() + state.page.slice(1)} · ${state.screen}` : 'Choose a theme to begin';
+    }
+    function fitPane(record) {
+      const width = state.screen === 'mobile' ? 390 : 1200;
+      const height = state.screen === 'mobile' ? 760 : 820;
+      const available = record.stage.clientWidth;
+      const scale = available / width;
+      record.stage.style.height = `${Math.ceil(height * scale)}px`;
+      record.native.style.width = `${width}px`;
+      record.native.style.height = `${height}px`;
+      record.native.style.transform = `scale(${scale})`;
+    }
+    const resizeObserver = new ResizeObserver(entries => {
+      entries.forEach(entry => { const record = activeFrames.find(item => item.stage === entry.target); if (record) fitPane(record); });
+    });
+    function render() {
+      resizeObserver.disconnect();
+      activeFrames.splice(0, activeFrames.length);
+      gallery.replaceChildren();
+      gallery.classList.toggle('compare', state.selected.length > 1 && state.screen === 'desktop');
+      selectedTemplates().forEach(template => {
+        const pane = document.createElement('article');
+        pane.className = `preview-pane ${state.screen}`;
+        pane.setAttribute('aria-label', `${template.name} ${state.page} page`);
+        const bar = document.createElement('div'); bar.className = 'pane-bar'; bar.innerHTML = '<i></i><i></i><i></i>';
+        const label = document.createElement('span'); label.className = 'pane-title'; label.textContent = `${template.name} / ${state.page}`; bar.append(label);
+        const stage = document.createElement('div'); stage.className = 'viewport-stage';
+        const native = document.createElement('div'); native.className = 'native-viewport';
+        const frame = document.createElement('iframe');
+        frame.title = `${template.name}: ${state.page}`;
+        frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox');
+        frame.srcdoc = preparePage(data.pages?.[template.id]?.[state.page], template.id);
+        native.append(frame); stage.append(native); pane.append(bar, stage); gallery.append(pane);
+        const record = { template:template.id, iframe:frame, stage, native };
+        activeFrames.push(record); resizeObserver.observe(stage); requestAnimationFrame(() => fitPane(record));
+      });
+      updateThemeButtons(); updateControls();
+    }
+    function renderThemes() {
+      templates.forEach(template => {
+        const button = document.createElement('button');
+        button.type = 'button'; button.className = 'theme-card'; button.dataset.template = template.id;
+        button.setAttribute('aria-pressed', String(state.selected.includes(template.id)));
+        button.setAttribute('aria-label', `Show ${template.name}`);
+        button.innerHTML = `<span class="theme-mark" aria-hidden="true"></span><span><strong>${escapeText(template.name)}</strong><small>${escapeText(template.description || '')}</small></span><span class="theme-check" aria-hidden="true"></span>`;
+        button.addEventListener('click', () => {
+          if (state.selected.includes(template.id)) {
+            if (state.selected.length === 1) return;
+            state.selected = state.selected.filter(id => id !== template.id);
+          } else { state.selected = [...state.selected, template.id]; }
+          render();
+        });
+        themeList.append(button);
+      });
+    }
+    window.addEventListener('message', event => {
+      const message = event.data;
+      if (!message || message.type !== 'author-preview:navigate' || !pages.has(message.page) || !availableIds.has(message.template)) return;
+      const matchingFrame = activeFrames.find(record => record.template === message.template && record.iframe.contentWindow === event.source);
+      if (!matchingFrame) return;
+      state.page = message.page;
+      render();
+    });
+    document.getElementById('page-tabs').addEventListener('click', event => { const button = event.target.closest('[data-page]'); if (!button || !pages.has(button.dataset.page)) return; state.page = button.dataset.page; render(); });
+    document.getElementById('screen-tabs').addEventListener('click', event => { const button = event.target.closest('[data-screen]'); if (!button || !['desktop','mobile'].includes(button.dataset.screen)) return; state.screen = button.dataset.screen; render(); });
+    const author = data.author || 'Author';
+    document.getElementById('author-label').textContent = `${author} · website preview`;
+    document.getElementById('gallery-title').textContent = `Choose a direction for ${author}'s website.`;
+    document.title = `${author} — Website Preview`;
+    renderThemes(); render();
+  })();
+  </script>
+</body>
+</html>

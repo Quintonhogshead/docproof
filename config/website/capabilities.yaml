@@ -1,0 +1,5 @@
+# Website Studio model limits are an explicit operational contract.  Do not
+# infer limits from a provider name: enable a model here only after its
+# structured-output and factual-quality pilot.
+version: 1
+models: {}

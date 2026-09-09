@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1200" role="img" aria-labelledby="title desc">
+  <title id="title">The Shape of Returning by Mara Ellison</title>
+  <desc id="desc">An abstract literary book cover with a tangerine sun, layered forest hills, and a winding river drawn in ink.</desc>
+  <rect width="800" height="1200" fill="#eee6d5"/>
+  <rect x="0" y="0" width="800" height="20" fill="#d7653d"/>
+  <circle cx="610" cy="335" r="104" fill="#d7653d"/>
+  <path d="M0 694 C126 630 234 626 348 682 C466 740 588 730 800 618 L800 1200 L0 1200Z" fill="#cad3c1"/>
+  <path d="M0 773 C130 701 256 722 360 780 C470 842 600 833 800 733 L800 1200 L0 1200Z" fill="#537262"/>
+  <path d="M0 897 C129 832 232 838 342 904 C460 974 602 978 800 872 L800 1200 L0 1200Z" fill="#29483f"/>
+  <g fill="none" stroke="#1d2927" stroke-width="3" opacity=".72">
+    <path d="M-20 750 C108 676 241 696 359 759 C474 821 597 814 820 704"/>
+    <path d="M-20 792 C116 714 242 734 365 798 C489 862 610 851 820 748"/>
+    <path d="M-20 838 C120 760 247 780 373 846 C489 906 620 901 820 795"/>
+    <path d="M-20 921 C129 859 244 870 349 929 C476 999 612 1004 820 891"/>
+    <path d="M-20 963 C132 900 244 918 354 973 C479 1038 617 1044 820 936"/>
+    <path d="M-20 1010 C134 950 250 966 360 1017 C488 1078 622 1088 820 983"/>
+  </g>
+  <path d="M493 442 C448 505 457 562 504 613 C552 664 549 719 486 773 C426 826 393 873 415 932 C436 987 491 1029 535 1085 C557 1112 557 1148 544 1200" fill="none" stroke="#eee6d5" stroke-width="19" stroke-linecap="round"/>
+  <path d="M493 442 C448 505 457 562 504 613 C552 664 549 719 486 773 C426 826 393 873 415 932 C436 987 491 1029 535 1085 C557 1112 557 1148 544 1200" fill="none" stroke="#d7653d" stroke-width="4" stroke-linecap="round"/>
+  <g fill="#1d2927" font-family="Georgia, 'Times New Roman', serif">
+    <text x="68" y="116" font-size="19" letter-spacing="5">A NOVEL</text>
+    <text x="68" y="208" font-size="65" letter-spacing="1">THE SHAPE</text>
+    <text x="68" y="277" font-size="65" letter-spacing="1">OF RETURNING</text>
+  </g>
+  <line x1="68" y1="313" x2="284" y2="313" stroke="#d7653d" stroke-width="7"/>
+  <text x="68" y="1114" fill="#eee6d5" font-family="ui-sans-serif, system-ui, sans-serif" font-size="22" font-weight="700" letter-spacing="7">MARA ELLISON</text>
+  <text x="68" y="1156" fill="#eee6d5" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" letter-spacing="3">A STORY OF THE LONG WAY HOME</text>
+</svg>

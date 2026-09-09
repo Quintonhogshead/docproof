@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "renderer_version": "1.0",
+  "template_id": "literary-journal",
+  "author": {
+    "name": "Mara Ellison",
+    "bio_short": "Mara Ellison writes about the quiet mathematics of leaving, returning, and finding a place to stand.",
+    "bio": "Mara Ellison is a novelist drawn to tidal towns, unfinished maps, and the small decisions that change a life's direction. Her work follows people who make their way through complicated inheritances with patience, wit, and a stubborn tenderness for the places that made them. She lives near the water and keeps a notebook for sentences overheard on long walks.",
+    "portrait_asset_id": ""
+  },
+  "headline": "Stories for the way back",
+  "intro": "Mara Ellison writes luminous, searching fiction about departure, memory, and the landscapes we carry home.",
+  "primary_cta": {
+    "label": "Explore the books",
+    "url": ""
+  },
+  "books": [
+    {
+      "id": "the-shape-of-returning",
+      "title": "The Shape of Returning",
+      "subtitle": "A novel",
+      "description": "After a decade away, cartographer Lena Vale comes back to the river town she once promised never to see again. As the old ferry route disappears beneath a changing shoreline, she must redraw the map of a family story that was never hers alone to tell.",
+      "hook": "A cartographer returns to a river town and discovers that home has been changing in her absence.",
+      "cover_asset_id": "shape-cover.svg",
+      "publication_date": "2024-09-17",
+      "links": []
+    },
+    {
+      "id": "where-the-river-ends",
+      "title": "Where the River Ends",
+      "subtitle": "Stories",
+      "description": "In these linked stories, women and men stand at the edges of familiar lives: a mother measures a vanished coastline, a brother keeps watch at a closed station, and a child learns the names of every bridge between here and elsewhere.",
+      "hook": "Linked stories about the thresholds where a life can open, close, or change course.",
+      "cover_asset_id": "river-cover.svg",
+      "publication_date": "2021-05-04",
+      "links": []
+    }
+  ],
+  "contact": {
+    "email": "hello@example.com",
+    "headline": "Write to Mara",
+    "message": "For reading group conversations, event invitations, or a note about the books, send a message here. Mara reads every letter when she can.",
+    "links": []
+  },
+  "praise": [],
+  "excerpt": "At the bend in the river, Lena stopped walking. The water had taken the old road with it, but the willows still leaned toward the missing bridge, keeping faith with a crossing no one could see.",
+  "seo": {
+    "description": "The official demo site for fictional novelist Mara Ellison, author of The Shape of Returning and Where the River Ends."
+  }
+}

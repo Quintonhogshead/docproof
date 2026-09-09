@@ -1,0 +1,22 @@
+[
+  {
+    "id": "shape-cover.svg",
+    "filename": "shape-cover.svg",
+    "media_type": "image/svg+xml",
+    "sha256": "edfe71919db9646efa24cf12103af8a7ee33eb70a6ee92a829dc1290fb50597c",
+    "alt": "Illustrated cover for The Shape of Returning by Mara Ellison",
+    "approved": true,
+    "focal_x": 0.5,
+    "focal_y": 0.5
+  },
+  {
+    "id": "river-cover.svg",
+    "filename": "river-cover.svg",
+    "media_type": "image/svg+xml",
+    "sha256": "b2d031d59da7698f1483044e2a19fd0523dbd9ffe1aafb6d31679a86b6649155",
+    "alt": "Illustrated cover for Where the River Ends by Mara Ellison",
+    "approved": true,
+    "focal_x": 0.5,
+    "focal_y": 0.5
+  }
+]

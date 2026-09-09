@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1200" role="img" aria-labelledby="title desc">
+  <title id="title">Where the River Ends by Mara Ellison</title>
+  <desc id="desc">An abstract dark book cover with a tangerine horizon, a river line, and layered landscape contours in paper and forest.</desc>
+  <rect width="800" height="1200" fill="#192b2a"/>
+  <rect x="62" y="62" width="676" height="1076" fill="none" stroke="#eadfc9" stroke-width="2" opacity=".7"/>
+  <circle cx="192" cy="486" r="102" fill="#d7653d"/>
+  <path d="M62 667 C184 611 292 625 388 676 C487 729 591 723 738 644 L738 1138 L62 1138Z" fill="#315247"/>
+  <path d="M62 768 C192 700 289 717 393 779 C499 843 593 825 738 753 L738 1138 L62 1138Z" fill="#526e5d"/>
+  <path d="M62 882 C197 831 302 847 399 901 C499 956 608 952 738 886 L738 1138 L62 1138Z" fill="#eadfc9"/>
+  <g fill="none" stroke="#192b2a" stroke-width="3" opacity=".72">
+    <path d="M62 719 C186 658 291 672 391 726 C495 782 594 774 738 701"/>
+    <path d="M62 760 C186 700 294 711 396 766 C500 822 602 817 738 744"/>
+    <path d="M62 813 C193 752 298 765 402 819 C507 874 600 871 738 802"/>
+    <path d="M62 918 C189 872 296 884 402 935 C506 985 608 987 738 924"/>
+    <path d="M62 970 C195 930 295 938 405 988 C514 1036 608 1038 738 978"/>
+    <path d="M62 1021 C191 985 302 989 411 1039 C510 1084 613 1091 738 1031"/>
+  </g>
+  <path d="M354 412 C393 482 390 541 349 607 C313 666 306 724 352 786 C402 851 485 886 488 947 C491 1007 430 1051 406 1108" fill="none" stroke="#eadfc9" stroke-width="21" stroke-linecap="round"/>
+  <path d="M354 412 C393 482 390 541 349 607 C313 666 306 724 352 786 C402 851 485 886 488 947 C491 1007 430 1051 406 1108" fill="none" stroke="#d7653d" stroke-width="4" stroke-linecap="round"/>
+  <g fill="#eadfc9" font-family="Georgia, 'Times New Roman', serif">
+    <text x="98" y="148" font-size="18" letter-spacing="5">STORIES</text>
+    <text x="98" y="218" font-size="62">WHERE THE</text>
+    <text x="98" y="286" font-size="62">RIVER ENDS</text>
+  </g>
+  <line x1="98" y1="324" x2="285" y2="324" stroke="#d7653d" stroke-width="7"/>
+  <text x="98" y="1062" fill="#192b2a" font-family="ui-sans-serif, system-ui, sans-serif" font-size="22" font-weight="700" letter-spacing="7">MARA ELLISON</text>
+  <text x="98" y="1104" fill="#192b2a" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" letter-spacing="3">LINKED STORIES</text>
+</svg>
