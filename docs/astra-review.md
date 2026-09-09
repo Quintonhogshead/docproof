@@ -95,6 +95,18 @@ the frozen source and comparing every DOCX member. Unsupported or ambiguous
 repairs remain blocked. Certification and handoff then run deterministically;
 no later Claude phase rejudges Astra or turns delivery failure into human PR.
 
+An `internal_repair` can replace one finding's `explanation` when its finding ID,
+paragraph, and complete original explanation match exactly. It cannot rewrite
+anchors, status, historical corrected text, or other evidence fields. Chunk-local
+finding IDs retain their positional pairing with the frozen finding rows.
+
+The frozen packet and model responses remain immutable. The reconciliation receipt
+records the explanation change and verifies all other evidence unchanged. A durable
+prepared plan and exclusive application lock allow recovery across document and
+metadata writes without generating another review. An unsupported target still
+blocks with the action ID and the failed metadata constraint; deleting a completed
+Codex request cache is not a recovery step.
+
 ## API cost reference
 
 The optional API route performs exact input-token preflight before its review.

@@ -210,7 +210,8 @@ def test_comment_quote_cannot_substitute_for_other_action_body_quotes(run, kind)
     action.update(kind=kind, replacement="A proposed replacement.")
     if kind == "revert_revision":
         action["revision_ids"] = [packet["revisions"][0]["id"]]
-    with pytest.raises(ar.AstraReviewError, match="quote is absent"):
+    expected = "exact finding explanation target" if kind == "internal_repair" else "quote is absent"
+    with pytest.raises(ar.AstraReviewError, match=expected):
         ar.validate_review(review, packet)
 
 

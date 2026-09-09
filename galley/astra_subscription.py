@@ -281,7 +281,9 @@ def _local_packet(chunk, packet, extra_para_ids=()):
     local["changed_source_paragraphs"] = [p for p in packet["changed_source_paragraphs"] if p["id"] in visible]
     for key in ("revisions", "comments"):
         local[key] = [r for r in packet[key] if r["id"] in ids[key]]
-    local["finding_ids"] = ids["findings"]
+    # IDs and rows are a positional mapping. Chunk ownership order follows
+    # manuscript locations and can differ from the frozen findings order.
+    local["finding_ids"] = [fid for fid in packet["finding_ids"] if fid in ids["findings"]]
     local["artifacts"]["findings.json"]["findings"] = [row for fid, row in zip(packet["finding_ids"], packet["artifacts"]["findings.json"]["findings"]) if fid in ids["findings"]]
     local["issue_index"] = [row for row in packet["issue_index"] if row["id"] in ids["issues"]]
     local["counts"] = {**{k: len(ids[k]) for k in packet["counts"]}, "paragraphs": len(local["accepted_paragraphs"])}
