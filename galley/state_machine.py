@@ -23,6 +23,7 @@ RUN_STATES = (
     "copyedit_complete",
     "audited",
     "settled",
+    "astra_reviewed",
     "certified",
     "delivered",
 )

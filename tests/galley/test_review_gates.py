@@ -286,6 +286,19 @@ def env(tmp_path) -> ga.AgentEnv:
     return ga.read_env(path)
 
 
+def _reviewed_escalation(tmp_path):
+    """A completed editorial verdict whose transport can be retried independently."""
+    files = [tmp_path / "Test - Book 2 - decision-log.md",
+             tmp_path / "Test - Book 2 - outcome.json"]
+    files[0].write_text("Astra completed the review and requested an editor.")
+    files[1].write_text(json.dumps({"outcome": "needs_human",
+                                   "reason": "The book needs human editorial judgment.",
+                                   "set_by": "gpt-6-astra (final editorial review)"}))
+    result = FakeResult("needs_human", "The book needs human editorial judgment.", uploaded=())
+    result.handoff = files
+    return result
+
+
 def test_a_temporary_upload_failure_leaves_a_durable_pending_delivery(env, tmp_path):
     calls: list[list[str]] = []
     fail = {"on": True}
@@ -299,8 +312,7 @@ def test_a_temporary_upload_failure_leaves_a_durable_pending_delivery(env, tmp_p
     ran = []
     agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
                    download=_downloader(tmp_path), poll_interval_s=0,
-                   run_driver=lambda **kw: (ran.append(kw), (_ for _ in ()).throw(
-                       RuntimeError("boom")))[1],
+                   run_driver=lambda **kw: ran.append(kw) or _reviewed_escalation(tmp_path),
                    upload=upload)
     agent.poll_once()
     ledger = ga.Ledger.load(agent.ledger_path)
@@ -332,8 +344,7 @@ def test_a_retried_delivery_uploads_only_what_is_missing(env, tmp_path):
 
     agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
                    download=_downloader(tmp_path), poll_interval_s=0,
-                   run_driver=lambda **kw: (_ for _ in ()).throw(
-                       RuntimeError("boom")),
+                   run_driver=lambda **kw: _reviewed_escalation(tmp_path),
                    upload=upload)
     agent.poll_once()
     entry = ga.Ledger.load(agent.ledger_path).books["drive-1"]
@@ -351,8 +362,7 @@ def test_a_retried_delivery_uploads_only_what_is_missing(env, tmp_path):
 def test_delivery_is_abandoned_after_the_bounded_retries(env, tmp_path):
     agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
                    download=_downloader(tmp_path), poll_interval_s=60,
-                   run_driver=lambda **kw: (_ for _ in ()).throw(
-                       RuntimeError("boom")),
+                   run_driver=lambda **kw: _reviewed_escalation(tmp_path),
                    upload=lambda f, d: (_ for _ in ()).throw(
                        RuntimeError("down")))
     agent.poll_once()

@@ -24,6 +24,16 @@ RUN curl -fsSL https://claude.ai/install.sh | bash -s latest \
     && ln -sf /root/.local/bin/claude /usr/local/bin/claude \
     && claude --version
 
+# Astra's final editorial review uses Codex with ChatGPT subscription sign-in.
+# Binaries stay in the image; the worker's separate refreshable auth cache lives
+# on its /data volume. Pin the CLI so unattended rebuilds keep tested behavior.
+ARG CODEX_RELEASE=0.153.1
+RUN curl -fsSL https://chatgpt.com/codex/install.sh -o /tmp/install-codex.sh \
+    && CODEX_HOME=/opt/galley-codex CODEX_INSTALL_DIR=/usr/local/bin \
+       CODEX_NON_INTERACTIVE=1 sh /tmp/install-codex.sh --release "$CODEX_RELEASE" \
+    && rm /tmp/install-codex.sh \
+    && codex --version
+
 # Install dependencies first, off the packaging metadata, so a code-only change
 # doesn't reinstall the world on every deploy.
 COPY pyproject.toml ./
@@ -32,7 +42,9 @@ RUN pip install --no-cache-dir ".[app,languagetool,galley]" || true
 
 # Now the source, and a real install so the console scripts exist.
 COPY . .
-RUN pip install --no-cache-dir ".[app,languagetool,galley]"
+# The dependency warm-up can leave generated modules in build/lib. Rebuild
+# them from this source snapshot rather than reusing timestamp-based output.
+RUN rm -rf build && pip install --no-cache-dir ".[app,languagetool,galley]"
 
 # The Galley agent's entrypoint and the brain's sifter wrapper (first on the
 # brain's PATH; re-injects the keys the driver strips from the brain's env).

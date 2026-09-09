@@ -152,9 +152,49 @@ def applied_rows(src: JournalSources | None) -> list[dict[str, Any]]:
     return [r for r in _rows(src) if _state_of(r)[0] == "applied"]
 
 
+def _astra_snapshot(src: JournalSources | None) -> dict[str, Any] | None:
+    """Read the verified final document, never an earlier findings projection."""
+    if src is None:
+        return None
+    from galley.outcome import requires_astra_review
+    if not requires_astra_review(src.run_dir):
+        return None
+    from galley.astra_review import AstraReviewError, build_packet, validate_receipt
+    receipt = validate_receipt(src.run_dir)
+    if not receipt.get("delivery_ready"):
+        raise AstraReviewError("The author handoff requires the final Astra repairs and clearance")
+    inputs = receipt.get("inputs", {})
+    packet = build_packet(src.run_dir, docx_path=inputs.get("docx_path"),
+                          context_paths=inputs.get("context_paths", ()))
+    expected = receipt.get("reconciliation", {}).get("current_packet_sha256") or receipt["packet_sha256"]
+    if packet["packet_sha256"] != expected:
+        raise AstraReviewError("The reviewed document changed while the author handoff was being rendered")
+    return packet
+
+
+def _actual_comment_rows(packet: Mapping[str, Any]) -> list[dict[str, Any]]:
+    paragraphs = {p["id"]: p["text"] for p in packet["accepted_paragraphs"]}
+    out = []
+    for comment in packet["comments"]:
+        anchors = comment["anchors"]
+        first = next((a for a in anchors if a["kind"] == "commentRangeStart"), anchors[0])
+        pid = first["para_id"]
+        text = paragraphs[pid]
+        start = first["offset"] if first["kind"] == "commentRangeStart" else 0
+        end = next((a["offset"] for a in anchors
+                    if a["para_id"] == pid and a["kind"] == "commentRangeEnd"), len(text))
+        out.append({"comment_id": comment["id"], "para_id": pid,
+                    "original_text": text[start:end], "explanation": comment["text"],
+                    "error_type": "author_query", "status": "query", "queried": True})
+    return out
+
+
 def query_rows(src: JournalSources | None) -> list[dict[str, Any]]:
     """The author questions that reach the margin: query rows that were not
     withheld."""
+    packet = _astra_snapshot(src)
+    if packet is not None:
+        return _actual_comment_rows(packet)
     path = delivered_docx(src)
     if path is not None:
         from galley.comment_reconcile import actual_comments
@@ -179,6 +219,9 @@ def comment_count(src: JournalSources | None) -> int | None:
     there is no document to count on, or None when neither exists."""
     if src is None:
         return None
+    packet = _astra_snapshot(src)
+    if packet is not None:
+        return len(packet["comments"])
     from galley.manifest import delivered_comment_count
     n = delivered_comment_count(src.run_dir)
     if n is not None:
@@ -517,13 +560,17 @@ def _section_confidence(
 def edit_shapes(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     """What the applied edits look like on the page, counted from the rows
     rather than asserted: single-word substitutions, edits that span more
-    than one word, and paragraph marks (a speaker split). The outcome reason
+    than one word, paragraph marks (a speaker split), and run formatting. The outcome reason
     of 2026-09-07 claimed "every change is single-token" over a delivery that
     held two paragraph breaks and several multiword substitutions."""
-    shape = {"single_word": 0, "multiword": 0, "paragraph_marks": 0}
+    shape = {"single_word": 0, "multiword": 0, "paragraph_marks": 0, "formatting": 0}
     for r in rows:
-        if r.get("format"):
+        if (r.get("error_type") in {"speaker_split", "paragraph_split", "paragraph_break"}
+                or r.get("paragraph") in {"split", "split-before", "split-after", "merge-next", "merge-previous"}):
             shape["paragraph_marks"] += 1
+            continue
+        if r.get("format"):
+            shape["formatting"] += 1
             continue
         a = r.get("anchor") or {}
         before = str(a.get("delete_text") or r.get("original_text") or "")
@@ -537,14 +584,22 @@ def edit_shapes(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
 
 
 def _summary_line(src: JournalSources, cf: CaseFile) -> str:
+    packet = _astra_snapshot(src)
+    if packet is not None:
+        passages = {pid for r in packet["revisions"] for pid in r["para_ids"]}
+        return (f"The reviewed document contains tracked revisions in **{_n(len(passages))} passage(s)** "
+                f"and **{_n(len(packet['comments']))} margin question(s)**. "
+                "The questions below are the comments that remain in this final document.")
     rows = applied_rows(src)
     shape = edit_shapes(rows)
-    corrections = len(rows) - shape["paragraph_marks"]
+    corrections = shape["single_word"] + shape["multiword"]
     comments = comment_count(src)
     parts = [f"**{_n(corrections)} tracked correction(s)**"]
     if shape["paragraph_marks"]:
         parts[0] += (f" and **{_n(shape['paragraph_marks'])} paragraph "
                      f"break(s)** ({_n(len(rows))} tracked changes in all)")
+    if shape["formatting"]:
+        parts.append(f"**{_n(shape['formatting'])} formatting change(s)**")
     if comments is not None:
         parts.append(f"**{_n(comments)} margin comment(s)**")
     text = "The proof contains " + " and ".join(parts) + "."
@@ -563,6 +618,11 @@ def _summary_line(src: JournalSources, cf: CaseFile) -> str:
 
 def _section_choices(src: JournalSources, cf: CaseFile) -> list[str]:
     out = ["## Choices and reasons", ""]
+    if _astra_snapshot(src) is not None:
+        return out + ["The final editorial review covered the complete manuscript, "
+                      "tracked revisions, margin comments, and recorded findings. "
+                      "Its approved repairs have been reconciled with the document. "
+                      "Review the proposed edits in Word; the surviving questions are listed below.", ""]
     prof = src.profile if isinstance(src.profile, dict) else {}
     appr = src.approval if isinstance(src.approval, dict) else {}
     scope = []
@@ -585,7 +645,8 @@ def _section_choices(src: JournalSources, cf: CaseFile) -> list[str]:
         out.append(f"Counted from the edits themselves: {_n(shape['single_word'])} "
                    f"single-word correction(s), {_n(shape['multiword'])} "
                    f"spanning more than one word, and "
-                   f"{_n(shape['paragraph_marks'])} paragraph break(s). "
+                   f"{_n(shape['paragraph_marks'])} paragraph break(s), plus "
+                   f"{_n(shape['formatting'])} formatting change(s). "
                    f"No sentence was recast.")
         out.append("")
 
@@ -952,6 +1013,8 @@ HOUSE_CONVENTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 
 def _derived_style_sections(src: JournalSources, cf: CaseFile) -> list[str]:
     out: list[str] = []
+    packet = _astra_snapshot(src)
+    final_questions = _actual_comment_rows(packet) if packet is not None else query_rows(src)
     prof = src.profile if isinstance(src.profile, dict) else {}
     appr = src.approval if isinstance(src.approval, dict) else {}
     counts = Counter(str(r.get("error_type") or "") for r in applied_rows(src))
@@ -963,21 +1026,27 @@ def _derived_style_sections(src: JournalSources, cf: CaseFile) -> list[str]:
         scope = f"{str(prof['variant']).upper()} English mechanical proofreading"
     if prof.get("genre"):
         scope += f" of a {str(prof['genre']).replace('_', ' ')}"
-    if appr.get("mechanical_only"):
+    if appr.get("mechanical_only") and packet is None:
         scope += " (mechanical scope only — no copy-editing lane ran)"
-    out.append(scope + ". The author's voice, remembered speech, deliberate "
-               "fragments, repetition, coinages, and transliterations are "
-               "preserved; a clear expression is never rewritten to be more "
-               "formal or concise.")
+    if packet is not None:
+        out.append(scope + ". The review aimed to preserve the author's voice, "
+                   "deliberate fragments, repetition, and established terms. "
+                   "The tracked document shows the proposed edits for review.")
+    else:
+        out.append(scope + ". The author's voice, remembered speech, deliberate "
+                   "fragments, repetition, coinages, and transliterations are "
+                   "preserved; a clear expression is never rewritten to be more "
+                   "formal or concise.")
     out.append("")
 
     out.append("## Mechanical conventions")
     out.append("")
-    out.append("| Feature | Treatment | Sites this run |")
-    out.append("| --- | --- | --- |")
+    out.append("| Feature | Treatment |" if packet is not None else "| Feature | Treatment | Sites this run |")
+    out.append("| --- | --- |" if packet is not None else "| --- | --- | --- |")
     for feature, treatment, keys in HOUSE_CONVENTIONS:
         n = sum(counts.get(k, 0) for k in keys)
-        out.append(f"| {feature} | {treatment} | {_n(n) if n else '—'} |")
+        out.append(f"| {feature} | {treatment} |" if packet is not None
+                   else f"| {feature} | {treatment} | {_n(n) if n else '—'} |")
     out.append("")
 
     names = prof.get("proper_nouns") if isinstance(prof.get("proper_nouns"),
@@ -993,7 +1062,7 @@ def _derived_style_sections(src: JournalSources, cf: CaseFile) -> list[str]:
     protect = [n_ for n_ in protect
                if not n_.endswith(("'s", "’s")) and len(n_) > 2
                and n_[0].isupper() and not n_.isupper()]
-    if protect:
+    if protect and packet is None:
         out.append("## Names and terms")
         out.append("")
         out.append("Preserved as the book establishes them: "
@@ -1001,7 +1070,7 @@ def _derived_style_sections(src: JournalSources, cf: CaseFile) -> list[str]:
                    + ("…" if len(protect) > 40 else "") + ".")
         out.append("")
 
-    pending = [r for r in query_rows(src) if _NAME_QUESTION_RE.search(
+    pending = [r for r in final_questions if _NAME_QUESTION_RE.search(
         _question_text(r))]
     if pending:
         out.append("## Unresolved, pending the author")
@@ -1032,9 +1101,11 @@ def _derived_style_sections(src: JournalSources, cf: CaseFile) -> list[str]:
     out.append("## Review conventions")
     out.append("")
     budget = appr.get("comment_budget") or prof.get("comment_budget")
-    delivered = comment_count(src)
-    line = ("Every text correction is a rejectable tracked change. Comments "
-            "ask; they never alter the text.")
+    delivered = len(final_questions) if packet is not None else comment_count(src)
+    line = ("Review the tracked text and formatting changes in Word. "
+            "Margin comments contain the questions that remain after the final editorial review."
+            if packet is not None else
+            "Every text correction is a rejectable tracked change. Comments ask; they never alter the text.")
     if budget:
         line += (f" The comment ceiling for this book was {_n(int(budget))}"
                  + (f"; the proof carries {_n(delivered)}." if delivered is not None
@@ -1283,6 +1354,32 @@ def _convention_lines(rows: Sequence[Mapping[str, Any]], limit: int = 10
     return out[:limit]
 
 
+def _render_reviewed_author_letter(packet: Mapping[str, Any], name: str, path: Path) -> Path:
+    """A brief author handoff based only on the verified final manuscript."""
+    import docx
+    questions = _actual_comment_rows(packet)
+    d = docx.Document()
+    d.add_heading("A note from your proofreader", level=0)
+    d.add_paragraph(name)
+    d.add_paragraph("The manuscript and its proposed edits received a final editorial review. "
+                    "The tracked document shows the text and formatting changes for you to review in Word.")
+    label = "question" if len(questions) == 1 else "questions"
+    d.add_paragraph(f"The final file carries {_n(len(questions))} margin {label}. "
+                    "These are the questions that remain after reviewing the book and its context.")
+    d.add_heading("Reviewing the manuscript", level=1)
+    d.add_paragraph("Accept or reject the tracked changes in Word. Reply to the remaining questions "
+                    "in the margins of the tracked document so your decisions stay with their passages.")
+    d.add_heading(f"Questions for you ({_n(len(questions))})", level=1)
+    if questions:
+        for question, span, _pids, _fids in grouped_questions(questions):
+            where = f"Near “{_clip(span, 70)}”" if span else "In the margin"
+            d.add_paragraph(f"{where}: {question}", style="List Bullet")
+    else:
+        d.add_paragraph("No author questions remain in the margins. Please review the tracked changes.")
+    d.save(str(path))
+    return path
+
+
 def render_author_letter(cf: CaseFile, out_dir: str | Path, *,
                          evidence: JournalSources,
                          title: str | None = None) -> Path:
@@ -1303,9 +1400,12 @@ def render_author_letter(cf: CaseFile, out_dir: str | Path, *,
     name = (title or cf.book or "your manuscript")
     if name.lower().endswith(".docx"):
         name = name[:-5]
+    packet = _astra_snapshot(src)
+    if packet is not None:
+        return _render_reviewed_author_letter(packet, name, out_path / AUTHOR_LETTER_NAME)
     applied = applied_rows(src)
     shape = edit_shapes(applied)
-    corrections = len(applied) - shape["paragraph_marks"]
+    corrections = shape["single_word"] + shape["multiword"]
     comments = query_rows(src)
     questions, notes = split_comments(comments)
     appr = src.approval if isinstance(src.approval, dict) else {}
@@ -1330,6 +1430,8 @@ def render_author_letter(cf: CaseFile, out_dir: str | Path, *,
         f"The file carries {_n(corrections)} tracked correction(s)"
         + (f" and {_n(shape['paragraph_marks'])} paragraph break(s)"
            if shape["paragraph_marks"] else "")
+        + (f" and {_n(shape['formatting'])} formatting change(s)"
+           if shape["formatting"] else "")
         + f", with {_n(len(comments))} comment(s) in the margin. "
         f"{_n(shape['single_word'])} of the corrections change a single "
         f"word; {_n(shape['multiword'])} touch more than one. No sentence "

@@ -38,8 +38,14 @@ env_file="${GALLEY_AGENT_ENV_FILE:-$HOME/.galley/agent.env}"
 watch_home="${DOCPROOF_WATCH_HOME:-/data/galley/watch}"
 export GALLEY_AGENT_ENV_FILE="$env_file" DOCPROOF_WATCH_HOME="$watch_home"
 
+# A dedicated, persistent ChatGPT login for this one serialized worker. Never
+# copy a laptop's actively refreshed auth cache here or use a paid API fallback.
+export GALLEY_CODEX_HOME="${GALLEY_CODEX_HOME:-/data/galley-codex}"
+
 umask 077
 mkdir -p "$(dirname "$env_file")" "$root" "$watch_home"
+mkdir -p "$GALLEY_CODEX_HOME"
+chmod 700 "$GALLEY_CODEX_HOME"
 {
   printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$(printf '%s' "$token" | tr -d '[:space:]')"
   printf 'GALLEY_APP_URL=%s\n' "$app_url"

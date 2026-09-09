@@ -16,6 +16,7 @@ from typing import Any, Mapping
 
 OUTCOME_NAME = "outcome.json"
 OUTCOMES = ("done", "needs_human")
+ASTRA_REQUIRED_NAME = "astra-review-required.json"
 
 # Both verdicts move the Projects record out of "Ready for Proofing". Blank
 # values are refused because PATCHing "" would clear the status property.
@@ -88,6 +89,45 @@ class Outcome:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def requires_astra_review(run_dir: str | Path) -> bool:
+    """Enrollment is explicit for legacy artifacts, automatic in new drives."""
+    run = Path(run_dir)
+    workspace = (run.parent.parent if run.parent.name == "runs" else
+                 run.parent if run.name == "runs" else run)
+    return ((run / ASTRA_REQUIRED_NAME).exists()
+            or (workspace / ASTRA_REQUIRED_NAME).exists()
+            or (run / "astra-review.json").exists())
+
+
+def astra_outcome(run_dir: str | Path, *,
+                  done_value: str = DEFAULT_DONE_VALUE,
+                  needs_human_value: str = DEFAULT_NEEDS_HUMAN_VALUE) -> Outcome:
+    """Use only a complete review of this exact snapshot as editorial authority.
+
+    Missing, stale or unreconciled evidence is an operational block, never a
+    new editorial verdict and never a fallback to the old numeric thresholds.
+    """
+    from galley.astra_review import AstraReviewError, validate_receipt
+    receipt = validate_receipt(run_dir)
+    review = receipt["review"]
+    verdict = review["editorial_verdict"]
+    if verdict == "ready" and not receipt.get("delivery_ready"):
+        raise AstraReviewError(
+            "Astra's review requires repairs before this build can be delivered; "
+            "reconcile the recorded actions without requesting another review.")
+    outcome = "done" if verdict == "ready" else "needs_human"
+    return Outcome(
+        outcome=outcome, reason=review["verdict_reason"],
+        evidence={"editorial_authority": "gpt-6-astra", "reasoning_effort": "high",
+                  "packet_sha256": receipt["packet_sha256"],
+                  "response_id": receipt.get("response_id", ""),
+                  "repair_required": receipt.get("repair_required", False),
+                  "usage": receipt.get("usage", {})},
+        hubspot=hubspot_fields(outcome, done_value=done_value,
+                               needs_human_value=needs_human_value),
+        set_by="gpt-6-astra (final editorial review)")
 
 
 _WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’-]*")
@@ -266,6 +306,9 @@ def assess(run_dir: str | Path, *, thresholds: Thresholds | None = None,
     """The verdict from the run's own numbers. `needs_human` only when the
     book is beyond a mechanical proofread by one of the thresholds; the reason
     names the number that crossed."""
+    if requires_astra_review(run_dir):
+        return astra_outcome(run_dir, done_value=done_value,
+                             needs_human_value=needs_human_value)
     th = thresholds or Thresholds()
     ev = evidence_of(run_dir, source_paras)
     reasons: list[str] = []

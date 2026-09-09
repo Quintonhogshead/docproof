@@ -100,6 +100,15 @@ class ResidualFinding:
 
 
 
+def manuscript_docx_files(run_dir: str | Path) -> list[Path]:
+    """Exclude supporting documents and the immutable pre-reconciliation copy."""
+    return sorted(p for p in Path(run_dir).glob("*.docx")
+                  if not p.name.startswith("~$")
+                  and "change log" not in p.name.lower()
+                  and p.name.lower() not in ("astra-reviewed-source.docx", "author-letter.docx")
+                  and not p.name.lower().endswith((" - author letter.docx", " - clean.docx")))
+
+
 def deliverable_docx(run_dir: str | Path) -> Path | None:
     """The manuscript deliverable in a finished run dir, or None.
 
@@ -107,9 +116,7 @@ def deliverable_docx(run_dir: str | Path) -> Path | None:
     is neither a Word lock file nor the change-log document (which quotes the
     pre-fix text on purpose)."""
     run = Path(run_dir)
-    docs = sorted(p for p in run.glob("*.docx")
-                  if not p.name.startswith("~$")
-                  and "change log" not in p.name.lower())
+    docs = manuscript_docx_files(run)
     return docs[0] if docs else None
 
 

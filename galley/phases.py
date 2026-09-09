@@ -2,7 +2,7 @@
 
 ALL_PHASES: tuple[str, ...] = (
     "profile", "approve", "sweeps", "ladder", "flights", "audit", "reread",
-    "verify", "settle", "certify", "deliver",
+    "verify", "settle", "astra_review", "certify", "deliver",
 )
 COPYEDIT_PHASES: tuple[str, ...] = ("flights", "reread")
 MECHANICAL_PHASES: tuple[str, ...] = tuple(

@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from galley import driver as gd
-from .test_driver import (FIXTURE, FakeSpawner, MECH_PLAN, _deliverable,
+from .test_driver import (FIXTURE, FakeSpawner, LEGACY_PHASES, MECH_PLAN, _deliverable,
                           _driver, _plan)
 
 
@@ -250,7 +250,7 @@ def test_a_quiet_settle_round_finishes_the_book(book, tmp_path):
     spawn = Settles(ws)
     result = _driver(book, tmp_path, spawn=spawn).run()
     assert result.outcome == "done", result.reason
-    assert spawn.phases == list(gd.MECHANICAL_PHASES)
+    assert spawn.phases == LEGACY_PHASES
 
 
 def test_a_still_noisy_third_round_is_needs_human_but_still_delivers(
@@ -276,7 +276,7 @@ def test_a_still_noisy_third_round_is_needs_human_but_still_delivers(
     assert "still finding errors after 3 round(s): 9 in the last round" \
         in result.reason
     assert "needs a human proofreader" in result.reason
-    assert spawn.phases == list(gd.MECHANICAL_PHASES)   # certify/deliver ran
+    assert spawn.phases == LEGACY_PHASES   # certify/deliver ran
     # The whole hand-off, with the verdict in it.
     names = {p.name for p in result.handoff}
     assert "Ford - Book 2.docx" in names

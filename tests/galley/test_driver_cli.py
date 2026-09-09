@@ -57,7 +57,7 @@ def test_dry_run_seeds_the_workspace_and_prints_the_sequence(book, tmp_path,
     assert (Path(payload["workspace"]) / "CLAUDE.md").is_file()
 
 
-def test_drive_stops_at_the_gate_and_exits_7(book, tmp_path, capsys,
+def test_drive_blocks_at_the_gate_without_an_editorial_verdict(book, tmp_path, capsys,
                                              monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
     calls: list[str] = []
@@ -75,13 +75,12 @@ def test_drive_stops_at_the_gate_and_exits_7(book, tmp_path, capsys,
                "--no-state-gate", "--json"])
     # profile ran, the gate refused the $2.80 plan against a $1 budget.
     assert calls == ["profile"]
-    assert rc == 7
+    assert rc == 8
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-    assert payload["outcome"] == "needs_human"
+    assert payload["outcome"] == "blocked"
     assert "over the $1.00 budget" in payload["reason"]
     ws = tmp_path / "ws" / "ford"
-    assert json.loads((ws / "runs" / "outcome.json").read_text(
-        "utf-8"))["outcome"] == "needs_human"
+    assert not (ws / "runs" / "outcome.json").exists()
 
 
 def test_drive_reports_a_setup_error_as_exit_2(book, tmp_path, capsys):
