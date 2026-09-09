@@ -31,10 +31,10 @@ DEFAULT_ROUNDS = 3
 MAX_GROWTH = 1.5
 MAX_GROWTH_SLACK = 20
 
-ACTIONS = ("absorb", "add", "drop", "query", "revise", "revert")
+ACTIONS = ("absorb", "add", "drop", "query", "revise", "revert", "internal_repair")
 TERMINAL_STATES = ("applied", "dropped", "query")
 NON_TERMINAL = ("pending", "held", "residual", "flagged", "proposed",
-                "screened")
+                "screened", "internal_repair")
 
 REASON_PREFIXES = (
     "duplicate", "overlap_loser", "voice", "intent_zone", "style_only", "fact",
@@ -125,7 +125,8 @@ class Residual:
                 "severity": self.severity, "verdict": self.verdict,
                 "source_span": list(self.source_span) if self.source_span
                 else None, "owner_finding_id": self.owner_finding_id,
-                "round_seen": self.round_seen}
+                "round_seen": self.round_seen, "original_text": self.owner_original,
+                "corrected_text": self.owner_corrected, "fix": self.suggestion}
 
 
 @dataclass
@@ -181,7 +182,7 @@ class SettlementRecord:
 @dataclass
 class Settlement:
     """settlement.json: every SettlementRecord, the items still open (empty
-    when the loop converged or was closed out as queries), and the loop's own
+    only when the loop has resolved every internal item), and the loop's own
     accounting."""
 
     run_dir: str = ""
@@ -202,7 +203,8 @@ class Settlement:
     convergence: dict[str, Any] = field(default_factory=dict)
 
     def record_ids(self) -> set[str]:
-        return {r.residual_id for r in self.records}
+        return {rid for rid, rec in self.latest().items()
+                if rec.action != "internal_repair"}
 
     def latest(self) -> dict[str, SettlementRecord]:
         """The last record per residual (a revert supersedes the absorb)."""
@@ -367,8 +369,14 @@ def open_items(run_dir: str | Path) -> list[Residual]:
                 continue
             seen.add(item.id)
             out.append(item)
+    # Internal repairs survive later verify snapshots and process restarts.
+    if settled:
+        for row in settled.open:
+            item = Residual.from_problem(row) if row.get("kind") == "edit_damage" else Residual.from_walk(row)
+            if item.id not in have and item.id not in seen:
+                out.append(item)
+                seen.add(item.id)
     return out
-
 
 
 @dataclass
@@ -379,6 +387,7 @@ class Decision:
     question: str = ""               # for query
     composite: emap.Composite | None = None
     owner_key: str | None = None
+    mechanical_approved: bool = False
 
 
 # A parenthetical or dash-led tail that TALKS ABOUT typography instead of
@@ -417,7 +426,7 @@ def looks_like_instruction(suggestion: str, quote: str) -> bool:
     trailing whitespace.", "Use a semicolon: ...") rather than replacement
     text. Applied verbatim it becomes the manuscript's text — the Redding
     trial wrote "Mindset Number 1: Delete the trailing whitespace." That
-    shape routes to the judge (or to a query), never to compose."""
+    shape routes to the judge (or internal repair), never to compose."""
     if not suggestion.strip():
         return False
     if _INSTRUCTION_RE.match(suggestion) and not _INSTRUCTION_RE.match(quote):
@@ -513,8 +522,8 @@ def _norm_words(text: str) -> list[str]:
 
 #
 # A mechanical-only run permits only punctuation/case/hyphen/space changes,
-# one function-word change, or a same-stem spelling/inflection fix. Larger
-# changes become queries with reason `rewrite_class`.
+# one function-word change, or a same-stem spelling/inflection fix. Unrecognized
+# changes require internal grammatical judgment.
 
 def _function_words() -> frozenset[str]:
     """The closed-class list, shared with docproof.adjudicate's recurrence
@@ -569,38 +578,32 @@ def rewrite_class(before: str, after: str) -> str | None:
     """Why a change is more than a mechanical proofread would make — or None
     when a mechanical-only run may apply it as an edit.
 
-    Punctuation, case, hyphen, and spacing are ignored. At most one word may
-    change, and it must be a function word or same-stem spelling/inflection fix.
+    Punctuation, case, hyphen, and spacing are ignored. Each changed token is assessed as grammar or spelling. Unrecognized
+    changes require internal grammatical judgment.
     """
     if edit_kind(before, after) == "punctuation":
         return None                  # punctuation/case/hyphen/space only
-    bw = [w.lower() for w in _TOKEN_RE.findall(before)]
-    aw = [w.lower() for w in _TOKEN_RE.findall(after)]
+    from galley.mechanics import canonical_surface, same_inflection
+    bw = [w.lower() for w in _TOKEN_RE.findall(canonical_surface(before))]
+    aw = [w.lower() for w in _TOKEN_RE.findall(canonical_surface(after))]
     if bw == aw:
         return None
     import difflib
-    changes: list[tuple[list[str], list[str]]] = []
+    function_words = _function_words()
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
             a=bw, b=aw, autojunk=False).get_opcodes():
-        if tag != "equal":
-            changes.append((bw[i1:i2], aw[j1:j2]))
-    n = sum(max(len(x), len(y)) for x, y in changes)
-    if n > 1:
-        return f"{n} words changed"
-    old_w, new_w = changes[0]
-    old = old_w[0] if old_w else ""
-    new = new_w[0] if new_w else ""
-    function_words = _function_words()
-    if not old or not new:                   # one word inserted or deleted
-        word = old or new
-        if word in function_words:
-            return None
-        return f"{'deletes' if old else 'inserts'} {word!r}"
-    if old in function_words and new in function_words:
-        return None
-    if _same_stem(old, new):
-        return None
-    return f"word swap {old!r} -> {new!r}"
+        if tag == "equal":
+            continue
+        old, new = bw[i1:i2], aw[j1:j2]
+        if len(old) == len(new):
+            if all((a in function_words and b in function_words)
+                   or same_inflection(a, b) or _same_stem(a, b)
+                   for a, b in zip(old, new)):
+                continue
+        elif max(len(old), len(new)) == 1 and (old or new)[0] in function_words:
+            continue
+        return f"requires grammatical judgment: {old!r} -> {new!r}"
+    return None
 
 
 
@@ -740,12 +743,19 @@ def _fact(before: str, after: str, paragraph: str = "") -> str | None:
     noun. Only a change in the WORDS of a quoted passage, a number, or a
     genuinely new capitalized word counts here. Removing an editor's aside
     that leaked into the text is never a fact change."""
+    from galley.mechanics import canonical_surface
+    before, after = canonical_surface(before), canonical_surface(after)
     from docproof.chapter_labels import is_chapter_label
     from docproof.flights import _titles, fact_change
     if deletes_an_aside(before, after):
         return None
     if is_chapter_label(paragraph):
         # Renumber chapter/part headings as tracked edits, not author queries.
+        return None
+    numeric = r"(?<!\w)[+-]?\d+(?:\.\d+)?"
+    if re.findall(numeric, before) != re.findall(numeric, after):
+        return "number value or order changed"
+    if edit_kind(before, after) == "punctuation":
         return None
     try:
         why = fact_change(before, after)
@@ -830,13 +840,18 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
            zones: Any = None, *, replacement: str | None = None,
            mechanical_only: bool = False,
            sweeps: "SweepGuard | None" = None,
-           skipped: Mapping[str, str] | None = None) -> Decision:
+           skipped: Mapping[str, str] | None = None,
+           mechanical_approved: bool = False) -> Decision:
     """Return a deterministic decision, or ``judge`` when a usable suggestion
     is unavailable or exceeds the growth guard. ``sweeps`` rejects edits that a
-    deterministic sweep would undo; ``mechanical_only`` routes larger rewrites
-    to queries. Skipped TOC paragraphs are dropped as ``toc_unreachable``."""
+    deterministic sweep would undo; ``mechanical_only`` routes uncertain corrections
+    to internal judgment. Skipped TOC paragraphs are dropped as ``toc_unreachable``."""
     why = resolve(res, em, accepted, working)
     if why is not None:
+        current = accepted.get(res.para_id, "")
+        from galley.comment_reconcile import corrected_at_source
+        if corrected_at_source(source.get(res.para_id, ""), current, res.quote, res.suggestion):
+            return Decision("drop", "already_corrected")
         reason = str((skipped or {}).get(res.para_id, ""))
         if reason.lower().startswith("style:toc"):
             return Decision("drop", "toc_unreachable")
@@ -844,8 +859,8 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
             # Real text the engine cannot place by arithmetic: still a
             # residual, so it goes to the author with the suggestion, never
             # silently away.
-            return Decision("query", why, question=_question(res))
-        return Decision("drop", why)
+            return Decision("internal_repair", why)
+        return Decision("internal_repair", why)
 
     if res.kind == "edit_damage":
         key = res.owner_finding_id or ""
@@ -862,14 +877,14 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
         if had_note and fix == res.owner_corrected:
             return Decision("revert", "editorial_note", owner_key=key)
         fact = _fact(res.owner_corrected, fix, source.get(res.para_id, ""))
-        if fact:
-            return Decision("query", f"fact:{fact}", owner_key=key,
-                            question=_question(res, fix))
+        if fact and (not mechanical_approved or fact.startswith("number")):
+            return Decision("judge" if replacement is None else "internal_repair",
+                            f"fact:{fact}", owner_key=key)
         bad = artifact_in(fix)
         if bad and not artifact_in(res.owner_corrected):
             if replacement is None:
                 return Decision("judge", f"artifact:{bad}", owner_key=key)
-            return Decision("query", f"artifact:{bad}", owner_key=key,
+            return Decision("internal_repair", f"artifact:{bad}", owner_key=key,
                             question=_question(res, fix))
         if len(fix) > MAX_GROWTH * max(len(res.owner_original), 1) \
                 + MAX_GROWTH_SLACK and replacement is None:
@@ -888,11 +903,11 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
                     if bad:
                         return Decision("drop", f"undoes_house_style:{bad}",
                                         owner_key=key)
-        if mechanical_only:
-            why = rewrite_class(res.owner_original, fix)
+        if mechanical_only and not mechanical_approved:
+            why = rewrite_class(res.owner_corrected, fix)
             if why:
-                return Decision("query", f"rewrite_class:{why}", owner_key=key,
-                                question=_question(res, fix))
+                return Decision("judge" if replacement is None else "internal_repair",
+                                f"rewrite_class:{why}", owner_key=key)
         return Decision("revise", f"edit_damage:{res.verdict or 'flagged'}",
                         replacement=fix, owner_key=key)
 
@@ -903,22 +918,22 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
     suggestion = replacement if replacement is not None else res.suggestion
     suggestion, had_note = strip_note(suggestion, res.quote)
     if had_note and not suggestion.strip():
-        return Decision("query", "editorial_note", question=_question(res))
+        return Decision("internal_repair", "editorial_note", question=_question(res))
     if not suggestion.strip() and res.quote.strip():
         if replacement is None:
             return Decision("judge", "no_suggestion")
-        return Decision("query", "no_suggestion", question=_question(res))
+        return Decision("internal_repair", "no_suggestion", question=_question(res))
     if looks_like_instruction(suggestion, res.quote):
         if replacement is None:
             return Decision("judge", "instruction")
-        return Decision("query", "instruction", question=_question(res))
+        return Decision("internal_repair", "instruction", question=_question(res))
     if suggestion == res.quote:
         return Decision("drop", "walker_wrong")
     tag = ""
     if closed_compound_known(res.quote, suggestion):
         tag = "closed_compound"
     elif is_space_deletion(res.quote, suggestion):
-        return Decision("query", "space_deletion",
+        return Decision("judge" if replacement is None else "internal_repair", "space_deletion",
                         question=_question(res, suggestion))
     lo, hi = align_to_sentence(acc, lo, hi, suggestion)
     if suggestion == acc[lo:hi]:
@@ -944,9 +959,8 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
     if repeat:
         tag = "duplicate_passage"
     fact = None if repeat else _fact(comp.before, comp.text, src_text)
-    if fact:
-        return Decision("query", f"fact:{fact}", question=_question(res,
-                                                                    suggestion))
+    if fact and (not mechanical_approved or fact.startswith("number")):
+        return Decision("judge" if replacement is None else "internal_repair", f"fact:{fact}")
     # Scan the settlement WITH its neighbours: `”.` is the boundary between a
     # replacement ending in a quote mark and the period that follows it.
     ctx_before = acc[max(0, comp.acc_start - 3):comp.acc_start]
@@ -955,12 +969,12 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
     if bad and not artifact_in(ctx_before + comp.before + ctx_after):
         if replacement is None:
             return Decision("judge", f"artifact:{bad}")
-        return Decision("query", f"artifact:{bad}",
+        return Decision("internal_repair", f"artifact:{bad}",
                         question=_question(res, suggestion))
     if len(comp.text) > MAX_GROWTH * max(len(comp.before), 1) + MAX_GROWTH_SLACK:
         if replacement is None:
             return Decision("judge", "oversize")
-        return Decision("query", "oversize", question=_question(res, suggestion))
+        return Decision("internal_repair", "oversize", question=_question(res, suggestion))
     # duplicate: a kept row already does exactly this
     for key, row in working.items():
         if (str(row.get("para_id")) == res.para_id and not comp.absorbed
@@ -978,11 +992,11 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
             return Decision("drop", f"undoes_house_style:{bad}")
     # Proofread scope: the net change on the SOURCE span, not just this
     # settlement's delta, is what the author's tracked change will show.
-    if mechanical_only and not repeat:
-        why = rewrite_class(src_text[comp.src_start:comp.src_end], comp.text)
+    if mechanical_only and not repeat and not mechanical_approved:
+        why = rewrite_class(acc[lo:hi], suggestion)
         if why:
-            return Decision("query", f"rewrite_class:{why}",
-                            question=_question(res, suggestion))
+            return Decision("judge" if replacement is None else "internal_repair",
+                            f"rewrite_class:{why}")
     if comp.absorbed:
         return Decision("absorb", tag, replacement=comp.text, composite=comp,
                         owner_key=comp.owners[0])
@@ -1011,13 +1025,23 @@ correct settlement:
   drop    — the flag is wrong or is a matter of taste/voice; say why in one line;
   query   — only the author can answer (a fact, an intent, an identity, or two
             plausible repairs); write the one-line question.
-Never rewrite beyond the flagged span. Never change a number, name, title,
-date, or quoted line — that is a query. Never write a note to the editor into
+Never rewrite beyond the flagged span. Correct grammar, spelling, punctuation, agreement, pronoun case, tense, and
+missing function words when the intended meaning is clear. Multiple necessary
+mechanical changes are permitted. Number formatting, abbreviation punctuation,
+and established name spellings do not change facts. Check each actual number
+value and referent; a new value or identity needs author knowledge. Preserve
+deliberate voice where established by the context. Technical application
+failures are internal_repair, never query. Never write a note to the editor into
 the replacement. Standard: U.S. English, Chicago 17, Merriam-Webster — and the
 HOUSE STYLE below, which overrides Chicago wherever the two differ: a flag on
 text already in a house form is wrong, and the answer is drop.
 Return JSON {"action": ..., "replacement": ..., "reason": ..., "question": ...}
-with every key present (empty string when unused)."""
+with category (grammar|spelling|punctuation|number_style|name_spelling|other),
+preserves_meaning (boolean), and missing_knowledge (string) also present.
+For an edit, affirm preserves_meaning and identify its mechanical category.
+For a query, missing_knowledge must name the fact, intended meaning, identity,
+or choice between plausible repairs that only the author can supply. A generic
+"please confirm" or engine failure is not missing author knowledge."""
 
 
 def _judge_system(context: str = "") -> str:
@@ -1041,6 +1065,9 @@ def _judge_schema() -> tuple[dict[str, Any], str]:
         replacement: str
         reason: str
         question: str
+        category: str = ""
+        preserves_meaning: bool = False
+        missing_knowledge: str = ""
 
     return strict_json_schema(_Decision), "decision"
 
@@ -1097,9 +1124,9 @@ def judge_packet(res: Residual, em: emap.EditMap, source: Mapping[str, str],
 
 def judge_decision(res: Residual, result: Any) -> Decision:
     """The judge's reply as a Decision (`judge_replacement` carries the text
-    for a second pass through `decide`; anything unusable is a query)."""
+    for a second pass through `decide`; unusable replies remain internal)."""
     if result.stop_reason != "ok" or not isinstance(result.parsed, dict):
-        return Decision("query", "no_suggestion", question=_question(res))
+        return Decision("internal_repair", "no_suggestion")
     action = str(result.parsed.get("action", "")).strip().lower()
     replacement = xml_safe(str(result.parsed.get("replacement", "") or ""))
     reason = str(result.parsed.get("reason", "") or "").strip()[:160]
@@ -1107,10 +1134,16 @@ def judge_decision(res: Residual, result: Any) -> Decision:
     if action == "drop":
         return Decision("drop", f"voice:{reason}" if reason else "voice")
     if action == "query":
-        return Decision("query", "judge", question=question or _question(res))
+        missing = str(result.parsed.get("missing_knowledge") or "").strip()
+        if not missing or not question:
+            return Decision("internal_repair", "missing_query_basis")
+        return Decision("query", f"author_knowledge:{missing}", question=question)
     if action in ("absorb", "add") and replacement.strip():
-        return Decision("judge_replacement", reason, replacement=replacement)
-    return Decision("query", "no_suggestion", question=_question(res))
+        return Decision("judge_replacement", reason, replacement=replacement,
+                        mechanical_approved=(result.parsed.get("preserves_meaning") is True
+                            and result.parsed.get("category") in {
+                                "grammar", "spelling", "punctuation", "number_style", "name_spelling"}))
+    return Decision("internal_repair", "no_suggestion")
 
 
 _SECOND_LOOK_SYSTEM = """\
@@ -1227,6 +1260,8 @@ def query_already_on(res: Residual, working: Mapping[str, Mapping[str, Any]],
         if not (row.get("force_query") or row.get("queried")
                 or str(row.get("status")) == "query"):
             continue
+        if str(row.get("explanation") or "").strip() != _question(res).strip():
+            continue
         anchored = str(row.get("original_text") or "").strip()
         if not anchored:
             continue
@@ -1333,14 +1368,14 @@ def _apply_decision(res: Residual, dec: Decision,
                           lane=lane)
         if qrow is not None:
             new_rows.append(qrow)
-        rec = SettlementRecord(res.id, round_no, "query", owner_key, before,
+        rec = SettlementRecord(res.id, round_no, "query" if qrow is not None else "internal_repair", owner_key, before,
                                "", dec.reason, verified_by, para_id=res.para_id,
                                question=dec.question or _question(res),
                                kind=res.kind)
         return rec, new_rows, removed
 
-    # drop
-    rec = SettlementRecord(res.id, round_no, "drop", owner_key, before, "",
+    # Internal work never creates a finding/comment row.
+    rec = SettlementRecord(res.id, round_no, "internal_repair" if dec.action == "internal_repair" else "drop", owner_key, before, "",
                            dec.reason, verified_by, para_id=res.para_id,
                            kind=res.kind)
     return rec, new_rows, removed
@@ -1354,6 +1389,7 @@ class Folded:
     added: int = 0
     queried: int = 0
     dropped: int = 0
+    internal_repairs: int = 0
     notes: list[str] = field(default_factory=list)
     records: list[SettlementRecord] = field(default_factory=list)
 
@@ -1411,7 +1447,7 @@ def fold_accepted_rows(run_dir: Path, rows: Sequence[Mapping[str, Any]], *,
                        mechanical_only: bool = False) -> Folded:
     """Rows quoted from a build's ACCEPTED text, folded into that build's kept
     rows through its edit map — the `import-findings --anchor accepted` path.
-    Deterministic only (a row the guards cannot settle becomes a query)."""
+    Deterministic only; unresolved work is persisted as internal repair."""
     env = load_envelope(run_dir)
     working, _owner_of = kept_rows(env.get("findings") or [])
     source, zones, variant, skipped = _prepare_source(cfg, manuscript,
@@ -1430,7 +1466,7 @@ def fold_accepted_rows(run_dir: Path, rows: Sequence[Mapping[str, Any]], *,
                      mechanical_only=mechanical_only, sweeps=guard,
                      skipped=skipped)
         if dec.action == "judge":
-            dec = Decision("query", dec.reason, question=_question(res))
+            dec = Decision("internal_repair", dec.reason)
         rec, added, _removed = apply_decision(res, dec, working, source, 0,
                                               verified_by="import")
         new_rows.extend(added)
@@ -1441,6 +1477,13 @@ def fold_accepted_rows(run_dir: Path, rows: Sequence[Mapping[str, Any]], *,
             folded.added += 1
         elif rec.action == "query":
             folded.queried += 1
+        elif rec.action == "internal_repair":
+            folded.internal_repairs += 1
+            settlement = Settlement.load(run_dir) or Settlement(run_dir=str(run_dir))
+            settlement.records.append(rec)
+            settlement.residuals_seen.append(res.to_json())
+            settlement.open.append(res.to_json())
+            settlement.save(run_dir)
         else:
             folded.dropped += 1
             folded.notes.append(f"{res.para_id} {res.quote[:40]!r}: dropped "
@@ -1482,7 +1525,7 @@ class SettleOptions:
     max_turns: int = DEFAULT_MAX_TURNS
     propagate: bool = True
     # The approval's scope (approval.json `mechanical_only`): a suggestion
-    # beyond a proofread's reach ships as a query, never an edit.
+    # outside known mechanical categories requires internal judgment.
     mechanical_only: bool = False
     # Model calls in flight for judge and delta re-verification work.
     concurrency: int = 1
@@ -1529,6 +1572,7 @@ class Settler:
         # Edits and reverts invalidate a paragraph's last verification.
         # Only a successful reread clears it; remaining dirty ids block certify.
         self._dirty: set[str] = set()
+        self._recovery_removed: dict[str, dict[str, dict[str, Any]]] = {}
 
 
     def _rebuild(self, rows: list[dict[str, Any]], *, snapshot: str) -> Any:
@@ -1563,29 +1607,122 @@ class Settler:
         _orig, accepted = paragraph_views(self.run_dir)
         return working, em, accepted
 
+    def _reconcile_comments(self) -> None:
+        from galley.comment_reconcile import reconciliation, actual_comments
+        from galley.verify import deliverable_docx, paragraph_views
+        from hashlib import sha256
+        working, _, accepted = self._load_state()
+        env = load_envelope(self.run_dir)
+        removed = reconciliation(env.get("findings") or [], accepted,
+                                 self.settlement.residuals_seen, source=self._source)
+        if removed:
+            rows = []
+            for key, row in working.items():
+                reason = removed.get(key, removed.get(emap.row_key(row)))
+                if reason is None:
+                    rows.append(row)
+                    continue
+                rid = settle_residual_of(row)
+                if rid:
+                    self.settlement.records.append(SettlementRecord(
+                        rid, self.settlement.rounds, "drop", None, "", "",
+                        reason, self.verified_by, para_id=str(row.get("para_id", ""))))
+            self._rebuild(rows, snapshot="comments-reconciled")
+            _, final = paragraph_views(self.run_dir)
+            if final != accepted:
+                raise RuntimeError("Comment reconciliation changed the manuscript text")
+        path = deliverable_docx(self.run_dir)
+        if path:
+            final_rows = load_envelope(self.run_dir).get("findings") or []
+            comments = actual_comments(path, final_rows)
+            receipt = {"schema_version": 1, "document_sha256": sha256(path.read_bytes()).hexdigest(),
+                       "comment_count": len(comments), "removed_count": len(removed),
+                       "removed": [{"finding": k, "reason": v} for k, v in removed.items()]}
+            (self.run_dir / "comment_reconciliation.json").write_text(
+                json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _intake_corrections(self) -> list[Residual]:
+        """Recover correction-shaped queries and seed guaranteed house fixes."""
+        from galley.comment_reconcile import proposed_text
+        from galley.mechanics import abbreviation_fixes
+        from galley.verify import residual_id
+        self._reconcile_comments()
+        working, _, accepted = self._load_state()
+        residuals = []
+        seen = {r["residual_id"]: r for r in self.settlement.residuals_seen}
+        remove = []
+        for key, row in working.items():
+            if not (row.get("force_query") or row.get("queried")):
+                continue
+            rid = settle_residual_of(row)
+            # An explicitly adjudicated author question is already classified.
+            prior = self.settlement.latest().get(rid)
+            if prior and prior.action == "query" and prior.reason.startswith("author_knowledge:"):
+                continue
+            fix = proposed_text(row)
+            old = seen.get(rid, {})
+            fix = str(old.get("suggestion") or fix)
+            if not fix and not re.search(
+                    r"missing|misspell|grammar|punctuation|agreement|compound|hyphen|"
+                    r"capitalization|wrong past|transpos|house (?:number|style)",
+                    str(row.get("explanation") or ""), re.I):
+                continue
+            if row.get("error_type") == "speaker_split":
+                continue
+            pid = str(row.get("para_id", ""))
+            quote = str(old.get("quote") or row.get("original_text") or "")
+            if not fix:
+                fixes = list(abbreviation_fixes(quote))
+                if fixes:
+                    fix = quote
+                    for lo, hi, replacement in reversed(fixes):
+                        fix = fix[:lo] + replacement + fix[hi:]
+            res = Residual(id=rid or residual_id(pid, quote), kind="residual",
+                           para_id=pid, quote=quote, suggestion=fix,
+                           problem=str(row.get("explanation") or ""))
+            residuals.append(res)
+            remove.append(key)
+        if remove:
+            self._rebuild([r for k, r in working.items() if k not in remove], snapshot="query-intake")
+            _, _, accepted = self._load_state()
+        for pid, text in accepted.items():
+            fixes = list(abbreviation_fixes(text))
+            if not fixes:
+                continue
+            corrected = text
+            for lo, hi, value in reversed(fixes):
+                corrected = corrected[:lo] + value + corrected[hi:]
+            residuals.append(Residual(id=residual_id(pid, text), kind="residual",
+                para_id=pid, quote=text, suggestion=corrected,
+                problem="Missing period in the abbreviation U.S.", severity="high"))
+        return residuals
+
     def _settled_ok(self, rows_after: Sequence[Mapping[str, Any]],
                     residual_ids: set[str]) -> dict[str, str]:
         """After a rebuild: for each settlement row, whether it landed.
         Returns residual_id -> failure status for the ones that did not."""
         failed: dict[str, str] = {}
+        seen: set[str] = set()
         for r in rows_after:
             if not isinstance(r, dict):
                 continue
             rid = settle_residual_of(r)
             if not rid or rid not in residual_ids:
                 continue
+            seen.add(str(rid))
             state, reason = terminal_state(r)
             if state == "applied":
                 continue
-            if state == "query" and (r.get("force_query") or r.get("queried")):
-                continue
             failed[str(rid)] = reason or state
+        for rid in residual_ids - seen:
+            failed[rid] = "missing_settlement_row"
         return failed
 
-    def round(self, round_no: int, items: list[Residual]) -> list[Residual]:
+    def round(self, round_no: int, items: list[Residual], *, _recovering: bool = False) -> list[Residual]:
         """Settle `items`; return the NEW open items the delta verify raised
         (empty when the engine cannot verify or nothing new surfaced)."""
         working, em, accepted = self._load_state()
+        baseline = copy.deepcopy(working)
         source = self._source
         new_rows: list[dict[str, Any]] = []
         removed_by: dict[str, dict[str, dict[str, Any]]] = {}
@@ -1607,20 +1744,22 @@ class Settler:
                          **guards)
             if dec.action == "judge":
                 if self.provider is None:
-                    dec = Decision("query", dec.reason,
-                                   question=_question(res))
+                    dec = Decision("internal_repair", dec.reason)
                 else:
                     judged += 1
-                    jd = prefetched.get(res.id) or judge(
-                        res, em, source, working, self.provider,
-                        self.opt.model, self.usage, context=self.opt.context)
+                    try:
+                        jd = prefetched.get(res.id) or judge(
+                            res, em, source, working, self.provider,
+                            self.opt.model, self.usage, context=self.opt.context)
+                    except Exception as exc:
+                        log.warning("settle: internal judge unavailable: %s", exc)
+                        jd = Decision("internal_repair", "judge_unavailable")
                     if jd.action == "judge_replacement":
                         dec = decide(res, em, accepted, source, working,
                                      self._zones, replacement=jd.replacement,
-                                     **guards)
+                                     mechanical_approved=jd.mechanical_approved, **guards)
                         if dec.action == "judge":
-                            dec = Decision("query", dec.reason,
-                                           question=_question(res))
+                            dec = Decision("internal_repair", dec.reason)
                     else:
                         dec = jd
             self._plan(plans, unplannable, res, dec, em, source, working)
@@ -1628,7 +1767,8 @@ class Settler:
                 res, dec, working, source, round_no,
                 verified_by=self.verified_by)
             records.append(rec)
-            new_rows.extend(added)
+            if rec.action != "query":
+                new_rows.extend(added)
             removed_by[res.id] = removed
             added_by[res.id] = added
             if rec.action == "query":
@@ -1648,7 +1788,7 @@ class Settler:
 
         # Propagate: the same surface, untouched, in the paragraph and its
         # neighbours gets the same fix — recorded, never silent.
-        if self.opt.propagate:
+        if self.opt.propagate and not _recovering:
             propagated = self._propagate(items, records, em, source, working,
                                          new_rows, round_no)
             new_rows.extend(propagated[0])
@@ -1660,45 +1800,30 @@ class Settler:
         result = self._rebuild(rows, snapshot=f"round{round_no}")
         env = load_envelope(self.run_dir)
         failed = self._settled_ok(env.get("findings") or [],
-                                  {r.id for r in items})
-        if failed:
-            # The composite did not land (the validator refused it). Put the
-            # owner rows back, take the composite out, and hand the residual
-            # to the author instead — never lose the owner's fix silently.
-            for rid, status in failed.items():
-                res = next(r for r in items if r.id == rid)
-                for key, row in removed_by.get(rid, {}).items():
-                    working[key] = row
-                for row in added_by.get(rid, []):
-                    if row in new_rows:
-                        new_rows.remove(row)
-                q = _query_row(res, source, _question(res))
-                if q is not None:
-                    new_rows.append(q)
-                records.append(SettlementRecord(
-                    rid, round_no, "query", res.owner_finding_id, "", "",
-                    f"rejected_{status}" if not status.startswith("rejected")
-                    else status, self.verified_by, para_id=res.para_id,
-                    question=_question(res), kind=res.kind))
-            rows = list(working.values()) + new_rows
-            self._rebuild(rows, snapshot=f"round{round_no}-revert")
-
-        # Re-read every paragraph this round wrote. A text mismatch or a newly
-        # duplicated five-word fragment reverts its settlements to queries.
-        reverted: dict[str, str] = {}
+                                  {r.residual_id for r in records
+                                   if r.action in ("add", "absorb", "revise")})
         bad_paras = self._self_check(plans, unplannable, failed, records, em)
+        for rec in records:
+            if rec.residual_id in failed:
+                bad_paras[rec.para_id] = failed[rec.residual_id]
+        reverted = {}
         if bad_paras:
-            targets: dict[str, str] = {}
-            for rec in records:
-                if rec.action in ("absorb", "add", "revise") \
-                        and rec.para_id in bad_paras \
-                        and rec.residual_id not in failed:
-                    targets[rec.residual_id] = bad_paras[rec.para_id]
-            if targets:
-                reverted.update(targets)
-                records.extend(self._revert_records(
-                    targets, items, records, removed_by, round_no,
-                    snapshot=f"round{round_no}-composite-revert"))
+            # Restore the last verified rows for affected paragraphs. Other
+            # paragraphs retain their successful corrections.
+            current, _, _ = self._load_state()
+            current = {k: v for k, v in current.items()
+                       if v.get("para_id") not in bad_paras}
+            for key, row in baseline.items():
+                if row.get("para_id") in bad_paras:
+                    current[f"baseline-{key}"] = row
+            self._rebuild(list(current.values()), snapshot=f"round{round_no}-restore")
+            for res in items:
+                if res.para_id in bad_paras:
+                    reverted[res.id] = bad_paras[res.para_id]
+                    records.append(SettlementRecord(
+                        res.id, round_no, "internal_repair", res.owner_finding_id,
+                        "", "", bad_paras[res.para_id], self.verified_by,
+                        para_id=res.para_id, kind=res.kind))
         self.settlement.records.extend(records)
         for res in items:
             self.settlement.residuals_seen.append(res.to_json())
@@ -1707,6 +1832,26 @@ class Settler:
             f"{len(failed)} reverted"
             + (f", {len(reverted)} composite(s) failed the self-check"
                if reverted else ""))
+
+        if _recovering:
+            self._recovery_removed.update(removed_by)
+            return []
+        # Retry from fresh coordinates, one correction per rebuild. Recovery
+        # is bounded independently of the editorial reread round budget.
+        from galley.mechanics import rebase_correction
+        for res in items:
+            if res.id in reverted:
+                retry = copy.deepcopy(res)
+                if res.kind == "residual":
+                    _, _, now = self._load_state()
+                    current = now.get(res.para_id, "")
+                    fix = rebase_correction(accepted.get(res.para_id, ""), current,
+                                            res.quote, res.suggestion)
+                    if fix is not None:
+                        retry.quote, retry.suggestion = current, fix
+                self.round(round_no, [retry], _recovering=True)
+        removed_by.update(self._recovery_removed)
+        records = [self.settlement.latest().get(rec.residual_id, rec) for rec in records]
 
         # A5 — delta verify over the touched paragraphs
         self.last_reread = 0
@@ -1923,13 +2068,14 @@ class Settler:
                         if rec.residual_id in failed}
         _orig, actual = paragraph_views(self.run_dir)
         if not actual:
-            return {}
+            return {pid: "missing_rebuilt_text" for pid in touched}
         bad: dict[str, str] = {}
         for pid in sorted(touched):
             if pid in failed_paras or pid in unplannable:
                 continue
             got = actual.get(pid)
             if got is None:
+                bad[pid] = "missing_rebuilt_paragraph"
                 continue
             segs = em.paragraphs.get(pid)
             planned = sorted(plans.get(pid, []), key=lambda t: t[0])
@@ -1937,6 +2083,9 @@ class Settler:
                 expected = emap.accepted_of(segs)
                 overlap = any(planned[i][1] > planned[i + 1][0]
                               for i in range(len(planned) - 1))
+                if overlap:
+                    bad[pid] = "overlapping_plans"
+                    continue
                 if not overlap:
                     for lo, hi, text, _rid in reversed(planned):
                         expected = expected[:lo] + text + expected[hi:]
@@ -1960,7 +2109,7 @@ class Settler:
                         ) -> list[SettlementRecord]:
         """Undo this round's settlement for each residual in `targets`
         (residual_id -> reason): its settlement row(s) come out, the owner
-        rows it absorbed go back, and the residual ships as a query. Returns
+        rows it absorbed go back, and the residual remains internal. Returns
         the records; rebuilds the deliverable once.
 
         Owner rows are restored under fresh keys because each rebuild mints new
@@ -1986,13 +2135,9 @@ class Settler:
                     self.verified_by, para_id=prior.para_id if prior else "",
                     kind="residual"))
                 continue
-            q = _query_row(res, source, _question(res))
-            if q is not None:
-                working[f"settle-q-{rid}"] = q
-            else:
-                working.pop(f"settle-q-{rid}", None)
+            working.pop(f"settle-q-{rid}", None)
             out.append(SettlementRecord(
-                rid, round_no, "query" if q is not None else "drop",
+                rid, round_no, "internal_repair",
                 res.owner_finding_id, before, "", reason, self.verified_by,
                 para_id=res.para_id, question=_question(res), kind=res.kind))
             self.touched.add(res.para_id)
@@ -2133,7 +2278,8 @@ class Settler:
         return open_items(self.run_dir)
 
     def run(self) -> SettleResult:
-        items = open_items(self.run_dir)
+        intake = self._intake_corrections()
+        items = list({r.id: r for r in open_items(self.run_dir) + intake}.values())
         round_no = self.settlement.rounds
         self.last_reread = 0
         if not items and self.opt.until_clean and self.provider is not None:
@@ -2150,6 +2296,7 @@ class Settler:
         if self.opt.until_clean:
             limit = min(self.opt.rounds, HARD_MAX_ROUNDS) if self.opt.rounds \
                 else HARD_MAX_ROUNDS
+        limit += round_no
         stopped = "clean"
         while items and round_no < limit:
             round_no += 1
@@ -2167,7 +2314,7 @@ class Settler:
                 stopped = "turn_budget"
                 note = (f"round {round_no}: turn budget reached "
                         f"({self.usage.api_calls} of {self.opt.max_turns}); "
-                        f"{len(items)} item(s) ship as questions")
+                        f"{len(items)} item(s) remain internal repairs")
                 log.warning("settle: %s", note)
                 self.settlement.notes.append(note)
                 break
@@ -2175,7 +2322,7 @@ class Settler:
                 stopped = "quiet"
                 note = (f"round {round_no}: quiet — {len(items)} new item(s) "
                         f"after re-reading {self.last_reread}; converged, "
-                        f"leftovers ship as questions")
+                        f"leftovers remain internal repairs")
                 log.info("settle: %s", note)
                 self.settlement.notes.append(note)
                 break
@@ -2191,30 +2338,18 @@ class Settler:
             "quiet": self._quiet(len(items)) if items else True,
             "turns": self.usage.api_calls}
         if items:
-            # I5 — bounded and honest: leftovers ship as questions.
-            round_no += 1
-            working, em, accepted = self._load_state()
-            source = self._source
-            new_rows: list[dict[str, Any]] = []
             for res in items:
-                resolve(res, em, accepted, working)
-                q = _query_row(res, source, _question(res))
-                if q is not None:
-                    new_rows.append(q)
-                    self.touched.add(res.para_id)
                 self.settlement.records.append(SettlementRecord(
-                    res.id, round_no, "query" if q is not None else "drop",
-                    res.owner_finding_id, "", "",
-                    f"unresolved_after_{self.settlement.rounds}" if q is not None
-                    else "unanchorable", self.verified_by,
-                    para_id=res.para_id, question=_question(res),
-                    kind=res.kind))
+                    res.id, round_no, "internal_repair", res.owner_finding_id,
+                    "", "", f"unresolved_after_{self.settlement.rounds}",
+                    self.verified_by, para_id=res.para_id, kind=res.kind))
                 self.settlement.residuals_seen.append(res.to_json())
-            self._rebuild(list(working.values()) + new_rows,
-                          snapshot=f"round{round_no}-closeout")
-            self.settlement.rounds = round_no
-            items = []
-        self.settlement.open = [r.to_json() for r in items]
+        self._reconcile_comments()
+        latest = self.settlement.latest()
+        self.settlement.open = list({r["residual_id"]: r
+            for r in self.settlement.residuals_seen
+            if latest.get(r["residual_id"]) is not None
+            and latest[r["residual_id"]].action == "internal_repair"}.values())
         self._finalize()
         return SettleResult(self.settlement, usage=self.usage,
                             touched=set(self.touched))
@@ -2285,7 +2420,7 @@ def rewrite_verify_artifacts(run_dir: str | Path, settlement: Settlement, *,
         rid = str(item.get("residual_id", ""))
         rec = latest.get(rid)
         d = dict(item)
-        d["settled"] = rec.action if rec else None
+        d["settled"] = rec.action if rec and rec.action != "internal_repair" else None
         d["settlement_reason"] = rec.reason if rec else ""
         if item.get("kind") == "edit_damage":
             d.setdefault("problem_id", rid)
@@ -2306,7 +2441,7 @@ def rewrite_verify_artifacts(run_dir: str | Path, settlement: Settlement, *,
         payload["generated_at"] = _now()
         # `ran` is the READ's word, not the settlement's: absent (an older
         # artifact) it is left absent; false stays false.
-        payload["settled"] = True
+        payload["settled"] = not settlement.open
         payload["settlement_rounds"] = settlement.rounds
         # Every row the read produced is preserved; the settlement records
         # ride beside them (a settled row keeps its verdict, plus `settled`).
@@ -2356,7 +2491,7 @@ def unsettled(run_dir: str | Path) -> tuple[list[str], list[str]]:
                 continue
             item = Residual.from_walk(row) if kind == "residual" \
                 else Residual.from_problem(row)
-            if item.id not in have and not row.get("settled"):
+            if item.id not in have:
                 out.append(item.id)
     return open_res, open_prob
 

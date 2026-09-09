@@ -160,18 +160,18 @@ def test_settle_closes_owned_unowned_zone_note_and_fact_residuals(tmp_path):
     cfgpath = _replay_config(tmp_path, intent_zones_file=str(zones))
     rc = main(["galley", "settle", str(run), "--source", str(src), "--config",
                cfgpath, "--engine", "none", "--no-verify"])
-    assert rc == 0
+    assert rc == 1
 
     recs, st = _records(run)
     assert recs[residual_id(p0, "thee")].action == "absorb"
     assert recs[residual_id(p1, "recieve")].action == "add"
     q = recs[residual_id(p2, "coins twice")]
-    assert q.action == "query" and q.reason.startswith("fact:")
+    assert q.action == "internal_repair" and q.reason.startswith("fact:")
     z = recs[residual_id(p4, "Mom")]
     assert z.action == "drop" and z.reason.startswith("intent_zone")
     u = recs[residual_id(p1, "zzzz")]
-    assert u.action == "drop" and u.reason == "unanchorable"
-    assert st.open == [] and st.rounds == 1
+    assert u.action == "internal_repair" and u.reason == "unanchorable"
+    assert len(st.open) == 2 and st.rounds == 1
 
     # the deliverable: composite revised, new edit landed, zone untouched
     acc = _accepted(run)
@@ -186,8 +186,7 @@ def test_settle_closes_owned_unowned_zone_note_and_fact_residuals(tmp_path):
     # the fact query reached the margin
     env = json.loads((run / "findings.json").read_text("utf-8"))
     queries = [r for r in env["findings"] if r.get("queried")]
-    assert any(r["para_id"] == p2 and "3 times" in r["explanation"]
-               for r in queries)
+    assert not queries
     # I1: every row terminal, and stamped
     assert all(r.get("state") in ("applied", "dropped", "query")
                for r in env["findings"])
@@ -197,21 +196,21 @@ def test_settle_closes_owned_unowned_zone_note_and_fact_residuals(tmp_path):
     assert composite and composite[0]["error_type"] == "galley_settle"
     assert composite[0]["absorbed"]
     # nothing is open; certify's settlement checks pass
-    assert open_items(run) == []
+    assert len(open_items(run)) == 2
     cert = certify_run(run)
     by = {c.name: c for c in cert.checks}
-    assert by["residual settlement"].status == "pass"
+    assert by["residual settlement"].status == "fail"
     # A deterministic settle changed p0/p1 with no engine to re-read them:
     # the verify records are merged, not restamped, and name the paragraphs
     # a `galley verify --paragraphs` must cover before delivery (GALLEY-002).
     assert by["finished-text walk"].status == "fail"
-    assert "changed after their last read" in by["finished-text walk"].detail
+    assert "unsettled residual" in by["finished-text walk"].detail
     assert by["change verifier"].status == "fail"
     assert by["terminal states"].status == "pass"
-    assert by["outcome"].status == "pass" and "done" in by["outcome"].detail
+    assert by["outcome"].status == "pass" and "needs_human" in by["outcome"].detail
     assert (run / "outcome.json").exists()
     oc = json.loads((run / "outcome.json").read_text("utf-8"))
-    assert oc["outcome"] == "done" and oc["hubspot"]["property"] == "docproof"
+    assert oc["outcome"] == "needs_human" and oc["hubspot"]["property"] == "docproof"
 
 
 # --- edit damage: the change verifier's own items ------------------------------
@@ -276,7 +275,7 @@ def test_settle_keeps_a_cluster_applied_when_one_member_is_revised(tmp_path):
 
 # --- T4: bounded rounds — what cannot be decided ships as a question ---------
 
-def test_settle_turns_an_undecidable_residual_into_a_query(tmp_path):
+def test_undecidable_residual_remains_internal_until_judged(tmp_path):
     src = _manuscript(tmp_path)
     ids, _doc = _para_ids(src)
     p2 = ids[2]
@@ -286,13 +285,13 @@ def test_settle_turns_an_undecidable_residual_into_a_query(tmp_path):
     _walk(run, [{"para_id": p2, "quote": "sure the total", "problem":
                  "garbled — two plausible repairs", "suggestion": "",
                  "severity": "medium"}])
-    assert _settle(tmp_path, run, src, "--rounds", "1") == 0
+    assert _settle(tmp_path, run, src, "--rounds", "1") == 1
     recs, st = _records(run)
     r = recs[residual_id(p2, "sure the total")]
-    assert r.action == "query" and r.question
-    assert st.open == []
+    assert r.action == "internal_repair" and not r.question
+    assert len(st.open) == 1
     env = json.loads((run / "findings.json").read_text("utf-8"))
-    assert any(row.get("queried") and row["para_id"] == p2
+    assert not any(row.get("queried") and row["para_id"] == p2
                and "two plausible repairs" in row["explanation"]
                for row in env["findings"])
     # state machine: settled is reachable now, and refuses while open
@@ -300,7 +299,7 @@ def test_settle_turns_an_undecidable_residual_into_a_query(tmp_path):
     ws.mkdir()
     assert main(["galley", "state", str(ws), "--advance", "intake"]) == 0
     assert main(["galley", "state", str(ws), "--advance", "settled",
-                 "--results", str(run)]) == 0
+                 "--results", str(run)]) == 7
 
 
 def test_state_refuses_settled_while_items_are_open(tmp_path):
@@ -324,7 +323,7 @@ def test_state_refuses_settled_while_items_are_open(tmp_path):
 
 # --- T5: an unanchorable walker row is recorded, never silently lost ---------
 
-def test_unanchorable_rows_are_recorded_as_dropped(tmp_path):
+def test_unanchorable_rows_remain_internal(tmp_path):
     src = _manuscript(tmp_path)
     ids, _doc = _para_ids(src)
     run = _build(tmp_path, src, [
@@ -334,18 +333,18 @@ def test_unanchorable_rows_are_recorded_as_dropped(tmp_path):
                  "suggestion": "x", "severity": "low"},
                 {"para_id": "body-9999", "quote": "gate", "problem": "?",
                  "suggestion": "x", "severity": "low"}])
-    assert _settle(tmp_path, run, src) == 0
+    assert _settle(tmp_path, run, src) == 1
     recs, _st = _records(run)
     assert recs[residual_id(ids[3], "not in the text")].reason == "unanchorable"
-    assert recs[residual_id("body-9999", "gate")].action == "drop"
+    assert recs[residual_id("body-9999", "gate")].action == "internal_repair"
     fw = json.loads((run / "finished_walk.json").read_text("utf-8"))
-    assert {r["settled"] for r in fw["residuals"]} == {"drop"}
-    assert fw["unsettled"] == []
+    assert {r["settled"] for r in fw["residuals"]} == {None}
+    assert len(fw["unsettled"]) == 2
 
 
 # --- T2: the delta verifier flags a composite -> revert + query ---------------
 
-def test_a_verifier_flag_on_a_composite_reverts_it_to_a_query(tmp_path,
+def test_verifier_revert_remains_internal(tmp_path,
                                                              monkeypatch):
     src = _manuscript(tmp_path)
     ids, _doc = _para_ids(src)
@@ -373,14 +372,14 @@ def test_a_verifier_flag_on_a_composite_reverts_it_to_a_query(tmp_path,
                         ("provider", prov, "fake-model"))
     rc = main(["galley", "settle", str(run), "--source", str(src),
                "--config", _replay_config(tmp_path), "--engine", "provider"])
-    assert rc == 0
+    assert rc == 1
     recs, st = _records(run)
     r = recs[residual_id(p0, "thee")]
-    assert r.action == "query" and r.reason == "verifier_confirmed"
+    assert r.action == "internal_repair" and r.reason == "verifier_confirmed"
     acc = _accepted(run)
     assert "thee desk" in acc[p0]               # the owner's edit stands
     env = json.loads((run / "findings.json").read_text("utf-8"))
-    assert any(row.get("queried") and row["para_id"] == p0
+    assert not any(row.get("queried") and row["para_id"] == p0
                for row in env["findings"])
     assert len(prov.calls) == 5
     look = prov.calls[2]
@@ -388,7 +387,7 @@ def test_a_verifier_flag_on_a_composite_reverts_it_to_a_query(tmp_path,
     assert "HOUSE STYLE" in look["system"]
     assert certify_run(run).checks and {
         c.name: c.status for c in certify_run(run).checks
-    }["residual settlement"] == "pass"
+    }["residual settlement"] == "fail"
 
 
 # --- the judge: a residual with no suggestion, decided by the model ----------
@@ -527,10 +526,10 @@ def test_instruction_shaped_suggestions_never_become_text(tmp_path):
     _walk(run, [{"para_id": ids[3], "quote": "The garden gate",
                  "problem": "leading space", "suggestion":
                  "Delete the trailing whitespace.", "severity": "low"}])
-    assert _settle(tmp_path, run, src) == 0
+    assert _settle(tmp_path, run, src) == 1
     recs, _st = _records(run)
     r = recs[residual_id(ids[3], "The garden gate")]
-    assert r.action == "query" and r.reason == "instruction"
+    assert r.action == "internal_repair" and r.reason == "instruction"
     assert "Delete the trailing" not in _accepted(run)[ids[3]]
 
 
@@ -553,7 +552,7 @@ def test_a_whole_sentence_suggestion_replaces_the_sentence_not_the_fragment(
     assert acc.count("David counted") == 1
 
 
-def test_settle_queries_are_never_collapsed_into_one_comment(tmp_path):
+def test_internal_repairs_never_become_comments(tmp_path):
     src = _manuscript(tmp_path)
     ids, _doc = _para_ids(src)
     run = _build(tmp_path, src, [
@@ -564,10 +563,11 @@ def test_settle_queries_are_never_collapsed_into_one_comment(tmp_path):
                  "suggestion": "", "severity": "medium"}
                 for i, q in ((1, "Its light"), (2, "the coins"),
                              (3, "old dog"))])
-    assert _settle(tmp_path, run, src) == 0
+    assert _settle(tmp_path, run, src) == 1
     env = json.loads((run / "findings.json").read_text("utf-8"))
     assert sum(1 for r in env["findings"] if r.get("queried")
-               and r["error_type"] == "galley_settle") == 3
+               and r["error_type"] == "galley_settle") == 0
+    assert len(_records(run)[1].open) == 3
 
 
 def test_case_only_change_inside_quoted_speech_is_not_a_fact_change():
@@ -578,7 +578,7 @@ def test_case_only_change_inside_quoted_speech_is_not_a_fact_change():
     assert _fact("one 12 minute talk", "one 21 minute talk") is not None
 
 
-def test_a_suggestion_that_ships_a_house_artifact_is_queried(tmp_path):
+def test_house_artifact_remains_internal(tmp_path):
     src = _manuscript(tmp_path)
     ids, _doc = _para_ids(src)
     run = _build(tmp_path, src, [
@@ -588,10 +588,10 @@ def test_a_suggestion_that_ships_a_house_artifact_is_queried(tmp_path):
     _walk(run, [{"para_id": ids[1], "quote": "the letter by tonight.",
                  "problem": "quote it", "suggestion": "“the letter by tonight”.",
                  "severity": "low"}])
-    assert _settle(tmp_path, run, src) == 0
+    assert _settle(tmp_path, run, src) == 1
     recs, _st = _records(run)
     r = recs[residual_id(ids[1], "the letter by tonight.")]
-    assert r.action == "query" and r.reason.startswith("artifact:")
+    assert r.action == "internal_repair" and r.reason.startswith("artifact:")
     assert "”." not in _accepted(run)[ids[1]]
 
 
@@ -680,9 +680,9 @@ def test_until_clean_stops_after_a_quiet_round(tmp_path, monkeypatch):
     rc = main(["galley", "settle", str(run), "--source", str(src), "--config",
                _replay_config(tmp_path), "--engine", "provider",
                "--until-clean"])
-    assert rc == 0
+    assert rc == 1
     _recs, st = _records(run)
-    assert st.rounds == 2 and st.open == []
+    assert st.rounds == 1 and st.open
     assert any("quiet" in n for n in st.notes)
 
 
@@ -714,9 +714,9 @@ def test_until_clean_respects_the_turn_budget(tmp_path, monkeypatch):
     rc = main(["galley", "settle", str(run), "--source", str(src), "--config",
                _replay_config(tmp_path), "--engine", "provider",
                "--until-clean", "--max-turns", "2"])
-    assert rc == 0
+    assert rc == 1
     recs, st = _records(run)
-    assert st.rounds == 2 and st.open == []
+    assert st.rounds == 1 and st.open
     assert any("turn budget" in n for n in st.notes)
     assert sum(1 for r in recs.values()
                if r.reason.startswith("unresolved_after_")) == 4
@@ -747,7 +747,7 @@ def test_a_sweep_that_will_not_converge_flags_needs_human(tmp_path, monkeypatch)
     # two noisy rounds fit in a 4-turn budget; the sweep stops still noisy
     assert main(["galley", "settle", str(run), "--source", str(src),
                  "--config", _replay_config(tmp_path), "--engine", "provider",
-                 "--until-clean", "--max-turns", "4"]) == 0
+                 "--until-clean", "--max-turns", "4"]) == 1
     oc = json.loads((run / "outcome.json").read_text("utf-8"))
     assert oc["outcome"] == "needs_human"
     assert "still finding" in oc["reason"]
@@ -784,7 +784,7 @@ def test_until_clean_takes_an_explicit_rounds_as_its_ceiling(tmp_path,
     assert main(["galley", "settle", str(run), "--source", str(src),
                  "--config", _replay_config(tmp_path), "--engine", "provider",
                  "--until-clean", "--rounds", "2", "--quiet-floor", "0",
-                 "--quiet-share", "0"]) == 0
+                 "--quiet-share", "0"]) == 1
     _recs, st = _records(run)
     # Two settling rounds, then the leftovers shipped as questions — never a
     # third read, though the provider had one more noisy answer scripted.
@@ -927,10 +927,10 @@ def test_a_failed_second_look_keeps_todays_revert(tmp_path, monkeypatch):
                         ("provider", prov, "fake-model"))
     rc = main(["galley", "settle", str(run), "--source", str(src),
                "--config", _replay_config(tmp_path), "--engine", "provider"])
-    assert rc == 0
+    assert rc == 1
     recs, _st = _records(run)
     r = recs[residual_id(p0, "thee")]
-    assert r.action == "query" and r.reason == "verifier_reverted"
+    assert r.action == "internal_repair" and r.reason == "verifier_reverted"
     assert "thee desk" in _accepted(run)[p0]
 
 
@@ -1001,7 +1001,7 @@ def test_rewrite_class_names_the_georgis_examples():
     assert rewrite_class("as a man and wife", "as man and wife") is None
 
 
-def test_mechanical_only_turns_a_rewrite_into_a_query_with_the_suggestion(
+def test_rewrite_requires_internal_judgment(
         tmp_path):
     src = _manuscript(tmp_path)
     ids, _doc = _para_ids(src)
@@ -1019,20 +1019,21 @@ def test_mechanical_only_turns_a_rewrite_into_a_query_with_the_suggestion(
         {"para_id": p1, "quote": "recieve", "problem": "misspelling",
          "suggestion": "receive", "severity": "high"},
     ])
-    assert _settle(tmp_path, run, src, "--mechanical-only") == 0
+    assert _settle(tmp_path, run, src, "--mechanical-only") == 1
     recs, st = _records(run)
     q = recs[residual_id(p2, "sure the total would not change again")]
-    assert q.action == "query" and q.reason.startswith("rewrite_class:")
-    assert "certain the sum was fixed" in q.question
+    assert q.action == "internal_repair" and q.reason.startswith("rewrite_class:")
+    assert not q.question
+    assert any(r["suggestion"] == "certain the sum was fixed" for r in st.open)
     assert recs[residual_id(p2, "sure the total")].action == "add"
     assert recs[residual_id(p1, "recieve")].action == "add"
     acc = _accepted(run)
     assert "sure that the total would not change again" in acc[p2]
     assert "receive" in acc[p1]
     env = json.loads((run / "findings.json").read_text("utf-8"))
-    assert any(r.get("queried") and "certain the sum" in r["explanation"]
+    assert not any(r.get("queried") and "certain the sum" in r["explanation"]
                for r in env["findings"])
-    assert st.open == []
+    assert len(st.open) == 1
 
 
 def test_an_approval_that_says_mechanical_only_implies_the_guard(tmp_path):
@@ -1047,10 +1048,10 @@ def test_an_approval_that_says_mechanical_only_implies_the_guard(tmp_path):
                  "severity": "low"}])
     approval = tmp_path / "approval.json"
     approval.write_text(json.dumps({"mechanical_only": True}), "utf-8")
-    assert _settle(tmp_path, run, src, "--approval", str(approval)) == 0
+    assert _settle(tmp_path, run, src, "--approval", str(approval)) == 1
     recs, _st = _records(run)
     r = recs[residual_id(p2, "sure the total would not change")]
-    assert r.action == "query" and r.reason.startswith("rewrite_class:")
+    assert r.action == "internal_repair" and r.reason.startswith("rewrite_class:")
     assert "coins twice, sure the total would not change" in _accepted(run)[p2]
 
 
@@ -1072,7 +1073,7 @@ def test_duplicated_fragments_finds_the_georgis_splice():
     assert introduced_fragments("Plain text here.", worse)
 
 
-def test_self_check_reverts_a_composite_that_did_not_compose_as_planned(
+def test_self_check_recovers_failed_composite_individually(
         tmp_path, monkeypatch):
     """A composite whose rebuilt paragraph does not read as the decision said
     it should (the Georgis splice) is reverted to a query with reason
@@ -1088,31 +1089,30 @@ def test_self_check_reverts_a_composite_that_did_not_compose_as_planned(
                  "suggestion": "the", "severity": "high"},
                 {"para_id": p1, "quote": "recieve", "problem": "misspelling",
                  "suggestion": "receive", "severity": "high"}])
+    from galley.settle import Settler
     real = gv.paragraph_views
-    state = {"n": 0}
+    check = Settler._self_check
+    state = {"injected": False}
 
-    def views(run_dir):
-        original, accepted = real(run_dir)
-        state["n"] += 1
-        # Corrupt p0 ONCE, at the self-check's read of the rebuilt docx (the
-        # loads before it must see the true text or nothing resolves).
-        if state["n"] == 2 and "the desk" in accepted.get(p0, ""):
-            accepted = dict(accepted)
-            accepted[p0] = accepted[p0].replace(
-                "the desk", "the desk flickered, then the desk")
-        return original, accepted
-    monkeypatch.setattr(gv, "paragraph_views", views)
+    def mismatch(self, *args):
+        bad = check(self, *args)
+        if not state["injected"]:
+            state["injected"] = True
+            bad[p0] = "composite_mismatch"
+        return bad
+    monkeypatch.setattr(Settler, "_self_check", mismatch)
     assert _settle(tmp_path, run, src) == 0
     recs, st = _records(run)
     r = recs[residual_id(p0, "thee")]
-    assert r.action == "query" and r.reason == "composite_mismatch"
-    assert r.before_replacement == "the"
+    assert r.action == "absorb"
+    assert any(rec.reason == "composite_mismatch" and rec.action == "internal_repair" for rec in st.records)
+    assert "the desk" in r.after_replacement
     assert recs[residual_id(p1, "recieve")].action == "add"
     acc = real(run)[1]
-    assert "thee desk" in acc[p0]                  # the owner's edit restored
+    assert "the desk" in acc[p0]                  # the owner's edit restored
     assert "receive" in acc[p1]
     env = json.loads((run / "findings.json").read_text("utf-8"))
-    assert any(row.get("queried") and row["para_id"] == p0
+    assert not any(row.get("queried") and row["para_id"] == p0
                for row in env["findings"])
     assert st.open == []
     assert any("failed the self-check" in n for n in st.notes)
@@ -1169,6 +1169,7 @@ def test_xml_safe_strips_what_ooxml_cannot_carry_and_nothing_else():
     dec = judge_decision(res, ProviderResult(parsed=parsed, stop_reason="ok"))
     assert isinstance(dec, Decision) and dec.replacement == "receive"
     parsed["action"] = "query"
+    parsed["missing_knowledge"] = "The identity intended by the author"
     assert judge_decision(res, ProviderResult(parsed=parsed,
                                               stop_reason="ok")).question == "why?"
 
@@ -1267,7 +1268,7 @@ def test_settle_deletes_a_duplicated_passage_as_an_edit(tmp_path):
     assert st.open == []
 
 
-def test_a_second_question_on_a_queried_span_is_a_duplicate(tmp_path):
+def test_different_internal_issues_in_one_span_are_preserved(tmp_path):
     src = _manuscript(tmp_path)
     ids, _doc = _para_ids(src)
     p2 = ids[2]
@@ -1280,14 +1281,13 @@ def test_a_second_question_on_a_queried_span_is_a_duplicate(tmp_path):
          "severity": "medium"},
         {"para_id": p2, "quote": "would not change again", "problem":
          "unclear — which total?", "suggestion": "", "severity": "medium"}])
-    assert _settle(tmp_path, run, src, "--rounds", "1") == 0
+    assert _settle(tmp_path, run, src, "--rounds", "1") == 1
     recs, st = _records(run)
     first = recs[residual_id(p2, "sure the total")]
     second = recs[residual_id(p2, "would not change again")]
-    assert first.action == "query"
-    assert second.action == "drop" and second.reason.startswith(
-        "duplicate_query")
+    assert first.action == "internal_repair"
+    assert second.action == "internal_repair"
     env = json.loads((run / "findings.json").read_text("utf-8"))
     assert sum(1 for row in env["findings"]
-               if row.get("queried") and row["para_id"] == p2) == 1
-    assert st.open == []
+               if row.get("queried") and row["para_id"] == p2) == 0
+    assert len(st.open) == 2

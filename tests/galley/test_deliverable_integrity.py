@@ -165,7 +165,7 @@ def test_questions_and_notes_are_told_apart(tmp_path):
     assert [r["finding_id"] for r in questions] == ["q-1"]
     assert [r["finding_id"] for r in notes] == ["q-2", "q-3"]
     text = "\n".join(_section_decisions(_src(tmp_path, COMMENTS), CaseFile()))
-    assert "1 question(s) only you can answer" in text
+    assert "1 author question(s)" in text
     assert "2 note(s)" in text
     assert "### Questions for you (1)" in text
     assert "### Notes on what was done (2)" in text

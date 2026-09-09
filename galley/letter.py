@@ -155,6 +155,10 @@ def applied_rows(src: JournalSources | None) -> list[dict[str, Any]]:
 def query_rows(src: JournalSources | None) -> list[dict[str, Any]]:
     """The author questions that reach the margin: query rows that were not
     withheld."""
+    path = delivered_docx(src)
+    if path is not None:
+        from galley.comment_reconcile import actual_comments
+        return actual_comments(path, _rows(src))
     out = []
     for r in _rows(src):
         state, reason = _state_of(r)
@@ -541,6 +545,9 @@ def _summary_line(src: JournalSources, cf: CaseFile) -> str:
     if oc.get("outcome") == "done":
         text += (" Every finding the run raised ended as a tracked edit, a "
                  "recorded drop, or a question below; nothing is pending.")
+    elif (oc.get("evidence") or {}).get("unresolved_internal"):
+        text += (" **Proof incomplete: internal repairs remain.** "
+                 + _clip(oc.get("reason"), 500))
     elif oc.get("outcome") == "needs_human":
         text += (" **This book needs a human proofreader**: "
                  f"{_clip(oc.get('reason'), 400)}")
@@ -632,7 +639,7 @@ def _section_choices(src: JournalSources, cf: CaseFile) -> list[str]:
 #: comment is the owner's design (PR #225); a rule note is the one counted
 #: comment a collapsed sweep family keeps. Calling these "questions only you
 #: can answer" (the letter of 2026-09-07) was untrue of two of six comments.
-NOTE_TYPES: frozenset[str] = frozenset({"speaker_split"})
+NOTE_TYPES: frozenset[str] = frozenset({"speaker_split", "preserved_comment"})
 
 
 def is_note(row: Mapping[str, Any]) -> bool:
@@ -664,18 +671,23 @@ def _comment_bullets(groups) -> list[str]:
 def _section_decisions(src: JournalSources, cf: CaseFile) -> list[str]:
     out = ["## Decisions still needed", ""]
     rows = query_rows(src)
+    from galley.settle import Settlement
+    settlement = Settlement.load(src.run_dir)
+    pending = max(len(settlement.open), settlement.counts().get("internal_repair", 0)) if settlement else 0
+    if pending:
+        out.append(f"The proof is incomplete: {_n(pending)} internal repair(s) remain. "
+                   "These require production work and are not author questions.")
+        out.append("")
     if not rows:
-        out.append("None — every finding was decided. Nothing is waiting on "
+        out.append("No author questions are in the document. Nothing is waiting on "
                    "you beyond reviewing the tracked changes.")
         out.append("")
         return out
     questions, notes = split_comments(rows)
     out.append(f"The document carries {_n(len(rows))} margin comment(s): "
-               f"{_n(len(questions))} question(s) only you can answer — a "
-               f"fact, an intent, an identity — and {_n(len(notes))} note(s) "
-               f"recording what the proofreader did or which house rule "
-               f"applied. None changes the text until you decide. Internal "
-               f"review is closed; these await you.")
+               f"{_n(len(questions))} author question(s) and {_n(len(notes))} note(s), "
+               f"including retained source comments. The tracked changes record "
+               f"corrections already made.")
     out.append("")
     if questions:
         groups = grouped_questions(questions)
@@ -819,6 +831,8 @@ def _section_closing(src: JournalSources) -> list[str]:
         text = ("**Outcome: done.** This is a proofreading hand-off for your "
                 "review; the comments above and the production notes in the "
                 "verification report are what remain before publication.")
+    elif (oc.get("evidence") or {}).get("unresolved_internal"):
+        text = (f"**Outcome: proof incomplete.** {_clip(oc.get('reason'), 500)}")
     elif verdict == "needs_human":
         text = (f"**Outcome: needs a human proofreader.** {_clip(oc.get('reason'), 500)}")
     else:
@@ -1302,6 +1316,9 @@ def render_author_letter(cf: CaseFile, out_dir: str | Path, *,
                   "pacing and the story's continuity were left as you wrote "
                   "them, except where a question below says otherwise.")
     d.add_paragraph(scope)
+    if src and (src.outcome or {}).get("evidence", {}).get("unresolved_internal"):
+        d.add_paragraph("This proof is incomplete. Production repairs remain before "
+                        "delivery can be certified; they are not questions for you.")
     d.add_paragraph(
         f"The file carries {_n(corrections)} tracked correction(s)"
         + (f" and {_n(shape['paragraph_marks'])} paragraph break(s)"

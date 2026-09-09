@@ -160,8 +160,8 @@ def evidence_of(run_dir: str | Path, source_paras: Mapping[str, str] | None
     damage = 0
     if settlement is not None:
         for rec in settlement.latest().values():
-            if rec.action == "query" and rec.reason.startswith(
-                    "unresolved_after_"):
+            if rec.action == "internal_repair" or (rec.action == "query" and rec.reason.startswith(
+                    "unresolved_after_")):
                 unresolved += 1
             if rec.kind == "edit_damage":
                 damage += 1
@@ -269,6 +269,9 @@ def assess(run_dir: str | Path, *, thresholds: Thresholds | None = None,
     th = thresholds or Thresholds()
     ev = evidence_of(run_dir, source_paras)
     reasons: list[str] = []
+    if ev["unresolved_internal"] or ev.get("open_items"):
+        reasons.append(f"Proof incomplete: {max(ev['unresolved_internal'], ev.get('open_items') or 0)} "
+                       "internal repair(s) remain; these are production work, not author questions")
     if ev["paragraphs"] and ev["rewrite_share"] >= th.rewrite_share:
         reasons.append(
             f"{ev['rewrite_paragraphs']} of {ev['paragraphs']} paragraphs "
@@ -284,8 +287,8 @@ def assess(run_dir: str | Path, *, thresholds: Thresholds | None = None,
     if ev["paragraphs"] and ev["unresolved_share"] >= th.unresolved_share:
         reasons.append(
             f"{ev['unresolved_queries']} residuals could not be decided after "
-            f"{ev['settle_rounds']} settle round(s) and ship as author "
-            f"questions ({ev['unresolved_share']:.0%} of paragraphs)")
+            f"{ev['settle_rounds']} settle round(s) and remain internal "
+            f"repairs ({ev['unresolved_share']:.0%} of paragraphs)")
     conv = ev.get("convergence") or {}
     if conv and conv.get("stopped") in ("turn_budget", "round_cap", "rounds") \
             and not conv.get("quiet", True) and conv.get("rounds", 0) >= 2:
