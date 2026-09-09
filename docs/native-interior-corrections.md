@@ -2,7 +2,7 @@
 
 DocProof's Mac worker reads the Pre-Proof Interior Design Corrections Form, freezes each submission, resolves its book in Google Drive, and saves a new numbered InDesign edition. The original edition is preserved.
 
-**Current rollout: local review only. Google Drive uploads are disabled at the user's request.** The delivery behaviors below describe the built capability; they do not authorize enabling uploads. Obtain the user's instruction before changing that setting.
+**Installation defaults to local review.** Enable Drive delivery only after the operator authorizes it and confirms the worker's live queue contains no test jobs. Use a separate watch home for synthetic tests; source editions are preserved and delivery creates a new Book N+1.
 
 The installed Mac worker checks for new submissions every five minutes, starting September 9, 2026 at 12:39 p.m. Eastern. Private attachments can be supplied manually while the HubSpot permission is pending. The review interface is at [DocProof](http://127.0.0.1:8767/#watch); its saved home is `output/interior-worker` in this checkout. The Choly and Arendell Word files supplied during setup have been cached against their exact attachment IDs; caching does not process historical submissions or change their books.
 
@@ -92,7 +92,7 @@ Keep the native worker polling every five minutes:
 
 The native worker reloads settings before each queue pass. Turning off Interior corrections pauses new passes. An already running book finishes its current operation. `native-worker.json` records the latest check; `native_jobs/<job-id>/job.json` records each frozen submission and delivery receipts.
 
-The installed review worker uses `--local-only`, which also prevents uploads if someone changes the saved upload checkbox. Publishing requires a deliberate worker restart without that flag as well as enabling the upload setting, after the user authorizes it.
+The installer creates a review worker with `--local-only`, which also prevents uploads if someone changes the saved upload checkbox. After authorization, publishing requires enabling `corrections_native_auto_upload` and restarting the worker without `--local-only`. Keep test jobs outside the live worker home; completed local jobs can otherwise become eligible for delivery. HubSpot writeback is a separate setting. The panel's manual check remains a local-only pass when `corrections_native_worker_only` is enabled; the background worker handles delivery.
 
 Keep the general DocWatch clock disabled in a dedicated native-worker home; the native poll command already provides its own loop and does not start unrelated stages.
 
