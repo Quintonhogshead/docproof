@@ -9,6 +9,8 @@ import yaml
 from pydantic import (BaseModel, ConfigDict, Field, field_validator,
                       model_validator)
 
+from .attribution import PROOFREADER_AUTHOR
+
 
 class APIConfig(BaseModel):
     model: str = "claude-opus-5"
@@ -1811,15 +1813,15 @@ class Config(BaseModel):
     # manuscript: what changed, what was only asked about, and — the part the
     # house brief insists on — what this pass did not cover.
     change_log: bool = True
-    revision_author: str = "Atmosphere Press Proofreader"
+    revision_author: str = PROOFREADER_AUTHOR
     # The merge desk's per-lane author override (docproof/mergedesk.py,
     # Finding.lane): a finding whose lane has an entry here is attributed to
-    # that name instead of `revision_author` when its tracked change or
-    # comment is written, so a merged deliverable can carry two authors —
+    # that name instead of `revision_author` when its tracked change is
+    # written, so a merged deliverable can carry two revision authors —
     # Word's "Show Markup > Specific People" then filters one lane from the
     # other. A lane with no entry (including "", every finding outside a
-    # merged run) falls back to `revision_author` unchanged, so a run that
-    # never tags a lane writes byte-identical output to before this existed.
+    # merged run) falls back to `revision_author`. All generated comments
+    # use the house proofreader name, regardless of lane or revision author.
     lane_authors: dict[str, str] = Field(default_factory=lambda: {
         "copyedit": "Atmosphere Press Copy Editor",
     })

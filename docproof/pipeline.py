@@ -2616,7 +2616,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
             and fmt.annotate_excluded_words and prepared.spell.available
             and prepared.spell.lexicon):
         fmt.annotate_excluded_words(prepared.pkg, prepared.doc,
-                                    prepared.spell.lexicon, cfg.revision_author)
+                                    prepared.spell.lexicon)
     stats = fmt.apply_tracked_changes(prepared.pkg, prepared.doc, validated, cfg)
 
     # Shadow-only examination accounting. It observes the final validator and

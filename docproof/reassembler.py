@@ -10,6 +10,7 @@ from typing import Literal, Sequence
 
 from lxml import etree
 
+from .attribution import PROOFREADER_AUTHOR, PROOFREADER_INITIALS
 from .config import Config
 from .models import Anchor, DocumentModel, Finding, index_paragraphs
 from .queries import query_span, query_text, shows_margin_comment
@@ -391,8 +392,8 @@ class _Comments:
     complains, set `comments: false` in config — the explanations still land
     in summary.md either way."""
 
-    def __init__(self, pkg: DocxPackage, author: str, date: str):
-        self.author, self.date = author, date
+    def __init__(self, pkg: DocxPackage, date: str):
+        self.date = date
         name = "word/comments.xml"
         if pkg.has(name):
             self.root = pkg.tree(name)
@@ -422,8 +423,7 @@ class _Comments:
                          {"Id": f"rId{n}", "Type": _REL_COMMENTS,
                           "Target": "comments.xml"})
 
-    def attach_to_span(self, p, start: int, end: int, text: str,
-                       author: str | None = None) -> bool:
+    def attach_to_span(self, p, start: int, end: int, text: str) -> bool:
         """Anchor a comment to a range of the paragraph's text, with no
         revision around it — the query channel: this asks, and changes
         nothing.
@@ -433,22 +433,18 @@ class _Comments:
         out of w:t. Splitting runs and inserting range markers does not shift
         those offsets, so the edits that follow still land correctly.
 
-        `author`, if given, overrides the part's default author for this one
-        comment — the merge desk's per-lane attribution (Finding.lane,
-        Config.lane_authors); omitted, it falls back to the author the part
-        was opened with, unchanged from before lanes existed."""
+        All generated comments carry the house proofreader name. Existing
+        comments retain their original attribution."""
         _ensure_boundary(p, start)
         _ensure_boundary(p, end)
         covered = [t for (t, s, e) in _text_spans(p)
                    if s >= start and e <= end and e > s]
         if not covered:
             return False
-        self.attach(p, covered[0].getparent(), covered[-1].getparent(), text,
-                   author=author)
+        self.attach(p, covered[0].getparent(), covered[-1].getparent(), text)
         return True
 
-    def attach(self, p, first_el, last_el, text: str,
-              author: str | None = None) -> None:
+    def attach(self, p, first_el, last_el, text: str) -> None:
         cid = str(next(self.ids))
         af, al = _p_level(first_el, p), _p_level(last_el, p)
         start = etree.Element(qn("w:commentRangeStart"), {qn("w:id"): cid})
@@ -461,8 +457,9 @@ class _Comments:
 
         c = etree.SubElement(self.root, qn("w:comment"),
                              {qn("w:id"): cid,
-                              qn("w:author"): author or self.author,
-                              qn("w:date"): self.date, qn("w:initials"): "dp"})
+                              qn("w:author"): PROOFREADER_AUTHOR,
+                              qn("w:date"): self.date,
+                              qn("w:initials"): PROOFREADER_INITIALS})
         cp = etree.SubElement(c, P_TAG)
         cr = etree.SubElement(cp, R_TAG)
         ctxt = etree.SubElement(cr, T_TAG)
@@ -494,7 +491,7 @@ def _excluded_note(words: Sequence[str], limit: int) -> str:
 
 
 def annotate_excluded_words(pkg: DocxPackage, doc: DocumentModel,
-                            words: Sequence[str], author: str, *,
+                            words: Sequence[str], *,
                             date: str | None = None, limit: int = 120) -> bool:
     """Anchor one comment at the top of the document naming the words the spell
     scan excluded from checking — the ones it judged the author's own and so
@@ -524,7 +521,7 @@ def annotate_excluded_words(pkg: DocxPackage, doc: DocumentModel,
     start, end = (m.start(), m.end()) if m else (0, min(1, len(first.text)))
 
     date = date or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    comments = _Comments(pkg, author, date)
+    comments = _Comments(pkg, date)
     pkg.mark_modified("word/document.xml")
     placed = comments.attach_to_span(elem, start, end, _excluded_note(words, limit))
     if placed:
@@ -720,10 +717,9 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                     unplaced.append(f.finding_id)
                     continue
                 if comments is None:
-                    comments = _Comments(pkg, cfg.revision_author, date)
+                    comments = _Comments(pkg, date)
                 lo, hi = query_span(f, paras[para_id].text)
-                if comments.attach_to_span(p, lo, hi, query_text(f),
-                                          author=_author(f)):
+                if comments.attach_to_span(p, lo, hi, query_text(f)):
                     queried.append(f.finding_id)
                 else:
                     unplaced.append(f.finding_id)
@@ -774,10 +770,9 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                 applied.append(f.finding_id)
                 if cfg.comments and not f.silent and in_body_flow:
                     if comments is None:
-                        comments = _Comments(pkg, cfg.revision_author, date)
+                        comments = _Comments(pkg, date)
                     comments.attach(p, first, last,
-                                    f.explanation or f"{f.error_type} fix",
-                                    author=author)
+                                    f.explanation or f"{f.error_type} fix")
 
     log.info("Applied %d tracked change(s); %d skipped by safety checks.",
              len(applied), len(skipped))

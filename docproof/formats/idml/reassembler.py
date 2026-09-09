@@ -24,6 +24,7 @@ from datetime import datetime
 
 from lxml import etree
 
+from ...attribution import PROOFREADER_AUTHOR
 from ...config import Config
 from ...models import Anchor, DocumentModel, Finding, index_paragraphs
 from ...queries import query_span, query_text, shows_margin_comment
@@ -34,6 +35,7 @@ from .walker import (CHANGE, CONTENT, CSR, DELETED, DESIGNMAP, DOCUMENT_USER,
 log = logging.getLogger("docproof.formats.idml.reassembler")
 
 _DOCPROOF_USER = "dDocProofUser"
+_NOTE_USER = "dDocProofNotesUser"
 
 
 @dataclass(frozen=True)
@@ -177,12 +179,13 @@ def apply_replacement(para: _Paragraph, anchor: Anchor, author: str,
 
 
 
-def _note(text: str, author: str, date: str) -> etree._Element:
+def _note(text: str, date: str) -> etree._Element:
     """The Note element itself, in the shape InDesign 2026 writes its own
     (docs/idml-notes.md)."""
     note = etree.Element(NOTE, {"Collapsed": "false", "CreationDate": date,
-                                "ModificationDate": date, "UserName": author,
-                                "AppliedDocumentUser": _DOCPROOF_USER})
+                                "ModificationDate": date,
+                                "UserName": PROOFREADER_AUTHOR,
+                                "AppliedDocumentUser": _NOTE_USER})
     inner_psr = etree.SubElement(note, PSR, {
         "AppliedParagraphStyle": "ParagraphStyle/$ID/[No paragraph style]"})
     inner_csr = etree.SubElement(inner_psr, CSR, {
@@ -192,19 +195,17 @@ def _note(text: str, author: str, date: str) -> etree._Element:
     return note
 
 
-def attach_note(anchor_el: etree._Element, text: str, author: str,
-                date: str) -> None:
+def attach_note(anchor_el: etree._Element, text: str, date: str) -> None:
     """An inline Note beside the change, holding docproof's explanation.
 
     Notes live where the change lives — a direct child of the
     CharacterStyleRange — and are excluded from canonical text by the walker,
     so adding one never disturbs an anchor."""
     parent = anchor_el.getparent()
-    parent.insert(parent.index(anchor_el), _note(text, author, date))
+    parent.insert(parent.index(anchor_el), _note(text, date))
 
 
-def attach_note_at(para: _Paragraph, off: int, text: str, author: str,
-                   date: str) -> bool:
+def attach_note_at(para: _Paragraph, off: int, text: str, date: str) -> bool:
     """A Note at a character offset with no revision around it — the query
     channel: this asks, and changes nothing.
 
@@ -222,22 +223,23 @@ def attach_note_at(para: _Paragraph, off: int, text: str, author: str,
         return False
     para.ensure_boundary(off)
     parent, at, _ = para.insert_point(off)
-    parent.insert(at, _note(text, author, date))
+    parent.insert(at, _note(text, date))
     return True
 
 
-def ensure_document_user(pkg: IdmlPackage, author: str) -> None:
-    """Register the revision author so InDesign shows a name on each change.
+def ensure_document_user(pkg: IdmlPackage, author: str, *,
+                         user_id: str = _DOCPROOF_USER) -> None:
+    """Register a revision or note author so InDesign shows the right name.
 
     Every IDML already carries at least one DocumentUser; ours is added beside
     them rather than replacing one, so a real user's identity is left alone."""
     root = pkg.tree(DESIGNMAP)
     for el in root.iterchildren(DOCUMENT_USER):
-        if el.get("Self") == _DOCPROOF_USER:
+        if el.get("Self") == user_id:
             el.set("UserName", author)
             pkg.mark_modified(DESIGNMAP)
             return
-    user = etree.Element(DOCUMENT_USER, {"Self": _DOCPROOF_USER,
+    user = etree.Element(DOCUMENT_USER, {"Self": user_id,
                                          "UserName": author})
     existing = list(root.iterchildren(DOCUMENT_USER))
     if existing:
@@ -327,6 +329,8 @@ def apply_tracked_changes(pkg: IdmlPackage, doc: DocumentModel,
         by_part.setdefault(paras[f.para_id].part, []).append(f)
 
     ensure_document_user(pkg, author)
+    if cfg.comments or queries:
+        ensure_document_user(pkg, PROOFREADER_AUTHOR, user_id=_NOTE_USER)
 
     for part, part_findings in by_part.items():
         walked_by_id = {wp.para_id: wp for wp in walk_package(pkg)
@@ -373,7 +377,7 @@ def apply_tracked_changes(pkg: IdmlPackage, doc: DocumentModel,
             for f in sorted((x for x in para_findings if x.status != "validated"),
                             key=lambda x: x.anchor.start):
                 lo, _hi = query_span(f, paras[para_id].text)
-                if attach_note_at(para, lo, query_text(f), author, date):
+                if attach_note_at(para, lo, query_text(f), date):
                     queried.append(f.finding_id)
                     touched = True
                 else:
@@ -393,7 +397,7 @@ def apply_tracked_changes(pkg: IdmlPackage, doc: DocumentModel,
                 touched = changed = True
                 if cfg.comments and not f.silent and first is not None:
                     attach_note(first, f.explanation or f"{f.error_type} fix",
-                                author, date)
+                                date)
 
         if touched:
             if changed:

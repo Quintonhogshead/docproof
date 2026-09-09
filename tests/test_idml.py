@@ -218,8 +218,19 @@ def test_explanations_become_notes(cfg, tmp_path):
     story_part = [p for p in after.story_parts() if p.endswith("ue0.xml")][0]
     notes = list(after.tree(story_part).iter("Note"))
     assert len(notes) == 1
+    _assert_note_attribution(after, notes)
     assert notes[0].findtext("ParagraphStyleRange/CharacterStyleRange/Content") \
         == "Because."
+
+
+def _assert_note_attribution(pkg, notes):
+    users = {u.get("Self"): u.get("UserName")
+             for u in pkg.tree("designmap.xml").iter("DocumentUser")}
+    for note in notes:
+        assert note.get("UserName") == "Atmosphere Press Proofreader"
+        assert users[note.get("AppliedDocumentUser")] == "Atmosphere Press Proofreader"
+    # Custom tracked-change attribution still resolves to its own user.
+    assert users["dDocProofUser"] == "docproof"
 
 
 def test_notes_do_not_disturb_canonical_text(cfg, tmp_path):
@@ -282,6 +293,8 @@ def test_a_query_becomes_a_note(cfg, tmp_path):
     assert stats.queried == ("q-1",)
     assert stats.applied == () and not stats.unplaced
     assert notes_in(after) == ["Who is speaking here?"]
+    _assert_note_attribution(after, [n for part in after.story_parts()
+                                     for n in after.tree(part).iter("Note")])
 
 
 def test_a_query_changes_nothing(cfg, tmp_path):
