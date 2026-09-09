@@ -374,15 +374,48 @@ agent treats that as the machine's problem, not the book's: the driver raises
 instead of writing a `needs_human` verdict, the claimed book stays claimed and
 untouched, the agent stops claiming, emails once, and the practitioner panel
 shows **Halted · subscription token rejected**. It also checks the token at
-boot, before any book. To recover:
+boot, before any book. To recover, mint a token on a Mac signed in to the
+Max subscription — but **do not copy it off the screen.** `claude setup-token`
+draws the token inside a box as 35-character rows with screen redraws between
+them, so a mouse selection picks up the wraps, `pbpaste | tr -d '[:space:]'`
+glues the surrounding prose onto the token, and a grep over the boxed output
+stops at the first row. Every one of those yields a well-formed token that the
+API rejects with `401 OAuth access token is invalid`, which looks exactly like
+a bad mint (the 2026-09-09 rotation took five tries that way). Redirect stdout
+instead — the prompts still reach the terminal, and the token lands in the
+file as one plain 108-character line:
 
 ```bash
-claude setup-token
-fly secrets set -a atmosphere-docproof GALLEY_OAUTH_TOKEN=<the new token>
+claude setup-token > /tmp/tok.txt
+```
+
+Verify it locally before it goes anywhere near Fly (this never echoes the
+token; the API key is unset so the answer can only come from the token):
+
+```bash
+env -u ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN="$(grep -o 'sk-ant-oat01-[A-Za-z0-9_-]*' /tmp/tok.txt)" \
+  claude -p "Reply with exactly the word: ok" --max-turns 1 --output-format json < /dev/null \
+  | grep -o '"result":"[^"]*"'
+```
+
+Only when that prints `"result":"ok"`:
+
+```bash
+fly secrets set -a atmosphere-docproof \
+  GALLEY_OAUTH_TOKEN="$(grep -o 'sk-ant-oat01-[A-Za-z0-9_-]*' /tmp/tok.txt)" && rm -f /tmp/tok.txt
 ```
 
 The secret restarts the machines; the agent's first poll resumes the held
-book from the phase it was in. A book that an older agent wrote off as
+book from the phase it was in. To confirm on the machine itself, source the
+credentials file and strip the API keys the way the agent does — a bare
+`claude -p` over `fly ssh console` inherits `ANTHROPIC_API_KEY`, answers on
+it, and proves nothing about the subscription:
+
+```bash
+fly ssh console -a atmosphere-docproof --process-group agent -C "/bin/sh -c 'set -a; . /root/.galley/agent.env; set +a; env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY claude -p \"Reply with exactly the word: ok\" --max-turns 1 --output-format json < /dev/null'"
+```
+
+A book that an older agent wrote off as
 `needs_human` over a dead token is `failed` in the ledger and will not be
 retried — drop it and mark it awaiting again:
 
