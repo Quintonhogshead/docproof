@@ -16,6 +16,9 @@ workspace/<book-slug>/
                                  grep/head/tail/wc/ls/cat runs/*; never
                                  overwritten)
   source/<book>.docx
+  intake/<input-hash>/original/<book>.docx  (agent's unchanged Book 1 download)
+  intake/<input-hash>/formatted/<book>.docx (verified plain manuscript)
+  intake/<input-hash>/formatting.json       (original/output hashes and checks)
   profile.json       (written by /profile)
   PLAN.md            (written by /draft-plan, human-approved at the gate)
   approval.json      (written by `docproof galley approve` from the plan)
@@ -104,10 +107,26 @@ every --poll-interval (default 5 min):
     GET <app>/api/watch/awaiting          (bearer token, read-only)
     for the first book this machine has not already claimed:
         download the Book 1 with the watcher's own Google sign-in
+        format it as a plain manuscript and verify the words and content
         run galley.driver over it — --approve auto, $10, mechanical only
         the driver's hand-off uploads the Book 2 set to the author's folder
 DocWatch's next tick reads the outcome.json and moves HubSpot on.
 ```
+
+The agent formats new Book 1 intakes before the driver records its source or
+starts proofreading. It uses the existing plain manuscript preset: Times New
+Roman, 12-point body, 14-point chapter titles, consistent paragraph spacing,
+indents, margins and page numbers. Paragraph classification uses the Claude
+subscription; formatting has no API fallback. Incomplete classification or
+failed content verification stops the intake before proofreading begins.
+
+Both the tracked Book 2 and its clean reading copy inherit this formatting.
+Rejecting the proofreading changes restores the formatted Book 1. The unchanged
+download is retained in `intake/` alongside formatting notes and verification.
+Retries reuse the verified formatted file byte for byte and resume unfinished
+formatting windows from a checkpoint. Proofreads already in progress when this
+feature is installed keep their recorded source; a changed Book 1 is formatted
+as a new intake and starts a fresh proofreading revision.
 
 **One book at a time, once each, always with an answer.** A local ledger
 (`~/galley-workspaces/.agent-state.json`) records every Drive file id claimed,
