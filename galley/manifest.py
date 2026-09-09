@@ -524,9 +524,29 @@ def _certify_comment_premises(run: Path, envelope: dict[str, Any] | None
     except Exception as e:                                  # noqa: BLE001
         return Check("comment premises", "skip",
                      f"no delivered text to check against ({e})")
+    from galley.comment_reconcile import reconciliation
+    from galley.settle import Settlement
+    from galley.verify import deliverable_docx
+    from hashlib import sha256
+    settlement = Settlement.load(run)
+    receipt_path = run / "comment_reconciliation.json"
+    if settlement is not None and not receipt_path.is_file():
+        return Check("comment premises", "fail", "Final comment reconciliation has not run")
+    if receipt_path.is_file():
+        try:
+            receipt = json.loads(receipt_path.read_text("utf-8"))
+            document = deliverable_docx(run)
+            if document is None or receipt.get("document_sha256") != sha256(document.read_bytes()).hexdigest():
+                return Check("comment premises", "fail", "Document changed after comment reconciliation")
+        except (OSError, ValueError, TypeError):
+            return Check("comment premises", "fail", "Invalid comment reconciliation receipt")
     rows = [r for r in (envelope.get("findings") or []) if isinstance(r, dict)]
     checkable = [r for r in rows
                  if str(r.get("error_type") or "") in PREMISES]
+    extra = reconciliation(rows, delivered, settlement.residuals_seen if settlement else (), source=_orig)
+    if extra:
+        return Check("comment premises", "fail",
+                     f"{len(extra)} stale or duplicate proofreading comment(s); reconcile and rebuild")
     stale = stale_queries(rows, delivered)
     if stale:
         return Check("comment premises", "fail",
@@ -699,9 +719,9 @@ def _certify_settlement(run: Path) -> Check:
                          f"settle`")
         return Check("residual settlement", "pass",
                      "verify raised nothing to settle")
-    if settlement.open:
+    if settlement.open or settlement.counts().get("internal_repair"):
         return Check("residual settlement", "fail",
-                     f"settlement.json leaves {len(settlement.open)} item(s) "
+                     f"settlement.json leaves {max(len(settlement.open), settlement.counts().get('internal_repair', 0))} item(s) "
                      f"open after {settlement.rounds} round(s)")
     if n_open:
         return Check("residual settlement", "fail",

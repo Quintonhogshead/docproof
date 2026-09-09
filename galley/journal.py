@@ -653,12 +653,11 @@ def _section_settle(doc: _Doc, src: JournalSources) -> None:
     records = [r for r in (settlement.get("records") or [])
                if isinstance(r, dict)]
     conv = settlement.get("convergence") or {}
-    doc.para(f"{len(records)} item(s) closed over "
+    doc.para(f"{len(records)} decision record(s) over "
              f"{settlement.get('rounds', 0)} round(s) on "
-             f"`{settlement.get('engine', '?')}`. Every open item ends as an "
-             f"ABSORB into the owning edit, an ADD of a new edit, a DROP with a "
-             f"reason, a REVISE of the owner, or a QUERY to the author — never "
-             f"a note for later.")
+             f"`{settlement.get('engine', '?')}`. Corrections are applied or rejected "
+             f"with a reason. Author questions require missing author knowledge; "
+             f"technical failures remain internal repairs and block completion.")
     if conv:
         doc.para(f"The sweep stopped because: **{conv.get('stopped', '?')}** "
                  f"(last round found {conv.get('last_new_items', '?')} new "
@@ -666,7 +665,7 @@ def _section_settle(doc: _Doc, src: JournalSources) -> None:
     still_open = settlement.get("open") or []
     if still_open:
         doc.para(f"**{len(still_open)} item(s) were still open when the loop "
-                 f"stopped** — they ship as author questions.")
+                 f"stopped** — they remain internal repairs; no author comments were created for them.")
     by_round: dict[int, list[Mapping[str, Any]]] = {}
     for rec in records:
         by_round.setdefault(int(rec.get("round", 0) or 0), []).append(rec)

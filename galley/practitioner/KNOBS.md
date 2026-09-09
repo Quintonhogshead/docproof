@@ -127,8 +127,8 @@ ESCALATION (the knob may not exist), not a reason to go read the source.
 - **`docproof galley settle RUN --source BOOK --config C`** — the settlement
   loop. Reads `finished_walk.json` + `change_verify.json`, closes every item
   (absorb / add / drop / query), rebuilds at $0, re-verifies the touched
-  paragraphs, repeats to `--rounds` (default 3); leftovers ship as
-  `unresolved_after_N` queries. Writes `settlement.json`, restamps the two
+  paragraphs, repeats to `--rounds` (default 3); leftovers remain
+  `internal_repair` items with `unresolved_after_N` reasons and block completion. Writes `settlement.json`, restamps the two
   verify artifacts for the final build, stamps `state`/`disposition_reason`
   on every findings row, writes `outcome.json`. `--engine auto|subagent|
   provider|none`; `--no-verify` skips the delta re-read; `--dry-run` lists
@@ -542,7 +542,7 @@ on this path (rows are curated); the word-count delta guard still does.
   accepted paragraph is the concatenation of `text`; `owner` null = untouched.
 - **`settlement.json`**: `{"rounds", "engine", "model", "counts": {action:
   n}, "records": [{"residual_id", "round", "action": absorb|add|revise|drop|
-  query, "owner_finding_id", "before_replacement", "after_replacement",
+  query|internal_repair, "owner_finding_id", "before_replacement", "after_replacement",
   "reason", "verified_by", "para_id", "question", "kind": residual|
   edit_damage}], "open": [], "residuals_seen": [...], "cost", "notes"}`.
   Reason prefixes: `duplicate | overlap_loser | voice | intent_zone |
@@ -558,16 +558,19 @@ on this path (rows are curated); the word-count delta guard still does.
   singles inside dialogue, numbers spelled to one hundred) is never an
   error; settle additionally sweeps the candidate paragraph and DROPS any
   settlement the configured sweeps would re-fire on (`undoes_house_style`).
-  (2) `--mechanical-only` (implied by `--approval` whose manifest says
-  `mechanical_only`): a suggestion may become an edit only when it is
-  punctuation/case/hyphen/space-only, or changes at most ONE word and that
-  word is a function word or a same-stem spelling/inflection fix (≤2 edits);
-  anything larger ships as a QUERY carrying the suggestion
-  (`rewrite_class:<why>`). (3) After every rebuild the paragraphs the round
-  wrote are read back and compared with what the decisions said they should
-  read; a mismatch, or a five-word run now repeated inside the paragraph
-  that the source did not repeat, reverts the round's settlements there to
-  queries (`composite_mismatch` / `duplicated_fragment`). certify's artifact
+  (2) `--mechanical-only` recognizes punctuation, spelling, grammatical
+  inflections, function words, and equivalent number/time formatting. Each
+  proposed correction is assessed independently; multiple necessary mechanical
+  changes are allowed. Unrecognized repairs go to internal grammatical judgment.
+  The judge must name a mechanical category and affirm preserved meaning. A
+  query must identify missing author knowledge and supply a specific question.
+  Actual number-value changes cannot be approved as mere formatting.
+  (3) Every rebuilt paragraph is compared with the planned result. Mismatches,
+  overlapping plans, missing edits, and introduced duplication restore the last
+  verified rows for that paragraph. Corrections retry individually using fresh
+  locations; independent edits are rebased onto the current text. Failed retries
+  remain internal work and block certification; they never become author comments.
+  The artifact
   scan fails on the same repeat. (4) A verifier flag on a composite gets a
   judge SECOND LOOK (keep|revert) before a revert: `verifier_overruled`
   keeps it, `verifier_confirmed` reverts; `verifier_reverted` only when the
@@ -610,3 +613,23 @@ on this path (rows are curated); the word-count delta guard still does.
   loses to `sweep_ellipsis` — target only characters outside the claim.
 - Same-point insertions from two sources compose into `,,` — dedupe by
   insertion POINT, then iterate the artifact scan until clean.
+
+### Mechanical corrections and final comments
+
+`U.S` → `U.S.` is seeded automatically on each settlement run. The rule cannot
+match an already punctuated abbreviation. Routine grammar, punctuation, and
+spelling corrections are tracked edits; an engine error is never an author query.
+
+Internal repairs persist in `settlement.json` under both the latest decision and
+`open`. They survive new verification snapshots and restarts. A round limit stops
+work without declaring it settled. `outcome.json` reports an incomplete proof
+using the existing `needs_human` status, with the production failure explicitly
+named in its reason and `unresolved_internal` evidence.
+
+Before delivery, finding-owned comments are checked against the final text.
+Already corrected targets and duplicate questions are removed by rebuilding from
+the source, preserving the author's original comments. Distinct questions in one
+sentence remain distinct. `comment_reconciliation.json` binds the check and actual
+comment count to the delivered DOCX hash; a later document change invalidates it.
+The letter inventories actual Word comments and distinguishes internal work from
+author questions. Certification refuses stale reconciliation or any internal repair.

@@ -1200,6 +1200,7 @@ def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
         settled_note = (f"  --anchor accepted: {folded.absorbed} row(s) revise "
                         f"an applied edit, {folded.added} land on untouched "
                         f"text, {folded.queried} became queries, "
+                        f"{folded.internal_repairs} need internal repair, "
                         f"{folded.dropped} dropped; replaying {len(rows)} "
                         f"row(s) in all")
         for line in folded.notes[:10]:
