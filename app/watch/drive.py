@@ -252,6 +252,15 @@ def list_folder(token: str, folder_id: str, *, opener=_open_url,
             return files
 
 
+def get_file(token: str, file_id: str, *, opener=_open_url) -> DriveFile:
+    """One file's details, by id — its real type rather than a guess from
+    its name."""
+    params = {"fields": FILE_FIELDS, **SHARED_DRIVE}
+    raw = _json_call(_request(_url(f"{API}/files/{file_id}", params), token),
+                     opener=opener, what="read a file's details")
+    return DriveFile.from_api(raw)
+
+
 def download_bytes(token: str, file_id: str, *, opener=_open_url,
                    what: str = "download a file") -> bytes:
     """A file's contents, into memory. For small things read and parsed on the

@@ -194,6 +194,42 @@ def test_slug_falls_back_to_the_surname():
     assert ga.slug_for("---.docx", "Redding") == "redding-book"
 
 
+# --- downloading the Book 1 ---------------------------------------------------
+
+def test_an_extensionless_word_upload_is_downloaded_not_exported():
+    """Bradshaw, 2026-09-10: "Bradshaw - Book 1" had no extension, the name
+    guess said native Doc, and Drive refused the export on every poll."""
+    from app.watch.drive import DOCX_MIME
+    from tests.fakes import drive_entry, fake_drive
+
+    opener = fake_drive({"drive-9": drive_entry("Bradshaw - Book 1")})
+    book = ga.AwaitingBook(file_id="drive-9", name="Bradshaw - Book 1")
+    handle = ga.drive_handle("at-1", book, opener=opener)
+    assert handle.mime_type == DOCX_MIME
+    assert not handle.is_google_doc
+    assert handle.name == "Bradshaw - Book 1"
+
+
+def test_a_native_doc_is_still_exported():
+    from app.watch.drive import GOOGLE_DOC_MIME
+    from tests.fakes import drive_entry, fake_drive
+
+    opener = fake_drive({"drive-9": drive_entry("Bradshaw - Book 1",
+                                                mime=GOOGLE_DOC_MIME)})
+    book = ga.AwaitingBook(file_id="drive-9", name="Bradshaw - Book 1")
+    assert ga.drive_handle("at-1", book, opener=opener).is_google_doc
+
+
+def test_the_name_guess_stands_in_when_drive_will_not_say():
+    from app.watch.drive import DriveError
+    from tests.fakes import drive_entry, fake_drive
+
+    opener = fake_drive({"drive-9": drive_entry("Bradshaw - Book 1")},
+                        fail={"get": DriveError("no")})
+    book = ga.AwaitingBook(file_id="drive-9", name="Bradshaw - Book 1")
+    assert ga.drive_handle("at-1", book, opener=opener).is_google_doc
+
+
 # --- the loop -----------------------------------------------------------------
 
 def test_discovery_claim_run_handoff_and_ledger(env, tmp_path):

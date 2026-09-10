@@ -186,7 +186,7 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
     makes "the second tick finds nothing to do" a thing a test can simply ask
     for, rather than a sequence it has to choreograph.
 
-    `fail` maps an endpoint — token, list, download, export, upload, patch, and
+    `fail` maps an endpoint — token, list, get, download, export, upload, patch, and
     the HubSpot pair hubspot_search / hubspot_patch — to an exception raised the
     first time that endpoint is called and not after, which is how a tick is
     made to die in a chosen place.
@@ -360,6 +360,13 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
         if query.get("alt") == ["media"]:
             _maybe_fail("download")
             return Response(content.get(path.rsplit("/", 1)[-1], docx))
+
+        # `files.get` — one file's details by id, no media.
+        file_id = path.rsplit("/", 1)[-1]
+        if request.get_method() == "GET" and file_id in store:
+            _maybe_fail("get")
+            entry = {k: v for k, v in store[file_id].items() if k != "parents"}
+            return Response(json.dumps(entry).encode())
 
         _maybe_fail("list")
         kept = [e for e in store.values()
