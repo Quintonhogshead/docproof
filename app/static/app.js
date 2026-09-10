@@ -8066,9 +8066,19 @@ function renderWatchFiles(files) {
     // book that got all of its outputs made this column wider than the card,
     // and the Cost and Try-again columns scrolled off the right edge behind a
     // scrollbar macOS does not draw — "I don't see the button".
-    const tr = bodyRow([f.name, f.plain_state,
-                        f.uploaded.join('\n') || '—', money(f.cost)]);
+    const flags = f.flags || [];
+    const flagState = flags.map((flag) => `${flag.label}: ${flag.value === 'human'
+      ? 'read · needs a human' : flag.value === 'failed' ? 'failed'
+      : flag.stage === 'proof' ? 'read' : 'completed'}`).join('\n');
+    const tr = bodyRow([[f.name, f.author || f.folder].filter(Boolean).join('\n'),
+                        flagState || (f.proof_marked === 'awaiting' ? 'Waiting for proofreader'
+                          : Object.keys(f.flag_resets || {}).length && !f.job_id && !f.proof_marked
+                            ? 'Flag cleared · waiting for ready status' : f.plain_state),
+                        [...(f.uploaded || []), ...(f.proof_uploaded || []),
+                          ...(f.corrections_uploaded || [])].join('\n') || '—', money(f.cost)]);
     tr.className = 'wf-history-row';
+    tr.dataset.processed = flags.some((flag) => flag.completed) ? 'true' : 'false';
+    tr.dataset.flagged = flags.length ? 'true' : 'false';
     ['Manuscript', 'Status', 'Delivered files', 'Cost'].forEach((label, i) => {
       tr.children[i].dataset.label = label;
     });
@@ -8087,10 +8097,39 @@ function renderWatchFiles(files) {
       btn.addEventListener('click', () => retryFailed(f, btn));
       td.append(btn);
     }
+    flags.forEach((flag) => {
+      if (flag.stage === 'format' && flag.value === 'failed') return;
+      const btn = document.createElement('button');
+      btn.className = 'ghost small';
+      btn.textContent = `Clear ${flag.label.toLowerCase()} flag`;
+      btn.addEventListener('click', () => resetWatchFlag(f, flag, btn));
+      td.append(btn);
+    });
     tr.append(td);
     table.append(tr);
   });
   applyWatchFilesFilter();
+}
+
+async function resetWatchFlag(f, flag, btn) {
+  if (!confirm(`Clear the ${flag.label.toLowerCase()} flag on ${f.name}? `
+      + 'This allows a fresh run when its HubSpot status is ready, including '
+      + 'on the next scheduled check if it is already ready. A new run may '
+      + 'incur processing costs. Previous files and job records are kept.')) return;
+  btn.disabled = true;
+  try {
+    const body = await api('/api/watch/flags/reset', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({file_id: f.file_id, stage: flag.stage,
+                            updated_at: f.updated_at}),
+    });
+    renderWatch(body, true);
+    watchNote($('watch-files-note'), `${flag.label} flag cleared for ${body.name}. `
+      + 'Set its HubSpot status to the ready value when you want it processed again.', 'ok');
+  } catch (e) {
+    btn.disabled = false;
+    watchNote($('watch-files-note'), e.message, 'error');
+  }
 }
 
 async function retryFailed(f, btn) {
@@ -10507,11 +10546,15 @@ function applyWatchFilesFilter() {
   const input = $('watch-files-filter');
   const table = $('watch-files');
   if (!input || !table) return;
-  const q = input.value.trim().toLowerCase();
+  const fold = (value) => value.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+  const q = fold(input.value.trim());
+  const mode = $('watch-files-state')?.value || 'all';
   const rows = [...table.querySelectorAll('tr')];
   rows.forEach((tr, idx) => {
     if (idx === 0) return;               // the header row always stays
-    tr.hidden = !!q && !tr.textContent.toLowerCase().includes(q);
+    tr.hidden = (!!q && !fold(tr.textContent).includes(q))
+      || (mode === 'processed' && tr.dataset.processed !== 'true')
+      || (mode === 'flagged' && tr.dataset.flagged !== 'true');
   });
   const empty = $('watch-files-empty');
   empty.hidden = rows.slice(1).some((tr) => !tr.hidden);
@@ -10519,6 +10562,7 @@ function applyWatchFilesFilter() {
     : 'No manuscript activity yet. Completed work will appear here after the first check.';
 }
 $('watch-files-filter').addEventListener('input', applyWatchFilesFilter);
+$('watch-files-state')?.addEventListener('change', applyWatchFilesFilter);
 
 boot();
 

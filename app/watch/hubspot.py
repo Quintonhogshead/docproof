@@ -257,13 +257,15 @@ def file_urls(value: str) -> list[str]:
 def name_matches(stored: str, key: str) -> bool:
     """Whether a filename's author key names this record.
 
-    Trimmed and case-insensitive, and a co-author parenthetical is set aside —
+    Whitespace-, accent- and case-insensitive, and a co-author parenthetical is set aside —
     a file named for "Lichtenstein" matches a record whose author last name is
     stored "Lichtenstein (and Dolores DelBello)" — because the folder carries
     one surname and the record may carry more. An empty key or an empty stored
     value matches nothing, so a blank never sweeps a book in by accident."""
-    s = (stored or "").strip().lower()
-    k = (key or "").strip().lower()
+    from .names import name_key
+
+    s = name_key(stored or "")
+    k = name_key(key or "")
     if not s or not k:
         return False
     main = s.split(" (")[0].strip()

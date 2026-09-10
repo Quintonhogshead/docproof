@@ -73,6 +73,23 @@ def test_is_source_name_matches_only_the_authors_intake_file(name, last, want):
     assert naming.is_source_name(name, last) is want
 
 
+@pytest.mark.parametrize("filename_surname,hubspot_surname", [
+    ("Aragon", "Aragón"),
+    ("Aragón", "Aragon"),
+    ("Arago\u0301n", "ARAGON"),
+])
+def test_accent_variants_match_formatting_and_proofing_sources(
+        filename_surname, hubspot_surname):
+    assert naming.is_source_name(
+        f"{filename_surname} - Book Original.docx", hubspot_surname)
+    assert naming.is_proof_source_name(
+        f"{filename_surname} - Book 1.docx", hubspot_surname)
+    assert naming.format_base(f"{filename_surname} - Book Original").startswith(
+        filename_surname + " - ")
+    assert naming.proof_base(f"{filename_surname} - Book 1").startswith(
+        filename_surname + " - ")
+
+
 # --- has_source_label ---------------------------------------------------------
 
 @pytest.mark.parametrize("name,want", [

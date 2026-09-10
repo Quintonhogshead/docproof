@@ -12,8 +12,10 @@ way Drive would, honouring the parent, name and mimeType clauses.
 """
 from __future__ import annotations
 
+import pytest
+
 from app.watch import folders
-from app.watch.drive import FOLDER_MIME
+from app.watch.drive import DriveError, FOLDER_MIME
 
 from .fakes import drive_entry, fake_drive
 
@@ -58,6 +60,37 @@ def test_case_only_drift_is_forgiven_by_the_fallback():
 
 def test_surrounding_whitespace_is_forgiven():
     assert _resolve({"sf-1": _folder("Quinton Johnson ")}) == "sf-1"
+
+
+@pytest.mark.parametrize("first,last,folder", [
+    ("Ana", "Aragón", "Ana Aragon"),
+    ("José", "Aragón", "jose aragon"),
+    ("Jose\u0301", "Arago\u0301n", "Jose Aragon"),
+    ("Ana", "Aragón", "ana aragón"),
+    ("李", "王", "李 王"),
+    ("José", "D'Ávila", "jose d'avila"),
+])
+def test_accent_variants_resolve_without_changing_the_display_name(
+        first, last, folder):
+    assert _resolve({"sf-1": _folder(folder)}, first, last) == "sf-1"
+
+
+def test_accent_fallback_refuses_two_equivalent_folders():
+    assert _resolve({"sf-1": _folder("ana aragón"),
+                     "sf-2": _folder("ana aragon")}, "Ana", "Aragón") is None
+
+
+def test_exact_spelling_keeps_priority_over_accent_fallback():
+    assert _resolve({"sf-1": _folder("Ana Aragón"),
+                     "sf-2": _folder("Ana Aragon")}, "Ana", "Aragón") == "sf-1"
+
+
+def test_incomplete_search_results_are_not_trusted():
+    entries = {"match": _folder("ana aragon")}
+    entries.update({f"extra-{n}": _folder(f"ana aragon {n}") for n in range(20)})
+    with pytest.raises(DriveError, match="Too many author folders"):
+        folders.resolve("Ana", "Aragón", PARENT, "tok",
+                        opener=fake_drive(entries, page_size=20))
 
 
 # --- refusing to guess --------------------------------------------------------

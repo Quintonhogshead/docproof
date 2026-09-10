@@ -209,6 +209,12 @@ def test_a_property_outside_the_allowlist_is_refused_before_any_request():
     ("Smith", "Smithson", False),                   # not a loose prefix match
     ("Smithson", "Smith", False),
     ("St Denis", "St Denis", True),                 # a space in the surname
+    ("Aragón", "Aragon", True),
+    ("Aragon", "Aragón", True),
+    ("Arago\u0301n", "ARAGON", True),
+    ("Aragón (and José Pérez)", "Aragon", True),
+    ("Aragón", "Aragones", False),
+    ("王", "李", False),
     ("Grest", "", False),
     ("", "Grest", False)])
 def test_name_matches_pairs_a_filename_key_with_a_stored_surname(

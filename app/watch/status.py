@@ -347,6 +347,7 @@ def awaiting(home: str | Path) -> list[dict]:
             "subfolder_id": rec.subfolder_id,
             "author_last": rec.author_last,
             "modified_time": rec.modified_time,
+            "request_id": rec.flag_resets.get("proof", ""),
             "updated_at": rec.updated_at,
         })
     return out
@@ -380,6 +381,8 @@ def _agent_readable() -> bool:
 
 def _files(root: Path) -> list[dict]:
     """One row per manuscript the watcher has seen, newest first."""
+    from .flags import for_record
+
     state = WatchState.load(root / STATE_FILE)
     if not state.files:
         return []
@@ -392,6 +395,9 @@ def _files(root: Path) -> list[dict]:
         rows.append({
             "file_id": rec.file_id,
             "name": rec.name,
+            "flags": for_record(rec),
+            "flag_resets": rec.flag_resets,
+            "author": " ".join(p for p in (rec.author_first, rec.author_last) if p),
             "job_id": rec.job_id,
             "marked": rec.marked,
             "said": said,

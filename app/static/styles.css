@@ -1527,11 +1527,13 @@ button.pill.setup.actionable:hover { background: color-mix(in srgb, var(--warn) 
 #auto-panel-history #watch-files-filter { max-width: 28rem; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); padding: 0.65rem 0.8rem; font: inherit; font-size: 0.85rem; }
 #watch-files { display: table; table-layout: fixed; margin-top: 1rem; }
 #watch-files th, #watch-files td { padding: 0.8rem 0.75rem 0.8rem 0; overflow-wrap: anywhere; white-space: normal; vertical-align: top; }
-#watch-files th:nth-child(1) { width: 25%; }
+#watch-files th:nth-child(1) { width: 23%; }
 #watch-files th:nth-child(2) { width: 20%; }
-#watch-files th:nth-child(3) { width: 33%; }
+#watch-files th:nth-child(3) { width: 27%; }
 #watch-files th:nth-child(4) { width: 10%; }
-#watch-files th:nth-child(5) { width: 12%; }
+#watch-files th:nth-child(5) { width: 20%; }
+#watch-files td:nth-child(-n+3) { white-space: pre-line; }
+#watch-files td:last-child button { display: block; white-space: normal; text-align: left; margin-bottom: 0.4rem; }
 .wf-integration-head { display: flex; justify-content: space-between; gap: 1rem; align-items: center; }
 @media (max-width: 68rem) {
   body:has(:is(#screen-watch, #screen-drop):not([hidden])) > header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0.65rem 1rem; }
