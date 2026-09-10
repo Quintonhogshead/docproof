@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 from dataclasses import asdict
 from urllib.parse import quote
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import RedirectResponse, FileResponse
@@ -177,6 +178,11 @@ class ProofRelease(BaseModel):
 
 class ClearMarker(BaseModel):
     file_id: str = Field(min_length=1, max_length=200)
+
+
+class ResetFlag(ClearMarker):
+    stage: Literal["format", "proof", "promo", "plan", "corrections"]
+    updated_at: str = Field(min_length=1, max_length=100)
 
 
 class NativeBook(BaseModel):
@@ -725,6 +731,42 @@ def register(app: FastAPI) -> None:
         log.info("%s cleared the failed marker on %s (%s) from the panel.",
                  who, rec.name, rec.file_id)
         return {"cleared": rec.file_id, "name": rec.name, "removed": removed,
+                **watch_payload()}
+
+    @app.post("/api/watch/flags/reset", dependencies=[Depends(may_manage)])
+    def reset_flag(update: ResetFlag, request: Request) -> dict:
+        from ..lock import FolderInUse, FolderLock
+        from ..watch import flags
+        from ..watch.state import STATE_FILE, WatchState
+
+        watch: WatchRunner = app.state.watch
+        if watch.busy:
+            raise HTTPException(409, "Wait for the current automation check to finish.")
+        try:
+            with FolderLock(watch.home):
+                state = WatchState.load(Path(watch.home) / STATE_FILE)
+                rec = state.files.get(update.file_id)
+                if rec is None:
+                    raise HTTPException(404, "This book is no longer in the activity list.")
+                if rec.updated_at != update.updated_at:
+                    raise HTTPException(409, "This book changed. Refresh the list and try again.")
+                label, field, _, terminal = flags.STAGES[update.stage]
+                if getattr(rec, field) not in terminal:
+                    raise HTTPException(409, "This workflow has no finished flag to clear.")
+                token = _drive_token_or_none(watch.home)
+                if not token:
+                    raise HTTPException(400, "Sign in to Google first to clear the flag in Drive.")
+                user = getattr(request.state, "user", None)
+                who = getattr(user, "email", "") or "an administrator"
+                try:
+                    flags.reset(token, rec, state, update.stage, who=who)
+                except DriveError as exc:
+                    raise HTTPException(502, f"Google Drive could not clear the flag: {exc}") from exc
+                log.info("%s cleared the %s flag on %s (%s).", who, label,
+                         rec.name, rec.file_id)
+        except FolderInUse:
+            raise HTTPException(409, "Wait for the current automation check to finish.") from None
+        return {"cleared": rec.file_id, "name": rec.name, "stage": update.stage,
                 **watch_payload()}
 
     @app.post("/api/watch/run", dependencies=[Depends(may_manage)])

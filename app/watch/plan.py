@@ -235,7 +235,9 @@ def upload_outputs(token: str, file: DriveFile, job: Job, ws: WatchSettings,
     for artifact in artifacts(job):
         if artifact.name in rec.plan_uploaded:
             continue
-        orphan = _already_there(listing, file.id, artifact.name)
+        from .flags import current_outputs
+        orphan = _already_there(current_outputs(listing, rec, "plan", file),
+                                file.id, artifact.name)
         if orphan is not None:
             log.info("%s is already in the folder from an earlier run",
                      artifact.name)

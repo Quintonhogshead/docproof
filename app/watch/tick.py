@@ -31,7 +31,7 @@ from typing import Any, Callable
 from app.jobs import REFUSED, Job, JobRunner, JobStore
 from app.settings import Paths, get_api_key, resource_root
 
-from . import (corrections, drive, folders, hubspot, naming, notify, plan,
+from . import (corrections, drive, flags, folders, hubspot, naming, notify, plan,
                prep, promo, proof)
 from .drive import DriveError, DriveFile
 from .hubspot import HubSpotAuthError, HubSpotError
@@ -833,6 +833,7 @@ def _one_proof(token: str, home: Path, ws: WatchSettings, file: DriveFile,
     # scoped listing costs one request and cannot pick the wrong book's verdict.
     folder_files = (listing if not ws.subfolders_enabled
                     else drive.list_folder(token, dest_folder_id, opener=opener))
+    folder_files = flags.current_outputs(folder_files, rec, "proof", file)
     landed = proof.outcome_in_folder(folder_files, file.name)
     if landed is not None and rec.proof_marked not in PROOF_TERMINAL:
         verdict = proof.read_outcome(token, landed, opener=opener)
@@ -1222,6 +1223,10 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
     # which state it is in matters: a source marked done is a finished book
     # whose HubSpot status simply never moved, not a missing one.
     intake_files = [f for f in contents if stage.source_name(f.name, last)]
+    if not dry_run:
+        for intake in intake_files:
+            flags.remember(intake, state, author_first=first, author_last=last,
+                           subfolder_id=subfolder_id, subfolder_name=author)
     intake_done = any(stage.already_done(f) for f in intake_files)
     intake_failed = [f for f in intake_files if stage.already_failed(f)]
 
@@ -1330,6 +1335,12 @@ def _discover_nested(token: str, ws: WatchSettings, record, first: str,
     failed_intakes: list[DriveFile] = []
     for folder in book_folders:
         contents = drive.list_folder(token, folder.id, opener=opener)
+        if not dry_run:
+            for intake in contents:
+                if stage.source_name(intake.name, last):
+                    flags.remember(intake, state, author_first=first,
+                                   author_last=last, subfolder_id=folder.id,
+                                   subfolder_name=author)
         manuscripts = [f for f in contents if stage.candidate(f)]
         if ws.require_source_label or stage.label_always:
             manuscripts = [f for f in manuscripts
@@ -1867,6 +1878,9 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
                                     report=report, dry_run=dry_run)
     else:
         listing = drive.list_folder(token, ws.folder_id, opener=opener)
+        if not dry_run:
+            for file in listing:
+                flags.remember(file, state)
         routes = {}
 
     # Proofing gets its OWN listing in subfolder mode, discovered at its own

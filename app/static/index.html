@@ -1645,11 +1645,19 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
            role="tabpanel" aria-labelledby="autotab-history">
         <div class="card">
           <h3>Manuscript activity</h3>
-          <p class="muted small">See what happened, find delivered files, and retry manuscripts that need attention.</p>
+          <p class="muted small">See known books and their processing flags. Clear a flag to allow that workflow to run again when the book is ready in HubSpot. Previous files and job records are kept.</p>
           <label class="field" style="margin:0 0 0.6rem">
             <span class="sr-only">Search manuscript activity</span>
             <input type="search" id="watch-files-filter"
-                   placeholder="Filter by book name or status…">
+                   placeholder="Filter by author, book, or status…">
+          </label>
+          <label class="field" style="margin:0 0 0.6rem">
+            <span>Show</span>
+            <select id="watch-files-state">
+              <option value="all">All activity</option>
+              <option value="processed">Already processed / read</option>
+              <option value="flagged">All processing flags</option>
+            </select>
           </label>
           <p id="watch-files-empty" class="muted" hidden>No manuscript activity yet. Completed work will appear here after the first check.</p>
           <p id="watch-files-note" class="action-note" hidden></p>

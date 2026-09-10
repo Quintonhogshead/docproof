@@ -947,3 +947,24 @@ def test_forget_by_id_and_its_refusals(env, tmp_path):
     assert agent.ledger().state("drive-1") == ga.FAILED
     with pytest.raises(ga.AgentError, match="No book in the ledger"):
         agent.forget("nope")
+
+
+def test_explicit_reset_rereads_once_in_a_fresh_workspace(env, tmp_path):
+    ran = []
+    app = FakeApp([BOOK])
+    agent = _agent(env, tmp_path, opener=app, download=_downloader(tmp_path),
+                   run_driver=lambda **kw: ran.append(kw) or FakeResult())
+    agent.poll_once()
+    previous = agent.ledger().claimed("drive-1")
+    agent.opener = FakeApp([{**BOOK, "request_id": "2026-09-10T12:00:00Z"}])
+
+    agent.poll_once()
+    agent.poll_once()
+
+    assert len(ran) == 2
+    assert ran[1]["slug"] != ran[0]["slug"]
+    assert "start_phase" not in ran[1]
+    entry = agent.ledger().claimed("drive-1")
+    assert entry["request_id"] == "2026-09-10T12:00:00Z"
+    assert entry["previous_runs"] == [previous]
+    assert entry["state"] == ga.FINISHED

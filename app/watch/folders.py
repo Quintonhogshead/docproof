@@ -7,8 +7,9 @@ HubSpot who is ready, and asks Drive for *that* name directly.
 
 So this is one scoped query, not an enumeration. Drive's `name =` is
 case-sensitive, so an exact hit is trusted and a miss falls back to a
-case-insensitive `name contains` narrowed by a normalised compare here — still
-one small answer, never the whole parent. A name that resolves to zero folders,
+case-insensitive `name contains` for the original and accent-free spellings,
+narrowed by a normalised compare here — still small answers, never the whole
+parent. A name that resolves to zero folders,
 or to more than one, is nobody's to guess: `resolve` returns `None` and the
 caller leaves the book where it is and tells a person.
 """
@@ -18,6 +19,7 @@ import logging
 
 from . import drive
 from .drive import DriveFile
+from .names import flatten_accents, name_key
 
 log = logging.getLogger("docproof.app.watch.folders")
 
@@ -34,10 +36,8 @@ def compose(first: str, last: str) -> str:
 
 
 def _norm(name: str) -> str:
-    """Case- and whitespace-insensitive, so `quinton  johnson` and `Quinton
-    Johnson` are the same folder. `casefold`, not `lower`, so it holds up
-    outside ASCII."""
-    return " ".join(name.split()).casefold()
+    """Compare names without case, whitespace, or accent differences."""
+    return name_key(name)
 
 
 def _escape(value: str) -> str:
@@ -54,13 +54,17 @@ def _search(token: str, parent_id: str, clause: str, *, opener) -> list[DriveFil
          f"and mimeType = '{drive.FOLDER_MIME}' and trashed = false")
     params = {
         "q": q,
-        "fields": f"files({drive.FILE_FIELDS})",
+        "fields": f"nextPageToken,files({drive.FILE_FIELDS})",
         "pageSize": "20",
         **drive.SHARED_DRIVE_LIST,
     }
     answer = drive._json_call(
         drive._request(drive._url(f"{drive.API}/files", params), token),
         opener=opener, what="find the author's folder")
+    if answer.get("nextPageToken"):
+        raise drive.DriveError(
+            "Too many author folders matched the search. Narrow the author "
+            "name in HubSpot before trying again.")
     return [DriveFile.from_api(raw) for raw in (answer.get("files") or [])
             if isinstance(raw, dict)]
 
@@ -72,8 +76,8 @@ def resolve(first: str, last: str, parent_id: str, token: str, *,
 
     The exact `name =` query first — one hit, done. Its miss is usually only
     case, so the fallback casts `name contains` and keeps whatever equals the
-    wanted name once whitespace and case are set aside. Zero survivors, or more
-    than one, is `None`: the caller would rather wait than write a manuscript
+    wanted name once whitespace, accents and case are set aside. Zero survivors,
+    or more than one, is `None`: the caller would rather wait than write a manuscript
     into a folder it guessed at."""
     wanted = compose(first, last)
     if not wanted or not parent_id:
@@ -83,9 +87,13 @@ def resolve(first: str, last: str, parent_id: str, token: str, *,
                     opener=opener)
     matches = [f for f in exact if _norm(f.name) == _norm(wanted)]
     if not matches:
-        loose = _search(token, parent_id, f"name contains '{_escape(wanted)}'",
-                        opener=opener)
-        matches = [f for f in loose if _norm(f.name) == _norm(wanted)]
+        # Query both spellings: normalising only the returned names cannot
+        # recover an unaccented folder that Drive never returned.
+        for spelling in dict.fromkeys((wanted, flatten_accents(wanted))):
+            loose = _search(token, parent_id,
+                            f"name contains '{_escape(spelling)}'",
+                            opener=opener)
+            matches.extend(f for f in loose if _norm(f.name) == _norm(wanted))
 
     ids = {f.id for f in matches}
     if len(ids) == 1:

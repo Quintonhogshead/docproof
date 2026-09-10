@@ -6,6 +6,7 @@ support launchd on macOS and systemd on Linux.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import plistlib
@@ -203,6 +204,7 @@ class AwaitingBook:
     name: str
     folder_id: str = ""
     author_last: str = ""
+    request_id: str = ""
 
     @classmethod
     def from_json(cls, raw: dict) -> "AwaitingBook":
@@ -210,7 +212,8 @@ class AwaitingBook:
                    name=str(raw.get("name", "")),
                    folder_id=str(raw.get("folder_id")
                                  or raw.get("subfolder_id") or ""),
-                   author_last=str(raw.get("author_last", "")))
+                   author_last=str(raw.get("author_last", "")),
+                   request_id=str(raw.get("request_id", "")))
 
 
 def _open_url(request: urllib.request.Request, timeout: int = 30):
@@ -534,6 +537,19 @@ class Agent:
         report.looked_at = len(books)
         ledger = self.ledger()
 
+        # A person explicitly cleared this book's processed flag. Archive the
+        # old ledger entry before retrying deliveries, so stale hand-offs cannot
+        # complete the new request. A reset gets its own workspace below.
+        for book in books:
+            old = ledger.claimed(book.file_id)
+            if book.request_id and old.get("request_id", "") != book.request_id:
+                history = list(old.get("previous_runs") or [])
+                if old:
+                    history.append({k: v for k, v in old.items() if k != "previous_runs"})
+                ledger.books[book.file_id] = {"request_id": book.request_id,
+                                              "previous_runs": history}
+                ledger.save()
+
         # Retry pending delivery before starting another book.
         self.retry_deliveries(ledger, report)
 
@@ -702,10 +718,12 @@ class Agent:
         its outcome.
         """
         slug = slug_for(book.name, book.author_last, book.file_id)
+        if book.request_id:
+            slug += "-r" + hashlib.sha256(book.request_id.encode()).hexdigest()[:12]
         report.claimed = book.name
         folder = self.drive_folder_override or book.folder_id
         ledger.record(book.file_id, CLAIMED, name=book.name, slug=slug,
-                      folder_id=folder)
+                      folder_id=folder, request_id=book.request_id)
         self.log(f"{'Resuming' if resume else 'Claiming'} {book.name} "
                  f"(workspace {slug}).")
         self._status = {k: v for k, v in self._status.items()

@@ -126,6 +126,8 @@ class FileRecord:
     # "pdf" | "docx" | "text" and the file it was saved as.
     corrections_input_kind: str = ""
     corrections_input_name: str = ""
+    flag_resets: dict[str, str] = field(default_factory=dict)
+    flag_reset_history: list[dict] = field(default_factory=list)
     modified_time: str = ""
     updated_at: str = ""
 

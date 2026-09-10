@@ -55,7 +55,7 @@ def test_quiet_poll_updates_clock_without_rebuilding_unchanged_rows():
         renderPassesSummary: () => { clock++; },
         renderWatchSignIn: noop, renderWatchRun: noop, renderWatchBanner: noop,
         renderWatchFiles: noop, renderProofReadout: noop, applyWatchSchedule: noop,
-        renderNativeWorker: noop, renderNativeIntake: noop,
+        renderNativeWorker: noop, renderNativeIntake: noop, refreshNativeQueue: noop,
         renderWatchNextRun: noop,
       });
       vm.runInContext(source, context);
@@ -202,4 +202,52 @@ def test_attention_includes_all_exposed_workflow_lifecycles_once_per_file():
                       proof_outcome: 'needs_human', corrections_marked: 'failed'},
                      ...healthy];
       assert.equal(files.filter(attention).length, 1);
+    """)
+
+
+def test_history_filters_processed_books_and_folds_author_accents():
+    _node(["applyWatchFilesFilter"], """
+      const rows = [{},
+        {textContent: 'José Aragón Book 1 read', dataset: {processed: 'true', flagged: 'true'}},
+        {textContent: 'Jane Doe failed', dataset: {processed: 'false', flagged: 'true'}},
+        {textContent: 'Waiting book', dataset: {processed: 'false', flagged: 'false'}}];
+      const fields = {
+        'watch-files-filter': {value: 'jose aragon'},
+        'watch-files-state': {value: 'processed'},
+        'watch-files': {querySelectorAll: () => rows},
+        'watch-files-empty': {},
+      };
+      const context = vm.createContext({$: id => fields[id]});
+      vm.runInContext(source, context);
+      context.applyWatchFilesFilter();
+      assert.deepEqual(rows.slice(1).map(row => row.hidden), [false, true, true]);
+      fields['watch-files-filter'].value = '';
+      fields['watch-files-state'].value = 'flagged';
+      context.applyWatchFilesFilter();
+      assert.deepEqual(rows.slice(1).map(row => row.hidden), [false, false, true]);
+      fields['watch-files-state'].value = 'all';
+      context.applyWatchFilesFilter();
+      assert.deepEqual(rows.slice(1).map(row => row.hidden), [false, false, false]);
+    """)
+
+
+
+def test_clear_flag_sends_only_the_selected_book_and_workflow():
+    _node(["resetWatchFlag"], """
+      const calls = [], notes = [], renders = [];
+      const context = vm.createContext({
+        confirm: () => true, $: () => ({}),
+        api: async (url, options) => { calls.push([url, JSON.parse(options.body)]); return {name: 'Book'}; },
+        renderWatch: body => renders.push(body),
+        watchNote: (_, message, kind) => notes.push(kind),
+      });
+      vm.runInContext(source, context);
+      const button = {};
+      await context.resetWatchFlag({file_id: 'id', name: 'Book', updated_at: 'revision'},
+                                  {stage: 'proof', label: 'Proofreading'}, button);
+      assert.deepEqual(calls, [['/api/watch/flags/reset',
+                               {file_id: 'id', stage: 'proof', updated_at: 'revision'}]]);
+      assert.equal(button.disabled, true);
+      assert.deepEqual(notes, ['ok']);
+      assert.equal(renders.length, 1);
     """)

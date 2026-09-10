@@ -41,8 +41,9 @@ one in `SPELLINGS` if it is numbered), not a rule spread across the watcher.
 from __future__ import annotations
 
 import re
-import unicodedata
 from pathlib import Path
+
+from .names import flatten_accents
 
 # The stage tokens, read side and write side. Compared case-insensitively, and
 # tolerant of every dash and spacing variant (see `_fold` and `_token_re`).
@@ -170,9 +171,9 @@ _TOKEN = {stage: tuple(_token_re(sp) for sp in spellings_of(stage))
 
 def _fold(text: str) -> str:
     """A name reduced to what a house-convention comparison should care about:
-    Unicode-normalised, every dash variant made a hyphen, whitespace runs
+    Accents removed, every dash variant made a hyphen, whitespace runs
     collapsed to one space, and case folded."""
-    text = unicodedata.normalize("NFC", text)
+    text = flatten_accents(text)
     text = _DASH_RE.sub("-", text)
     return " ".join(text.split()).casefold()
 

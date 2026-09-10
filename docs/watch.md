@@ -192,11 +192,17 @@ search every record for the key. It first fetches the short list of records
 currently at the ready value, then matches the filename key against *that* list.
 So eleven authors named "Smith" in the CRM are no problem: only the one an editor
 flagged "Ready for Formatting" is ever a candidate. The key match is
-case-insensitive and ignores a co-author parenthetical, so `Lichtenstein - Book
+accent- and case-insensitive and ignores a co-author parenthetical, so `Lichtenstein - Book
 Original` matches a record whose surname is stored `Lichtenstein (and Dolores
 DelBello)`. If two records sharing a surname are *both* flagged ready at once,
 DocProof will not guess — that manuscript waits and is reported as needing a
 person, while the rest of the pass goes on.
+
+Author-folder lookups preserve the HubSpot spelling for the exact match, then
+search both the original and accent-free names. `José Aragón` can find a
+`Jose Aragon` folder, and an `Aragon - Book Original` or `Aragon - Book 1`
+inside it matches the accented surname. Display and output names keep their
+original spelling. Ambiguous or incomplete folder-search results are refused.
 
 Setting it up is a token and a handful of fields:
 
@@ -839,6 +845,25 @@ state, reason, date and job — and the attempt count goes back to zero, so a
 second failure is dated and explained afresh. Only a `failed` marker is
 cleared: a `formatted` one is what stops a finished book being prepared and
 paid for twice, and the command refuses to touch it.
+
+**Viewing and removing processed/read flags.** In **Automations → History**,
+choose **Already processed / read** to see known completed books, or **All
+processing flags** to include failures. Search by author, book, or status;
+the search ignores accents. Each workflow has its own **Clear … flag** button.
+This is an administrator action in the hosted app and is refused during a
+watcher pass or if the displayed record has changed.
+
+Clearing a flag removes that workflow's Drive marker and resets its local job
+and completion pointers. It keeps previous files, job records, other workflows,
+and an audit of the reset. HubSpot is left at its current status: the workflow
+can start again when the book is ready there, including on the next scheduled
+check if it is already ready. A new run can incur processing costs. Old outputs
+are not reused as a fresh run's results; external proofreading receives a new
+request and workspace so the agent's completed-book ledger does not skip it.
+Deploy the watcher and proofreader agent together when enabling this control.
+
+The list includes local history and Drive flags found during normal discovery.
+It does not scan every author folder just to populate History.
 
 **Everything else is tried again.** A model that would not answer, a folder
 that would not list, a network that was not there: the file is left unmarked

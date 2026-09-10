@@ -106,7 +106,7 @@ def test_the_answer_carries_no_settings(tmp_path, monkeypatch):
     assert set(payload) == {"books"}
     assert set(payload["books"][0]) == {
         "file_id", "name", "folder_id", "subfolder_id", "author_last",
-        "modified_time", "updated_at"}
+        "modified_time", "updated_at", "request_id"}
 
 
 # --- who may read it ----------------------------------------------------------
