@@ -7,6 +7,7 @@ from pathlib import Path
 import threading
 
 from .workflow import save_json
+from .remote_control import allowed
 
 
 def collect_once(home: Path, *, get_key=None, opener=None):
@@ -18,7 +19,7 @@ def collect_once(home: Path, *, get_key=None, opener=None):
     home = Path(home).resolve()
     try:
         ws = WatchSettings.load(home)
-        if not ws.corrections_enabled or ws.corrections_engine != "native":
+        if not ws.corrections_enabled or ws.corrections_engine != "native" or not allowed(home):
             return {"state": "paused"}
         if not ws.corrections_native_form_poll or not ws.corrections_native_start_after:
             raise ValueError("Configure the correction form and its start date before starting the collector.")
@@ -68,7 +69,7 @@ def poll_once(home: Path, *, get_key=None, opener=None, local_only=False):
     path = home / "native-worker.json"
     save_json(path, receipt)
     try:
-        if not ws.corrections_enabled or ws.corrections_engine != "native":
+        if not ws.corrections_enabled or ws.corrections_engine != "native" or not allowed(home):
             receipt["state"] = "paused"
             return report
         if not ws.corrections_native_form_poll or not ws.corrections_native_start_after:

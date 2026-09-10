@@ -7498,7 +7498,7 @@ function renderNativeWorker(w) {
   const line = $('native-worker-line');
   const detail = $('native-worker-detail');
   const error = $('native-worker-error');
-  line.textContent = `${state} — Mac native worker`;
+  line.textContent = `${state} — InDesign worker`;
   const bits = [];
   if (worker.local_only) bits.push('Local review only — Drive uploads blocked');
   if (worker.state === 'checking') {
@@ -7519,6 +7519,54 @@ function renderNativeWorker(w) {
   detail.hidden = !bits.length;
   error.textContent = worker.error || '';
   error.hidden = !worker.error;
+}
+
+function interiorComputerState(computer) {
+  if (computer.stale) return 'offline';
+  if (computer.pending) return 'pending';
+  return computer.desired.enabled ? 'on' : 'off';
+}
+
+function renderInteriorComputer(w) {
+  const computer = w.interior_computer;
+  const block = $('interior-computer-readout');
+  if (!block) return;
+  block.hidden = !computer;
+  $('interior-local-settings').hidden = !!computer;
+  for (const id of ['native-worker-readout', 'native-intake-readout', 'native-queue-readout',
+      'native-books-panel', 'native-correction-jobs', 'native-local-hint']) {
+    if (computer) $(id).hidden = true;
+  }
+  if (!computer) return;
+  const wanted = computer.desired.enabled ? 'on' : 'off';
+  const labels = {on:'On — confirmed by the laptop', off:'Off — confirmed by the laptop',
+    pending:`Waiting for the laptop to turn ${wanted}`,
+    offline:`Laptop connection unavailable — requested ${wanted}`};
+  $('interior-computer-line').textContent = labels[interiorComputerState(computer)];
+  const counts = computer.counts || {};
+  const worker = computer.worker || {};
+  const details = [`Last connected ${nativeReceiptTime(computer.received_at)}`];
+  if (worker.state === 'checking') details.push('An InDesign queue check is in progress');
+  else if (worker.finished_at) details.push(`Last queue check ${nativeReceiptTime(worker.finished_at)}`);
+  details.push(`${counts.waiting || 0} submissions waiting · ${counts.review || 0} need review · ${counts.running || 0} active batches · ${counts.delivered || 0} delivered batches`);
+  if (computer.queue_error) details.push('Queue status needs attention; counts may be incomplete');
+  if (worker.state === 'error') details.push('The worker reported a problem; check the laptop');
+  if (!computer.configured_enabled) details.push('The laptop’s local correction settings are disabled');
+  $('interior-computer-detail').textContent = details.join(' · ');
+  $('interior-computer-rules').textContent = `${computer.quiet_seconds / 3600}-hour quiet period · Unclear book matches held for review · Book N.5 with a corrections spreadsheet · ${computer.auto_upload ? 'Only verified results upload' : 'Results stay local'}. On resumes at the next queue check, within five minutes. A lost website connection pauses new work and uploads within 90 seconds.`;
+  const digest = computer.digest || {};
+  const zone = digest.timezone === 'America/New_York' ? 'Eastern' : digest.timezone;
+  const schedule = digest.time === '17:00' ? '5 p.m.' : digest.time;
+  $('interior-digest-line').textContent = digest.enabled
+    ? `Once a day at ${schedule} ${zone} → ${digest.recipient}` : 'Daily email is off';
+  const emailBits = [];
+  if (computer.stale || digest.stale) emailBits.push('Email status is out of date; waiting for the laptop');
+  if (digest.last_sent_at) emailBits.push(`Last sent ${nativeReceiptTime(digest.last_sent_at)}`);
+  else emailBits.push('No confirmed email sent yet');
+  if (digest.next_at) emailBits.push(`Next scheduled ${nativeReceiptTime(digest.next_at)}`);
+  if (digest.state === 'delivery_uncertain') emailBits.push('Last delivery is unconfirmed; no automatic duplicate today');
+  if (['preparation_failed', 'error', 'unknown'].includes(digest.state)) emailBits.push('Email needs attention on the laptop');
+  $('interior-digest-detail').textContent = emailBits.join(' · ');
 }
 
 function renderNativeIntake(w) {
@@ -7655,6 +7703,10 @@ function renderNativeBooks(books) {
 async function refreshNativeQueue() {
   const block = $('native-queue-readout');
   if (!block || !$('screen-watch') || $('screen-watch').hidden) return;
+  if (state.watchStatus?.interior_computer) {
+    block.hidden = true;
+    return;
+  }
   try {
     const queue = await api('/api/watch/native/queue');
     state.nativeQueue = queue;
@@ -7711,6 +7763,7 @@ function renderWatch(body, quiet) {
   renderProofReadout(w);
   renderNativeWorker(w);
   renderNativeIntake(w);
+  renderInteriorComputer(w);
   // The workflow registry reads the watch status too (the Format and Proofread
   // rows), so it has to follow a change here. Only when something it shows
   // actually moved, though: rebuilding the table every five seconds would take
@@ -7721,6 +7774,7 @@ function renderWatch(body, quiet) {
                                       w.hubspot_proof_ready_value,
                                       w.hubspot_proof_done_value,
                                       w.corrections_enabled, w.subfolders_enabled,
+                                      w.interior_computer && interiorComputerState(w.interior_computer),
                                       w.hubspot_corrections_ready_value,
                                       w.hubspot_corrections_done_value,
                                       w.hubspot_corrections_file_property,
@@ -9919,18 +9973,19 @@ function automationWorkflows() {
       id: 'corrections', name: 'Interior corrections',
       sub: nativeCorrections ? 'Author form → InDesign correction and review' : 'Author form → Book N.5 IDML + spreadsheet',
       trigger: {
-        text: nativeCorrections && w.corrections_native_form_poll ? 'Pre-Proof correction form' : w.hubspot_corrections_ready_value
+        text: nativeCorrections && (w.interior_computer || w.corrections_native_form_poll) ? 'Pre-Proof correction form' : w.hubspot_corrections_ready_value
           ? 'HubSpot: ' + w.hubspot_corrections_ready_value : 'HubSpot status',
         hs: true,
       },
       effect: nativeCorrections ? 'Book N.5 INDD + PDF + corrections spreadsheet' : 'Book N.5 + Applied / Not applied sheet',
       config: 'wf-config-corrections',
       enabled: !!w.corrections_enabled, toggleable: true,
-      status: !w.corrections_enabled ? 'off' : (corrReady ? 'on' : 'setup'),
+      status: w.interior_computer ? interiorComputerState(w.interior_computer)
+        : !w.corrections_enabled ? 'off' : (corrReady ? 'on' : 'setup'),
       // Needs HubSpot, subfolder mode (the IDML lives in the author's folder),
       // both dropdown values, and at least one of the two form properties the
       // workflow copies the submission into. The CLI sets the rest.
-      setup: (!w.corrections_enabled || corrReady) ? null
+      setup: (w.interior_computer || !w.corrections_enabled || corrReady) ? null
         : (w.hubspot_enabled
             ? (w.subfolders_enabled
                 ? { hint: 'Add the trigger, completion status, and at least one '
@@ -9986,8 +10041,8 @@ function wfJump(text, tab) {
   return b;
 }
 
-const WF_STATUS_LABEL = { on: 'On', setup: 'Needs setup', off: 'Off' };
-const WF_STATUS_ORDER = { setup: 0, on: 1, off: 2 };
+const WF_STATUS_LABEL = { on: 'On', setup: 'Needs setup', off: 'Off', pending: 'Waiting for laptop', offline: 'Laptop offline' };
+const WF_STATUS_ORDER = { setup: 0, pending: 0, offline: 0, on: 1, off: 2 };
 
 function wfLastLook() {
   const w = state.watchStatus || {};

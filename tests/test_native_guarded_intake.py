@@ -111,6 +111,50 @@ def test_seven_received_files_wait_three_hours_and_deliver_once(harness):
     assert len(h.calls) == 1 and len(h.uploads) == 4
 
 
+@pytest.mark.parametrize('during_upload', [False, True])
+def test_website_pause_preserves_verified_work_and_resumes_without_reediting(harness, monkeypatch, during_upload):
+    from docproof.interior.workflow import save_json
+    h = harness
+    root = h.tmp_path / 'interior-remote'
+    save_json(root / 'config.json', {'url':'https://example.com'})
+    def lease(enabled):
+        save_json(root / 'lease.json', {'enabled':enabled,'expires_at':h.clock[0]+90})
+    lease(True)
+    h.add('one', note='Fix one typo')
+    h.run()
+    h.clock[0] += 10800
+    lease(True)
+    if during_upload:
+        upload = native.drive.upload
+        def stop_after_upload(*args, **kwargs):
+            value = upload(*args, **kwargs)
+            lease(False)
+            return value
+        monkeypatch.setattr(native.drive, 'upload', stop_after_upload)
+    else:
+        workflow = native._call_workflow
+        def stop_after_edit(*args, **kwargs):
+            result = workflow(*args, **kwargs)
+            lease(False)
+            return result
+        monkeypatch.setattr(native, '_call_workflow', stop_after_edit)
+    h.run()
+    job = native._read_jobs(h.tmp_path)[0]
+    assert job['status'] == 'verified' and not job.get('blocked')
+    assert len(h.calls) == 1 and len(h.uploads) == (1 if during_upload else 0)
+    assert queue.status(h.tmp_path)['batches'][0]['state'] == 'delivery'
+    assert queue.books(h.tmp_path)['project']['source_version'] == 4
+    h.run()
+    assert len(h.calls) == 1
+    if during_upload:
+        monkeypatch.setattr(native.drive, 'upload', upload)
+    lease(True)
+    h.run()
+    assert len(h.calls) == 1 and len(h.uploads) == 4
+    assert queue.status(h.tmp_path)['batches'][0]['state'] == 'delivered'
+    assert queue.books(h.tmp_path)['project']['source_version'] == 4.5
+
+
 def test_one_missing_file_blocks_all_edits_and_preserves_other_receipts(harness):
     h = harness
     urls = [f'https://files.test/{i}.txt' for i in range(7)]

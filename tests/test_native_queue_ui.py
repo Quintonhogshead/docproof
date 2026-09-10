@@ -12,6 +12,31 @@ ROOT = Path(__file__).parents[1]
 NODE = shutil.which("node")
 
 
+def test_interior_switch_renders_ack_offline_and_digest_without_html_injection():
+    result = _run_node(r'''
+const fs = require('fs'), vm = require('vm');
+const source = fs.readFileSync('app/static/app.js','utf8');
+const nodes = {};
+const context = {$: id => nodes[id] || (nodes[id] = {}), Date, Number};
+vm.runInNewContext(source.slice(source.indexOf('function nativeReceiptTime'), source.indexOf('function renderNativeIntake')), context);
+const computer = {desired:{enabled:true}, enabled:true, stale:false, pending:true,
+  configured_enabled:true, quiet_seconds:10800, auto_upload:true, worker:{state:'idle'}, counts:{waiting:7},
+  received_at:'2026-09-10T18:00:00Z', digest:{enabled:true,recipient:'<img onerror=alert(1)>',time:'17:00',timezone:'America/New_York',state:'scheduled'}};
+context.renderInteriorComputer({interior_computer:computer});
+if (!nodes['interior-computer-line'].textContent.includes('Waiting')) throw Error('Claims on before acknowledgment');
+computer.pending = false;
+context.renderInteriorComputer({interior_computer:computer});
+if (!nodes['interior-computer-line'].textContent.includes('On — confirmed')) throw Error('Missing confirmed state');
+computer.stale = true;
+context.renderInteriorComputer({interior_computer:computer});
+if (!nodes['interior-computer-line'].textContent.includes('unavailable')) throw Error('Stale computer still online');
+if ('innerHTML' in nodes['interior-digest-line']) throw Error('Unsafe recipient rendering');
+if (!nodes['interior-local-settings'].hidden || !nodes['native-queue-readout'].hidden) throw Error('Shows server settings for laptop');
+process.stdout.write(JSON.stringify({email:nodes['interior-digest-line'].textContent}));
+''')
+    assert 'Once a day at 5 p.m. Eastern' in result['email']
+
+
 def _run_node(script: str) -> dict:
     if NODE is None:
         pytest.skip("Node.js is not available")

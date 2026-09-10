@@ -116,7 +116,10 @@ def install_auth(app: FastAPI, accounts: Accounts, *, secret: str | None = None,
 
     async def gate(request: Request, call_next):
         path = request.url.path
-        if path.startswith("/api/") and path not in _OPEN_PATHS:
+        # Only the bounded computer heartbeat uses a bearer token. The same
+        # path's PUT remains session- and administrator-gated.
+        computer_heartbeat = path == '/api/watch/interior-computer' and request.method == 'POST'
+        if path.startswith("/api/") and path not in _OPEN_PATHS and not computer_heartbeat:
             user = _session_user(request, accounts)
             if user is None:
                 return JSONResponse({"detail": "Sign in required"},

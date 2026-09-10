@@ -1210,13 +1210,24 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
               <!-- Interior corrections -->
               <div class="wf-config" id="wf-config-corrections" hidden>
                 <div class="wf-setup" id="wf-corrections-setup" hidden></div>
+                <div id="interior-computer-readout" class="wf-readout" aria-live="polite" hidden>
+                  <h4>Corrections laptop</h4>
+                  <p id="interior-computer-line"></p>
+                  <p id="interior-computer-detail" class="small"></p>
+                  <p id="interior-computer-rules" class="small muted"></p>
+                  <p class="small muted">The Interior corrections switch controls this laptop. Turning it off stops new books and further uploads. An open InDesign job finishes locally; an upload already in progress can finish. The daily email continues while corrections are off.</p>
+                  <h4>Daily email</h4>
+                  <p id="interior-digest-line"></p>
+                  <p id="interior-digest-detail" class="small muted"></p>
+                </div>
+                <div id="interior-local-settings">
                 <p class="wf-hint">Read the author's uploaded corrections and Additional Notes,
                   find the latest book in Interior Design, and keep a report of every instruction.
-                  Native InDesign uses Astra and this Mac to save the next numbered INDD,
+                  Native InDesign uses Astra and the connected computer to save the next numbered INDD,
                   verify it, and flag any remaining designer work.</p>
                 <label class="field"><span>Correction workflow</span>
                   <select id="corrections-engine"><option value="idml">IDML and designer handoff</option>
-                    <option value="native">Astra and InDesign on this Mac</option></select></label>
+                    <option value="native">Astra and InDesign on the corrections computer</option></select></label>
                 <label class="checkbox"><input type="checkbox" id="corrections-native-upload">
                   Upload verified native results to Drive</label>
                 <label class="checkbox"><input type="checkbox" id="corrections-native-partial">
@@ -1304,6 +1315,7 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                   <button id="wf-corrections-save" class="primary">Save correction settings</button>
                 </div>
                 <p id="wf-corrections-note" class="action-note" hidden></p>
+                </div>
                 <div class="wf-readout" id="native-worker-readout" aria-live="polite">
                   <h4>InDesign worker</h4>
                   <p id="native-worker-line" class="small"></p>
@@ -1341,7 +1353,7 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                   <p id="native-book-note" class="action-note" hidden></p>
                   <div id="native-book-list" aria-live="polite"></div>
                 </details>
-                <p class="hint">If private HubSpot file access is unavailable, a waiting submission will let you supply its downloaded attachment here. Files and correction results stay local while Drive uploads are blocked.</p>
+                <p class="hint" id="native-local-hint">If private HubSpot file access is unavailable, a waiting submission will let you supply its downloaded attachment here. Files and correction results stay local while Drive uploads are blocked.</p>
                 <div id="native-correction-jobs" aria-live="polite"></div>
               </div>
 

@@ -1483,6 +1483,7 @@ details.advanced > .field { margin: 0 0 1.1rem; }
 .wf-state .pill { font-size: 0.68rem; line-height: 1.8; padding: 0.12rem 0.55rem; white-space: nowrap; }
 .pill.on { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
 .pill.setup { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.pill.pending, .pill.offline { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 button.pill.setup.actionable { border: 0; font: inherit; font-size: 0.68rem; text-align: left; cursor: pointer; min-height: 30px; }
 button.pill.setup.actionable:hover { background: color-mix(in srgb, var(--warn) 22%, transparent); }
 .wf-auto-label { display: block; width: 100%; color: var(--muted); font-size: 0.63rem; margin-top: 0.25rem; }
