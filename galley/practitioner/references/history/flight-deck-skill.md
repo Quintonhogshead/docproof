@@ -5,10 +5,6 @@ description: Run the copy-edit flight deck — 6 focused lenses over proofread t
 
 # /flight-deck — the copy-edit lane
 
-Requires explicit copy-edit authorization for this run. Read
-`references/legacy-copyedit.md`, `references/house-rules.md`, and
-`references/findings.md` once; all paths are workspace-relative.
-
 Measured facts this skill encodes: decomposition is the recall lever
 (1 generalist read proposed 32% of the human line/copy edits → 6 focused
 lenses 47% → +Sonnet flights 55%). Judge posture is the dominant dial: the
@@ -74,5 +70,5 @@ not stricter judges.
 - Fly on unproofread text.
 - Let a Gemini/extra proposer auto-join because a key is set — flights are
   what the plan says, exactly.
-- Judge proofread findings lenient or override the approved copy-edit posture.
-  Mechanics are strict; copy-edit posture follows the authorized genre/plan.
+- Judge proofread findings lenient or copy-edit findings strict. Same model,
+  opposite postures, by lane.

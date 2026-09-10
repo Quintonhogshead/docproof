@@ -5,11 +5,6 @@ description: Merge the mechanical and copy-edit lanes into one deliverable — s
 
 # /merge-desk — one manuscript, two lanes, zero artifacts
 
-Requires explicit copy-edit authorization for a cross-lane merge. Read
-`references/legacy-copyedit.md` and `references/findings.md` once; all paths
-are workspace-relative. Mechanical-only work uses the same artifact/reject-all
-checks through its build and certification, without opening a copy-edit lane.
-
 Goal: a single tracked-changes deliverable where Word can filter the
 proofread and the copy-edit by author name, with no composition artifacts.
 

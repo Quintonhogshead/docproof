@@ -95,7 +95,7 @@ app = ["static/*", "static/art/*", "static/canvas/*", "static/canvas/vendor/*"]
 "galley.prompts" = ["*.md"]
 # The practitioner manual, skills and launchers: galley/driver.py seeds every
 # workspace from them, and the Fly agent runs off the installed wheel.
-"galley.practitioner" = ["*.md", "*.sh", "skills/*/*", "galley-bin/*", "fly/*"]
+"galley.practitioner" = ["*.md", "*.sh", "skills/*/*", "galley-bin/*", "fly/*", "references/*.md", "references/history/*.md"]
 config = ["*.yaml"]
 # Stage and genre presets: `galley routes`/`--stage`/`--genre` resolve these
 # under resource_root(), so a wheel without them fails the plan gate on Fly

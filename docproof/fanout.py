@@ -73,8 +73,21 @@ def fold_usage(into: Usage, other: Usage) -> None:
     into.sapling_cost += other.sapling_cost
     for model, bucket in other.by_model.items():
         dst = into.by_model.setdefault(model, {"api_calls": 0})
+        # Subscription billing is a flag, not a numeric counter. Summing False
+        # turns it into integer 0, which older pricing's `is False` misses.
+        # Legacy buckets with actual usage and no marker remain billable.
+        def billed(values):
+            if "billed" in values:
+                return bool(values["billed"])
+            return any(values.get(key, 0) for key in (
+                "api_calls", "input_tokens", "output_tokens",
+                "cache_creation_input_tokens", "cache_read_input_tokens"))
+
+        charged = billed(dst) or billed(bucket)
         for k, v in bucket.items():
-            dst[k] = dst.get(k, 0) + v
+            if k != "billed":
+                dst[k] = dst.get(k, 0) + v
+        dst["billed"] = bool(charged)
 
 
 __all__ = ["fan_out", "fold_usage"]

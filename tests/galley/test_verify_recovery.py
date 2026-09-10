@@ -18,7 +18,7 @@ class Provider:
 
     def complete_structured(self, **kwargs):
         self.calls.append(kwargs)
-        body = self.bodies.pop(0) if self.bodies else {}
+        body = self.bodies.pop(0) if self.bodies else {kwargs["schema_name"]: []}
         return body if isinstance(body, ProviderResult) else ProviderResult(
             parsed=body, stop_reason="ok")
 

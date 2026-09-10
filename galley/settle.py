@@ -1529,6 +1529,10 @@ class SettleOptions:
     mechanical_only: bool = False
     # Model calls in flight for judge and delta re-verification work.
     concurrency: int = 1
+    verification_pass: str = "primary"
+    verification_policy: str = "mechanical-verification-v1"
+    required_verification_passes: tuple[str, ...] = ("primary",)
+    verification_config_sha256: str = ""
 
 
 @dataclass
@@ -1537,6 +1541,7 @@ class SettleResult:
     outputs: Any = None
     usage: Usage = field(default_factory=Usage)
     touched: set[str] = field(default_factory=set)
+    recovered_usage: Usage = field(default_factory=Usage)
 
     @property
     def open(self) -> int:
@@ -1556,6 +1561,7 @@ class Settler:
         self.provider = provider
         self.opt = options or SettleOptions()
         self.usage = Usage()
+        self.recovered_usage = Usage()
         self.settlement = Settlement.load(self.run_dir) or Settlement()
         self.settlement.run_dir = str(self.run_dir)
         self.settlement.max_rounds = self.opt.rounds
@@ -2246,30 +2252,38 @@ class Settler:
         read the book as it is now, not restamp a read of an earlier build.
         Counts toward the turn budget like every other call."""
         from galley.verify import (accepted_text, applied_edits, verify_run,
-                                   write_artifacts)
+                                   write_artifacts, verification_invocation)
         uc, uw = Usage(), Usage()
-        changes = verify_run(self.run_dir, self.provider, self.opt.model, uc,
-                             context=self.opt.context, run_changes=True,
-                             run_walk=False, max_tokens=self.opt.max_tokens,
-                             concurrency=self.opt.concurrency)
-        walk = verify_run(self.run_dir, self.provider, self.opt.model, uw,
-                          context=self.opt.context, run_changes=False,
-                          run_walk=True, max_tokens=self.opt.max_tokens,
-                          concurrency=self.opt.concurrency)
-        for u in (uc, uw):
-            for f in ("input_tokens", "output_tokens",
-                      "cache_creation_input_tokens", "cache_read_input_tokens",
-                      "api_calls"):
-                setattr(self.usage, f, getattr(self.usage, f) + getattr(u, f))
-            for mdl, bucket in u.by_model.items():
-                dst = self.usage.by_model.setdefault(mdl, {"api_calls": 0})
-                for k, v in bucket.items():
-                    dst[k] = dst.get(k, 0) + v
-        acc = accepted_text(self.run_dir)
-        write_artifacts(self.run_dir, changes, walk, model=self.opt.model,
-                        engine=self.opt.engine, usage_changes=uc,
-                        usage_walk=uw, applied=len(applied_edits(self.run_dir)),
-                        paragraphs=sum(1 for t in acc.values() if t.strip()))
+        verification = dict(engine=self.opt.engine,
+                            pass_id=self.opt.verification_pass,
+                            policy_id=self.opt.verification_policy,
+                            required_pass_ids=self.opt.required_verification_passes,
+                            config_sha256=self.opt.verification_config_sha256,
+                            purpose="settlement-fresh")
+        with verification_invocation(self.run_dir, self.provider, self.opt.model,
+                context=self.opt.context, max_tokens=self.opt.max_tokens, **verification) as invocation:
+            changes = verify_run(self.run_dir, self.provider, self.opt.model, uc,
+                                 context=self.opt.context, run_changes=True,
+                                 run_walk=False, max_tokens=self.opt.max_tokens,
+                                 concurrency=self.opt.concurrency,
+                                 command_id=invocation.command_id, **verification)
+            walk = verify_run(self.run_dir, self.provider, self.opt.model, uw,
+                              context=self.opt.context, run_changes=False,
+                              run_walk=True, max_tokens=self.opt.max_tokens,
+                              concurrency=self.opt.concurrency,
+                              command_id=invocation.command_id, **verification)
+            from docproof.fanout import fold_usage
+            fold_usage(self.recovered_usage, changes.recovered_usage)
+            fold_usage(self.recovered_usage, walk.recovered_usage)
+            for u in (uc, uw):
+                fold_usage(self.usage, u)
+            acc = accepted_text(self.run_dir)
+            write_artifacts(self.run_dir, changes, walk, model=self.opt.model,
+                            engine=self.opt.engine, usage_changes=uc,
+                            usage_walk=uw, applied=len(applied_edits(self.run_dir)),
+                            paragraphs=sum(1 for t in acc.values() if t.strip()))
+            if not invocation.mark_complete(changes, walk):
+                raise RuntimeError("Settlement verification is incomplete; unread work remains recoverable")
         self.settlement.notes.append(
             f"fresh sweep: {len(changes.problems)} flagged edit(s), "
             f"{len(walk.residuals)} residual(s) over the whole book")
@@ -2283,10 +2297,22 @@ class Settler:
         round_no = self.settlement.rounds
         self.last_reread = 0
         if not items and self.opt.until_clean and self.provider is not None:
-            log.info("settle: nothing open — --until-clean starts with a "
-                     "fresh sweep of the whole book")
-            items = self.fresh_sweep()
-            self.last_reread = (len(items) or 1) * 50   # a whole-book read
+            from galley.verify import reusable_clean_verification
+            reusable = reusable_clean_verification(self.run_dir, self.provider,
+                self.opt.model, context=self.opt.context, engine=self.opt.engine,
+                max_tokens=self.opt.max_tokens, pass_id=self.opt.verification_pass,
+                required_pass_ids=self.opt.required_verification_passes,
+                policy_id=self.opt.verification_policy,
+                config_sha256=self.opt.verification_config_sha256)
+            if reusable:
+                self.settlement.notes.append(
+                    "Reused complete clean verification of the unchanged build and exact pass policy.")
+                log.info("settle: reused complete clean verification of the unchanged build")
+            else:
+                log.info("settle: nothing open — --until-clean starts with a "
+                         "fresh sweep of the whole book")
+                items = self.fresh_sweep()
+                self.last_reread = (len(items) or 1) * 50   # a whole-book read
         # `--until-clean` sweeps until a round comes back quiet, but an
         # EXPLICIT `--rounds N` is still a ceiling on it: a caller who names a
         # round budget means it, and the old behaviour (silently sweeping to
@@ -2352,17 +2378,23 @@ class Settler:
             and latest[r["residual_id"]].action == "internal_repair"}.values())
         self._finalize()
         return SettleResult(self.settlement, usage=self.usage,
-                            touched=set(self.touched))
+                            touched=set(self.touched), recovered_usage=self.recovered_usage)
 
     def _finalize(self) -> None:
         """Write the artifacts certify reads: settlement.json, the two verify
         artifacts re-stamped for THIS build with every item carrying a record,
         and the terminal state on every findings.json row."""
         from docproof.providers import cost_of_usage
-        cost = cost_of_usage(self.usage, fallback_model=self.opt.model or None) \
+        from docproof.fanout import fold_usage
+        total_usage = Usage()
+        fold_usage(total_usage, self.usage)
+        fold_usage(total_usage, self.recovered_usage)
+        cost = cost_of_usage(total_usage, fallback_model=self.opt.model or None) \
             or 0.0
         self.settlement.cost = {"total_usd": float(cost),
-                                "api_calls": self.usage.api_calls,
+                                "api_calls": total_usage.api_calls,
+                                "new_api_calls": self.usage.api_calls,
+                                "recovered_api_calls": self.recovered_usage.api_calls,
                                 "engine": self.opt.engine,
                                 "model": self.opt.model}
         stamp_states(self.run_dir, self.settlement)
