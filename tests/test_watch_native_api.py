@@ -14,6 +14,9 @@ def test_native_form_settings_round_trip_through_watch_api(tmp_path):
     fields = {
         "corrections_engine": "native",
         "corrections_native_form_poll": True,
+        "corrections_native_quiet_seconds": 10800,
+        "corrections_native_form_project_property": "docproof_project_id",
+        "corrections_native_form_file_count_property": "correction_file_count",
         "corrections_native_start_after": "2026-01-01T00:00:00Z",
         "corrections_native_form_first_property": "firstname",
         "corrections_native_form_last_property": "lastname",

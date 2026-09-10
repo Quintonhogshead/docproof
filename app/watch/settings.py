@@ -355,7 +355,7 @@ class WatchSettings:
     # A native pass may still hand a designer its partially applied Book N+1.
     # This is useful for the default local workflow, where a person finishes
     # the remaining layout work before publishing.
-    corrections_native_partial_upload: bool = True
+    corrections_native_partial_upload: bool = False
     # Optional CRM mappings.  Empty values mean DocProof does not touch that
     # property; no CRM property is invented by the native adapter.
     corrections_native_folder_property: str = ""
@@ -368,6 +368,9 @@ class WatchSettings:
     # it explicit so a configured CRM file/notes property works without a
     # surprise 403 on every watch tick.
     corrections_native_form_poll: bool = False
+    corrections_native_quiet_seconds: int = 10800
+    corrections_native_form_project_property: str = "docproof_project_id"
+    corrections_native_form_file_count_property: str = ""
     corrections_native_start_after: str = ""
     corrections_native_form_first_property: str = "firstname"
     corrections_native_form_last_property: str = "lastname"

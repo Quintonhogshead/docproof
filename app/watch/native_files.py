@@ -70,6 +70,10 @@ class _StripHeaders(urllib.request.HTTPRedirectHandler):
 
 _NO_REDIRECT = urllib.request.build_opener(_NoRedirect)
 _STRIP_HEADERS = urllib.request.build_opener(_StripHeaders)
+# Identify the authorized desktop client instead of urllib's generic agent,
+# which HubSpot's CDN rejects with Cloudflare error 1010. This is not an
+# authentication header and contains no account or device information.
+_STRIP_HEADERS.addheaders = [('User-Agent', 'DocProof/1.0 (+https://github.com/Quintonhogshead/docproof)')]
 
 
 def _open_no_redirect(request: urllib.request.Request, timeout: int = 60):
@@ -213,7 +217,9 @@ def store_manual_file(source: Path, cache_root, file_id: str,
                 f"Manual attachment cache {identifier} already contains different bytes; "
                 "remove that cache entry explicitly before replacing it.")
     if not target.exists():
-        temporary = Path(tempfile.mkstemp(prefix=".native-", dir=folder)[1])
+        temporary_fd, temporary_name = tempfile.mkstemp(prefix=".native-", dir=folder)
+        os.close(temporary_fd)
+        temporary = Path(temporary_name)
         try:
             shutil.copyfile(source, temporary)
             try:
@@ -298,12 +304,32 @@ def download_file(token: str, url: str, dest_dir, *, opener=_open_no_redirect,
     # injected test openers see the same header-free request.
     request = urllib.request.Request(signed_url, method="GET")
     final_opener = _open_stripped if production_opener else opener
-    with _answer(request, opener=final_opener, what="download the native correction attachment") as response:
-        body = response.read()
-        headers = getattr(response, "headers", None)
-        disposition = headers.get("Content-Disposition", "") if headers is not None else ""
+    try:
+        with _answer(request, opener=final_opener, what="download the native correction attachment") as response:
+            body = response.read()
+            headers = getattr(response, "headers", None)
+            disposition = headers.get("Content-Disposition", "") if headers is not None else ""
+    except _PermissionDenied:
+        query = urllib.parse.parse_qs(parsed.query)
+        if not file_id or not all(query.get(key) for key in ('portalId', 'sign', 'conversionId', 'filename')):
+            raise
+        # A complete signed form link is a second documented download route.
+        # The files API already authorized this file, but its CDN link failed.
+        # Use the original form signature without any bearer token, including
+        # on redirects. Do not enable this fallback for an unsigned URL.
+        request = urllib.request.Request(url, method='GET')
+        with _answer(request, opener=final_opener, what="download the signed form attachment") as response:
+            body = response.read()
+            headers = getattr(response, "headers", None)
+            disposition = headers.get("Content-Disposition", "") if headers is not None else ""
     folder = Path(dest_dir)
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / _filename(url, disposition or "", fallback_name)
+    # Authentication redirects may end in HTTP 200 with a login page while
+    # retaining the filename from the original form link.
+    if target.suffix.lower() in {'.docx', '.pdf', '.png', '.jpg', '.jpeg', '.tif', '.tiff'}:
+        lead = body.lstrip()[:200].lower()
+        if lead.startswith((b'<!doctype html', b'<html')):
+            raise HubSpotError('HubSpot returned an HTML sign-in page instead of the correction attachment.')
     target.write_bytes(body)
     return target

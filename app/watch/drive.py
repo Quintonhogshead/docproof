@@ -62,6 +62,7 @@ class DriveFile:
     app_properties: dict[str, str] = field(default_factory=dict)
     modified_time: str = ""
     size: int = 0                    # 0 for a native Doc: Drive omits it
+    md5_checksum: str = ''
 
     @property
     def is_folder(self) -> bool:
@@ -80,6 +81,7 @@ class DriveFile:
             app_properties=dict(raw.get("appProperties") or {}),
             modified_time=str(raw.get("modifiedTime", "")),
             size=int(raw.get("size") or 0),
+            md5_checksum=str(raw.get('md5Checksum') or ''),
         )
 
 
@@ -218,7 +220,7 @@ def refresh_access_token(client_id: str, client_secret: str,
 
 
 
-FILE_FIELDS = "id,name,mimeType,appProperties,modifiedTime,size"
+FILE_FIELDS = "id,name,mimeType,appProperties,modifiedTime,size,md5Checksum"
 
 
 def list_folder(token: str, folder_id: str, *, opener=_open_url,

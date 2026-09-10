@@ -15,6 +15,7 @@ import logging
 import plistlib
 import subprocess
 import threading
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -491,7 +492,10 @@ def test_a_preview_google_refuses_says_what_google_said(client):
 # --- automatic passes ---------------------------------------------------------
 
 def test_turning_the_schedule_on_writes_an_agent_and_says_when(client,
-                                                               tmp_path):
+                                                               tmp_path, monkeypatch):
+    monkeypatch.setattr('app.routes.watch.sys', SimpleNamespace(platform='darwin'))
+    monkeypatch.setattr('app.watch.schedule.os', SimpleNamespace(getuid=lambda: 501))
+    monkeypatch.setattr('app.watch.status._agent_readable', lambda: True)
     configured(client)
 
     body = client.put("/api/watch/schedule",
@@ -505,7 +509,8 @@ def test_turning_the_schedule_on_writes_an_agent_and_says_when(client,
 
 
 def test_a_time_that_does_not_exist_is_refused_without_writing_an_agent(
-        client, tmp_path):
+        client, tmp_path, monkeypatch):
+    monkeypatch.setattr('app.routes.watch.sys', SimpleNamespace(platform='darwin'))
     configured(client)
 
     answer = client.put("/api/watch/schedule", json={"times": "25:00"})
@@ -515,7 +520,10 @@ def test_a_time_that_does_not_exist_is_refused_without_writing_an_agent(
     assert not (tmp_path / "agent.plist").exists()
 
 
-def test_turning_the_schedule_off_removes_it(client, tmp_path):
+def test_turning_the_schedule_off_removes_it(client, tmp_path, monkeypatch):
+    monkeypatch.setattr('app.routes.watch.sys', SimpleNamespace(platform='darwin'))
+    monkeypatch.setattr('app.watch.schedule.os', SimpleNamespace(getuid=lambda: 501))
+    monkeypatch.setattr('app.watch.status._agent_readable', lambda: True)
     configured(client)
     client.put("/api/watch/schedule", json={"times": "06:00"})
 

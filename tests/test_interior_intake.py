@@ -65,6 +65,20 @@ def test_supplied_text_decodes_entities_without_losing_raw_text(tmp_path):
     assert source["raw_text"] == packet["text_raw"]
 
 
+def test_docx_struck_deletion_and_explicit_false_survive_intake(tmp_path):
+    path = tmp_path / 'corrections.docx'
+    document = Document()
+    paragraph = document.add_paragraph('Keep this ')
+    paragraph.add_run('delete this').font.strike = True
+    paragraph.add_run('keep this too').font.strike = False
+    document.save(path)
+    packet = build_packet([path], '', tmp_path / 'work')
+    runs = next(row['runs'] for row in packet['evidence'] if row['kind'] == 'docx_paragraph')
+    assert runs[1]['formatting']['strike'] is True
+    assert runs[2]['formatting']['strike'] is False
+    assert 'strike' in runs[1]['formatting_xml']
+
+
 def test_flattened_pdf_keeps_every_page_as_visual_evidence(tmp_path):
     pdf = tmp_path / "scan.pdf"
     writer = PdfWriter()

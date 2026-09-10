@@ -1,13 +1,14 @@
 """A resumable local correction job. Only verified artifacts become deliverables."""
 from __future__ import annotations
 
-import fcntl
+from docproof import platform_io as fcntl
 import hashlib
 import json
 import os
 import re
 import subprocess
 import tempfile
+import time
 from zipfile import ZIP_DEFLATED, ZipFile
 from contextlib import contextmanager
 from pathlib import Path
@@ -31,7 +32,17 @@ def save_json(path: Path, data: dict) -> None:
             json.dump(data, stream, ensure_ascii=True, indent=2, allow_nan=False)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(name, path)
+        for attempt in range(10):
+            try:
+                os.replace(name, path)
+                break
+            except PermissionError:
+                # A simultaneous desktop status reader can briefly hold a
+                # Windows handle without delete sharing. Preserve the old
+                # complete record while waiting for that reader to close.
+                if os.name != 'nt' or attempt == 9:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
     finally:
         if os.path.exists(name):
             os.unlink(name)
@@ -39,8 +50,8 @@ def save_json(path: Path, data: dict) -> None:
 
 @contextmanager
 def worker_lock():
-    """One full book operation on this Mac, including between native calls."""
-    path = Path(tempfile.gettempdir()) / f"docproof-interior-job-{os.getuid()}.lock"
+    """One full book operation for this user, including between native calls."""
+    path = Path(tempfile.gettempdir()) / f"docproof-interior-job-{fcntl.user_lock_suffix()}.lock"
     with path.open("a") as stream:
         try:
             fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -100,10 +111,153 @@ def _artifact(snapshot, key, fallback):
     return Path(snapshot.get(key) or fallback).resolve()
 
 
+_REVIEW_CHECKPOINT_VERSION = 1
+
+
+def _checkpoint_entry(work: Path, path: Path) -> dict[str, str]:
+    """Record one immutable, work-contained checkpoint artifact."""
+    path = Path(path).resolve()
+    if not path.is_file() or not path.stat().st_size:
+        raise RuntimeError(f"Review checkpoint artifact is missing or empty: {path.name}.")
+    try:
+        relative = path.relative_to(work)
+    except ValueError as exc:
+        raise RuntimeError("Review checkpoint artifact escaped the job directory.") from exc
+    return {"path": relative.as_posix(), "sha256": digest(path)}
+
+
+def _checkpoint_path(work: Path, entry: dict, label: str) -> Path:
+    if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+        raise RuntimeError(f"Review checkpoint is missing its {label} path.")
+    relative = Path(entry["path"])
+    if relative.is_absolute():
+        raise RuntimeError(f"Review checkpoint {label} path is not job-relative.")
+    path = (work / relative).resolve()
+    try:
+        path.relative_to(work)
+    except ValueError as exc:
+        raise RuntimeError(f"Review checkpoint {label} path escaped the job directory.") from exc
+    if not path.is_file() or digest(path) != entry.get("sha256"):
+        raise RuntimeError(f"Review checkpoint artifact changed or is missing: {label}.")
+    return path
+
+
+def _make_review_checkpoint(work: Path, source: Path, output: Path,
+                            before_pdf: Path, after_pdf: Path, idml: Path,
+                            final: dict, baseline: dict) -> dict:
+    images = []
+    required = set(final.get("required_review_pages", []))
+    rows = {row.get("page"): row for row in final.get("review_images", [])
+            if isinstance(row, dict) and isinstance(row.get("page"), int)}
+    baseline_pages = int(baseline.get("page_count", baseline.get("pages", 0)) or 0)
+    for page in sorted(required):
+        row = rows.get(page)
+        if not row or not row.get("after"):
+            raise RuntimeError(f"Review checkpoint is missing the after image for page {page}.")
+        before = row.get("before")
+        if page <= baseline_pages and not before:
+            raise RuntimeError(f"Review checkpoint is missing the before image for page {page}.")
+        images.append({
+            "page": page,
+            "before": _checkpoint_entry(work, Path(before)) if before else None,
+            "after": _checkpoint_entry(work, Path(row["after"])),
+        })
+    return {
+        "version": _REVIEW_CHECKPOINT_VERSION,
+        "source": {"path": str(Path(source).resolve()), "sha256": digest(source)},
+        "artifacts": {
+            "output_indd": _checkpoint_entry(work, output),
+            "baseline_pdf": _checkpoint_entry(work, before_pdf),
+            "output_pdf": _checkpoint_entry(work, after_pdf),
+            "output_idml": _checkpoint_entry(work, idml),
+            "final_json": _checkpoint_entry(work, work / "final.json"),
+            "verification_json": _checkpoint_entry(work, work / "verification.json"),
+        },
+        "review_images": images,
+        "required_review_pages": sorted(required),
+    }
+
+
+def _restore_review_checkpoint(work: Path, source: Path, checkpoint: dict,
+                               baseline: dict, plan: dict) -> tuple[dict, dict, Path, Path, Path]:
+    if checkpoint.get("version") != _REVIEW_CHECKPOINT_VERSION:
+        raise RuntimeError("Unsupported or incomplete review checkpoint.")
+    source_info = checkpoint.get("source")
+    if (not isinstance(source_info, dict)
+            or Path(source_info.get("path", "")).resolve() != source.resolve()
+            or source_info.get("sha256") != digest(source)):
+        raise RuntimeError("Review checkpoint source changed.")
+    artifacts = checkpoint.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise RuntimeError("Review checkpoint has no artifact manifest.")
+    paths = {key: _checkpoint_path(work, artifacts.get(key), key)
+             for key in ("output_indd", "baseline_pdf", "output_pdf", "output_idml",
+                         "final_json", "verification_json")}
+    expected_output = (work / next_name(source)).resolve()
+    if paths["output_indd"] != expected_output:
+        raise RuntimeError("Review checkpoint output INDD path changed.")
+    expected_baseline_pdf = _artifact(baseline, "baseline_pdf", work / "baseline.pdf")
+    if paths["baseline_pdf"] != expected_baseline_pdf:
+        raise RuntimeError("Review checkpoint baseline PDF path changed.")
+    final = json.loads(paths["final_json"].read_text(encoding="utf-8"))
+    verification = json.loads(paths["verification_json"].read_text(encoding="utf-8"))
+    if final.get("verification") != verification:
+        raise RuntimeError("Review checkpoint final and verification JSON disagree.")
+    required = checkpoint.get("required_review_pages")
+    if (not isinstance(required, list) or any(type(page) is not int for page in required)
+            or len(required) != len(set(required))):
+        raise RuntimeError("Review checkpoint required-page coverage is invalid.")
+    if final.get("required_review_pages") != required:
+        raise RuntimeError("Review checkpoint required-page coverage changed.")
+    checkpoint_images = checkpoint.get("review_images")
+    if not isinstance(checkpoint_images, list):
+        raise RuntimeError("Review checkpoint final JSON has no review images.")
+    final_images = final.get("review_images")
+    if not isinstance(final_images, list):
+        raise RuntimeError("Review checkpoint final JSON has no review images.")
+    checkpoint_pages = [row.get("page") if isinstance(row, dict) else None for row in checkpoint_images]
+    final_pages = [row.get("page") if isinstance(row, dict) else None for row in final_images]
+    if (any(type(page) is not int for page in checkpoint_pages + final_pages)
+            or len(checkpoint_pages) != len(set(checkpoint_pages))
+            or set(checkpoint_pages) != set(required)
+            or len(final_pages) != len(set(final_pages))
+            or set(final_pages) != set(required)):
+        raise RuntimeError("Review checkpoint image coverage changed.")
+    image_rows = {row["page"]: row for row in final_images}
+    for image in checkpoint_images:
+        page = image.get("page") if isinstance(image, dict) else None
+        row = image_rows.get(page)
+        if not row:
+            raise RuntimeError(f"Review checkpoint lost review images for page {page}.")
+        for side in ("before", "after"):
+            entry = image.get(side)
+            if entry is None:
+                if row.get(side):
+                    raise RuntimeError(f"Review checkpoint image set changed for page {page}.")
+                continue
+            path = _checkpoint_path(work, entry, f"page {page} {side}")
+            if Path(row.get(side, "")).resolve() != path:
+                raise RuntimeError(f"Review checkpoint image path changed for page {page}.")
+    for field, key, label in (("output_pdf", "output_pdf", "PDF"),
+                               ("output_idml", "output_idml", "IDML")):
+        declared = final.get(field)
+        if declared and Path(declared).resolve() != paths[key]:
+            raise RuntimeError(f"Review checkpoint final {label} path changed.")
+    if not verification.get("integrity_passed"):
+        raise VerificationError("Saved document failed exact text verification: "
+                                + "; ".join(verification.get("failures", [])))
+    # Re-run the deterministic text/style check from the frozen JSON. This
+    # keeps a model-review retry subject to the same integrity gate.
+    checked = check_saved(baseline, final, plan["edits"])
+    if checked != verification:
+        raise RuntimeError("Review checkpoint deterministic verification changed.")
+    return final, verification, paths["baseline_pdf"], paths["output_pdf"], paths["output_idml"]
+
+
 def _report(work: Path, result: dict, plan: dict | None = None) -> Path:
     path = work / "correction-report.json"
     packet_path = work / "packet.json"
-    packet = json.loads(packet_path.read_text()) if packet_path.exists() else {}
+    packet = json.loads(packet_path.read_text(encoding='utf-8')) if packet_path.exists() else {}
     save_json(path, {**result, "instructions": (plan or {}).get("instructions", []),
                      "edits": (plan or {}).get("edits", []), "source_evidence": packet.get("evidence", [])})
     lines = ["InDesign corrections", "", f"Outcome: {result['status']}",
@@ -130,7 +284,7 @@ def package_result(work: Path, output: Path, pdf: Path, idml: Path) -> Path:
                     archive.write(path, output.stem + "/" + str(path.relative_to(output.parent)))
         packet_path = work / "packet.json"
         if packet_path.exists():
-            packet = json.loads(packet_path.read_text())
+            packet = json.loads(packet_path.read_text(encoding='utf-8'))
             for index, source in enumerate(packet.get("sources", []), 1):
                 artifact = source.get("artifact_path")
                 if artifact and Path(artifact).is_file():
@@ -144,7 +298,7 @@ def package_result(work: Path, output: Path, pdf: Path, idml: Path) -> Path:
 
 def run_local(source: Path, attachments: list[Path], text: str, work_dir: Path,
               rules: dict | None = None, *, native=None, astra=None,
-              packet_builder=None, page_reviewer=None) -> dict:
+              packet_builder=None, page_reviewer=None, plan_only=False) -> dict:
     """Run/resume a frozen submission; all external boundaries are injectable."""
     work = Path(work_dir).resolve()
     work.mkdir(parents=True, exist_ok=True)
@@ -163,12 +317,12 @@ def run_local(source: Path, attachments: list[Path], text: str, work_dir: Path,
                         "text": text, "rules": rules or {}}
             request_path = work / "submission.json"
             if request_path.exists():
-                if json.loads(request_path.read_text()) != identity:
+                if json.loads(request_path.read_text(encoding='utf-8')) != identity:
                     raise ValueError("This job's source or submission changed. Start a new job folder.")
             else:
                 save_json(request_path, identity)
             receipt_path = work / "workflow.json"
-            receipt = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
+            receipt = json.loads(receipt_path.read_text(encoding='utf-8')) if receipt_path.exists() else {}
             if receipt.get("stage") == "complete":
                 for path, sha in receipt.get("artifact_hashes", {}).items():
                     if not Path(path).is_file() or digest(Path(path)) != sha:
@@ -178,37 +332,48 @@ def run_local(source: Path, attachments: list[Path], text: str, work_dir: Path,
                 raise RuntimeError("An InDesign edit was interrupted. Inspect the saved job before recovery; edits were not repeated.")
             evidence_path = work / "evidence-manifest.json"
             if evidence_path.exists():
-                for path, sha in json.loads(evidence_path.read_text()).items():
+                for path, sha in json.loads(evidence_path.read_text(encoding='utf-8')).items():
                     if not Path(path).is_file() or digest(Path(path)) != sha:
                         raise RuntimeError("Frozen correction evidence changed. This job requires recovery.")
             from .intake import build_packet
-            from .astra import AstraReviewer
+            from .routing import LunaFirstReviewer
             from .native import InDesignWorker
             native = native or InDesignWorker()
-            astra = astra or AstraReviewer()
+            astra = astra or LunaFirstReviewer()
             packet_builder = packet_builder or build_packet
             page_reviewer = page_reviewer or review_pages
             packet_path, baseline_path = work / "packet.json", work / "baseline.json"
             if packet_path.exists():
-                packet = json.loads(packet_path.read_text())
+                packet = json.loads(packet_path.read_text(encoding='utf-8'))
             else:
                 packet = packet_builder(attachments, text, work)
                 save_json(packet_path, packet)
+            if (rules or {}).get('book_identity') and packet.get('errors'):
+                raise ValueError('Some correction evidence could not be read completely; no book edits were started.')
             if baseline_path.exists():
-                baseline = json.loads(baseline_path.read_text())
+                baseline = json.loads(baseline_path.read_text(encoding='utf-8'))
             else:
                 baseline = native.inspect(source, work)
                 save_json(baseline_path, baseline)
+            if (rules or {}).get('book_identity'):
+                from .book_identity import verify_identity
+                verify_identity(baseline, rules['book_identity'])
             plan_path = work / "plan.json"
             if plan_path.exists():
-                plan = json.loads(plan_path.read_text())
+                plan = json.loads(plan_path.read_text(encoding='utf-8'))
             else:
                 plan = astra.plan(packet, baseline, work, rules=rules or {})
-                validate_plan(plan, packet)
-                prepare_edits(baseline, plan["edits"])
-                save_json(plan_path, plan)
             validate_plan(plan, packet)
             prepare_edits(baseline, plan["edits"])
+            if not plan_path.exists():
+                save_json(plan_path, plan)
+            if plan_only:
+                return {**result, 'status': 'planned', 'counts': {
+                    'instructions': len(plan['instructions']), 'edits': len(plan['edits']),
+                    'unresolved': sum(row['disposition'] in {'designer', 'clarification'} for row in plan['instructions'])}}
+            if not plan['edits'] and any(row.get('disposition') in {'clarification', 'designer'} for row in plan['instructions']):
+                raise RuntimeError('No actionable corrections were established. InDesign was not asked to create an unchanged book: '+
+                                   '; '.join(plan.get('questions', []) + plan.get('designer_reasons', [])))
             if not evidence_path.exists():
                 save_json(evidence_path, {str(p): digest(p) for p in (packet_path, baseline_path, plan_path)})
             output = work / next_name(source)
@@ -217,25 +382,31 @@ def run_local(source: Path, attachments: list[Path], text: str, work_dir: Path,
                 applied = native.apply(source, output, plan["edits"], work)
                 save_json(work / "applied.json", applied)
                 save_json(receipt_path, {"stage": "applied"})
-            # Always inspect the actual saved INDD rather than trust the edit script.
-            final = native.verify(output, work)
-            if final.get("style_inventory_complete") is False or baseline.get("style_inventory_complete") is False:
-                raise VerificationError("InDesign did not return a complete formatting inventory.")
-            verification = check_saved(baseline, final, plan["edits"])
-            save_json(work / "verification.json", verification)
-            if not verification["integrity_passed"]:
-                raise VerificationError("Saved document failed exact text verification: " + "; ".join(verification["failures"]))
-            before_pdf = _artifact(baseline, "baseline_pdf", work / "baseline.pdf")
-            after_pdf = _artifact(final, "output_pdf", work / "final.pdf")
-            idml = _artifact(final, "output_idml", work / "final.idml")
-            for path in (output, before_pdf, after_pdf, idml):
-                if not path.is_file() or not path.stat().st_size:
-                    raise RuntimeError(f"InDesign did not produce {path.name}.")
-            final.update(page_reviewer(before_pdf, after_pdf, work))
-            final["verification"] = verification
-            final["instructions"] = plan["instructions"]
-            save_json(work / "final.json", final)
-            save_json(receipt_path, {"stage": "reviewing"})
+            checkpoint = receipt.get("review_checkpoint") if receipt.get("stage") == "reviewing" else None
+            if checkpoint is not None:
+                final, verification, before_pdf, after_pdf, idml = _restore_review_checkpoint(
+                    work, source, checkpoint, baseline, plan)
+            else:
+                # Always inspect the actual saved INDD rather than trust the edit script.
+                final = native.verify(output, work)
+                if final.get("style_inventory_complete") is False or baseline.get("style_inventory_complete") is False:
+                    raise VerificationError("InDesign did not return a complete formatting inventory.")
+                verification = check_saved(baseline, final, plan["edits"])
+                save_json(work / "verification.json", verification)
+                if not verification["integrity_passed"]:
+                    raise VerificationError("Saved document failed exact text verification: " + "; ".join(verification["failures"]))
+                before_pdf = _artifact(baseline, "baseline_pdf", work / "baseline.pdf")
+                after_pdf = _artifact(final, "output_pdf", work / "final.pdf")
+                idml = _artifact(final, "output_idml", work / "final.idml")
+                for path in (output, before_pdf, after_pdf, idml):
+                    if not path.is_file() or not path.stat().st_size:
+                        raise RuntimeError(f"InDesign did not produce {path.name}.")
+                final.update(page_reviewer(before_pdf, after_pdf, work))
+                final["verification"] = verification
+                final["instructions"] = plan["instructions"]
+                save_json(work / "final.json", final)
+                checkpoint = _make_review_checkpoint(work, source, output, before_pdf, after_pdf, idml, final, baseline)
+                save_json(receipt_path, {"stage": "reviewing", "review_checkpoint": checkpoint})
             review = astra.review(packet, baseline, final, plan["edits"], work)
             expected_ids = {r["id"] for r in plan["instructions"]}
             reviewed_ids = review.get("instruction_ids", [])

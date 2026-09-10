@@ -1,6 +1,11 @@
 'use strict';
 const nativeCorrectionFields = {"corrections-native-form": "corrections_native_form_id", "corrections-native-start-after": "corrections_native_start_after", "corrections-native-form-first": "corrections_native_form_first_property", "corrections-native-form-last": "corrections_native_form_last_property", "corrections-native-form-book": "corrections_native_form_book_property", "corrections-native-form-file": "corrections_native_form_file_property", "corrections-native-form-notes": "corrections_native_form_notes_property", "corrections-native-project-id": "corrections_native_project_id_property", "corrections-native-project-book": "corrections_native_project_book_property", "corrections-native-folder": "corrections_native_folder_property", "corrections-native-submission": "corrections_native_submission_property", "corrections-native-status": "corrections_native_status_property", "corrections-native-designer": "corrections_native_designer_property", "corrections-native-reason": "corrections_native_reason_property", "corrections-native-output": "corrections_native_output_property", "corrections-native-verified-value": "corrections_native_verified_value", "corrections-native-designer-value": "corrections_native_designer_value", "corrections-native-clarification-value": "corrections_native_clarification_value", "corrections-native-technical-value": "corrections_native_technical_value"};
 
+Object.assign(nativeCorrectionFields, {
+  'corrections-native-form-project': 'corrections_native_form_project_property',
+  'corrections-native-form-file-count': 'corrections_native_form_file_count_property',
+});
+
 // Language rule for everything the user reads: no "chunks", no "tokens", no
 // "batch", no "API" outside the Settings key fields. Sections, reviews, cost.
 
@@ -72,6 +77,7 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 correctionsSource: null,
                 // Counted so overlapping reads cannot enable Apply early.
                 correctionsReading: 0,
+                nativeQueue: null,
                 // And whether the last read ended in an error, which leaves a
                 // part-read list behind. Apply stays locked on that too: the
                 // corrections past the failure were never read at all.
@@ -7476,7 +7482,7 @@ function promptCard(t) {
 
 function nativeReceiptTime(iso) {
   if (!iso) return '';
-  const date = new Date(iso);
+  const date = new Date(typeof iso === 'number' ? iso * 1000 : iso);
   return isNaN(date) ? '' : date.toLocaleString();
 }
 
@@ -7543,6 +7549,122 @@ function renderNativeIntake(w) {
   error.hidden = !intake.error;
 }
 
+function nativeWaitLabel(iso) {
+  if (!iso) return 'Eligibility time unavailable';
+  const at = new Date(typeof iso === 'number' ? iso * 1000 : iso);
+  if (Number.isNaN(at.getTime())) return 'Eligibility time unavailable';
+  const remaining = at.getTime() - Date.now();
+  if (remaining <= 0) return `Eligible ${nativeReceiptTime(iso)}`;
+  const minutes = Math.ceil(remaining / 60000);
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `Eligible ${nativeReceiptTime(iso)} · three-hour wait: ${hours}h ${mins}m remaining`;
+}
+
+function nativeQueueBookLabel(projectId, books) {
+  const book = (books || []).find((row) => row.project_id === projectId);
+  if (!book) return projectId || 'Book not identified';
+  return [book.title, book.author].filter(Boolean).join(' · ') || projectId;
+}
+
+function renderNativeQueue(queue) {
+  const block = $('native-queue-readout');
+  if (!block) return;
+  const data = queue || {};
+  const events = Array.isArray(data.events) ? data.events : [];
+  const batches = Array.isArray(data.batches) ? data.batches : [];
+  const books = Array.isArray(data.books) ? data.books : [];
+  const line = $('native-queue-line');
+  const eventBox = $('native-queue-events');
+  const batchBox = $('native-queue-batches');
+  const error = $('native-queue-error');
+  block.hidden = !events.length && !batches.length && !books.length && !data.error;
+  if (block.hidden) return;
+  const quiet = Number(data.quiet_seconds || 10800);
+  line.textContent = `${events.length} collected submission${events.length === 1 ? '' : 's'} · ${batches.length} batch${batches.length === 1 ? '' : 'es'} · ${Math.round(quiet / 3600)}-hour quiet period`;
+  eventBox.replaceChildren();
+  if (events.length) {
+    const heading = document.createElement('h5');
+    heading.textContent = 'Collected submissions';
+    eventBox.append(heading);
+  }
+  for (const event of events) {
+    const item = document.createElement('p');
+    item.className = 'small';
+    const received = nativeReceiptTime(event.received_at);
+    const stateLabel = event.history_state ? `Earlier worker: ${event.history_state}.` : event.batch_id ? 'Assigned to a batch.' : 'Waiting for the quiet period.';
+    const eligibility = event.ready_at && !event.reason ? ` · ${nativeWaitLabel(event.ready_at)}` : '';
+    item.textContent = `${nativeQueueBookLabel(event.project_id, books)} · ${event.marker || 'unmarked'} — ${event.reason || stateLabel}${received ? ` · received ${received}` : ''}${eligibility}`;
+    eventBox.append(item);
+  }
+  batchBox.replaceChildren();
+  if (batches.length) {
+    const heading = document.createElement('h5');
+    heading.textContent = 'Batches';
+    batchBox.append(heading);
+  }
+  for (const batch of batches) {
+    const item = document.createElement('p');
+    item.className = 'small';
+    const created = nativeReceiptTime(batch.created_at);
+    item.textContent = `${nativeQueueBookLabel(batch.project_id, books)} · ${batch.state || 'unknown'} — ${batch.reason || 'No reason supplied.'}${created ? ` · created ${created}` : ''}`;
+    if (batch.state === 'local_complete') {
+      const resume = document.createElement('button');
+      resume.type = 'button';
+      resume.textContent = 'Release verified result for delivery';
+      resume.addEventListener('click', async () => {
+        resume.disabled = true;
+        try {
+          const updated = await api(`/api/watch/native/batches/${encodeURIComponent(batch.batch_id)}/resume-delivery`, {method: 'POST'});
+          state.nativeQueue = updated;
+          renderNativeQueue(updated);
+        } catch (err) {
+          error.textContent = err.message;
+          error.hidden = false;
+          resume.disabled = false;
+        }
+      });
+      item.append(' ', resume);
+    }
+    batchBox.append(item);
+  }
+  renderNativeBooks(books);
+  error.textContent = data.error || '';
+  error.hidden = !data.error;
+}
+
+function renderNativeBooks(books) {
+  const list = $('native-book-list');
+  if (!list) return;
+  list.replaceChildren();
+  if (!books.length) {
+    const empty = document.createElement('p');
+    empty.className = 'muted small';
+    empty.textContent = 'No verified books saved yet.';
+    list.append(empty);
+    return;
+  }
+  for (const book of books) {
+    const item = document.createElement('p');
+    item.className = 'small';
+    item.textContent = `${book.title || 'Untitled'} · ${book.author || 'Author unavailable'} · ${book.surname || 'Filename surname unavailable'}${book.blocked ? ' — blocked' : ' — verified'}`;
+    list.append(item);
+  }
+}
+
+async function refreshNativeQueue() {
+  const block = $('native-queue-readout');
+  if (!block || !$('screen-watch') || $('screen-watch').hidden) return;
+  try {
+    const queue = await api('/api/watch/native/queue');
+    state.nativeQueue = queue;
+    renderNativeQueue(queue);
+  } catch (err) {
+    state.nativeQueue = {error: err.message};
+    renderNativeQueue(state.nativeQueue);
+  }
+}
+
 async function loadWatch({ quiet = false } = {}) {
   const body = await api('/api/watch');
   // Refreshed on every deliberate load, kept on the five-second poll: a key
@@ -7554,6 +7676,7 @@ async function loadWatch({ quiet = false } = {}) {
     } catch (_) { state.watchModels = state.watchModels || []; }
   }
   renderWatch(body, quiet);
+  await refreshNativeQueue();
   if (!quiet) {
     // The workflow settings live behind their own endpoints; load them when the
     // tab is opened so the registry rows and the drawers reflect what's saved.
@@ -7644,7 +7767,8 @@ function renderWatch(body, quiet) {
   $('corrections-model-passes').checked = w.corrections_model_passes !== false;
   $('corrections-engine').value = w.corrections_engine || 'idml';
   $('corrections-native-upload').checked = !!w.corrections_native_auto_upload;
-  $('corrections-native-partial').checked = w.corrections_native_partial_upload !== false;
+  $('corrections-native-partial').checked = w.corrections_native_partial_upload === true;
+  $('corrections-native-partial').disabled = !!w.corrections_native_form_poll;
   $('corrections-native-form-poll').checked = !!w.corrections_native_form_poll;
   for (const [id, key] of Object.entries(nativeCorrectionFields)) $(id).value = w[key] ?? '';
   const nativeJobs = $('native-correction-jobs');
@@ -10340,6 +10464,40 @@ $('wf-corrections-save').addEventListener('click', async () => {
     watchNote(note, 'Saved.', 'ok');
   } catch (err) {
     watchNote(note, err.message, 'error');
+  } finally { button.disabled = false; }
+});
+
+$('native-book-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = $('native-book-save');
+  const note = $('native-book-note');
+  note.hidden = true;
+  button.disabled = true;
+  const value = (id) => $(id).value.trim();
+  try {
+    await api('/api/watch/native/books', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        project_id: value('native-book-project-id'),
+        title: value('native-book-title'),
+        author: value('native-book-author'),
+        surname: value('native-book-surname'),
+        folder_id: value('native-book-folder-id'),
+        source_id: value('native-book-source-id'),
+        source_version: Number(value('native-book-source-version')),
+        title_aliases: value('native-book-title-aliases').split('\n').map(s => s.trim()).filter(Boolean),
+        author_aliases: value('native-book-author-aliases').split('\n').map(s => s.trim()).filter(Boolean),
+      }),
+    });
+    await refreshNativeQueue();
+    note.textContent = 'Verified book saved.';
+    note.className = 'action-note ok';
+    note.hidden = false;
+    event.target.reset();
+  } catch (err) {
+    note.textContent = err.message;
+    note.className = 'action-note error';
+    note.hidden = false;
   } finally { button.disabled = false; }
 });
 

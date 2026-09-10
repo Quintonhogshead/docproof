@@ -1,10 +1,11 @@
 """No live model calls: exercise the actual runner against a fake subprocess."""
 import copy
-import fcntl
+from docproof import platform_io as fcntl
 import io
 import json
 import os
 import subprocess
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -73,6 +74,7 @@ def fake(tmp_path, monkeypatch):
     monkeypatch.setenv("GALLEY_CODEX_HOME", str(tmp_path / "auth-cache"))
     monkeypatch.setattr(cr.shutil, "which", lambda candidate: "/installed/codex" if candidate else None)
     monkeypatch.setattr(cr.subprocess, "Popen", cli)
+    monkeypatch.setattr(cr.fcntl, "process_job", lambda proc: nullcontext())
     return cli
 
 
@@ -98,6 +100,60 @@ def test_check_login_only_probes_private_subscription_auth(fake, tmp_path, monke
     assert probe.kwargs["cwd"] == tmp_path / "auth-cache"
     assert 0 < probe.timeout <= 12
     assert not (tmp_path / "work").exists()
+
+
+def test_model_tools_start_in_evidence_workspace_not_private_receipts(fake, tmp_path):
+    run(tmp_path)
+    generation = next(call for call in fake.calls if not call.is_auth)
+    assert generation.kwargs['cwd'] == (tmp_path / 'work').resolve()
+    assert generation.argv[generation.argv.index('--sandbox') + 1] == 'read-only'
+
+
+def test_luna_routing_is_recorded_and_cannot_reuse_an_astra_receipt(fake, tmp_path):
+    run(tmp_path, model='gpt-5.6-luna', reasoning_effort='medium')
+    generation = next(call for call in fake.calls if not call.is_auth)
+    assert generation.argv[generation.argv.index('--model') + 1] == 'gpt-5.6-luna'
+    assert 'model_reasoning_effort="medium"' in generation.argv
+    assert receipt(tmp_path)['model'] == 'gpt-5.6-luna'
+    assert receipt(tmp_path)['reasoning_effort'] == 'medium'
+    with pytest.raises(AstraReviewError, match='different evidence'):
+        run(tmp_path)
+    assert len([call for call in fake.calls if not call.is_auth]) == 1
+
+
+def test_unknown_model_never_starts_subscription_cli(fake, tmp_path):
+    with pytest.raises(AstraReviewError, match='Unsupported subscription'):
+        run(tmp_path, model='arbitrary-model')
+    assert not fake.calls
+
+
+def test_cancelled_local_review_never_starts_cli(fake, tmp_path):
+    (tmp_path/'work').mkdir()
+    (tmp_path/'work/cancel-review.txt').write_text('Input download was invalid.')
+    with pytest.raises(AstraReviewError, match='cancelled before model submission'):
+        run(tmp_path)
+    assert fake.calls == []
+
+
+def test_scoped_evidence_config_is_frozen_into_the_request(fake, tmp_path):
+    from docproof.interior.evidence_server import write_manifest
+    import tomllib
+    work = tmp_path / 'work'
+    work.mkdir()
+    document = work / 'packet.json'
+    document.write_text('{}')
+    registry = write_manifest(work, {'packet': document}, {})
+    assert run(tmp_path) == RESULT
+    argv = fake.calls[-1].argv
+    settings = '\n'.join(argv[i+1] for i, value in enumerate(argv[:-1]) if value == '-c')
+    config = tomllib.loads(settings)['mcp_servers']['docproof_evidence']
+    assert config['required'] is True
+    assert config['args'][:3] == ['-m', 'docproof.interior.evidence_server', '--manifest']
+    assert json.loads(Path(config['args'][3]).read_text('utf-8')) == json.loads(registry.read_text('utf-8'))
+    assert argv[argv.index('--sandbox')+1] == 'read-only'
+    registry.write_text('{"version":1,"files":{}}')
+    with pytest.raises(AstraReviewError, match='different evidence'):
+        run(tmp_path)
 
 
 @pytest.mark.parametrize("auth_text", ["Not logged in", "Logged in using an API key"])
@@ -143,15 +199,19 @@ def test_uses_only_chatgpt_astra_high_and_reuses_completed_output(fake, tmp_path
     for child in fake.calls:
         assert all(key not in child.kwargs["env"] for key in leaked_env if key != "CODEX_HOME")
         assert child.kwargs["env"]["CODEX_HOME"] == str(tmp_path / "auth-cache")
-        assert child.kwargs["start_new_session"]
+        if os.name == "nt":
+            assert child.kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW
+        else:
+            assert child.kwargs["start_new_session"]
     saved = receipt(tmp_path)
     assert saved["status"] == "completed" and saved["submitted"]
     assert saved["usage"] == {"input_tokens": 123, "cached_input_tokens": 45, "output_tokens": 67}
     assert saved["thread_id"] == "thread-fake-01"
     assert "SECRET_TRANSCRIPT_VALUE" not in json.dumps(saved) and "DO_NOT_KEEP" not in json.dumps(saved)
     directory = cr.request_directory(tmp_path / "work", "chapter-1")
-    assert directory.stat().st_mode & 0o777 == 0o700
-    assert all(p.stat().st_mode & 0o777 == 0o600 for p in directory.iterdir())
+    if os.name != "nt":
+        assert directory.stat().st_mode & 0o777 == 0o700
+        assert all(p.stat().st_mode & 0o777 == 0o600 for p in directory.iterdir())
 
 
 @pytest.mark.parametrize("auth_text,returncode", [
@@ -213,7 +273,7 @@ def test_missing_final_output_blocks_without_replay(fake, tmp_path):
 def test_timeout_kills_process_group_and_blocks_replay(fake, tmp_path, monkeypatch):
     fake.timeout = True
     killed = []
-    monkeypatch.setattr(cr.os, "killpg", lambda pid, sig: killed.append((pid, sig)))
+    monkeypatch.setattr(cr.fcntl, "terminate_process_tree", lambda proc, **kw: killed.append((proc.pid, 15)))
     with pytest.raises(AstraReviewError, match="timeout"):
         run(tmp_path)
     assert killed == [(7654321, cr.signal.SIGTERM)]

@@ -269,7 +269,20 @@ def _docx_source(path: Path, source_id: str, work_dir: Path, digest: str) -> tup
                         if container.tag.rsplit("}", 1)[-1] in {"ins", "del", "moveFrom", "moveTo"} and node in list(container.iter()):
                             revision = container.tag.rsplit("}", 1)[-1]
                             break
-                    runs.append({"text": text_value, "revision": revision})
+                    run_row = {"text": text_value, "revision": revision}
+                    properties = node.find('w:rPr', _NS)
+                    if properties is not None:
+                        # Direct formatting carries editorial meaning even
+                        # without tracked changes (for example a struck deletion).
+                        run_row['formatting_xml'] = ET.tostring(properties, encoding='unicode')
+                        formatting = {}
+                        for name in ('strike', 'dstrike', 'b', 'i'):
+                            property_node = properties.find('w:'+name, _NS)
+                            if property_node is not None:
+                                formatting[name] = property_node.get(f'{{{_W}}}val', 'true').lower() not in {'0', 'false', 'off'}
+                        if formatting:
+                            run_row['formatting'] = formatting
+                    runs.append(run_row)
                     if revision:
                         source["tracked_changes"].append({"id": f"{paragraph_id}-revision-{len(source['tracked_changes']):05d}",
                                                           "paragraph_id": paragraph_id, "kind": revision,

@@ -302,7 +302,7 @@ def test_native_upload_failure_resumes_without_reinvoking_workflow(tmp_path, mon
     assert second.failed and not second.uploaded
 
 
-def test_form_driven_native_discovery_does_not_require_corrections_status(tmp_path, monkeypatch):
+def test_form_driven_native_discovery_collects_but_does_not_guess_a_book(tmp_path, monkeypatch):
     folder = "interior"
     files = {
         folder: {**drive_entry("Interior Design", mime="application/vnd.google-apps.folder"), "parents": ["root"]},
@@ -334,6 +334,8 @@ def test_form_driven_native_discovery_does_not_require_corrections_status(tmp_pa
                        hubspot_last_property="lastname", corrections_enabled=True,
                        corrections_engine="native", corrections_native_form_poll=True,
                        corrections_native_start_after="2026-09-09T00:00:00Z",
+                       corrections_native_form_book_property="book_title",
+                       corrections_native_project_book_property="book_title",
                        corrections_native_folder_property="native_folder",
                        corrections_native_form_file_property="files",
                        corrections_native_form_notes_property="notes",
@@ -345,7 +347,10 @@ def test_form_driven_native_discovery_does_not_require_corrections_status(tmp_pa
     report = TickReport()
     native.run_stage("drive", tmp_path, ws, WatchState(tmp_path / "state.json"), None, None,
                      mock=False, opener=opener, hs_token="hubspot", report=report)
-    assert report.corrected and opener.hubspot["hs-Johnson"]["properties"]["native_status"] == "Verified"
+    from app.watch import native_queue
+    assert len(native_queue.status(tmp_path)['events']) == 1
+    assert report.needs_human and not report.corrected and not report.uploaded
+    assert 'native_status' not in opener.hubspot['hs-Johnson']['properties']
 
 
 def test_manual_attachment_request_resumes_from_exact_cached_file(tmp_path, monkeypatch):

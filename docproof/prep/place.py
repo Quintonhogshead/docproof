@@ -36,6 +36,15 @@ class PlaceError(Exception):
 def find_indesign(*, runner=subprocess.run) -> str | None:
     """Where InDesign is, or None. Used to tell the user it is missing — the
     script itself asks for the application by id and never by path."""
+    import sys
+    if sys.platform == "win32":
+        import os
+        for folder in (os.environ.get("ProgramW6432"), os.environ.get("ProgramFiles")):
+            if folder:
+                hits = sorted(Path(folder).glob("Adobe/Adobe InDesign */InDesign.exe"))
+                if hits:
+                    return str(hits[-1])
+        return None
     try:
         found = runner(["mdfind",
                         f'kMDItemCFBundleIdentifier == "{BUNDLE_ID}"'],

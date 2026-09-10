@@ -26,10 +26,10 @@ def _holder_script(root: str, hold_seconds: float = 30) -> str:
     """A second process that takes the lock and sits on it."""
     return textwrap.dedent(f"""
         {ROOT}
-        import time
+        import time, os
         from app.lock import FolderLock
         lock = FolderLock({root!r}).acquire()
-        print("held", flush=True)
+        print("held", os.getpid(), flush=True)
         time.sleep({hold_seconds})
     """)
 
@@ -37,9 +37,13 @@ def _holder_script(root: str, hold_seconds: float = 30) -> str:
 @pytest.fixture
 def holder(tmp_path):
     """A live second DocProof holding tmp_path, killed when the test ends."""
-    proc = subprocess.Popen([sys.executable, "-c", _holder_script(str(tmp_path))],
+    # Windows venv python.exe is a redirector; use the real interpreter so this
+    # handle owns the lock process itself and kill/wait test the correct PID.
+    proc = subprocess.Popen([getattr(sys, '_base_executable', sys.executable), "-c", _holder_script(str(tmp_path))],
                             stdout=subprocess.PIPE, text=True)
-    assert proc.stdout.readline().strip() == "held", "holder never started"
+    ready = proc.stdout.readline().strip().split()
+    assert ready[0] == "held", "holder never started"
+    proc.worker_pid = int(ready[1])
     yield proc
     proc.kill()
     proc.wait(timeout=10)
@@ -59,12 +63,12 @@ def test_a_second_copy_is_refused_and_told_who_has_it(tmp_path, holder):
     with pytest.raises(FolderInUse) as caught:
         FolderLock(tmp_path).acquire()
 
-    assert caught.value.owner["pid"] == holder.pid
+    assert caught.value.owner["pid"] == holder.worker_pid
     message = str(caught.value)
     assert str(tmp_path) in message
     # The message has to be actionable, not just a refusal: which copy to go
     # and close, and what to do if you meant to run two.
-    assert str(holder.pid) in message
+    assert str(holder.worker_pid) in message
     assert "terminal" in message              # not the packaged app
     assert "Quit the other one" in message
     assert "--home" in message

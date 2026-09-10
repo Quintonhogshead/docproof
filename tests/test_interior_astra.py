@@ -118,11 +118,12 @@ def test_verified_review_requires_all_instructions_and_pages(monkeypatch, tmp_pa
     assert result["status"] == "verified"
     assert "astra-interior-baseline.json" in prompts[0]
     assert "astra-interior-final.json" in prompts[0]
-    assert "/tmp/baseline.pdf" in prompts[0]
-    assert "/tmp/final.pdf" in prompts[0]
+    assert str(Path("/tmp/baseline.pdf").resolve()) in prompts[0]
+    assert str(Path("/tmp/final.pdf").resolve()) in prompts[0]
 
 
 def test_large_inputs_are_file_backed_instead_of_duplicated_in_prompt(monkeypatch, tmp_path):
+    monkeypatch.setattr('docproof.interior.astra.sys.platform', 'darwin')
     packet, snapshot = _inputs()
     packet["evidence"][0]["text"] = "correction " * 20000
     snapshot["stories"][0]["text"] = "A teh sentence."

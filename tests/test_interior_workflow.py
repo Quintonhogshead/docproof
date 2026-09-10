@@ -8,6 +8,11 @@ from docproof.interior.verify import VerificationError, check_saved, prepare_edi
 from docproof.interior.workflow import next_name, run_local
 
 
+@pytest.fixture(autouse=True)
+def isolated_worker_lock(monkeypatch, tmp_path):
+    monkeypatch.setattr('docproof.interior.workflow.tempfile.gettempdir', lambda: str(tmp_path))
+
+
 def snapshot(text="Board Songbird now."):
     start = text.find("Songbird")
     return {"stories": [{"id": "1", "text": text, "style_ranges": [
@@ -91,6 +96,7 @@ def test_next_number_not_lexical():
 
 class Native:
     calls = 0
+    verify_calls = 0
     corrupt = False
 
     def inspect(self, source, work):
@@ -103,6 +109,7 @@ class Native:
         return {}
 
     def verify(self, output, work):
+        self.verify_calls += 1
         (work / "final.pdf").write_bytes(b"pdf")
         (work / "final.idml").write_bytes(b"idml")
         return snapshot("Board the Songbird now." + ("X" if self.corrupt else ""))
@@ -116,13 +123,23 @@ class Astra:
         return {"status": "verified", "instruction_ids": ["i1"], "reviewed_pages": [1], "reasons": []}
 
 
-def run(tmp_path, native=None, astra=None):
+def run(tmp_path, native=None, astra=None, page_reviewer=None):
     source = tmp_path / "Hill - Book 4.indd"
     if not source.exists():
         source.write_bytes(b"original")
+    if page_reviewer is None:
+        def page_reviewer(before, after, work):
+            folder = work / "review-pages"
+            folder.mkdir(exist_ok=True)
+            before_image, after_image = folder / "before-1.png", folder / "after-1.png"
+            before_image.write_bytes(b"before-image")
+            after_image.write_bytes(b"after-image")
+            return {"required_review_pages": [1],
+                    "review_images": [{"page": 1, "before": str(before_image),
+                                       "after": str(after_image)}]}
     return run_local(source, [], "Add the", tmp_path / "job", native=native or Native(),
                      astra=astra or Astra(), packet_builder=lambda *a: {"sources": [{"id": "s1"}]},
-                     page_reviewer=lambda *a: {"required_review_pages": [1], "review_images": []})
+                     page_reviewer=page_reviewer)
 
 
 def test_resume_never_reapplies_and_rejects_changed_artifact(tmp_path):
@@ -136,6 +153,87 @@ def test_resume_never_reapplies_and_rejects_changed_artifact(tmp_path):
     assert n.calls == 1
 
 
+def test_review_checkpoint_reuses_native_verification_after_model_failure(tmp_path):
+    class FailOnce(Astra):
+        calls = 0
+
+        def review(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("temporary reviewer failure")
+            return super().review(*args, **kwargs)
+
+    n, reviewer = Native(), FailOnce()
+    first = run(tmp_path, native=n, astra=reviewer)
+    assert first["status"] == "technical_block"
+    receipt = json.loads((tmp_path / "job" / "workflow.json").read_text())
+    assert receipt["stage"] == "reviewing" and receipt.get("review_checkpoint")
+    second = run(tmp_path, native=n, astra=reviewer)
+    assert second["status"] == "verified"
+    assert n.verify_calls == 1
+
+
+def test_changed_review_checkpoint_artifact_blocks_without_native_retry(tmp_path):
+    class FailOnce(Astra):
+        def review(self, *args, **kwargs):
+            raise RuntimeError("temporary reviewer failure")
+
+    n = Native()
+    assert run(tmp_path, native=n, astra=FailOnce())["status"] == "technical_block"
+    (tmp_path / "job" / "final.pdf").write_bytes(b"changed")
+    result = run(tmp_path, native=n, astra=Astra())
+    assert result["status"] == "technical_block"
+    assert "checkpoint" in result["reasons"][0].lower()
+    assert n.verify_calls == 1
+
+
+def test_removed_checkpoint_image_entry_blocks(tmp_path):
+    class FailOnce(Astra):
+        def review(self, *args, **kwargs):
+            raise RuntimeError("temporary reviewer failure")
+
+    n = Native()
+    assert run(tmp_path, native=n, astra=FailOnce())["status"] == "technical_block"
+    receipt_path = tmp_path / "job" / "workflow.json"
+    receipt = json.loads(receipt_path.read_text())
+    receipt["review_checkpoint"]["review_images"] = []
+    receipt_path.write_text(json.dumps(receipt))
+    result = run(tmp_path, native=n, astra=Astra())
+    assert result["status"] == "technical_block"
+    assert "image coverage" in result["reasons"][0].lower()
+    assert n.verify_calls == 1
+
+
+def test_changed_required_review_png_blocks(tmp_path):
+    class FailOnce(Astra):
+        def review(self, *args, **kwargs):
+            raise RuntimeError("temporary reviewer failure")
+
+    n = Native()
+    assert run(tmp_path, native=n, astra=FailOnce())["status"] == "technical_block"
+    (tmp_path / "job" / "review-pages" / "after-1.png").write_bytes(b"changed")
+    result = run(tmp_path, native=n, astra=Astra())
+    assert result["status"] == "technical_block"
+    assert "page 1 after" in result["reasons"][0].lower()
+    assert n.verify_calls == 1
+
+
+def test_legacy_reviewing_receipt_falls_back_to_native_verification(tmp_path):
+    class FailReview(Astra):
+        def review(self, *args, **kwargs):
+            raise RuntimeError("temporary reviewer failure")
+
+    n = Native()
+    assert run(tmp_path, native=n, astra=FailReview())["status"] == "technical_block"
+    receipt_path = tmp_path / "job" / "workflow.json"
+    receipt = json.loads(receipt_path.read_text())
+    receipt.pop("review_checkpoint")
+    receipt_path.write_text(json.dumps(receipt))
+    result = run(tmp_path, native=n, astra=Astra())
+    assert result["status"] == "verified"
+    assert n.verify_calls == 2
+
+
 def test_unintended_text_is_not_published_as_partial(tmp_path):
     n = Native()
     n.corrupt = True
@@ -143,6 +241,21 @@ def test_unintended_text_is_not_published_as_partial(tmp_path):
     assert result["status"] == "technical_block"
     assert result["needs_designer"] is None
     assert not result["output_indd"]
+
+
+def test_plan_checkpoint_cannot_apply_edits_and_reads_utf8_snapshot(tmp_path):
+    source = tmp_path / 'Hill - Book 4.indd'
+    source.write_bytes(b'original')
+    work = tmp_path / 'job'
+    work.mkdir()
+    base = snapshot()
+    base['note'] = 'Typographic quotes: “example”'
+    (work / 'baseline.json').write_text(json.dumps(base, ensure_ascii=False), encoding='utf-8')
+    native = Native()
+    result = run_local(source, [], 'Add the', work, native=native, astra=Astra(),
+                       packet_builder=lambda *a: {'sources': [{'id': 's1'}]}, plan_only=True)
+    assert result['status'] == 'planned', result
+    assert native.calls == 0 and not (work / 'Hill - Book 5.indd').exists()
 
 
 def test_incomplete_visual_review_is_operational_block(tmp_path):
