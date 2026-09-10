@@ -8,8 +8,9 @@ description: Turn a profile into a priced, gated execution plan — lanes, model
 Read `references/config.md` and `references/lanes.md` once before pricing.
 Look up individual knob rows only as needed; all paths are workspace-relative.
 
-Goal: a plan the human can approve in one read: what runs, what it costs, what
-it should find, and when you'll stop.
+Goal: a complete plan the automatic gate can approve within the configured
+scope and budget: what runs, what it costs, and how coverage will be verified.
+No human will check it or answer a question before the final handoff.
 
 ## Reference rates (update from `galley calibrate` when a calibration exists)
 
@@ -77,8 +78,11 @@ the skeleton's shape.
 5. **Stop rules.** Marginal-cost ceiling per wave (default: stop when a wave
    costs more than ~$2 per finding added); max waves per tier; comment budget.
 6. **The gate.** Present: plan table, total, bespoke sweeps with counts and
-   samples, intent zones you will protect, anything unusual. WAIT for approval.
-   Scope changes after approval re-gate.
+   samples, intent zones you will protect, anything unusual. Finish this phase;
+   the driver checks and records approval automatically. Correct a rejected draft
+   inside the existing scope, coverage, routes, and budget. Do not wait for a
+   human, request extra budget, or treat silence as approval. After approval,
+   preserve the frozen plan/config and complete its authorized work.
 
 ## Fleet shape and the reread — what to plan, what not to
 

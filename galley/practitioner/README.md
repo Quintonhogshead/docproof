@@ -278,30 +278,43 @@ and `reread` are not run; `--copyedit` re-opens them for an experiment.
 
 | Flag | What it does |
 |---|---|
-| `--approve auto` | approve the plan when its `TOTAL` is inside `--budget` (default **$10**, the API ceiling) and no line puts a copy-edit lane in scope; otherwise stop |
+| `--approve auto` | approve the plan when its `TOTAL` is inside `--budget` (default **$10**, the API ceiling) and no line puts a copy-edit lane in scope; correct a refused draft once within remaining profile limits before reporting a concrete failure |
 | `--approve email` | send the plan through `galley ask` and poll `QUESTIONS.md` for `APPROVED`/`DECLINED` below the marker, until `--reply-timeout` (6h) |
 | `--approve manual` | today's behaviour: stop at the gate for a person |
 | `--from PHASE` / `--phases …` | restart from, or run only, these phases (`state.json` is the ledger) |
 | `--handoff DIR` | where the DocWatch hand-off is written (default `<workspace>/handoff/`) |
 | `--drive-folder-id ID` | also upload the hand-off there, using the watcher's own Google sign-in (`docproof-watch auth`) |
 | `--no-state-gate` | don't require each phase to have advanced `state.json` |
-| `--no-question-gate` | don't stop when a phase appends an escalation to `QUESTIONS.md` |
-| `--max-turns N` / `--phase-max-turns PHASE=N` | turn cap per session (default: settle 400, verify 250, ladder 100, 60-160 elsewhere; those three scale up with the book above 50k words, to 4x) |
-| `--timeout HOURS` / `--phase-timeout PHASE=HOURS` | wall-clock cap per session (default 2h; ladder 3h, verify/settle 4h; the same three scale with the book). An override is taken exactly, never scaled |
+| `--no-question-gate` | skip automatic triage of local notes; explicit interactive mode also disables its question stop |
+| `--max-turns N` / `--phase-max-turns PHASE=N` | turn cap per phase, shared with automatic recovery (default: settle 400, verify 250, ladder 100, 60-160 elsewhere; those three scale up with the book above 50k words, to 4x) |
+| `--timeout HOURS` / `--phase-timeout PHASE=HOURS` | wall-clock cap per phase, shared with automatic recovery (default 2h; ladder 3h, verify/settle 4h; the same three scale with the book). An override is taken exactly, never scaled |
 | `--settle-rounds N` / `--settle-quiet-floor N` / `--settle-quiet-share S` | the settle policy (default 3 / 4 / 0) |
 | `--model M` / `--phase-model PHASE=M` | which brain drives the sessions. Default is a **split** (owner, 2026-09-06): `claude-fable-5-1` on the judgment phases (approve, ladder, audit, settle, and the copy-edit flights/reread) and `claude-opus-5` on the scripted ones (profile, sweeps, verify, certify, deliver). `--model` forces one brain everywhere; `--phase-model` overrides one phase |
 | `--effort L` / `--phase-effort PHASE=L` | the session effort (`low`…`max`). Default: `high` on the Fable phases; the Opus phases run at Claude Code's own default. `--dry-run` prints the resolved brain per phase |
 
-**Stopping.** A phase that exits nonzero stops the driver, writes
-`runs/outcome.json` as `needs_human` naming the phase and its last log lines,
-and leaves the workspace alone — nothing is retried or worked around. The same
-happens when the gate refuses, when an emailed gate gets no reply, when a
-phase hits its turn cap or wall-clock timeout, when the settle sweep is still
-noisy at its round ceiling, when a phase exits 0 without advancing the state
-machine, and when a phase appends an escalation to `QUESTIONS.md` (`galley ask` exits 0, so the file is what says a
-session asked something nobody is there to answer). Exit codes: **0** finished,
-**7** stopped needing a human (read `runs/outcome.json`), **2** a setup error.
-Per-phase logs and the driver's own ledger are in `runs/driver/`.
+**Unattended recovery.** No human checks or answers anything before the final
+handoff. The default automatic mode records `galley ask` locally without sending
+mail or waiting for a reply. New notes receive one autonomous continuation when
+turn/time budget remains; notes alone never hold a successfully completed phase.
+Author-knowledge questions belong in final manuscript comments, and mechanical
+judgments use the book and house rules. Notes and recovery evidence are preserved
+in the final decision log.
+
+A failed operation or missing required state receives at most one continuation,
+using the original phase's remaining turns and time. Missing usage never grants
+a fresh allowance. Recovery resumes checkpoints rather than repeating completed
+paid lanes; it cannot change frozen approval, expand scope/spend, reduce coverage,
+or bypass verification. A rejected unapproved draft can be corrected once within
+the remaining profile budget, then the same deterministic gate decides again.
+
+If required work still cannot complete, the enrolled driver records an operational
+`blocked` result and preserves checkpoints without overriding Astra's editorial
+verdict. The agent holds an exhausted operation against repeated spending on the
+same release and moves on to other books; a later deployment enables resume.
+Authentication and infrastructure recovery remain service-level operations.
+Explicit `--approve email` / `manual` modes retain their requested interactive
+behavior. Exit codes: **0** finished, **8** operationally blocked, **7** final
+human-review/legacy outcome, **2** setup error. Evidence lives in `runs/driver/`.
 
 **The DocWatch hand-off.** After `deliver`, six files land in the hand-off
 directory under the house series. That series is `Book Original` (what the

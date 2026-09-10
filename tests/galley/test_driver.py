@@ -562,10 +562,8 @@ def test_a_missing_deliverable_is_a_handoff_failure(book, tmp_path):
     assert "hand-off failed" in result.reason
 
 
-def test_a_phase_that_escalates_a_question_stops_the_run(book, tmp_path):
-    """`galley ask` exits 0, so an escalation must be read off QUESTIONS.md —
-    otherwise a session that asked a blocking question and carried on looks
-    exactly like one that had nothing to ask."""
+def test_a_completed_phase_with_a_local_question_does_not_stop_the_run(book, tmp_path):
+    """A question alone cannot override successful phase/state evidence."""
     ws = gd.seed_workspace(book, "ford-book-1", workspace_root=tmp_path / "ws")
     _plan(ws)
     _deliverable(ws)
@@ -580,11 +578,11 @@ def test_a_phase_that_escalates_a_question_stops_the_run(book, tmp_path):
 
     spawn = Asking(ws)
     result = _driver(book, tmp_path, spawn=spawn).run()
-    assert result.outcome == "needs_human"
-    assert result.stopped_at == "sweeps"
-    assert "nobody to answer it" in result.reason
-    assert "blast radius" in result.reason
-    assert spawn.phases == ["profile", "approve", "sweeps"]
+    assert result.outcome == "done"
+    assert result.stopped_at is None
+    assert not result.asked and not result.recovery_exhausted
+    assert "blast radius" in (ws / "QUESTIONS.md").read_text()
+    assert spawn.phases == LEGACY_PHASES
 
 
 def test_the_email_gate_question_is_not_read_as_a_phase_escalation(book,

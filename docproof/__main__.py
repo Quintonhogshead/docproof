@@ -2155,27 +2155,33 @@ def _galley_outcome_impl(args) -> int:
 
 
 def _galley_ask(args) -> int:
-    """Push one escalation question over the shared DocWatch Gmail pipe.
-
-    Loud by design: a question that cannot send exits 2 with the fix, so the
-    practitioner KNOWS to fall back — log it in QUESTIONS.md and stop the
-    blocked thread — instead of waiting on a reply that can never come."""
+    """Keep unattended questions local; explicit interactive runs can email."""
     import sys
-
-    from app.watch.notify import send_question
-    from app.watch.settings import default_watch_home
+    from galley.unattended import is_unattended, record_question
 
     if args.body:
         body = args.body
     elif args.body_file:
         body = Path(args.body_file).read_text("utf-8")
     else:
-        body = sys.stdin.read()
+        # A forgotten --body must not wait on stdin in an unattended session.
+        body = "" if is_unattended() else sys.stdin.read()
     if not body.strip():
         print("galley ask: an empty question helps nobody — say what you were "
               "doing, the question, your recommended answer, and what is "
               "blocked.", file=sys.stderr)
         return 2
+    if is_unattended():
+        path = record_question(args.subject, body, args.book)
+        print(f"Recorded locally in {path}; no message was sent and no reply "
+              "is expected. Continue within the approved scope. Resolve "
+              "mechanical decisions from the evidence; preserve uncertain "
+              "wording and put justified author-knowledge questions in the "
+              "final manuscript. Recover tool failures using supported paths "
+              "without bypassing approval or verification.")
+        return 0
+    from app.watch.notify import send_question
+    from app.watch.settings import default_watch_home
     try:
         to = send_question(default_watch_home(), args.subject, body,
                            book=args.book)

@@ -778,7 +778,7 @@ class Agent:
         outcome = getattr(result, "outcome", "needs_human")
         reason = getattr(result, "reason", "")
         report.outcome, report.reason = outcome, reason
-        if outcome == "blocked" and getattr(result, "asked", False):
+        if outcome == "blocked" and getattr(result, "recovery_exhausted", False):
             self._hold_for_new_code(book, ledger, report, slug, folder, reason)
             return
         if outcome == "blocked":
@@ -849,12 +849,11 @@ class Agent:
     def _hold_for_new_code(self, book: AwaitingBook, ledger: Ledger,
                            report: RunReport, slug: str, folder: str,
                            reason: str) -> None:
-        """A phase stopped on a question nobody will answer. The claim stays
-        (the run resumes from its state), but not on the next poll: Bradshaw
-        Book 1 (2026-09-10) blocked at settle and was resumed five minutes
-        later, re-running verify and settle toward the same question. Held
-        until a different DocProof version is running — the only thing that
-        can change the answer."""
+        """Preserve a concrete failure after bounded automatic recovery.
+
+        Local questions never reach this path. Do not spend on the same
+        exhausted operation at every poll; a new release can resume it.
+        """
         from docproof import __version__
         report.outcome, report.reason = "blocked", reason
         ledger.record(book.file_id, CLAIMED, name=book.name, slug=slug,
@@ -863,12 +862,13 @@ class Agent:
         self._beat(state="idle", phase=None, last_outcome="blocked",
                    last_reason=reason[:600], last_book=book.name,
                    delivery="pending")
-        self._alarm(f"{book.name} is held until the next deploy",
-                    f"Galley stopped {book.name} on a question no one will "
-                    f"answer, so re-running it on this version "
-                    f"({__version__}) would stop the same way. It stays "
-                    f"claimed and resumes from its last state on the first "
-                    f"poll after a new version is deployed.\n\n{reason[:1500]}")
+        self._alarm(f"{book.name}: automatic recovery could not finish",
+                    f"Galley could not complete a required operation on "
+                    f"version {__version__} within its recovery limits. "
+                    f"The evidence and checkpoints are preserved. No answer "
+                    f"to a question is expected. The book remains claimed "
+                    f"and becomes eligible to resume after a new deployment."
+                    f"\n\n{reason[:1500]}")
         self.log(f"{book.name}: held for new code (v{__version__}).")
 
     def held_for_code(self, file_id: str, ledger: Ledger) -> bool:

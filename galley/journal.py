@@ -148,6 +148,10 @@ class JournalSources:
             certificate=certificate,
             outcome=_load(run / "outcome.json")
             or (_load(ws / "deliverable" / "outcome.json") if ws else None),
+            notes=[text for text in (
+                _text(ws / "QUESTIONS.md"),
+                _text(ws / "runs" / "driver" / "deferred-questions.jsonl"),
+            ) if text] if ws else [],
         )
 
 
@@ -231,6 +235,15 @@ def render_journal(run_dir: str | Path, *, workspace: str | Path | None = None,
 
     _section_summary(doc, src)
     _section_driver(doc, src)
+    if src.notes:
+        doc.heading(2, "Local notes retained for final review")
+        doc.para("These are recorded observations, including historical failures; "
+                 "they are not pending approval requests or proof of completion. "
+                 "The phase results and final verification record the outcome.")
+        for note in src.notes:
+            for line in note.splitlines():
+                doc.line("> " + line)
+            doc.line("")
     for phase in PHASE_ORDER:
         if phase in _SCOPED_OUT and not _has_copyedit_evidence(src, phase):
             continue
@@ -310,12 +323,16 @@ def _section_driver(doc: _Doc, src: JournalSources) -> None:
         limit = entry.get("limit") or ""
         if limit:
             doc.bullet(f"**{phase}** — STOPPED at its {limit.replace('_', ' ')} "
-                       f"cap (exit {rc}); the run ended here.")
+                       f"cap (exit {rc}); this session ended here.")
         elif rc:
-            doc.bullet(f"**{phase}** — FAILED, exit {rc}; the run ended here.")
+            doc.bullet(f"**{phase}** — FAILED, exit {rc}; this session ended here.")
         else:
             doc.bullet(f"**{phase}** — ran and finished.")
     doc.end_list()
+    for entry in src.driver.get("recovery") or []:
+        doc.para(f"**Automatic recovery ({_clip(entry.get('phase'), 40)}):** "
+                 f"{_clip(entry.get('reason'), 1200)}. "
+                 f"Evidence: `{_clip(entry.get('log'), 300)}`.")
     if gate:
         verdict = "approved" if gate.get("approved") else "refused"
         doc.para(f"**Plan gate ({gate.get('policy', '?')}): {verdict}** — "

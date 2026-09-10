@@ -508,9 +508,8 @@ def _galley_parser(sub) -> None:
                     help="also print the machine-readable result to stdout")
 
     gq = gsub.add_parser(
-        "ask", help="email the press a question only a person can answer — "
-                    "Galley's escalation push channel, over the shared DocWatch "
-                    "notify address; loud when it cannot send")
+        "ask", help="record a local note during unattended work (no reply "
+                    "expected); email the press only outside unattended sessions")
     gq.add_argument("subject", help="one line: what the question is about")
     gq.add_argument("--body", help="the question itself (or use --file/stdin): "
                                    "what you were doing, the question, your "
@@ -1037,8 +1036,8 @@ def _galley_parser(sub) -> None:
         "drive",
         help="the UNATTENDED driver: seed the per-book workspace and run the "
              "practitioner phases in order, each as its own headless session, "
-             "decide the plan gate under --approve, stop on the first failure "
-             "with runs/outcome.json = needs_human, and hand the deliverable "
+             "decide the plan gate under --approve, recover within the phase "
+             "limits without waiting for human replies, and hand the deliverable "
              "off to DocWatch. Mechanical proofreading only by default.")
     gdr.add_argument("--book", required=True,
                      help="the manuscript to proofread (.docx)")
@@ -1149,9 +1148,8 @@ def _galley_parser(sub) -> None:
                      help="settle's percentage quiet rule (default 0 — off, "
                           "so the absolute count decides alone)")
     gdr.add_argument("--no-question-gate", action="store_true",
-                     help="do not stop when a phase appends an escalation to "
-                          "QUESTIONS.md (by default an unanswerable question "
-                          "stops the run as needs_human)")
+                     help="skip autonomous triage of local notes; in explicit "
+                          "interactive mode, also disable the question stop")
     gdr.add_argument("--print-prompt", metavar="PHASE",
                      help="print that phase's prompt and exit — what the thin "
                           "shell wrapper uses; nothing is spawned")

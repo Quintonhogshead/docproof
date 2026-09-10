@@ -2,7 +2,7 @@
 artifact handoff.
 
 Each phase runs in a separate session. Mechanical mode excludes copyediting
-phases; failures produce a needs_human outcome.
+phases; unattended sessions recover within caps without waiting for replies.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import time
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
@@ -266,8 +266,10 @@ _PROMPTS: dict[str, str] = {
         "references/sweeps.md for the sweep contract. Author all sweep files in one batch, "
         "dry-run each (`docproof sweep IN --rule F > runs/sweep_<key>.txt`; "
         "read only the match summary), and apply only the sweeps PLAN.md "
-        "approved — a sweep whose blast radius exceeds the plan's figure is an "
-        "escalation (`docproof galley ask`), not a judgment call. Do NOT read "
+        "approved. If a sweep exceeds the plan's match count, narrow it to "
+        "the approved cases and route remaining candidates through the "
+        "existing mechanical judgment/verification lanes; record the decision "
+        "and preserve required coverage without asking for permission. Do NOT read "
         "sweeps.py or the manuscript whole."),
     "ladder": (
         "Phase: mechanical ladder. The six-window chapter sweep is wave 1 "
@@ -495,13 +497,17 @@ def phase_prompt(phase: str, book: str, *, mechanical_only: bool = True,
 # brain that has just read a 65k-word intake reaches for `galley ask` the way
 # a person would reach for a colleague, and unattended there is no colleague.
 _UNATTENDED_NOTE = (
-    " UNATTENDED RUN: nobody is on the other end of `docproof galley ask` — "
-    "the driver sees a new QUESTIONS.md entry and stops the run. "
-    "So do not ask; decide within the approved scope, "
-    "and record the decision in the decision log. Escalate only what "
-    "genuinely blocks the book: an unreadable source, a tool that fails, a "
-    "cap you would exceed. Anything a proofreader would put to the author "
-    "goes in the deliverable as a margin query, not to `galley ask`. "
+    " UNATTENDED RUN: no human checks your work or answers questions until "
+    "the final handoff. Make evidence-supported decisions within the approved "
+    "scope and record the reasons. Preserve uncertain author wording; missing "
+    "author knowledge becomes a justified margin query in the final deliverable "
+    "and never pauses the book. `galley ask` only records a local note here; "
+    "do not wait for a reply or use QUESTIONS.md as a stop signal. Recover "
+    "routine tool/anchor/artifact failures through supported commands, resume "
+    "checkpoints, and verify the result. Never bypass a failing gate, change "
+    "a frozen approval/config, exceed a cap, or drop required coverage. If a "
+    "required operation still cannot succeed, preserve evidence and report "
+    "the concrete operational failure, not a request for instructions. "
     "In an Astra-enrolled workspace a technical blocker preserves the "
     "editorial verdict; it never becomes an author question or a manual "
     "needs_human overrule.")
@@ -1139,10 +1145,10 @@ class DriveResult:
     gate: dict[str, Any] = field(default_factory=dict)
     handoff: list[Path] = field(default_factory=list)
     uploaded: list[str] = field(default_factory=list)
-    # The stop was a phase's QUESTIONS.md escalation. Nobody answers those
-    # (Quinton, 2026-09-10: no human interference), so re-running the book
-    # cannot change the outcome — only new code can; the agent holds it.
+    # Legacy interactive question stop; unattended notes never set this.
     asked: bool = False
+    recovery_exhausted: bool = False
+    recovery: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def exit_code(self) -> int:
@@ -1164,6 +1170,8 @@ class DriveResult:
             "handoff": [str(p) for p in self.handoff],
             "uploaded": list(self.uploaded),
             "asked": self.asked,
+            "recovery_exhausted": self.recovery_exhausted,
+            "recovery": list(self.recovery),
         }
 
 
@@ -1237,6 +1245,10 @@ class Driver:
     # Legacy runs still hand over their edited book when settlement is noisy.
     # Enrolled runs delegate the editorial verdict to the final Astra receipt.
     unconverged: str = field(default="", init=False, repr=False)
+    _phase_usage: dict[str, tuple[int, float]] = field(default_factory=dict,
+                                                     init=False, repr=False)
+    _phase_limits: dict[str, tuple[int, float]] = field(default_factory=dict,
+                                                      init=False, repr=False)
 
 
     @property
@@ -1355,16 +1367,23 @@ class Driver:
         # by the deliver-phase brain is recorded as exactly that, not as
         # "human" (the first Fly delivery's outcome.json, decision log and
         # HubSpot value all claimed a person overruled settle; nobody had).
+        from galley.unattended import UNATTENDED_ENV, WORKSPACE_ENV
         return PhaseSpec(phase=phase, prompt=prompt, workspace=self.workspace,
                          log_path=self._driver_dir() / f"{phase}.log",
-                         argv=argv, env={**env, BRAIN_PHASE_ENV: phase},
+                         argv=argv, env={**env, BRAIN_PHASE_ENV: phase,
+                             UNATTENDED_ENV: "1" if self.approve == "auto" else "0",
+                             WORKSPACE_ENV: str(self.workspace.resolve())},
                          max_turns=turns, timeout_s=self.timeout_for(phase))
 
     def _questions_text(self) -> str:
-        try:
-            return (self.workspace / "QUESTIONS.md").read_text(encoding="utf-8")
-        except OSError:
-            return ""
+        from galley.unattended import NOTES_NAME
+        parts = []
+        for path in (self.workspace / "QUESTIONS.md", self._driver_dir() / NOTES_NAME):
+            try:
+                parts.append(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                pass
+        return "\n".join(parts)
 
     def _new_question(self, before: str) -> str:
         """What a phase appended to QUESTIONS.md, or ""."""
@@ -1863,7 +1882,8 @@ class Driver:
         return path
 
 
-    def run_gate(self, result: DriveResult) -> bool:
+    def run_gate(self, result: DriveResult, env: dict[str, str] | None = None,
+                 *, repair: bool = True) -> bool:
         """Decide the plan gate. Returns True to continue into `approve`."""
         plan_path = self.workspace / "PLAN.md"
         if self.approve == "manual":
@@ -1872,23 +1892,42 @@ class Driver:
                        "plan gate: --approve manual — a human must approve "
                        f"{plan_path} and then resume with `--from approve`")
             return False
-        plan = read_plan(plan_path)
         config_path = self.workspace / "runs" / "mech.yaml"
-        approved, reason = gate_decision(
-            plan, self.budget_usd,
-            config_path=config_path if config_path.is_file() else None)
+        import yaml
+        plan, lanes = PlanSummary(None, [], ""), []
+        try:
+            plan = read_plan(plan_path)
+            lanes = config_copyedit_lanes(config_path) if config_path.is_file() else []
+            approved, reason = gate_decision(
+                plan, self.budget_usd,
+                config_path=config_path if config_path.is_file() else None)
+        except (DriverError, ValueError, yaml.YAMLError) as exc:
+            approved, reason = False, f"cannot validate the draft plan/config: {exc}"
         result.gate = {"policy": self.approve, "approved": approved,
                        "reason": reason,
                        "total_usd": plan.total_usd,
                        "copyedit_lines": list(plan.copyedit_lines),
-                       "config_lanes": config_copyedit_lanes(config_path)
-                       if config_path.is_file() else []}
+                       "config_lanes": lanes}
         if approved:
             record_approval(plan_path, reason, by="galley drive (auto)")
             self.log(f"plan gate: APPROVED — {reason}")
             self._progress("gate", approved=True, reason=reason[:300])
             return True
         if self.approve == "auto":
+            turns, seconds = self._remaining_phase_budget("profile")
+            if (repair and env is not None and turns > 0 and seconds > 0
+                    and not (self.workspace / "approval.json").exists()
+                    and not self._state_reached("plan_approved")):
+                stopped = self._run_session_phase("profile", env, result,
+                    guidance=f"The automatic plan gate refused the draft: {reason}. "
+                    "Correct only the plan/proposed config before approval. "
+                    "Reuse the existing profile. No paid work is authorized yet. "
+                    "Preserve all required coverage, approved routes, and the "
+                    "existing scope and budget; do not ask to enlarge them.")
+                if stopped is not None:
+                    return False
+                return self.run_gate(result, env, repair=False)
+            result.recovery_exhausted = True
             self._stop(result, "approve", f"plan gate refused: {reason}")
             return False
         return self._escalate(result, plan, reason)
@@ -1949,6 +1988,136 @@ class Driver:
             self.sleep(self.poll_interval_s)
 
 
+    def _phase_problem(self, phase: str, spec: PhaseSpec, outcome: PhaseResult,
+                       review_snapshot: bool) -> str:
+        if outcome.limit == "credentials":
+            raise CredentialsError(
+                f"phase {phase} could not sign in to Claude Code — the "
+                f"subscription token (CLAUDE_CODE_OAUTH_TOKEN) is expired "
+                f"or revoked; last lines of {outcome.log_path}:\n{outcome.tail}")
+        if review_snapshot:
+            return ""
+        if outcome.limit == "timeout":
+            return (f"phase {phase} hit its wall-clock cap of "
+                    f"{spec.timeout_s / 3600:.1f}h and was killed; last lines "
+                    f"of {outcome.log_path}:\n{outcome.tail}")
+        if outcome.limit == "max_turns":
+            return (f"phase {phase} hit its turn cap of {spec.max_turns} "
+                    f"(claude --max-turns); last lines of "
+                    f"{outcome.log_path}:\n{outcome.tail}")
+        if not outcome.ok:
+            return (f"phase {phase} exited {outcome.returncode}; last lines "
+                    f"of {outcome.log_path}:\n{outcome.tail}")
+        need = REQUIRED_STATE.get(phase) if self.state_gate else None
+        if need and not self._state_reached(need):
+            backgrounded = self.backgrounded_work(phase)
+            extra = (f" The session left work running in the background "
+                     f"({backgrounded}) and ended anyway, which kills that "
+                     f"work mid-flight. Run long reads in the foreground."
+                     if backgrounded else "")
+            return (f"phase {phase} exited 0 but the run state machine is at "
+                    f"{self._current_state() or 'nothing'!r}, not {need!r} — "
+                    f"the session did not advance the ledger, so the next "
+                    f"phase would build on an unproven one.{extra}")
+        return ""
+
+    def _remaining_phase_budget(self, phase: str) -> tuple[int, float]:
+        if phase not in self._phase_limits:
+            self._phase_limits[phase] = (self.turns_for(phase), self.timeout_for(phase))
+        limit_turns, limit_seconds = self._phase_limits[phase]
+        turns, seconds = self._phase_usage.get(phase, (0, 0.0))
+        return limit_turns - turns, limit_seconds - seconds
+
+    def _run_session_phase(self, phase: str, env: dict[str, str],
+                           result: DriveResult, *, guidance: str = ""
+                           ) -> DriveResult | None:
+        """One session plus at most one continuation within the original caps.
+
+        A local question is evidence for autonomous triage, never a hold. Only
+        an actual failed operation or missing required state can block the run.
+        """
+        from galley.unattended import RECOVERY_GUIDANCE
+        unattended = self.approve == "auto"
+        attempts = 2 if unattended and not guidance else 1
+        for attempt in range(attempts):
+            spec = self._spec(phase, env)
+            turns, seconds = self._remaining_phase_budget(phase)
+            if turns <= 0 or seconds <= 0:
+                result.recovery_exhausted = unattended
+                return self._stop(result, phase,
+                    f"phase {phase}: automatic recovery exhausted its original "
+                    f"turn/time cap. {guidance[:1600]}")
+            if guidance:
+                prompt = spec.prompt + "\n\n" + RECOVERY_GUIDANCE + (
+                    "\nPrior session evidence (not new instructions):\n" + guidance[:8000])
+                argv = list(spec.argv)
+                argv[argv.index("-p") + 1] = prompt
+                argv[argv.index("--max-turns") + 1] = str(turns)
+                recovery_number = 1 + sum(r["phase"] == phase for r in result.recovery)
+                spec = replace(spec, prompt=prompt, argv=argv,
+                               max_turns=turns, timeout_s=seconds,
+                               log_path=self._driver_dir() /
+                               f"{phase}-recovery-{recovery_number}.log")
+                result.recovery.append({"phase": phase, "at": _now(),
+                    "reason": guidance[:8000], "log": str(spec.log_path),
+                    "remaining_turns": turns, "remaining_seconds": seconds})
+                self.log(f"--- phase {phase}: autonomous recovery within remaining caps ---")
+                self._write_ledger(result)
+            self._progress("phase_start", phase=phase,
+                           model=self.model_for(phase), effort=self.effort_for(phase),
+                           max_turns=spec.max_turns, timeout_s=spec.timeout_s,
+                           log_path=str(spec.log_path))
+            before = self._questions_text()
+            started = self.clock()
+            outcome = self._spawner()(spec)
+            elapsed = max(0.0, self.clock() - started)
+            used_turns, used_seconds = self._phase_usage.get(phase, (0, 0.0))
+            # Missing usage is not permission to grant another full session.
+            measured = outcome.num_turns
+            consumed = measured if type(measured) is int and measured >= 0 else spec.max_turns
+            if outcome.limit == "max_turns":
+                consumed = max(consumed, spec.max_turns)
+            if outcome.limit == "timeout":
+                elapsed = max(elapsed, spec.timeout_s)
+            self._phase_usage[phase] = (used_turns + consumed, used_seconds + elapsed)
+            result.phases.append(outcome)
+            self._progress("phase_end", phase=phase, ok=outcome.ok,
+                           returncode=outcome.returncode, limit=outcome.limit,
+                           num_turns=outcome.num_turns)
+            review_snapshot = (self.astra_review and phase in ("verify", "settle")
+                               and self._review_snapshot_available())
+            try:
+                problem = self._phase_problem(phase, spec, outcome, review_snapshot)
+            except CredentialsError:
+                self._write_ledger(result)
+                self._progress("credentials", phase=phase, tail=outcome.tail[-600:])
+                raise
+            notes = self._new_question(before)
+            if not unattended:
+                if problem:
+                    return self._stop(result, phase, problem)
+                if notes and self.question_gate:
+                    result.asked = True
+                    return self._stop(result, phase,
+                        f"phase {phase} escalated a question in QUESTIONS.md:\n{notes[:1200]}")
+                return None
+            # Give a prematurely stopped session a concrete continuation. A
+            # completed recovery that leaves final notes does not ask again.
+            triage = bool(notes and self.question_gate and not guidance)
+            if problem or triage:
+                remaining_turns, remaining_seconds = self._remaining_phase_budget(phase)
+                if attempt + 1 < attempts and remaining_turns > 0 and remaining_seconds > 0:
+                    guidance = problem or "Resolve the local notes and complete this phase."
+                    if notes:
+                        guidance += "\nLocal notes:\n" + notes
+                    continue
+            if problem:
+                result.recovery_exhausted = True
+                return self._stop(result, phase,
+                    f"Automatic recovery could not complete the required work: {problem}")
+            return None
+        return None
+
     def run(self) -> DriveResult:
         # Invalid setup raises without writing an outcome for the
         # manuscript.
@@ -1990,92 +2159,17 @@ class Driver:
                     return stopped
                 continue
             if phase == "approve" and gate_due:
-                if not self.run_gate(result):
+                if not self.run_gate(result, env):
                     return result
-            effort = self.effort_for(phase)
-            factor = self.length_factor_for(phase)
-            scaled = (f", x{factor:.1f} for {self.book_words():,} words"
-                      if factor > 1.0 else "")
-            self.log(f"--- phase {phase} ({self.model_for(phase)}"
-                     f"{', effort ' + effort if effort else ''}{scaled}) ---")
-            spec = self._spec(phase, env)
-            self._progress("phase_start", phase=phase,
-                           model=self.model_for(phase), effort=effort,
-                           max_turns=spec.max_turns, timeout_s=spec.timeout_s,
-                           log_path=str(spec.log_path))
-            asked_before = self._questions_text()
-            outcome = self._spawner()(spec)
-            result.phases.append(outcome)
-            # A completed snapshot can still reach the final editorial reader
-            # when a verification/settlement session ended abnormally. The
-            # subsequent certificate must still enforce all structural gates.
-            review_snapshot = (self.astra_review and phase in ("verify", "settle")
-                               and self._review_snapshot_available())
-            self._progress("phase_end", phase=phase, ok=outcome.ok,
-                           returncode=outcome.returncode, limit=outcome.limit,
-                           num_turns=outcome.num_turns)
-            if outcome.limit == "timeout" and not review_snapshot:
-                return self._stop(
-                    result, phase,
-                    f"phase {phase} hit its wall-clock cap of "
-                    f"{spec.timeout_s / 3600:.1f}h and was killed — a session "
-                    f"that long is looping, not working; last lines of "
-                    f"{outcome.log_path}:\n{outcome.tail}")
-            if outcome.limit == "max_turns" and not review_snapshot:
-                return self._stop(
-                    result, phase,
-                    f"phase {phase} hit its turn cap of {spec.max_turns} "
-                    f"(claude --max-turns) — last lines of "
-                    f"{outcome.log_path}:\n{outcome.tail}")
-            if outcome.limit == "credentials":
-                # Not a verdict on the book: nothing ran, the ledger did not
-                # move, and the same phase resumes once the token is fixed.
-                self._write_ledger(result)
-                self._progress("credentials", phase=phase,
-                               tail=outcome.tail[-600:])
-                self.log(f"HALTED at {phase}: the brain could not sign in")
-                raise CredentialsError(
-                    f"phase {phase} could not sign in to Claude Code — the "
-                    f"subscription token (CLAUDE_CODE_OAUTH_TOKEN) is expired "
-                    f"or revoked; last lines of {outcome.log_path}:\n"
-                    f"{outcome.tail}")
-            if not outcome.ok and not review_snapshot:
-                return self._stop(
-                    result, phase,
-                    f"phase {phase} exited {outcome.returncode}; last lines of "
-                    f"{outcome.log_path}:\n{outcome.tail}")
-            asked = self._new_question(asked_before)
-            if asked and self.question_gate:
-                # galley ask exits zero; an unanswered escalation must still
-                # stop unattended work.
-                result.asked = True
-                return self._stop(
-                    result, phase,
-                    f"phase {phase} escalated a question and there is nobody "
-                    f"to answer it:\n{asked[:1200]}")
+            stopped = self._run_session_phase(phase, env, result)
+            if stopped is not None:
+                return stopped
             if phase == "settle" and not self.astra_review:
                 unconverged = self.settle_verdict()
                 if unconverged:
                     self.unconverged = unconverged
                     self.log(f"NOT CONVERGED at settle: {unconverged}")
                     self._progress("unconverged", phase=phase, reason=unconverged[:600])
-            need = REQUIRED_STATE.get(phase) if self.state_gate else None
-            if need and not self._state_reached(need) and not review_snapshot:
-                # Name the cause we have actually seen, because "did not
-                # advance the ledger" describes the symptom and cost four
-                # rounds of log archaeology to trace the first time.
-                backgrounded = self.backgrounded_work(phase)
-                extra = (f" The session left work running in the background "
-                         f"({backgrounded}) and ended anyway, which kills that "
-                         f"work mid-flight: a long read must run in the "
-                         f"foreground."
-                         if backgrounded else "")
-                return self._stop(
-                    result, phase,
-                    f"phase {phase} exited 0 but the run state machine is at "
-                    f"{self._current_state() or 'nothing'!r}, not {need!r} — "
-                    f"the session did not advance the ledger, so the next "
-                    f"phase would build on an unproven one.{extra}")
             self._write_ledger(result)
 
         try:
