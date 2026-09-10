@@ -119,6 +119,47 @@ def _job(home, batch):
     return jid, json.loads(path.read_text('utf-8')) if path.exists() else None
 
 
+def _prework_receipt(home, batch, reason):
+    """Create an auditable held receipt when guarded discovery fails early."""
+    from . import native_corrections as native
+
+    jid, saved = _job(home, batch)
+    job_dir = Path(home) / 'native_jobs' / jid
+    job_dir.mkdir(parents=True, exist_ok=True)
+    job = saved if isinstance(saved, dict) else None
+    if job is None:
+        events = batch.get('events') or []
+        slots, receipts, notes = [], [], []
+        for event in events:
+            urls = event.get('urls') or []
+            placeholders = []
+            for _ in urls:
+                placeholders.append(f'attachment-slot-{len(slots) + 1}')
+                slots.append(placeholders[-1])
+            receipts.append({'marker': str(event.get('marker') or ''), 'urls': placeholders})
+            if event.get('text'):
+                notes.append(str(event['text']))
+        book = batch.get('book') or {}
+        job = {
+            'job_id': jid, 'identity': jid, 'record_id': str(batch.get('project_id') or ''),
+            'source_id': str(book.get('source_id') or ''), 'source_name': '',
+            'source_version': book.get('source_version'), 'folder_id': str(book.get('folder_id') or ''),
+            'submission_marker': 'batch:' + str(batch.get('batch_id') or ''),
+            'submission_urls': slots, 'expected_attachment_count': len(slots),
+            'submission_text': '\n\n'.join(notes), 'record_properties': {},
+            'submission_receipts': receipts, 'batch_id': batch.get('batch_id'),
+            'book_identity': book, 'status': 'technical_block', 'blocked': True,
+            'uploaded': {}, 'created_at': time.time(), 'reason': str(reason),
+        }
+    else:
+        job['status'] = 'technical_block'
+        job['blocked'] = True
+        job['reason'] = str(reason)
+    native._write_minimal_audit(job_dir, job, status='technical_block', reason=str(reason))
+    native._write_json(job_dir / 'job.json', job)
+    return jid, job
+
+
 def _work(token, batch, ws, home, opener):
     from . import native_corrections as native
     book = batch['book']
@@ -128,7 +169,8 @@ def _work(token, batch, ws, home, opener):
     parsed = native.versioned_name(source.name) if source else None
     if not parsed or (parsed[0].casefold(), parsed[1]) != (book['surname'].casefold(), book['source_version']):
         raise queue.QueueError('The registered source is missing or its author/version changed.')
-    own_names = {f"{book['surname']} - Book {book['source_version'] + 1}{suffix}"
+    next_book = native.next_version(book['source_version'])
+    own_names = {native.native_filename(book['surname'], next_book, suffix)
                  for suffix in ('.indd', '.pdf', '.report.json', ' - package.zip')}
     owned = [row for row in listing if row.name in own_names and row.app_properties.get(native.NATIVE_JOB_PROP) == jid]
     candidates = [row for row in listing if row not in owned]
@@ -146,7 +188,7 @@ def verify_uploads(token, home, batch, job, *, opener):
     from . import native_corrections as native
     folder = batch['book']['folder_id']
     artifacts = native._artifact_paths(job['result'], Path('.'), Path(home) / 'native_jobs' / job['job_id'] / 'output',
-                                      f"{batch['book']['surname']} - Book {batch['book']['source_version'] + 1}.indd")
+                                      native.native_filename(batch['book']['surname'], native.next_version(batch['book']['source_version'])))
     if not artifacts or set(job.get('artifact_hashes') or {}) != {name for _, name in artifacts}:
         raise queue.QueueError('The delivery artifact manifest is incomplete.')
     for path, name in artifacts:
@@ -227,15 +269,17 @@ def run_stage(token, home, ws, *, opener, hs_token, report, mock=False):
                                                    allow=set(props), opener=opener)
                             job['crm_written'] = True
                             native._write_json(Path(home) / 'native_jobs' / jid / 'job.json', job)
-                    name = f"{batch['book']['surname']} - Book {batch['book']['source_version'] + 1}.indd"
-                    queue.advance_book(home, batch['batch_id'], job['uploaded'][name], batch['book']['source_version'] + 1)
+                    next_book = native.next_version(batch['book']['source_version'])
+                    name = native.native_filename(batch['book']['surname'], next_book)
+                    queue.advance_book(home, batch['batch_id'], job['uploaded'][name], next_book)
                     queue.set_batch(home, batch['batch_id'], 'delivered', job_id=jid)
                 else:
                     queue.set_batch(home, batch['batch_id'], 'delivery', reason='Upload will resume from the saved result.', job_id=jid)
             else:
                 raise queue.QueueError('The batch stopped without a verified or held outcome.')
         except queue.QueueError as exc:
-            queue.set_batch(home, batch['batch_id'], 'held', reason=str(exc))
+            jid, _ = _prework_receipt(home, batch, str(exc))
+            queue.set_batch(home, batch['batch_id'], 'held', reason=str(exc), job_id=jid)
             report.needs_human.append((batch['project_id'], str(exc)))
         except Exception:
             # A process/connection failure cannot reset a claimed batch or

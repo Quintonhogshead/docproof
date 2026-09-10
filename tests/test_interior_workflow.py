@@ -90,8 +90,9 @@ def test_saved_verifier_detects_unrequested_format_changes(property, value):
 
 
 def test_next_number_not_lexical():
-    assert next_name(Path("Hill - Book 9.indd")) == "Hill - Book 10.indd"
-    assert next_name(Path("Hill - Book10.INDD")) == "Hill - Book11.indd"
+    assert next_name(Path("Hill - Book 9.indd")) == "Hill - Book 9.5.indd"
+    assert next_name(Path("Hill - Book 9.5.indd")) == "Hill - Book 10.5.indd"
+    assert next_name(Path("Hill - Book10.INDD")) == "Hill - Book10.5.indd"
 
 
 class Native:

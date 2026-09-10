@@ -81,9 +81,11 @@ def register_book(home, book):
     for key in ('project_id', 'folder_id', 'source_id'):
         if not re.fullmatch(r'[A-Za-z0-9_-]+', data[key]):
             raise QueueError(f'Invalid {key.replace("_", " ")}.')
-    version = book.get('source_version')
-    if type(version) is not int or version < 1:
-        raise QueueError('The confirmed source needs a positive Book version.')
+    from docproof.interior.versions import native_version
+    try:
+        version = native_version(book.get('source_version'))
+    except ValueError as exc:
+        raise QueueError('The confirmed source needs a positive integer or .5 Book version.') from exc
     data['source_version'] = version
     for key in ('title_aliases', 'author_aliases'):
         values = book.get(key, [])
@@ -249,9 +251,14 @@ def advance_book(home, batch_id, source_id, version):
         batch = json.loads(batch_row['data'])
         row = db.execute('SELECT * FROM books WHERE project_id=?', (batch['project_id'],)).fetchone()
         book = json.loads(row['data'])
+        from docproof.interior.versions import native_version, next_version
+        try:
+            version = native_version(version)
+        except ValueError as exc:
+            raise QueueError('The delivered source needs a positive integer or .5 Book version.') from exc
         if book['source_id'] == source_id and book['source_version'] == version:
             return
-        if row['blocked'] or book != batch['book'] or version != book['source_version'] + 1:
+        if row['blocked'] or book != batch['book'] or version != next_version(book['source_version']):
             raise QueueError('The registered book changed before delivery completed.')
         book.update(source_id=source_id, source_version=version)
         db.execute('UPDATE books SET data=? WHERE project_id=?', (canonical(book), book['project_id']))

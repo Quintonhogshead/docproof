@@ -98,6 +98,7 @@ version = {attr = "docproof.__version__"}
 include = ["docproof*", "app*", "config*", "galley*"]
 
 [tool.setuptools.package-data]
+"docproof.interior" = ["*.mjs"]
 app = ["static/*", "static/art/*", "static/canvas/*", "static/canvas/vendor/*"]
 "galley.prompts" = ["*.md"]
 # The practitioner manual, skills and launchers: galley/driver.py seeds every

@@ -462,7 +462,7 @@ def native_correction_jobs(home) -> list[dict]:
                          "missing_attachments": [{"file_id": str(item.get("file_id", "")),
                                                    "filename": str(item.get("filename", "Downloaded correction file"))}
                                                   for item in data.get("missing_attachments", []) if isinstance(item, dict)],
-                         "outputs": [name for name, key in {"indd": "output_indd", "pdf": "output_pdf", "package": "output_package", "report": "report"}.items() if result.get(key)],
+                         "outputs": [name for name, key in {"indd": "output_indd", "pdf": "output_pdf", "package": "output_package", "report": "report", "spreadsheet": "audit_spreadsheet"}.items() if result.get(key)],
                          "uploaded": data.get("uploaded", {}),
                          "created_at": data.get("created_at", "")})
         except (ValueError, OSError):
