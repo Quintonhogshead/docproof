@@ -45,7 +45,7 @@ REASON_PREFIXES = (
     "space_deletion", "rejected_", "no_suggestion", "unmapped", "edit_damage",
     "rewrite_class", "undoes_house_style", "composite_mismatch",
     "duplicated_fragment", "duplicate_query", "closed_compound",
-    "duplicate_passage")
+    "duplicate_passage", "stale")
 
 _SPACE_ONLY = re.compile(r"\s+")
 _PUNCT_ONLY = re.compile(r"[^\w\s]")
@@ -370,13 +370,42 @@ def open_items(run_dir: str | Path) -> list[Residual]:
             seen.add(item.id)
             out.append(item)
     # Internal repairs survive later verify snapshots and process restarts.
+    # `carried` marks a residual the current walk did not raise again although
+    # it read the paragraph as it now stands: found in an earlier build, it
+    # is one `decide` may close as stale. A read that never reached the
+    # paragraph proves nothing, so the item stays with the engine.
     if settled:
+        reread: set[str] | None = None
         for row in settled.open:
             item = Residual.from_problem(row) if row.get("kind") == "edit_damage" else Residual.from_walk(row)
             if item.id not in have and item.id not in seen:
+                if item.kind == "residual":
+                    if reread is None:
+                        reread = _walked_as_it_stands(run)
+                    if item.para_id in reread:
+                        item.raw["carried"] = True
                 out.append(item)
                 seen.add(item.id)
     return out
+
+
+def _walked_as_it_stands(run: Path) -> set[str]:
+    """The paragraphs the run's finished walk read in their current form: its
+    per-paragraph fingerprint matches the deliverable's, and it is neither
+    unread nor marked unverified."""
+    from galley.verify import build_fingerprints
+    try:
+        fw = json.loads((run / "finished_walk.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(fw, dict) or not fw.get("ran"):
+        return set()
+    current = (build_fingerprints(run) or {}).get("paragraph_sha256") or {}
+    read = fw.get("paragraph_sha256") or {}
+    skip = set(fw.get("unread_paragraphs") or []) \
+        | set(fw.get("unverified_paragraphs") or [])
+    return {pid for pid, digest in current.items()
+            if read.get(pid) == digest and pid not in skip}
 
 
 @dataclass
@@ -506,6 +535,35 @@ def closed_compound_known(before: str, after: str,
         if not dictionary_knows(word, dictionary):
             return False
     return True
+
+
+def spells_out_chicago_numeral(before: str, after: str,
+                               paragraph: str = "") -> str | None:
+    """A change that turns digits Chicago keeps into words — a part-of-book
+    locator ("book 1" -> "book one", CMOS 9.26) or an era ("45 BC") — or
+    None. The house rule spells out one through one hundred in prose, and
+    `_fact` cannot see the change (canonical_surface reads "one" as "1"), so
+    a judge applying the rule literally shipped "book one" on Bradshaw Book 1
+    (2026-09-10). A chapter/part HEADING is the exception: label style there
+    is the book's own and is fixed as mechanics."""
+    from docproof.chapter_labels import is_chapter_label
+    from docproof.residuals import chicago_keeps_numeral
+    from galley.mechanics import canonical_surface
+    if paragraph and is_chapter_label(paragraph):
+        return None
+    had = re.findall(r"\d+", before)
+    now = re.findall(r"\d+", after)
+    spelled = re.findall(r"\d+", canonical_surface(after))
+    for m in re.finditer(r"(?<![\w.,])\d{1,3}(?![\w,]|\.\d)", before):
+        if not chicago_keeps_numeral(before, m.start(), m.end()):
+            continue
+        n = m.group(0)
+        # the digits went AND came back as a spelled-out word of the same
+        # value (a changed value is a fact question, not this guard's)
+        if had.count(n) > now.count(n) and spelled.count(n) >= had.count(n):
+            site = before[max(0, m.start() - 12):m.end() + 6].strip()
+            return f"Chicago keeps the numeral in {site!r}"
+    return None
 
 
 def edit_kind(before: str, after: str) -> str:
@@ -805,6 +863,16 @@ def resolve(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
         return "unanchorable"
     n = acc.count(res.quote)
     if n == 0:
+        # A reader that typed a straight apostrophe or a hyphen for the
+        # book's curly quote or dash quoted the right text; the fold never
+        # moves a character, so the folded offset indexes the real text.
+        from docproof.validator import fold_punct
+        folded, fq = fold_punct(acc), fold_punct(res.quote)
+        if fq and folded.count(fq) == 1:
+            at = folded.index(fq)
+            res.quote = acc[at:at + len(res.quote)]
+            n = 1
+    if n == 0:
         # The docx view may carry text the map cannot (a paragraph outside
         # the mapped set); the map is the coordinate system, so a quote it
         # does not hold cannot be settled by arithmetic.
@@ -822,6 +890,40 @@ def resolve(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
     r = emap.locate(segs, lo, lo + len(res.quote))
     res.source_span = r.source_span or r.source_widened
     res.owner_finding_id = r.owners[0] if r.owners else None
+    return None
+
+
+def stale_item(res: Residual, current: str, source_para: str) -> str | None:
+    """Why an item that no longer anchors describes a build that is gone, or
+    None. Such an item can never be settled by arithmetic, and nothing is left
+    to settle: kept open, it blocked Bradshaw Book 1 through every round
+    (2026-09-10 — eight Chapter Six edit_damage items and two body-0024
+    residuals from the pre-rebuild build).
+
+    - edit_damage: the flagged edit is not in the build (no kept row makes
+      that change — `resolve` already established it) and its result is not
+      in the paragraph either: a changed edit shows its old text nowhere, and
+      a flagged deletion is gone when the paragraph again holds every copy of
+      the deleted text that the source does.
+    - residual: only one carried over from an earlier build (the current
+      read did not raise it again) whose quote, even punctuation-folded, is
+      nowhere in the paragraph. The current read is the authority on the
+      text as it now stands; a residual it did raise stays with the engine."""
+    from docproof.validator import fold_punct
+    if not current.strip():
+        return None                  # no rendered paragraph to judge against
+    if res.kind == "edit_damage":
+        orig, corr = res.owner_original, res.owner_corrected
+        if corr.strip() and corr != orig:
+            if fold_punct(corr) not in fold_punct(current):
+                return "flagged edit no longer in the build"
+        elif orig.strip() and source_para.count(orig) \
+                and current.count(orig) >= source_para.count(orig):
+            return "flagged deletion no longer in the build"
+        return None
+    if res.raw.get("carried") and res.quote.strip() \
+            and fold_punct(res.quote) not in fold_punct(current):
+        return "flagged text no longer in the paragraph"
     return None
 
 
@@ -855,6 +957,10 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
         reason = str((skipped or {}).get(res.para_id, ""))
         if reason.lower().startswith("style:toc"):
             return Decision("drop", "toc_unreachable")
+        if why == "unanchorable":
+            gone = stale_item(res, current, source.get(res.para_id, ""))
+            if gone:
+                return Decision("drop", f"stale:{gone}")
         if why in ("ambiguous_anchor", "unmapped"):
             # Real text the engine cannot place by arithmetic: still a
             # residual, so it goes to the author with the suggestion, never
@@ -876,6 +982,11 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
                             owner_key=key)
         if had_note and fix == res.owner_corrected:
             return Decision("revert", "editorial_note", owner_key=key)
+        numeral = spells_out_chicago_numeral(res.owner_corrected, fix,
+                                             source.get(res.para_id, ""))
+        if numeral:
+            return Decision("drop", f"undoes_house_style:{numeral}",
+                            owner_key=key)
         fact = _fact(res.owner_corrected, fix, source.get(res.para_id, ""))
         if fact and (not mechanical_approved or fact.startswith("number")):
             return Decision("judge" if replacement is None else "internal_repair",
@@ -958,6 +1069,9 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
                               + _para_neighbours(res.para_id, accepted))
     if repeat:
         tag = "duplicate_passage"
+    numeral = spells_out_chicago_numeral(comp.before, comp.text, src_text)
+    if numeral:
+        return Decision("drop", f"undoes_house_style:{numeral}")
     fact = None if repeat else _fact(comp.before, comp.text, src_text)
     if fact and (not mechanical_approved or fact.startswith("number")):
         return Decision("judge" if replacement is None else "internal_repair", f"fact:{fact}")
@@ -1025,6 +1139,11 @@ correct settlement:
   drop    — the flag is wrong or is a matter of taste/voice; say why in one line;
   query   — only the author can answer (a fact, an intent, an identity, or two
             plausible repairs); write the one-line question.
+Every reply is one of those four. A sentence that does not parse — a word
+missing or garbled — whose repair you cannot state with certainty from the
+context is a query: missing_knowledge is the wording the author meant, and the
+question quotes the phrase and asks what it should say. Never answer absorb or
+add without the replacement text.
 Never rewrite beyond the flagged span. Correct grammar, spelling, punctuation, agreement, pronoun case, tense, and
 missing function words when the intended meaning is clear. Multiple necessary
 mechanical changes are permitted. Number formatting, abbreviation punctuation,
@@ -1143,6 +1262,14 @@ def judge_decision(res: Residual, result: Any) -> Decision:
                         mechanical_approved=(result.parsed.get("preserves_meaning") is True
                             and result.parsed.get("category") in {
                                 "grammar", "spelling", "punctuation", "number_style", "name_spelling"}))
+    # An edit with no text but a question naming what only the author knows
+    # is the judge's query in the wrong slot: it agrees something is wrong
+    # and cannot say what the author meant (Bradshaw body-0023, 2026-09-10:
+    # a clause two readers could not parse came back `no_suggestion` every
+    # round, and stayed open for good).
+    missing = str(result.parsed.get("missing_knowledge") or "").strip()
+    if action in ("absorb", "add") and question and missing:
+        return Decision("query", f"author_knowledge:{missing}", question=question)
     return Decision("internal_repair", "no_suggestion")
 
 
@@ -1380,6 +1507,21 @@ def _apply_decision(res: Residual, dec: Decision,
                            kind=res.kind)
     return rec, new_rows, removed
 
+
+
+_QUOTE_FOLD = str.maketrans({"‘": "'", "’": "'", "‚": "'", "‛": "'",
+                             "“": '"', "”": '"', "„": '"', "‟": '"'})
+
+
+def _composed(text: str) -> str:
+    """A paragraph as the self-check compares it: whitespace collapsed and
+    quote marks folded straight. The rebuild curls every settlement row's
+    corrected text (replay.sanitize_corrected) while the plan holds the
+    suggestion as the reader typed it, so a composite written with a straight
+    apostrophe ("PageMaker's") landed as "PageMaker’s" and was reverted as a
+    composite mismatch — twice, on Bradshaw Book 1 (2026-09-10). Curling is
+    the rebuild's job, never composition damage."""
+    return " ".join(text.split()).translate(_QUOTE_FOLD)
 
 
 @dataclass
@@ -1690,7 +1832,26 @@ class Settler:
             remove.append(key)
         if remove:
             self._rebuild([r for k, r in working.items() if k not in remove], snapshot="query-intake")
-            _, _, accepted = self._load_state()
+            working, _, accepted = self._load_state()
+        # An applied edit that spells out a numeral Chicago keeps ("book 1" ->
+        # "book one") goes in as flagged edit damage whose fix is the author's
+        # own text, so `decide` reverts it — whichever lane made it and
+        # whether or not a verifier noticed.
+        from galley.verify import problem_id
+        for row in working.values():
+            if row.get("force_query") or row.get("queried"):
+                continue
+            pid = str(row.get("para_id", ""))
+            orig = str(row.get("original_text") or "")
+            corr = str(row.get("corrected_text") or "")
+            why = spells_out_chicago_numeral(orig, corr,
+                                             self._source.get(pid, ""))
+            if why:
+                residuals.append(Residual(
+                    id=problem_id(pid, orig, corr), kind="edit_damage",
+                    para_id=pid, quote=corr, problem=why, suggestion=orig,
+                    severity="high", verdict="house_style",
+                    owner_original=orig, owner_corrected=corr))
         for pid, text in accepted.items():
             fixes = list(abbreviation_fixes(text))
             if not fixes:
@@ -2095,7 +2256,7 @@ class Settler:
                 if not overlap:
                     for lo, hi, text, _rid in reversed(planned):
                         expected = expected[:lo] + text + expected[hi:]
-                    if " ".join(got.split()) != " ".join(expected.split()):
+                    if _composed(got) != _composed(expected):
                         log.warning("settle: %s did not compose as planned "
                                     "— expected %r, got %r", pid,
                                     expected[:160], got[:160])

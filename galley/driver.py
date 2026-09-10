@@ -1134,6 +1134,10 @@ class DriveResult:
     gate: dict[str, Any] = field(default_factory=dict)
     handoff: list[Path] = field(default_factory=list)
     uploaded: list[str] = field(default_factory=list)
+    # The stop was a phase's QUESTIONS.md escalation. Nobody answers those
+    # (Quinton, 2026-09-10: no human interference), so re-running the book
+    # cannot change the outcome — only new code can; the agent holds it.
+    asked: bool = False
 
     @property
     def exit_code(self) -> int:
@@ -1154,6 +1158,7 @@ class DriveResult:
                        for p in self.phases],
             "handoff": [str(p) for p in self.handoff],
             "uploaded": list(self.uploaded),
+            "asked": self.asked,
         }
 
 
@@ -2038,6 +2043,7 @@ class Driver:
             if asked and self.question_gate:
                 # galley ask exits zero; an unanswered escalation must still
                 # stop unattended work.
+                result.asked = True
                 return self._stop(
                     result, phase,
                     f"phase {phase} escalated a question and there is nobody "

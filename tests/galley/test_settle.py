@@ -1291,3 +1291,111 @@ def test_different_internal_issues_in_one_span_are_preserved(tmp_path):
     assert sum(1 for row in env["findings"]
                if row.get("queried") and row["para_id"] == p2) == 0
     assert len(st.open) == 2
+
+
+# --- Bradshaw Book 1 (2026-09-10): items the engine could never close --------
+
+def test_items_from_a_gone_build_close_as_stale(tmp_path):
+    """A flagged edit no longer in the build, and a residual the current read
+    did not raise again whose text is gone, close as `stale` — kept open they
+    blocked certification through every round."""
+    src = _manuscript(tmp_path)
+    ids, _doc = _para_ids(src)
+    run = _build(tmp_path, src, [
+        {"para_id": ids[0], "original_text": "teh", "corrected_text": "the",
+         "confidence": "high"}])
+    gone_edit = {"para_id": ids[1], "original_text": "recieve",
+                 "corrected_text": "receeve", "verdict": "wrong",
+                 "detail": "misspelled correction", "fix": "receive"}
+    _walk(run, [{"para_id": ids[3], "quote": "the old cat", "problem": "?",
+                 "suggestion": "the old dog", "severity": "low"}], [gone_edit])
+    assert _settle(tmp_path, run, src) == 1          # the residual is current
+    recs, _st = _records(run)
+    edit_id = problem_id(ids[1], "recieve", "receeve")
+    assert recs[edit_id].action == "drop"
+    assert recs[edit_id].reason.startswith("stale:")
+    res_id = residual_id(ids[3], "the old cat")
+    assert recs[res_id].action == "internal_repair"
+
+    _walk(run, [])                   # a read that proves nothing: still open
+    assert _settle(tmp_path, run, src) == 1
+    assert _records(run)[0][res_id].action == "internal_repair"
+
+    # a fresh walk that read every paragraph as it stands, and raised nothing
+    from galley.verify import build_fingerprints
+    _walk(run, [])
+    fw = json.loads((run / "finished_walk.json").read_text("utf-8"))
+    fw["paragraph_sha256"] = build_fingerprints(run)["paragraph_sha256"]
+    (run / "finished_walk.json").write_text(json.dumps(fw), encoding="utf-8")
+    assert _settle(tmp_path, run, src) == 0
+    recs, st = _records(run)
+    assert recs[res_id].action == "drop"
+    assert recs[res_id].reason == "stale:flagged text no longer in the paragraph"
+    assert st.open == []
+
+
+def test_a_spelled_out_part_of_book_numeral_is_reverted(tmp_path):
+    """"book 1" -> "book one" undoes Chicago 9.26 whichever lane applied it;
+    settle puts the digits back and refuses a residual that asks for it."""
+    paras = ["In book 1 of the memoir he says so, and in chapter 3 too.",
+             "The comet was seen in 45 BC by the villagers on the hill."]
+    src = _manuscript(tmp_path, paras)
+    ids, _doc = _para_ids(src)
+    run = _build(tmp_path, src, [
+        {"para_id": ids[0], "original_text": "book 1",
+         "corrected_text": "book one", "confidence": "high"}])
+    _walk(run, [{"para_id": ids[1], "quote": "45 BC",
+                 "problem": "spell out numbers", "suggestion": "forty-five BC",
+                 "severity": "low"}])
+    assert _settle(tmp_path, run, src) == 0
+    acc = _accepted(run)
+    assert "book 1 of the memoir" in acc[ids[0]]
+    assert "45 BC" in acc[ids[1]]
+    recs, _st = _records(run)
+    assert recs[residual_id(ids[1], "45 BC")].reason.startswith(
+        "undoes_house_style:Chicago keeps the numeral")
+
+
+def test_spells_out_chicago_numeral_spares_values_and_headings():
+    from galley.settle import spells_out_chicago_numeral as g
+    assert g("in book 1 of", "in book one of")
+    assert g("in 45 BC", "in forty-five BC")
+    assert g("It took 17 minutes", "It took seventeen minutes") is None
+    assert g("in chapter 3", "in chapter 4") is None          # a value change
+    assert g("Chapter 3", "Chapter Three", "Chapter 3") is None   # a heading
+
+
+def test_a_straight_apostrophe_composite_is_not_a_mismatch(tmp_path):
+    """The rebuild curls a settlement's text; the self-check must not read
+    "PageMaker’s" against the planned "PageMaker's" as composition damage."""
+    paras = ["It was one of PageMakers most loved features, they said."]
+    src = _manuscript(tmp_path, paras)
+    ids, _doc = _para_ids(src)
+    run = _build(tmp_path, src, [
+        {"para_id": ids[0], "original_text": "PageMakers",
+         "corrected_text": "PageMakers’", "confidence": "high"}])
+    _walk(run, [{"para_id": ids[0], "quote": "PageMakers’",
+                 "problem": "wrong possessive", "suggestion": "PageMaker's",
+                 "severity": "high"}])
+    assert _settle(tmp_path, run, src) == 0
+    assert "one of PageMaker’s most" in _accepted(run)[ids[0]]
+    recs, _st = _records(run)
+    assert recs[residual_id(ids[0], "PageMakers’")].action == "absorb"
+
+
+def test_a_judge_edit_without_text_but_with_author_knowledge_is_a_query():
+    from galley.settle import Residual, judge_decision
+    res = Residual(id="r-1", kind="residual", para_id="body-0001",
+                   quote="the clause", problem="does not parse",
+                   suggestion="")
+    dec = judge_decision(res, ProviderResult(parsed={
+        "action": "add", "replacement": "", "reason": "",
+        "question": "“the clause” — what should this say?",
+        "missing_knowledge": "the intended wording"},
+        usage=None, stop_reason="ok"))
+    assert dec.action == "query"
+    assert dec.reason == "author_knowledge:the intended wording"
+    dec = judge_decision(res, ProviderResult(parsed={
+        "action": "add", "replacement": "", "reason": "", "question": ""},
+        usage=None, stop_reason="ok"))
+    assert dec.action == "internal_repair"

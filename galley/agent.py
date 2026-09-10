@@ -311,6 +311,19 @@ def send_alert(env: AgentEnv, subject: str, body: str, *,
 
 
 CLAIMED, FINISHED, FAILED = "claimed", "finished", "failed"
+#: A claimed book's operational_status while it waits for a new version.
+HELD_FOR_CODE = "held_for_code"
+
+
+def code_id() -> str:
+    """What "a new version" means to a held book: the deployed image on Fly
+    (every deploy changes it, bumped version or not), else the package
+    version."""
+    from docproof import __version__
+    image = os.environ.get("FLY_IMAGE_REF", "").strip()
+    return f"{__version__}@{image}" if image else __version__
+
+
 # Retry incomplete delivery without rerunning the book, up to
 # MAX_DELIVERY_ATTEMPTS.
 PENDING_DELIVERY = "pending_delivery"
@@ -570,6 +583,9 @@ class Agent:
             if state in (FINISHED, FAILED, PENDING_DELIVERY):
                 report.skipped.append(f"{book.name} ({state})")
                 continue
+            if state == CLAIMED and self.held_for_code(book.file_id, ledger):
+                report.skipped.append(f"{book.name} (held for new code)")
+                continue
             resume = state == CLAIMED
             self.run_book(book, ledger, report, resume=resume)
             return report                     # one book at a time, on purpose
@@ -723,7 +739,8 @@ class Agent:
         report.claimed = book.name
         folder = self.drive_folder_override or book.folder_id
         ledger.record(book.file_id, CLAIMED, name=book.name, slug=slug,
-                      folder_id=folder, request_id=book.request_id)
+                      folder_id=folder, request_id=book.request_id,
+                      operational_status="")
         self.log(f"{'Resuming' if resume else 'Claiming'} {book.name} "
                  f"(workspace {slug}).")
         self._status = {k: v for k, v in self._status.items()
@@ -761,6 +778,9 @@ class Agent:
         outcome = getattr(result, "outcome", "needs_human")
         reason = getattr(result, "reason", "")
         report.outcome, report.reason = outcome, reason
+        if outcome == "blocked" and getattr(result, "asked", False):
+            self._hold_for_new_code(book, ledger, report, slug, folder, reason)
+            return
         if outcome == "blocked":
             # Infrastructure, missing evidence, or pending Astra repairs are
             # not a human-proofreader verdict. Keep the claim for safe resume.
@@ -825,6 +845,38 @@ class Agent:
         self._beat(state="idle", phase=None, last_outcome="blocked",
                    last_reason=reason[:600], last_book=book.name,
                    delivery="pending")
+
+    def _hold_for_new_code(self, book: AwaitingBook, ledger: Ledger,
+                           report: RunReport, slug: str, folder: str,
+                           reason: str) -> None:
+        """A phase stopped on a question nobody will answer. The claim stays
+        (the run resumes from its state), but not on the next poll: Bradshaw
+        Book 1 (2026-09-10) blocked at settle and was resumed five minutes
+        later, re-running verify and settle toward the same question. Held
+        until a different DocProof version is running — the only thing that
+        can change the answer."""
+        from docproof import __version__
+        report.outcome, report.reason = "blocked", reason
+        ledger.record(book.file_id, CLAIMED, name=book.name, slug=slug,
+                      folder_id=folder, operational_status=HELD_FOR_CODE,
+                      held_version=code_id(), reason=reason[:400])
+        self._beat(state="idle", phase=None, last_outcome="blocked",
+                   last_reason=reason[:600], last_book=book.name,
+                   delivery="pending")
+        self._alarm(f"{book.name} is held until the next deploy",
+                    f"Galley stopped {book.name} on a question no one will "
+                    f"answer, so re-running it on this version "
+                    f"({__version__}) would stop the same way. It stays "
+                    f"claimed and resumes from its last state on the first "
+                    f"poll after a new version is deployed.\n\n{reason[:1500]}")
+        self.log(f"{book.name}: held for new code (v{__version__}).")
+
+    def held_for_code(self, file_id: str, ledger: Ledger) -> bool:
+        """Whether a claimed book is waiting for a version other than the one
+        it stopped on."""
+        entry = ledger.claimed(file_id)
+        return (entry.get("operational_status") == HELD_FOR_CODE
+                and entry.get("held_version") == code_id())
 
     def fetch_book(self, book: AwaitingBook) -> Path:
         """The Book 1, on this Mac, as a .docx."""
@@ -1540,6 +1592,7 @@ def refresh_wrapper(*, source: Path | None = None,
 
 __all__ = ["AGENT_TOKEN_KEY", "APP_URL_KEY", "AWAITING_PATH", "CLAIMED",
            "DEFAULT_ENV_FILE", "DEFAULT_POLL_INTERVAL_S", "FAILED", "FINISHED",
+           "HELD_FOR_CODE", "code_id",
            "LABEL", "LEDGER_NAME", "LOG_NAME", "OAUTH_KEY", "UNIT_NAME",
            "Agent", "AgentEnv", "AgentError", "AwaitingBook", "Ledger",
            "RunReport", "apply_env", "fetch_awaiting", "install", "installed",

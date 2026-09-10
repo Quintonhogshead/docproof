@@ -19,7 +19,10 @@ must not be used to fabricate or overrule an enrolled verdict.
   ambiguous_anchor | editorial_note | verifier_reverted | verifier_confirmed |
   verifier_overruled | oversize | space_deletion | rejected_* |
   no_suggestion | edit_damage:<verdict> | rewrite_class:<why> |
-  undoes_house_style:<sweep key> | composite_mismatch | duplicated_fragment`.
+  undoes_house_style:<sweep key or Chicago numeral> | composite_mismatch |
+  duplicated_fragment | stale:<why>`. `stale` closes an item whose flagged
+  edit (or, for a residual carried from an earlier build, its quoted text)
+  is no longer in the paragraph — the engine's own answer, never a hand edit.
 - **Settle guards (v0.185.0, from the Georgis run).** (1) The walk, the
   change verifier, and the settle judge all carry ONE house-rule block
   (`galley/house_style.py`) and are told a house form (`4:00 AM`, `40

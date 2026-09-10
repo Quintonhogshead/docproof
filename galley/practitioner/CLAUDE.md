@@ -128,3 +128,7 @@ escalation, append the question, recommendation, and blocked work to QUESTIONS.m
 then `docproof galley ask "subject" --file QUESTIONS.md --book "book"`; report a
 failed send honestly. Never invent the reply. In enrolled runs a technical blocker
 is not an editorial `needs_human` verdict; preserve Astra's authority.
+No human answers QUESTIONS.md: the book is held until a new DocProof version is
+deployed, then resumes from its last state. Write the entry as an engine defect
+report (what the engine could not do, item ids, evidence paths), never as a
+request for approval.
