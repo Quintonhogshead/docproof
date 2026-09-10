@@ -319,6 +319,9 @@ def verify_uploads(token, home, batch, job, *, opener):
 
 def run_stage(token, home, ws, *, opener, hs_token, report, mock=False):
     from . import native_corrections as native
+    from docproof.interior import remote_control
+    if not remote_control.allowed(home):
+        return
     # Discovery runs even while another worker owns InDesign. Claims and the
     # native operation are serialized by the existing per-home worker lock.
     collect(home, ws, hs_token, opener=opener, drive_token=token)
@@ -327,6 +330,8 @@ def run_stage(token, home, ws, *, opener, hs_token, report, mock=False):
                       corrections_native_project_first_property='_docproof_first',
                       corrections_native_project_last_property='_docproof_last')
     with FolderLock(Path(home) / 'native_jobs'):
+        if not remote_control.allowed(home):
+            return
         batch = None
         for candidate in queue.pending_batches(home):
             _, saved = _job(home, candidate)
@@ -378,6 +383,12 @@ def run_stage(token, home, ws, *, opener, hs_token, report, mock=False):
                     queue.set_batch(home, batch['batch_id'], 'delivery', reason='Upload will resume from the saved result.', job_id=jid)
             else:
                 raise queue.QueueError('The batch stopped without a verified or held outcome.')
+        except remote_control.AutomationPaused:
+            jid, saved = _job(home, batch)
+            queue.set_batch(home, batch['batch_id'],
+                            'delivery' if saved and saved.get('status') == 'verified' else 'running',
+                            reason='Paused by website; saved work will resume when enabled.', job_id=jid)
+            report.waiting += 1
         except queue.QueueError as exc:
             jid, _ = _prework_receipt(home, batch, str(exc))
             queue.set_batch(home, batch['batch_id'], 'held', reason=str(exc), job_id=jid)

@@ -14,7 +14,7 @@ APP_JS = Path(__file__).parents[1] / "app/static/app.js"
 
 
 def _function(name: str) -> str:
-    source = APP_JS.read_text()
+    source = APP_JS.read_text(encoding='utf-8')
     start = re.search(rf"(?m)^(?:async )?function {name}\(", source)
     assert start is not None
     # These top-level functions use unindented closing braces; their nested
@@ -55,7 +55,7 @@ def test_quiet_poll_updates_clock_without_rebuilding_unchanged_rows():
         renderPassesSummary: () => { clock++; },
         renderWatchSignIn: noop, renderWatchRun: noop, renderWatchBanner: noop,
         renderWatchFiles: noop, renderProofReadout: noop, applyWatchSchedule: noop,
-        renderNativeWorker: noop, renderNativeIntake: noop, refreshNativeQueue: noop,
+        renderNativeWorker: noop, renderNativeIntake: noop, renderInteriorComputer: noop, refreshNativeQueue: noop,
         renderWatchNextRun: noop,
       });
       vm.runInContext(source, context);

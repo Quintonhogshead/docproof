@@ -234,6 +234,8 @@ def register(app: FastAPI) -> None:
     # guide use. The desktop build has one user and no gate, so it passes.
     may_manage = common.admin_gate(
         app, "Only an administrator can manage DocWatch.")
+    from ..watch import interior_remote
+    interior_remote.register(app, may_manage)
 
     @app.post("/api/watch/hubspot-connection", dependencies=[Depends(may_manage)])
     def hubspot_connection(body: HubSpotConnection):
@@ -410,8 +412,14 @@ def register(app: FastAPI) -> None:
     def watch_payload() -> dict:
         watch: WatchRunner = app.state.watch
         signing = watch.sign_in_state()
+        status = watchlib.status(watch.home, agent_path=watch.agent_path)
+        computer = interior_remote.status(watch.home)
+        if computer:
+            status.update(interior_computer=computer,
+                          corrections_enabled=computer['desired']['enabled'],
+                          corrections_engine='native')
         return {
-            "watch": watchlib.status(watch.home, agent_path=watch.agent_path),
+            "watch": status,
             "run": watch.state(),
             "sign_in": asdict(signing) if signing else None,
             "can_schedule": sys.platform == "darwin",
@@ -438,6 +446,14 @@ def register(app: FastAPI) -> None:
     @app.put("/api/watch", dependencies=[Depends(may_manage)])
     def write_watch(update: WatchUpdate) -> dict:
         watch: WatchRunner = app.state.watch
+        if interior_remote.read(watch.home):
+            fields = update.model_dump(exclude_unset=True)
+            corrections = {key for key in fields if 'corrections_' in key}
+            if corrections - {'corrections_enabled'}:
+                raise HTTPException(409, 'These correction settings belong to the connected laptop. Use the on/off switch here.')
+            if update.corrections_enabled is not None:
+                interior_remote.set_enabled(watch.home, update.corrections_enabled)
+                update = update.model_copy(update={'corrections_enabled': None})
         ws = WatchSettings.load(watch.home)
         # An empty folder box means "unchanged", the same as an absent one:
         # the panel always sends the field, and on a fresh setup it is blank —

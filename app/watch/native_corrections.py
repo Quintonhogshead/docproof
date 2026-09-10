@@ -769,6 +769,9 @@ def run_stage(token: str, home: Path, ws, state, runner, store, *, mock: bool,
     """Run at most one native book at a time and resume its own job ledger."""
     if not ws.corrections_enabled or ws.corrections_engine != "native" or not hs_token:
         return
+    from docproof.interior.remote_control import allowed
+    if (Path(home) / 'interior-computer.json').exists() or not allowed(home):
+        return
     if ws.corrections_native_form_poll:
         from . import native_intake
         try:
@@ -806,6 +809,7 @@ def run_stage(token: str, home: Path, ws, state, runner, store, *, mock: bool,
 
 def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
              hs_token: str, report) -> None:
+    from docproof.interior import remote_control
     record, folder_id, source_info, listing, *event_data = work
     batch = event_data[1] if len(event_data) > 1 else None
     if batch:
@@ -993,6 +997,7 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
             if batch:
                 native_queue.assert_active(home, batch['batch_id'])
                 rules['book_identity'] = batch['book']
+            remote_control.require(home)
             result = _call_workflow(local_source, attachments, text, job_dir / "output", rules)
             status = str(result.get("status", "technical_block"))
             job.update({"status": status, "result": result,
@@ -1109,6 +1114,7 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
             if existing is not None:
                 job.setdefault("uploaded", {})[name] = existing.id
                 continue
+            remote_control.require(home)
             fid = drive.upload(token, folder_id, path, name=name,
                                mime_type="application/octet-stream",
                                app_properties={NATIVE_JOB_PROP: job["job_id"],
@@ -1128,6 +1134,8 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
         job.pop('delivery_error', None)
         _write_json(job_dir / "job.json", job)
         report.corrected.append(f"{source.name}: {status}")
+    except remote_control.AutomationPaused:
+        raise
     except Exception as exc:  # noqa: BLE001 - persisted technical block
         # Preserve a completed local result when delivery or CRM writeback
         # fails.  The next tick can adopt receipts and finish the external
