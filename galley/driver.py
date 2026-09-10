@@ -336,6 +336,11 @@ _PROMPTS: dict[str, str] = {
         "(--source and --config). Report residual/problem counts."),
     "settle": (
         "Phase: residual settlement — zero open candidates. Follow /settle. "
+        "All separate verification outputs are registered with their source run "
+        "and enter settlement. If a proven author-knowledge query remains "
+        "no_suggestion, use --queries with the exact current build and residual "
+        "evidence as /settle documents; do not ask for approval to use this "
+        "existing mechanical-scope query channel. "
         "Run `docproof galley settle runs/<final> --source source/{book} "
         "--config <run config> --engine subagent --approval approval.json "
         "{settle_flags} > "

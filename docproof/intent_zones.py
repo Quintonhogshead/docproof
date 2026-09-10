@@ -260,6 +260,22 @@ class ResolvedZones:
         return {pid: [(lo, hi) for lo, hi, _z in rows]
                 for pid, rows in self._by_para.items() if rows}
 
+    def locked_cover(self, para_id: str, start: int, end: int) -> bool:
+        """Whether the entire span, not just one quoted word, is locked."""
+        if start == end:
+            zone = self.zone_at(para_id, start, end)
+            return zone is not None and zone.permission == "locked"
+        cursor = start
+        for lo, hi, zone in sorted(self._by_para.get(para_id, ()), key=lambda r: r[:2]):
+            if zone.permission != "locked" or hi <= cursor:
+                continue
+            if lo > cursor:
+                return False
+            cursor = max(cursor, hi)
+            if cursor >= end:
+                return True
+        return False
+
 
 def resolve(zones: IntentZones, paragraphs: list[ParagraphRef], *,
             closing_quotes: str = "”\"") -> ResolvedZones:

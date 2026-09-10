@@ -57,6 +57,25 @@ nonconvergence evidence rather than relabeling it as author questions.
    --source BOOK --config C` refuses while open work remains. Never fake the
    state or delete a repair to make it advance.
 
+Independent `galley verify --out` passes automatically register their artifacts
+with the reviewed run. Settlement reads all registered passes, including the
+slow type-and-compare pass; keep their files and original verification hashes.
+After rebuilding, repeat both required verification passes on the new build.
+
+When independent reads establish missing author knowledge but the narrow judge
+keeps returning `no_suggestion`, record the actual editorial ruling through
+`--queries runs/settle-queries.json`. The file is
+`{"build_sha256":"CURRENT_DELIVERABLE_SHA256","queries":[{"residual_id":"r-...",
+"para_id":"body-...","quote":"EXACT_RESIDUAL_QUOTE","question":"Specific author question",
+"missing_knowledge":"What fact or intended wording only the author knows"}]}`.
+Use an open residual from `galley residuals RUN --json`, the current deliverable
+hash, and evidence already recorded in decisions.md. Missing engines, unanchored
+text, locked source features, or spent rounds are not author knowledge. The
+engine checks the build and residual evidence; it writes the query and its
+settlement record without changing the approved config. Never hand-patch the
+findings or settlement ledger. Source-restoring corrections now withdraw their
+owning edits through settlement instead of producing rejected no-op rows.
+
 ## Queries and outcome
 
 Compare actual questions with approval's comment_budget before certification.

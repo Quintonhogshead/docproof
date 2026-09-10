@@ -892,6 +892,10 @@ def _galley_parser(sub) -> None:
     _verification_pass_args(gse)
     gse.add_argument("--context", help="a file of house-style / voice notes "
                                        "for the judge and the delta verify")
+    gse.add_argument("--queries", metavar="JSON",
+                     help="recorded author-knowledge queries for exact open residuals; "
+                          "requires current build_sha256 and queries with residual_id, "
+                          "para_id, quote, question and missing_knowledge")
     gse.add_argument("--no-verify", action="store_true",
                      help="skip the per-round delta re-read (deterministic "
                           "settlement only; the run keeps its last verify "

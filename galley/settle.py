@@ -352,11 +352,20 @@ def open_items(run_dir: str | Path) -> list[Residual]:
     have = settled.record_ids() if settled else set()
     out: list[Residual] = []
     seen: set[str] = set()
-    for name, kind in (("finished_walk.json", "residual"),
-                       ("change_verify.json", "edit_damage")):
+    from galley.settlement_inputs import verification_dirs
+    inputs = [(directory / name, kind) for directory in verification_dirs(run)
+              for name, kind in (("finished_walk.json", "residual"),
+                                 ("change_verify.json", "edit_damage"))]
+    for path, kind in inputs:
         try:
-            payload = json.loads((run / name).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            if path.parent != run.resolve():
+                raise ValueError(f"Unreadable registered verification input: {path}") from exc
+            continue
+        if not isinstance(payload, dict):
+            if path.parent != run.resolve():
+                raise ValueError(f"Invalid registered verification input: {path}")
             continue
         rows = payload.get("residuals" if kind == "residual" else "problems") \
             or []
@@ -937,6 +946,26 @@ def _owner_of_edit(res: Residual, working: Mapping[str, Mapping[str, Any]]
     return None
 
 
+def locked_residual(res: Residual, source, accepted, zones, *, resolved=False) -> str:
+    """Ignore an unchanged source feature in a locked zone, never edit damage."""
+    if res.kind != "residual" or zones is None or not zones.any:
+        return ""
+    src = source.get(res.para_id, "")
+    spans = []
+    if resolved and res.source_span is not None and not res.owner_finding_id:
+        spans = [res.source_span]
+    elif src and src == accepted.get(res.para_id) and res.quote:
+        from docproof.validator import fold_punct
+        spans = [(m.start(), m.end()) for m in re.finditer(
+            re.escape(fold_punct(res.quote)), fold_punct(src))]
+    if not spans:
+        return ""
+    protected = [zones.zone_at(res.para_id, lo, hi) for lo, hi in spans]
+    if all(zones.locked_cover(res.para_id, lo, hi) for lo, hi in spans):
+        return "intent_zone:" + (protected[0].label or protected[0].category or "locked")
+    return ""
+
+
 def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
            source: Mapping[str, str], working: Mapping[str, Mapping[str, Any]],
            zones: Any = None, *, replacement: str | None = None,
@@ -949,6 +978,9 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
     deterministic sweep would undo; ``mechanical_only`` routes uncertain corrections
     to internal judgment. Skipped TOC paragraphs are dropped as ``toc_unreachable``."""
     why = resolve(res, em, accepted, working)
+    protected = locked_residual(res, source, accepted, zones, resolved=why is None)
+    if protected:
+        return Decision("drop", protected)
     if why is not None:
         current = accepted.get(res.para_id, "")
         from galley.comment_reconcile import corrected_at_source
@@ -1111,6 +1143,9 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
         if why:
             return Decision("judge" if replacement is None else "internal_repair",
                             f"rewrite_class:{why}")
+    if comp.owners and comp.text == src_text[comp.src_start:comp.src_end]:
+        return Decision("revert", "restores_source", composite=comp,
+                        owner_key=comp.owners[0])
     if comp.absorbed:
         return Decision("absorb", tag, replacement=comp.text, composite=comp,
                         owner_key=comp.owners[0])
@@ -1439,7 +1474,7 @@ def _apply_decision(res: Residual, dec: Decision,
     before = working.get(owner_key or "", {}).get("corrected_text", "") \
         if owner_key else ""
 
-    if dec.action in ("absorb", "add") and dec.composite is not None:
+    if dec.action in ("absorb", "add", "revert") and dec.composite is not None:
         comp = dec.composite
         lane = ""
         cluster = ""
@@ -1449,6 +1484,11 @@ def _apply_decision(res: Residual, dec: Decision,
                 removed[key] = row
                 lane = lane or str(row.get("lane") or "")
                 cluster = cluster or str(row.get("cluster_id") or "")
+        if dec.action == "revert":
+            rec = SettlementRecord(res.id, round_no, "drop", owner_key,
+                                   comp.before, comp.text, dec.reason, verified_by,
+                                   para_id=res.para_id, kind=res.kind)
+            return rec, new_rows, removed
         extra = {"chunk_id": f"{SETTLE_CHUNK_PREFIX}{res.id}",
                  "lane": lane, "cluster_id": cluster}
         row = emap.as_row(source[res.para_id], comp, para_id=res.para_id,
@@ -1675,6 +1715,7 @@ class SettleOptions:
     verification_policy: str = "mechanical-verification-v1"
     required_verification_passes: tuple[str, ...] = ("primary",)
     verification_config_sha256: str = ""
+    queries_file: str | None = None
 
 
 @dataclass
@@ -1721,6 +1762,7 @@ class Settler:
         # Only a successful reread clears it; remaining dirty ids block certify.
         self._dirty: set[str] = set()
         self._recovery_removed: dict[str, dict[str, dict[str, Any]]] = {}
+        self._queries: dict[str, dict] = {}
 
 
     def _rebuild(self, rows: list[dict[str, Any]], *, snapshot: str) -> Any:
@@ -1737,7 +1779,8 @@ class Settler:
                     (snap / name).write_bytes(p.read_bytes())
         result = rebuild_from_rows(cfg, manuscript=self.manuscript, rows=rows,
                                    error_dir=self.error_dir,
-                                   remap_unchanneled=False, id_prefix="settle")
+                                   remap_unchanneled=False, id_prefix="settle",
+                                   settle_locked_queries=True)
         return result
 
     def _load_state(self) -> tuple[dict[str, dict[str, Any]], emap.EditMap,
@@ -1763,6 +1806,18 @@ class Settler:
         env = load_envelope(self.run_dir)
         removed = reconciliation(env.get("findings") or [], accepted,
                                  self.settlement.residuals_seen, source=self._source)
+        # Only generated finding-owned queries are removed. Original author
+        # comments survive every rebuild from the source document.
+        for key, row in working.items():
+            if terminal_state(row)[0] != "query":
+                continue
+            res = Residual(id=settle_residual_of(row) or key, kind="residual",
+                           para_id=str(row.get("para_id", "")),
+                           quote=str(row.get("original_text", "")),
+                           problem=str(row.get("explanation", "")), suggestion="")
+            protected = locked_residual(res, self._source, accepted, self._zones)
+            if protected:
+                removed[key] = protected
         if removed:
             rows = []
             for key, row in working.items():
@@ -1909,6 +1964,13 @@ class Settler:
         for res in items:
             dec = decide(res, em, accepted, source, working, self._zones,
                          **guards)
+            query = self._queries.get(res.id)
+            if query and dec.action in ("judge", "internal_repair"):
+                # A failed anchor is an engine repair, even with a requested
+                # question. Locked zones have already been dropped above.
+                if resolve(res, em, accepted, working) is None:
+                    dec = Decision("query", "author_knowledge:" + query["missing_knowledge"],
+                                   question=xml_safe(query["question"]))
             if dec.action == "judge":
                 if self.provider is None:
                     dec = Decision("internal_repair", dec.reason)
@@ -2017,6 +2079,17 @@ class Settler:
                     if fix is not None:
                         retry.quote, retry.suggestion = current, fix
                 self.round(round_no, [retry], _recovering=True)
+            elif res.kind == "residual" and res.para_id in self.touched:
+                prior = self.settlement.latest().get(res.id)
+                if prior and prior.action == "internal_repair" and prior.reason == "unanchorable":
+                    current_rows, current_map, current_text = self._load_state()
+                    retry = copy.deepcopy(res)
+                    if (current_text.get(res.para_id) != accepted.get(res.para_id)
+                            and resolve(retry, current_map, current_text, current_rows) is None):
+                        # A source-restoring edit can make another flag's exact
+                        # quote available again. Judge it once on this build,
+                        # instead of carrying an already-repaired anchor forever.
+                        self.round(round_no, [retry], _recovering=True)
         removed_by.update(self._recovery_removed)
         records = [self.settlement.latest().get(rec.residual_id, rec) for rec in records]
 
@@ -2147,7 +2220,7 @@ class Settler:
         ``working``; judge calls may fan out and are folded back by residual id."""
         if self.provider is None or self.opt.concurrency <= 1:
             return {}
-        need = [res for res in items
+        need = [res for res in items if res.id not in self._queries
                 if decide(res, em, accepted, source, working, self._zones,
                           **guards).action == "judge"]
         if not need:
@@ -2187,7 +2260,7 @@ class Settler:
         not match the map) marks the paragraph unplannable, so the self-check
         stays silent there rather than guessing."""
         pid = res.para_id
-        if dec.action in ("absorb", "add") and dec.composite is not None:
+        if dec.action in ("absorb", "add", "revert") and dec.composite is not None:
             comp = dec.composite
             plans.setdefault(pid, []).append(
                 (comp.acc_start, comp.acc_end, comp.text, res.id))
@@ -2227,8 +2300,7 @@ class Settler:
         (validator-refused, already reverted) item or an unplannable decision
         are skipped — their expected text is not known."""
         from galley.verify import paragraph_views
-        touched = {rec.para_id for rec in records
-                   if rec.action in ("absorb", "add", "revise")}
+        touched = set(plans)
         if not touched:
             return {}
         failed_paras = {rec.para_id for rec in records
@@ -2453,6 +2525,9 @@ class Settler:
         return open_items(self.run_dir)
 
     def run(self) -> SettleResult:
+        from galley.settlement_inputs import load_queries
+        self._queries = load_queries(self.opt.queries_file, self.run_dir,
+                                     open_items(self.run_dir))
         intake = self._intake_corrections()
         items = list({r.id: r for r in open_items(self.run_dir) + intake}.values())
         round_no = self.settlement.rounds
@@ -2532,6 +2607,25 @@ class Settler:
                     self.verified_by, para_id=res.para_id, kind=res.kind))
                 self.settlement.residuals_seen.append(res.to_json())
         self._reconcile_comments()
+        # Another item in this invocation may have removed the same bad edit.
+        # Re-evaluate internal records against the rebuilt map, not the stale
+        # pre-round coordinates, and close only deterministic DROP decisions.
+        # New edits and unresolved judgment still require the ordinary loop.
+        seen = {row["residual_id"]: row for row in self.settlement.residuals_seen}
+        unresolved = [seen[rid] for rid, prior in self.settlement.latest().items()
+                      if prior.action == "internal_repair" and rid in seen]
+        if unresolved:
+            working, em, accepted = self._load_state()
+            for row in unresolved:
+                res = (Residual.from_problem(row) if row.get("kind") == "edit_damage"
+                       else Residual.from_walk(row))
+                dec = decide(res, em, accepted, self._source, working, self._zones,
+                             mechanical_only=self.opt.mechanical_only,
+                             sweeps=self._sweeps, skipped=self._skipped)
+                if dec.action == "drop":
+                    record, _, _ = apply_decision(res, dec, working, self._source,
+                                                  round_no, verified_by="deterministic")
+                    self.settlement.records.append(record)
         latest = self.settlement.latest()
         self.settlement.open = list({r["residual_id"]: r
             for r in self.settlement.residuals_seen
@@ -2666,27 +2760,9 @@ def rewrite_verify_artifacts(run_dir: str | Path, settlement: Settlement, *,
 def unsettled(run_dir: str | Path) -> tuple[list[str], list[str]]:
     """(residual ids, problem ids) present in the verify artifacts with NO
     settlement record — certify's definition of "open"."""
-    run = Path(run_dir)
-    settled = Settlement.load(run)
-    have = settled.record_ids() if settled else set()
-    open_res: list[str] = []
-    open_prob: list[str] = []
-    for name, kind, out in (("finished_walk.json", "residual", open_res),
-                            ("change_verify.json", "edit_damage", open_prob)):
-        try:
-            payload = json.loads((run / name).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        rows = payload.get("residuals" if kind == "residual" else "problems") \
-            or []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            item = Residual.from_walk(row) if kind == "residual" \
-                else Residual.from_problem(row)
-            if item.id not in have:
-                out.append(item.id)
-    return open_res, open_prob
+    items = open_items(run_dir)
+    return ([r.id for r in items if r.kind == "residual"],
+            [r.id for r in items if r.kind == "edit_damage"])
 
 
 __all__ = [

@@ -1302,6 +1302,9 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
                        encoding="utf-8")
     fw_path.write_text(json.dumps(fw, indent=2, ensure_ascii=False),
                        encoding="utf-8")
+    if source_run_dir is not None and Path(source_run_dir).resolve() != run.resolve():
+        from galley.settlement_inputs import register_verification_source
+        register_verification_source(source_run_dir, run)
     return cv_path, fw_path
 
 
