@@ -110,3 +110,58 @@ def test_escalation_cannot_modify_unassigned_correction(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, 'run_structured', fake)
     with pytest.raises(InteriorAstraError, match='unknown evidence'):
         LunaFirstReviewer().plan(*inputs(), tmp_path)
+
+
+def test_shared_evidence_group_escalates_accepted_and_designer_rows_together(monkeypatch, tmp_path):
+    packet, snapshot = inputs()
+    packet['evidence'] = packet['evidence'][:1]
+    calls = []
+
+    def fake(prompt, schema, work_dir, *, request_id, **options):
+        calls.append(options)
+        style_row = instruction('style', 'designer', [])
+        style_row['covered_evidence_ids'] = []
+        if len(calls) == 1:
+            return plan(
+                [instruction('typo'), style_row],
+                [edit()])
+        subset = json.loads((work_dir / 'astra-interior-packet.json').read_text('utf-8'))
+        assert [row['id'] for row in subset['evidence']] == ['typo']
+        return plan(
+            [instruction('typo'), style_row],
+            [edit()])
+
+    monkeypatch.setattr(runner, 'run_structured', fake)
+    result = LunaFirstReviewer().plan(packet, snapshot, tmp_path)
+    assert [row['id'] for row in result['instructions']] == ['astra-typo', 'astra-style']
+    assert [row['id'] for row in result['edits']] == ['astra-typo']
+    assert len(calls) == 2
+
+
+def test_shared_group_keeps_unrelated_complex_source_and_two_astra_edits(monkeypatch, tmp_path):
+    packet, snapshot = inputs()
+    packet['evidence'] = packet['evidence'][:1]
+    packet['sources'].append({'id': 'source-2', 'kind': 'text', 'text': 'Other passage.'})
+    packet['evidence'].append({'id': 'other', 'source_id': 'source-2',
+                               'kind': 'text', 'text': 'Format other'})
+    calls = []
+
+    def fake(prompt, schema, work_dir, *, request_id, **options):
+        calls.append(options)
+        style_row = instruction('style', 'designer', [])
+        style_row['covered_evidence_ids'] = []
+        other_row = instruction('other', 'edit', ['other'])
+        other_row['source_ids'] = ['source-2']
+        if len(calls) == 1:
+            return plan([instruction('typo'), style_row, other_row],
+                        [edit(), edit('other', 'word', 'word', 'Italic')])
+        subset = json.loads((work_dir / 'astra-interior-packet.json').read_text('utf-8'))
+        assert {row['id'] for row in subset['evidence']} == {'typo', 'other'}
+        return plan([instruction('typo'), style_row, other_row],
+                    [edit(), edit('other', 'word', 'word', 'Italic')])
+
+    monkeypatch.setattr(runner, 'run_structured', fake)
+    result = LunaFirstReviewer().plan(packet, snapshot, tmp_path)
+    assert [row['id'] for row in result['edits']] == ['astra-typo', 'astra-other']
+    assert all(row['id'].startswith('astra-') for row in result['instructions'])
+    assert len(calls) == 2

@@ -113,6 +113,7 @@ def status(home: str | Path, *, get_key=None,
         # have to go and borrow it from.
         "hubspot_enabled": ws.hubspot_enabled,
         "hubspot_write_back": ws.hubspot_write_back,
+        "corrections_native_shared_form": ws.corrections_native_shared_form,
         # The proofing stage, whole: the Automations panel's Proofread drawer
         # both draws from and writes back every one of these.
         "proofing_enabled": ws.proofing_enabled,

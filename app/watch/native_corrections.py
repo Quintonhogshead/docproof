@@ -342,25 +342,38 @@ def _project_records(token: str, ws, *, opener) -> list[hubspot.HubSpotRecord]:
                          ws.corrections_native_project_book_property) if p]
     records: list[hubspot.HubSpotRecord] = []
     after = ""
+    seen: set[str] = set()
+    seen_ids: set[str] = set()
     while True:
-        # HubSpot search requires one filter group; HAS_PROPERTY keeps this an
-        # all-Projects read without inventing a status value.
-        body = {"filterGroups": [{"filters": [{
-            "propertyName": project_first,
-            "operator": "HAS_PROPERTY"}]}],
-                "properties": props, "limit": 100}
-        if after:
-            body["after"] = after
-        request = hubspot._request(
-            f"{hubspot.API}/crm/v3/objects/{ws.hubspot_object}/search", token,
-            data=json.dumps(body).encode(), method="POST")
+        if ws.corrections_native_shared_form:
+            # Include incomplete Projects: their titles still make a shared
+            # form ambiguous, even when the author's name is missing.
+            query = urllib.parse.urlencode({"properties": ','.join(props), "limit": 100,
+                                            **({"after": after} if after else {})})
+            request = hubspot._request(
+                f"{hubspot.API}/crm/v3/objects/{ws.hubspot_object}?{query}", token)
+        else:
+            body = {"filterGroups": [{"filters": [{"propertyName": project_first,
+                    "operator": "HAS_PROPERTY"}]}], "properties": props, "limit": 100}
+            if after:
+                body['after'] = after
+            request = hubspot._request(f"{hubspot.API}/crm/v3/objects/{ws.hubspot_object}/search",
+                                      token, data=json.dumps(body).encode(), method='POST')
         answer = hubspot._json_call(request, opener=opener,
                                     what="find Projects for native corrections")
-        records.extend(hubspot.HubSpotRecord.from_api(row)
-                       for row in answer.get("results") or [] if isinstance(row, dict))
+        for raw in answer.get('results') or []:
+            if not isinstance(raw, dict) or not raw.get('id') or str(raw['id']) in seen_ids:
+                raise NativeCorrectionError('HubSpot pagination returned an invalid or repeated Project; no title match is safe.')
+            seen_ids.add(str(raw['id']))
+            records.append(hubspot.HubSpotRecord.from_api(raw))
+        if len(records) > 50000:
+            raise NativeCorrectionError('HubSpot Projects exceed 50000 records; no partial title matching is allowed.')
         after = str((answer.get("paging") or {}).get("next", {}).get("after") or "")
         if not after:
             return records
+        if after in seen:
+            raise NativeCorrectionError("HubSpot Projects pagination is invalid or exceeds 50000 records")
+        seen.add(after)
 
 
 def _folder_for(token: str, ws, record, *, opener) -> str | None:

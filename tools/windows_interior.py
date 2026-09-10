@@ -47,7 +47,7 @@ def rehearsal(home: Path, *, astra=False):
       d=app.documents.add(false);
       d.documentPreferences.pageWidth="6in"; d.documentPreferences.pageHeight="9in";
       d.documentPreferences.facingPages=false;
-      var f=d.pages[0].textFrames.add(); f.geometricBounds=[36,36,500,390];
+      var f=d.pages[0].textFrames.add(); f.geometricBounds=["36pt","36pt","500pt","390pt"];
       f.contents="Windows correction rehearsal\\rThis sentnce describes a quiet river.\\rThe original edition must remain unchanged.";
       f.parentStory.texts[0].appliedFont=app.fonts.itemByName("Arial\\tRegular");
       f.parentStory.texts[0].pointSize=12;

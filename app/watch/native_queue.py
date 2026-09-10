@@ -72,7 +72,7 @@ def transaction(home: Path):
         db.close()
 
 
-def register_book(home, book):
+def register_book(home, book, *, if_absent=False):
     """An operator supplies the confirmed Project/folder/source mapping."""
     required = ('project_id', 'title', 'author', 'surname', 'folder_id', 'source_id')
     data = {key: str(book.get(key, '')).strip() for key in required}
@@ -94,6 +94,8 @@ def register_book(home, book):
         data[key] = list(dict.fromkeys(v.strip() for v in values))
     with transaction(home) as db:
         old = db.execute('SELECT data FROM books WHERE project_id=?', (data['project_id'],)).fetchone()
+        if old and if_absent:
+            return json.loads(old['data'])
         if old and json.loads(old['data']) == data:
             return data
         active = db.execute("SELECT 1 FROM batches WHERE project_id=? AND state NOT IN ('delivered','released')",

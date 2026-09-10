@@ -11,6 +11,87 @@ from app.lock import FolderLock
 from . import drive, hubspot, native_queue as queue
 
 
+def _title_candidates(title, ws, registry, records):
+    wanted = queue.title_key(title)
+    if not wanted:
+        return []
+    return [pid for pid, record in records.items()
+            if wanted in {queue.title_key(record.properties.get(ws.corrections_native_project_book_property, '')),
+                          *(queue.title_key(alias) for alias in registry.get(pid, {}).get('title_aliases', []))}]
+
+
+def _name_key(value):
+    return ' '.join(str(value or '').split()).casefold()
+
+
+def _auto_register(home, ws, records, rows, registry, drive_token, opener):
+    """Register only a single, fully verified pending book; never rewrite one."""
+    if not ws.corrections_native_shared_form or not drive_token or not ws.folder_id:
+        return {}
+    from . import native_corrections as native
+    project_first, project_last = native._project_name_properties(ws)
+    pending = {}
+    for row in rows:
+        values = row.get('values') or row.get('fields') or []
+        if isinstance(values, dict):
+            values = [{'name': k, 'value': v} for k, v in values.items()]
+        mapped = {str(v.get('name', '')).casefold(): str(v.get('value', '') or '').strip()
+                  for v in values if isinstance(v, dict)}
+        title = mapped.get(ws.corrections_native_form_book_property.casefold(), '')
+        candidates = _title_candidates(title, ws, registry, records)
+        if (len(candidates) == 1 and candidates[0] not in registry
+                and not (mapped.get(ws.corrections_native_form_project_property.casefold(), '')
+                         or row.get('recordId') or row.get('objectId'))):
+            pending.setdefault(candidates[0], []).append(native._row_marker(row))
+    holds = {}
+    if not pending:
+        return holds
+    try:
+        root_listing = drive.list_folder(drive_token, ws.folder_id, opener=opener)
+    except Exception as exc:
+        return {marker: f'{type(exc).__name__}: shared-form onboarding could not read the author folder.'
+                for markers in pending.values() for marker in markers}
+    for pid, markers in pending.items():
+        def hold(reason):
+            holds.update({marker: reason for marker in markers})
+        record = records[pid]
+        record_first = str(record.properties.get(project_first) or '').strip()
+        record_last = str(record.properties.get(project_last) or '').strip()
+        if not record_first or not record_last:
+            hold('Shared-form onboarding requires a CRM first and last author name.')
+            continue
+        author_key = _name_key(f'{record_first} {record_last}')
+        same_author = [r for r in records.values()
+                       if _name_key(f'{r.properties.get(project_first) or ""} {r.properties.get(project_last) or ""}') == author_key]
+        if len(same_author) != 1:
+            hold('Shared-form onboarding cannot disambiguate multiple Projects for this author.')
+            continue
+        author_hits = [f for f in root_listing if f.is_folder and _name_key(f.name) == author_key]
+        if len(author_hits) != 1:
+            hold('Shared-form onboarding found zero or multiple matching author folders.')
+            continue
+        try:
+            children = drive.list_folder(drive_token, author_hits[0].id, opener=opener)
+            interior = [f for f in children if f.is_folder and _name_key(f.name) == 'interior design']
+            if len(interior) != 1:
+                hold('Shared-form onboarding found zero or multiple Interior Design folders.')
+                continue
+            listing = drive.list_folder(drive_token, interior[0].id, opener=opener)
+            source, why = native.pick_source(listing, record_last)
+            if source is None:
+                hold('Shared-form onboarding found no unique highest native Book source.')
+                continue
+            queue.register_book(home, {'project_id': record.id,
+                'title': str(record.properties.get(ws.corrections_native_project_book_property) or '').strip(),
+                'author': f'{record_first} {record_last}', 'surname': record_last, 'folder_id': interior[0].id,
+                'source_id': source.id, 'source_version': native.versioned_name(source.name)[1],
+                'title_aliases': [], 'author_aliases': []}, if_absent=True)
+            registry[record.id] = queue.books(home).get(record.id, {})
+        except Exception as exc:
+            hold(f'{type(exc).__name__}: shared-form onboarding could not verify and save the book mapping.')
+    return holds
+
+
 def normalize(row, ws, registry, records):
     from .native_corrections import _row_marker, _timestamp_value, _project_name_properties
     fields = row.get('values') or row.get('fields') or []
@@ -43,6 +124,15 @@ def normalize(row, ws, registry, records):
         return hold('The submission has no stable event ID or valid timestamp.')
     if explicit and associated and explicit != associated:
         return hold('The submitted Project ID contradicts its HubSpot association.')
+    if not pid and ws.corrections_native_shared_form:
+        submitted_title = mapped.get(ws.corrections_native_form_book_property.casefold(), '').strip()
+        if not queue.title_key(submitted_title):
+            return hold('Shared-form matching requires a book title.')
+        candidates = _title_candidates(submitted_title, ws, registry, records)
+        if len(candidates) != 1:
+            return hold('The shared form does not identify exactly one readable HubSpot Project.')
+        pid = candidates[0]
+        event['project_id'] = pid
     if not pid:
         return hold('A verified Project ID is required; submitter names are not used to guess a book.')
     if pid not in registry or pid not in records:
@@ -68,7 +158,7 @@ def normalize(row, ws, registry, records):
     return event
 
 
-def collect(home, ws, hs_token, *, opener, now=None):
+def collect(home, ws, hs_token, *, opener, now=None, drive_token=None):
     """Capture every event, independently of the InDesign worker lock."""
     from . import native_corrections as native
     now = time.time() if now is None else now
@@ -95,8 +185,19 @@ def collect(home, ws, hs_token, *, opener, now=None):
             queue.capture(home, ws.corrections_native_form_id,
                           [normalize(row, ws, registry, {}) for row in rows if native._row_marker(row) not in existing], now=now)
             raise
-        queue.capture(home, ws.corrections_native_form_id,
-                      [normalize(row, ws, registry, records) for row in rows], now=now)
+        onboarding_holds = {}
+        try:
+            onboarding_holds = _auto_register(home, ws, records, rows, registry, drive_token, opener)
+        except Exception as exc:
+            onboarding_holds = {native._row_marker(row): f'{type(exc).__name__}: shared-form onboarding failed.'
+                                for row in rows}
+        events = []
+        for row in rows:
+            event = normalize(row, ws, registry, records)
+            if native._row_marker(row) in onboarding_holds and event.get('project_id') not in registry:
+                event['reason'] = onboarding_holds[native._row_marker(row)]
+            events.append(event)
+        queue.capture(home, ws.corrections_native_form_id, events, now=now)
     except Exception as exc:
         queue.record_error(home, f'{type(exc).__name__}: intake failed; no new batch will start.')
         raise
@@ -220,7 +321,7 @@ def run_stage(token, home, ws, *, opener, hs_token, report, mock=False):
     from . import native_corrections as native
     # Discovery runs even while another worker owns InDesign. Claims and the
     # native operation are serialized by the existing per-home worker lock.
-    collect(home, ws, hs_token, opener=opener)
+    collect(home, ws, hs_token, opener=opener, drive_token=token)
     guarded = replace(ws, corrections_native_partial_upload=False, hubspot_write_back=False,
                       corrections_native_folder_property='_docproof_folder',
                       corrections_native_project_first_property='_docproof_first',
