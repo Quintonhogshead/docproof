@@ -813,16 +813,13 @@ class Agent:
         dest = self.root / DOWNLOAD_DIR / book.file_id
         if self.download is not None:
             return self.download(book, dest)
-        from app.watch.drive import DriveFile
         from app.watch.proof import fetch
         from galley.driver import drive_token
 
         token = drive_token()
-        # Infer download versus native-Doc export from the name; fetch also
-        # converts .doc/.odt.
-        handle = DriveFile(id=book.file_id, name=book.name,
-                           mime_type=_mime_for(book.name))
-        return fetch(token, handle, dest)
+        # fetch picks download versus native-Doc export from the handle's
+        # type, and also converts .doc/.odt.
+        return fetch(token, drive_handle(token, book), dest)
 
     def drive_book(self, local: Path, slug: str, folder_id: str, *,
                    resume: bool) -> Any:
@@ -1182,6 +1179,28 @@ def _state_index(state: str) -> int:
 _DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _MIME_BY_SUFFIX = {".docx": _DOCX, ".doc": "application/msword",
                    ".odt": "application/vnd.oasis.opendocument.text"}
+
+
+def drive_handle(token: str, book: AwaitingBook, *, opener=None):
+    """The Book 1 as a DriveFile carrying Drive's own type for it.
+
+    The name alone cannot tell a native Google Doc from a Word upload whose
+    extension was dropped — both read "Smith - Book 1" — and exporting the
+    Word file is a 403 ("Export only supports Docs Editors files") that
+    blocks the book on every poll. Only when Drive will not say does the
+    name's guess stand in."""
+    from app.watch import drive
+
+    try:
+        meta = drive.get_file(token, book.file_id,
+                              opener=opener or drive._open_url)
+        mime = meta.mime_type
+    except drive.DriveError as e:
+        log.warning("Could not read Drive's type for %s (%s); guessing "
+                    "from the name.", book.name, e)
+        mime = ""
+    return drive.DriveFile(id=book.file_id, name=book.name,
+                           mime_type=mime or _mime_for(book.name))
 
 
 def _mime_for(name: str) -> str:
