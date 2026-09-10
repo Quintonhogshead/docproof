@@ -7780,7 +7780,7 @@ function renderWatch(body, quiet) {
     for (const kind of job.outputs || []) {
       const link = document.createElement('a');
       link.href = `/api/watch/native/jobs/${encodeURIComponent(job.job_id)}/file/${encodeURIComponent(kind)}`;
-      link.textContent = {indd: 'InDesign', pdf: 'PDF', package: 'Complete package', report: 'Correction report'}[kind] || kind;
+      link.textContent = {indd: 'InDesign', pdf: 'PDF', package: 'Complete package', report: 'Correction report', spreadsheet: 'Corrections spreadsheet'}[kind] || kind;
       link.style.marginLeft = '0.8em';
       card.append(link);
     }
@@ -9884,7 +9884,7 @@ function automationWorkflows() {
           ? 'HubSpot: ' + w.hubspot_corrections_ready_value : 'HubSpot status',
         hs: true,
       },
-      effect: nativeCorrections ? 'Book N+1 INDD + PDF + report' : 'Book N.5 + Applied / Not applied sheet',
+      effect: nativeCorrections ? 'Book N.5 INDD + PDF + corrections spreadsheet' : 'Book N.5 + Applied / Not applied sheet',
       config: 'wf-config-corrections',
       enabled: !!w.corrections_enabled, toggleable: true,
       status: !w.corrections_enabled ? 'off' : (corrReady ? 'on' : 'setup'),

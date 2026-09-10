@@ -45,20 +45,28 @@ def test_native_file_route_serves_job_output_but_not_paths_outside_job(tmp_path)
     job.mkdir(parents=True)
     output = job / "output.pdf"
     output.write_bytes(b"native result")
+    spreadsheet = job / "corrections.xlsx"
+    spreadsheet.write_bytes(b"audit result")
     (job / "job.json").write_text(
-        json.dumps({"result": {"output_pdf": str(output)}}), encoding="utf-8")
+        json.dumps({"result": {"output_pdf": str(output),
+                                "audit_spreadsheet": str(spreadsheet)}}), encoding="utf-8")
     outside = tmp_path / "outside.pdf"
     outside.write_bytes(b"private")
     bad = jobs / "job-2"
     bad.mkdir()
     (bad / "job.json").write_text(
-        json.dumps({"result": {"output_pdf": str(outside)}}), encoding="utf-8")
+        json.dumps({"result": {"output_pdf": str(outside),
+                                "audit_spreadsheet": str(outside)}}), encoding="utf-8")
 
     with TestClient(app) as client:
         answer = client.get("/api/watch/native/jobs/job-1/file/pdf")
         assert answer.status_code == 200
         assert answer.content == b"native result"
+        spreadsheet_answer = client.get("/api/watch/native/jobs/job-1/file/spreadsheet")
+        assert spreadsheet_answer.status_code == 200
+        assert spreadsheet_answer.content == b"audit result"
         assert client.get("/api/watch/native/jobs/job-2/file/pdf").status_code == 404
+        assert client.get("/api/watch/native/jobs/job-2/file/spreadsheet").status_code == 404
         assert client.get("/api/watch/native/jobs/job-1/file/../../outside").status_code in {404, 422}
 
 

@@ -18,9 +18,10 @@ def test_native_source_selection_is_numeric_and_refuses_ties():
     entries = [
         DriveFile("a", "Johnson - Book 9.indd", "application/octet-stream"),
         DriveFile("b", "Johnson - Book 10.indd", "application/octet-stream"),
+        DriveFile("half", "Johnson - Book 10.5.indd", "application/octet-stream"),
     ]
-    assert native.pick_source(entries, "Johnson")[0].id == "b"
-    tied = entries + [DriveFile("c", "Johnson - Book 10.indd", "application/octet-stream")]
+    assert native.pick_source(entries, "Johnson")[0].id == "half"
+    tied = entries + [DriveFile("c", "Johnson - Book 10.5.indd", "application/octet-stream")]
     assert native.pick_source(tied, "Johnson") == (None, "tie")
     assert native.newer_export(
         [DriveFile("out", "Johnson - Book 11.indd", "application/octet-stream"),
@@ -67,12 +68,14 @@ def test_native_run_uploads_verified_outputs_once_and_resumes_receipts(tmp_path,
         indd = out / "actual.indd"
         pdf = out / "actual.pdf"
         report = out / "correction-report.json"
+        audit = out / "corrections.xlsx"
         indd.write_bytes(b"corrected")
         pdf.write_bytes(b"pdf")
         report.write_text("{}", encoding="utf-8")
+        audit.write_bytes(b"xlsx")
         return {"status": "verified", "needs_designer": False,
                 "reasons": [], "output_indd": str(indd),
-                "output_pdf": str(pdf), "report": str(report)}
+                "output_pdf": str(pdf), "report": str(report), "audit_spreadsheet": str(audit)}
 
     monkeypatch.setattr(native, "_call_workflow", workflow)
     ws = WatchSettings(
@@ -95,8 +98,8 @@ def test_native_run_uploads_verified_outputs_once_and_resumes_receipts(tmp_path,
                      report=report)
     assert len(calls) == 1
     assert {name for name in report.uploaded} == {
-        "Johnson - Book 11.indd", "Johnson - Book 11.pdf",
-        "Johnson - Book 11.report.json",
+        "Johnson - Book 10.5.indd", "Johnson - Book 10.5.pdf",
+        "Johnson - Book 10.5.report.json", "Johnson - Book 10.5.corrections.xlsx",
     }
     assert opener.hubspot["hs-Johnson"]["properties"]["docproof"] == "verified"
 
@@ -273,9 +276,12 @@ def test_native_upload_failure_resumes_without_reinvoking_workflow(tmp_path, mon
         out = Path(work_dir); out.mkdir(parents=True, exist_ok=True)
         for name, body in (("a.indd", b"i"), ("a.pdf", b"p"), ("correction-report.json", b"{}")):
             (out / name).write_bytes(body)
+        audit = out / "corrections.xlsx"
+        audit.write_bytes(b"xlsx")
         return {"status": "verified", "needs_designer": False, "reasons": [],
                 "output_indd": str(out / "a.indd"), "output_pdf": str(out / "a.pdf"),
-                "report": str(out / "correction-report.json")}
+                "report": str(out / "correction-report.json"),
+                "audit_spreadsheet": str(audit)}
 
     monkeypatch.setattr(native, "_call_workflow", workflow)
     ws = WatchSettings(folder_id="root", client_id="c", client_secret="s", hubspot_enabled=True,
