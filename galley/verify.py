@@ -8,9 +8,14 @@ directory; failed structured replies are recorded as losses.
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
 import logging
-from dataclasses import dataclass
+import os
+import tempfile
+import uuid
+from contextlib import nullcontext
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -30,6 +35,281 @@ DEFAULT_WALK_CHARS = 6000
 MAX_PROBLEMS = 200
 MAX_RESIDUALS_PER_READ = 80
 MAX_RESIDUALS = 5000
+
+VERIFICATION_POLICY = "mechanical-verification-v1"
+_CHECKPOINT_VERSION = 1
+_CHECKPOINT_DIR = ".verification-checkpoints"
+
+
+def _digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                     separators=(",", ":"), allow_nan=False)
+                          .encode("utf-8")).hexdigest()
+
+
+def _save_json(path: Path, value: dict) -> None:
+    """Commit one complete checkpoint; a killed write leaves no reusable reply."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, ensure_ascii=False, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def _valid_schema(value: Any, schema: dict) -> bool:
+    """Strict local validation of the small verification response schemas."""
+    from docproof.providers.base import inlined_json_schema
+
+    def matches(item, node):
+        kind = node.get("type")
+        if kind == "object":
+            return (isinstance(item, dict)
+                    and set(item) == set(node.get("properties", {}))
+                    and all(matches(item[k], child)
+                            for k, child in node["properties"].items()))
+        if kind == "array":
+            return isinstance(item, list) and all(matches(x, node["items"]) for x in item)
+        valid = ((kind == "string" and isinstance(item, str))
+                 or (kind == "integer" and type(item) is int)
+                 or (kind == "boolean" and type(item) is bool))
+        return valid and ("enum" not in node or item in node["enum"])
+
+    try:
+        return matches(value, inlined_json_schema(schema))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _policy(pass_id, required_pass_ids, policy_id):
+    if pass_id is None and required_pass_ids is None and policy_id is None:
+        return None                       # legacy caller: fresh, no reusable proof
+    ids = list(required_pass_ids or ())
+    if (not isinstance(pass_id, str) or not pass_id.strip()
+            or not isinstance(policy_id, str) or not policy_id.strip()
+            or not ids or any(not isinstance(p, str) or not p.strip() for p in ids)
+            or len(set(ids)) != len(ids) or pass_id not in ids):
+        raise ValueError("Verification requires an explicit policy and unique required pass IDs containing this pass")
+    return {"id": policy_id, "pass_id": pass_id, "required_pass_ids": ids}
+
+
+def _verification_identity(run_dir, original, accepted, edits, provider, model,
+                           context, max_tokens, engine, policy, config_sha256,
+                           gate):
+    schema, schema_name = _change_schema() if gate == "changes" else _walk_schema()
+    system = (_CHANGE_SYSTEM + _context_block(context, "verifier") if gate == "changes"
+              else _WALK_SYSTEM + _context_block(context, "proofreader"))
+    path = deliverable_docx(run_dir)
+    return {"version": _CHECKPOINT_VERSION, "gate": gate, "model": model,
+            "engine": engine, "policy": policy, "config_sha256": config_sha256,
+            "provider": {"class": type(provider).__module__ + "." + type(provider).__qualname__,
+                         **{k: getattr(provider, k, None) for k in
+                            ("name", "model", "effort", "max_turns")}},
+            "document_sha256": hashlib.sha256(path.read_bytes()).hexdigest() if path else None,
+            "source_sha256": _digest(list(original.items())),
+            "accepted_sha256": _digest(list(accepted.items())), "edits_sha256": _digest(edits),
+            "system_sha256": _digest(system), "schema_sha256": _digest(schema),
+            "schema_name": schema_name, "max_tokens": max_tokens,
+            "change_batch": DEFAULT_CHANGE_BATCH, "walk_chars": DEFAULT_WALK_CHARS,
+            "limits": [MAX_PROBLEMS, MAX_RESIDUALS_PER_READ, MAX_RESIDUALS]}
+
+
+class _ReadCheckpoint:
+    """Resume only an unfinished invocation of the SAME explicit pass.
+
+    A completed invocation is never a cache for the next independent read.
+    The lock keeps concurrent invocations from impersonating one another's
+    crash recovery. Worker threads save separate atomic response files.
+    """
+
+    def __init__(self, run_dir, identity, purpose, command_id=None):
+        self.identity = identity
+        self.identity_sha256 = _digest(identity)
+        self.command_id = command_id
+        self.scope = _digest({"gate": identity["gate"], "policy": identity["policy"],
+                              "purpose": purpose, "command_id": command_id})
+        self.root = Path(run_dir) / _CHECKPOINT_DIR / self.scope
+        self.complete = True
+        self.windows = {}
+        self.recovered_usage = Usage()
+
+    def __enter__(self):
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.lock = (self.root / "lock").open("a")
+        fcntl.flock(self.lock.fileno(), fcntl.LOCK_EX)
+        state = _load_artifact(self.root / "state.json")
+        invocation = state.get("invocation_id", "")
+        resumable = ("incomplete", "completed") if self.command_id else ("incomplete",)
+        if (state.get("status") not in resumable
+                or state.get("identity_sha256") != self.identity_sha256
+                or not isinstance(invocation, str) or len(invocation) != 32
+                or any(c not in "0123456789abcdef" for c in invocation)):
+            invocation = uuid.uuid4().hex
+        self.invocation_id = invocation
+        self.directory = self.root / invocation
+        self.directory.mkdir(exist_ok=True)
+        from docproof.providers.base import NormalizedUsage
+        for path in self.directory.glob("*.usage.json"):
+            record = _load_artifact(path)
+            attempts = record.get("attempts", [])
+            if (record.get("identity_sha256") != self.identity_sha256
+                    or not isinstance(attempts, list)
+                    or record.get("usage_sha256") != _digest(attempts)):
+                continue
+            for attempt in attempts:
+                values = attempt.get("usage", {}) if isinstance(attempt, dict) else {}
+                if (set(values) != {"input_tokens", "output_tokens", "cache_creation_input_tokens",
+                                   "cache_read_input_tokens", "billed"}
+                        or type(values.get("billed")) is not bool
+                        or any(type(v) is not int or v < 0 for k, v in values.items() if k != "billed")
+                        or attempt.get("model") != self.identity["model"]):
+                    continue
+                self.recovered_usage.add(NormalizedUsage(**values), model=attempt["model"])
+        _save_json(self.root / "state.json", {"status": "incomplete",
+                   "identity_sha256": self.identity_sha256, "invocation_id": invocation})
+        return self
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.lock.fileno(), fcntl.LOCK_UN)
+        self.lock.close()
+
+    def load(self, request, validate):
+        key = _digest(request)
+        saved = _load_artifact(self.directory / (key + ".json"))
+        body = saved.get("parsed")
+        if (saved.get("identity_sha256") == self.identity_sha256
+                and saved.get("request_sha256") == key
+                and saved.get("result_sha256") == _digest(body)
+                and _valid_schema(body, request["schema"]) and validate(body)):
+            self.windows[key] = saved["result_sha256"]
+            from docproof.providers.base import ProviderResult
+            return ProviderResult(parsed=body, usage=None, stop_reason="ok")
+        return None
+
+    def record(self, request, result, validate):
+        if (result.stop_reason != "ok" or not _valid_schema(result.parsed, request["schema"])
+                or not validate(result.parsed)):
+            self.complete = False
+            return
+        key, result_sha = _digest(request), _digest(result.parsed)
+        _save_json(self.directory / (key + ".json"), {
+            "identity_sha256": self.identity_sha256, "request_sha256": key,
+            "result_sha256": result_sha, "parsed": result.parsed})
+        self.windows[key] = result_sha
+
+    def record_usage(self, request, result):
+        if result.usage is None:
+            return
+        key = _digest(request)
+        path = self.directory / (key + ".usage.json")
+        prior = _load_artifact(path)
+        attempts = prior.get("attempts", [])
+        if (prior.get("identity_sha256") != self.identity_sha256
+                or prior.get("usage_sha256") != _digest(attempts)):
+            attempts = []
+        values = {k: getattr(result.usage, k, 0) for k in
+                  ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")}
+        values["billed"] = getattr(result.usage, "billed", True)
+        attempts.append({"model": request["model"], "usage": values})
+        _save_json(path, {"identity_sha256": self.identity_sha256,
+                         "attempts": attempts, "usage_sha256": _digest(attempts)})
+
+    def finish(self, expected, complete):
+        complete = bool(complete and self.complete and len(self.windows) == expected)
+        proof = {"identity": self.identity, "identity_sha256": self.identity_sha256,
+                 "complete": complete, "expected_windows": expected,
+                 "windows": self.windows, "scope": self.scope,
+                 "invocation_id": self.invocation_id}
+        proof["proof_sha256"] = _digest(proof)
+        _save_json(self.root / "state.json", {"status": "completed" if complete else "incomplete",
+                   "identity_sha256": self.identity_sha256, "invocation_id": self.invocation_id})
+        return proof
+
+
+class _VerificationInvocation:
+    """A command's explicit recovery boundary includes both gates and writes."""
+
+    def __init__(self, run_dir, provider, model, *, output_dir=None, context="", engine="",
+                 pass_id=None, required_pass_ids=None, policy_id=None, config_sha256="",
+                 max_tokens=DEFAULT_MAX_TOKENS, run_changes=True, run_walk=True,
+                 purpose="verification"):
+        self.run = Path(run_dir)
+        self.output = Path(output_dir) if output_dir is not None else self.run
+        self.provider, self.model, self.context, self.engine = provider, model, context, engine
+        self.policy = _policy(pass_id, required_pass_ids, policy_id)
+        if self.policy is None:
+            raise ValueError("A resumable verification command requires an explicit pass policy")
+        self.config_sha256, self.max_tokens = config_sha256, max_tokens
+        self.purpose = purpose
+        self.gates = {"changes": bool(run_changes), "walk": bool(run_walk)}
+        self.root = self.run / _CHECKPOINT_DIR / "commands" / _digest({
+            "policy": self.policy, "output": str(self.output.resolve()), "purpose": purpose})
+
+    def _identity(self):
+        original, accepted = paragraph_views(self.run)
+        edits = applied_edits(self.run)
+        return {"output": str(self.output.resolve()), "selected_gates": self.gates, "purpose": self.purpose,
+                "gates": {gate: _verification_identity(self.run, original, accepted, edits,
+                    self.provider, self.model, self.context, self.max_tokens, self.engine,
+                    self.policy, self.config_sha256, gate) for gate, selected in self.gates.items() if selected}}
+
+    def __enter__(self):
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.lock = (self.root / "lock").open("a")
+        fcntl.flock(self.lock.fileno(), fcntl.LOCK_EX)
+        self.identity_sha256 = _digest(self._identity())
+        prior = _load_artifact(self.root / "state.json")
+        command_id = prior.get("command_id", "")
+        if (prior.get("status") != "incomplete" or prior.get("identity_sha256") != self.identity_sha256
+                or not isinstance(command_id, str) or len(command_id) != 32
+                or any(c not in "0123456789abcdef" for c in command_id)):
+            command_id = uuid.uuid4().hex
+        self.command_id = command_id
+        _save_json(self.root / "state.json", {"status": "incomplete",
+                   "identity_sha256": self.identity_sha256, "command_id": command_id})
+        return self
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.lock.fileno(), fcntl.LOCK_UN)
+        self.lock.close()
+
+    def mark_complete(self, changes, walk):
+        """Commit only after every selected gate and its artifact are complete."""
+        current = self._identity()
+        if _digest(current) != self.identity_sha256:
+            return False
+        artifacts = {}
+        for gate, result, filename, key, rows in (
+                ("changes", changes, "change_verify.json", "problems", changes.problems),
+                ("walk", walk, "finished_walk.json", "residuals", walk.residuals)):
+            if not self.gates[gate]:
+                continue
+            proof = result.verification_provenance.get(gate, {})
+            artifact = _load_artifact(self.output / filename)
+            expected_scope = _digest({"gate": gate, "policy": self.policy,
+                                      "purpose": self.purpose, "command_id": self.command_id})
+            if (proof.get("complete") is not True or proof.get("identity") != current["gates"][gate]
+                    or proof.get("scope") != expected_scope or artifact.get("ran") is not True
+                    or artifact.get(key) != [row.to_json() for row in rows]
+                    or artifact.get("unread_batches") or artifact.get("unread_paragraphs")
+                    or artifact.get("unverified_paragraphs")
+                    or (artifact.get("verification_provenance") is not None
+                        and artifact["verification_provenance"] != proof)):
+                return False
+            artifacts[filename] = _digest(artifact)
+        _save_json(self.root / "state.json", {"status": "completed", "command_id": self.command_id,
+                   "identity_sha256": self.identity_sha256, "artifacts_sha256": artifacts})
+        return True
+
+
+def verification_invocation(run_dir, provider, model, **kwargs):
+    """Recover an incomplete command; a completed command starts a fresh read."""
+    return _VerificationInvocation(run_dir, provider, model, **kwargs)
 
 _CHANGE_VERDICTS = (
     "breaks_meaning", "breaks_grammar", "voice_damage", "artifact", "wrong_rule")
@@ -379,26 +659,49 @@ UNREAD_BATCHES: list[dict[str, Any]] = []
 
 def _ask_with_retry(provider, *, model: str, system: str, user: str,
                     schema: dict[str, Any], schema_name: str, max_tokens: int,
-                    usage: Usage, what: str):
+                    usage: Usage, what: str, checkpoint=None, validate=None):
     """One structured call, retried ONCE when the reply did not come back
     clean. A lost reply is usually transient (a truncated or malformed answer
     from the subagent lane, a dropped connection); the Redding walk lost six
     of 42 windows that way, and every one read fine on a second try."""
-    result = provider.complete_structured(
-        model=model, system=system, user=user, schema=schema,
-        schema_name=schema_name, max_tokens=max_tokens)
+    request = dict(model=model, system=system, user=user, schema=schema,
+                   schema_name=schema_name, max_tokens=max_tokens)
+    # Two equal-looking windows are still distinct required reads.
+    cache_request = {**request, "window_id": what}
+
+    def checked(result):
+        if (checkpoint is not None and result.stop_reason == "ok"
+                and (not _valid_schema(result.parsed, schema) or not validate(result.parsed))):
+            from docproof.providers.base import ProviderResult
+            return ProviderResult(parsed=None, usage=result.usage, stop_reason="error",
+                                  error="Incomplete or invalid verification window response")
+        return result
+
+    if checkpoint is not None:
+        cached = checkpoint.load(cache_request, validate)
+        if cached is not None:
+            return cached
+    result = provider.complete_structured(**request)
+    if checkpoint is not None:
+        checkpoint.record_usage(cache_request, result)
     if result.usage is not None:
         usage.add(result.usage, model=model)
+    result = checked(result)
     if result.stop_reason == "ok":
+        if checkpoint is not None:
+            checkpoint.record(cache_request, result, validate)
         return result
     log.warning("%s: reply not ok (%s%s) — retrying once", what,
                 result.stop_reason,
                 f": {str(result.error)[:120]}" if result.error else "")
-    retry = provider.complete_structured(
-        model=model, system=system, user=user, schema=schema,
-        schema_name=schema_name, max_tokens=max_tokens)
+    retry = provider.complete_structured(**request)
+    if checkpoint is not None:
+        checkpoint.record_usage(cache_request, retry)
     if retry.usage is not None:
         usage.add(retry.usage, model=model)
+    retry = checked(retry)
+    if checkpoint is not None:
+        checkpoint.record(cache_request, retry, validate)
     return retry
 
 
@@ -407,12 +710,28 @@ def _take_losses(gate: str) -> list[tuple[str, str, str]]:
     _LOSSES[:] = [l for l in _LOSSES if l[0] != gate]
     return mine
 
+
+def _valid_change_window(body, batch):
+    rows = body["problems"]
+    return (len(rows) <= MAX_PROBLEMS
+            and len({r["index"] for r in rows}) == len(rows)
+            and all(1 <= r["index"] <= len(batch) and r["verdict"] in _CHANGE_VERDICTS
+                    for r in rows))
+
+
+def _valid_walk_window(body, read):
+    rows, text = body["findings"], dict(read)
+    return (len(rows) <= MAX_RESIDUALS_PER_READ
+            and all(r["para_id"] in text and r["severity"] in _SEVERITIES
+                    and bool(r["quote"].strip()) and r["quote"] in text[r["para_id"]]
+                    for r in rows))
+
 def verify_changes(edits: Sequence[dict[str, Any]], accepted: dict[str, str],
                    provider, model: str, usage: Usage, *,
                    context: str = "", batch_size: int = DEFAULT_CHANGE_BATCH,
                    max_tokens: int = DEFAULT_MAX_TOKENS,
                    original: dict[str, str] | None = None,
-                   concurrency: int = 1) -> list[ChangeProblem]:
+                   concurrency: int = 1, checkpoint=None) -> list[ChangeProblem]:
     """Re-read every applied edit in its finished context and return the ones
     that are a real problem. One `complete_structured` call per `batch_size`
     edits; a reply that did not come back clean is a loss (no problems), never a
@@ -444,7 +763,9 @@ def verify_changes(edits: Sequence[dict[str, Any]], accepted: dict[str, str],
                                  user=user, schema=schema,
                                  schema_name=schema_name, max_tokens=max_tokens,
                                  usage=local,
-                                 what=f"change batch {n}/{len(batches)}")
+                                 what=f"change batch {n}/{len(batches)}",
+                                 checkpoint=checkpoint,
+                                 validate=lambda body: _valid_change_window(body, batch))
         return result, local
 
     for (n, batch_idx), (result, local) in fan_out(
@@ -477,6 +798,12 @@ def verify_changes(edits: Sequence[dict[str, Any]], accepted: dict[str, str],
                 corrected_text=e["corrected_text"], verdict=verdict,
                 detail=str(row.get("detail", "")), fix=str(row.get("fix", ""))))
             if len(problems) >= MAX_PROBLEMS:
+                if checkpoint is not None:
+                    _LOSSES.append(("changes", "capacity", "Verification problem ceiling reached"))
+                    for index in range(n - 1, len(batches)):
+                        unread = [edits[i] for i in batches[index]]
+                        UNREAD_BATCHES.append({"index": index + 1, "edits": len(unread),
+                            "para_ids": sorted({str(e.get("para_id", "")) for e in unread})})
                 return problems
     return problems
 
@@ -485,7 +812,7 @@ def walk_finished_text(accepted: dict[str, str], provider, model: str,
                        usage: Usage, *, context: str = "",
                        char_budget: int = DEFAULT_WALK_CHARS,
                        max_tokens: int = DEFAULT_MAX_TOKENS,
-                       concurrency: int = 1) -> list[ResidualFinding]:
+                       concurrency: int = 1, checkpoint=None) -> list[ResidualFinding]:
     """Proofread the accepted text for residual errors and return them. One
     `complete_structured` call per read (a `char_budget` slice of paragraphs);
     a non-clean reply is a loss for that read, not a parse of a truncation.
@@ -509,7 +836,9 @@ def walk_finished_text(accepted: dict[str, str], provider, model: str,
         result = _ask_with_retry(provider, model=model, system=system,
                                  user=_walk_user(read), schema=schema,
                                  schema_name=schema_name, max_tokens=max_tokens,
-                                 usage=local, what=f"walk read {n}/{len(reads)}")
+                                 usage=local, what=f"walk read {n}/{len(reads)}",
+                                 checkpoint=checkpoint,
+                                 validate=lambda body: _valid_walk_window(body, read))
         return result, local
 
     for (n, read), (result, local) in fan_out(
@@ -546,6 +875,9 @@ def walk_finished_text(accepted: dict[str, str], provider, model: str,
                 log.error("walk_finished_text: book-wide residual ceiling "
                           "(%d) reached at read %d/%d — the remaining reads "
                           "were NOT made", MAX_RESIDUALS, n, len(reads))
+                if checkpoint is not None:
+                    _LOSSES.append(("walk", "capacity", "Verification residual ceiling reached"))
+                    unread_paragraphs.extend(pid for pid, _t in read)
                 unread_paragraphs.extend(
                     pid for rest in reads[n:] for pid, _t in rest)
                 UNREAD.extend(unread_paragraphs)
@@ -573,6 +905,8 @@ class VerifyRunResult:
     ran_changes: bool
     ran_walk: bool
     reason: str = ""
+    verification_provenance: dict[str, Any] = field(default_factory=dict)
+    recovered_usage: Usage = field(default_factory=Usage)
 
     def __iter__(self):
         yield self.problems
@@ -582,13 +916,33 @@ class VerifyRunResult:
 def verify_run(run_dir: str | Path, provider, model: str, usage: Usage, *,
                context: str = "", run_changes: bool = True,
                run_walk: bool = True, max_tokens: int = DEFAULT_MAX_TOKENS,
-               concurrency: int = 1) -> VerifyRunResult:
+               concurrency: int = 1, engine: str = "", pass_id: str | None = None,
+               required_pass_ids: Sequence[str] | None = None,
+               policy_id: str | None = None, config_sha256: str = "",
+               purpose: str = "verification", command_id: str | None = None) -> VerifyRunResult:
     """Both gates over a finished run dir. Reads the deliverable's two views and
     findings.json deterministically, then spends one model call per batch/read.
     With NO accepted text — no deliverable, or the OOXML tooling is missing —
     neither gate runs: the result says so (``ran_* = False`` plus a reason)
     rather than walking nothing and reporting it clean."""
+    policy = _policy(pass_id, required_pass_ids, policy_id)
+    if command_id is not None and (policy is None or not isinstance(command_id, str)
+            or len(command_id) != 32 or any(c not in "0123456789abcdef" for c in command_id)):
+        raise ValueError("A verification command ID must be a generated UUID and have an explicit pass policy")
     original, accepted = paragraph_views(run_dir)
+    edits = applied_edits(run_dir)
+    provenance = {}
+    recovered_usage = Usage()
+    evidence_available = isinstance(_load_artifact(Path(run_dir) / "findings.json").get("findings"), list)
+
+    def checkpoint(gate):
+        if policy is None:
+            return nullcontext(None)
+        identity = _verification_identity(run_dir, original, accepted, edits, provider,
+                                          model, context, max_tokens, engine, policy,
+                                          config_sha256, gate)
+        return _ReadCheckpoint(run_dir, identity, purpose, command_id)
+
     problems: list[ChangeProblem] = []
     residuals: list[ResidualFinding] = []
     if not accepted:
@@ -600,13 +954,19 @@ def verify_run(run_dir: str | Path, provider, model: str, usage: Usage, *,
                                ran_walk=False, reason=reason)
     ran_changes, ran_walk, reason = run_changes, run_walk, ""
     if run_changes:
-        edits = applied_edits(run_dir)
         _take_losses("changes")
-        problems = verify_changes(edits, accepted, provider, model, usage,
-                                  context=context, max_tokens=max_tokens,
-                                  original=original, concurrency=concurrency)
-        lost = _take_losses("changes")
         n_calls = -(-len(edits) // DEFAULT_CHANGE_BATCH) if edits else 0
+        with checkpoint("changes") as cp:
+            problems = verify_changes(edits, accepted, provider, model, usage,
+                                      context=context, max_tokens=max_tokens,
+                                      original=original, concurrency=concurrency,
+                                      checkpoint=cp)
+            lost = _take_losses("changes")
+            if cp is not None:
+                provenance["changes"] = cp.finish(n_calls, evidence_available
+                    and not lost and not UNREAD_BATCHES and len(problems) < MAX_PROBLEMS)
+                from docproof.fanout import fold_usage
+                fold_usage(recovered_usage, cp.recovered_usage)
         if n_calls and len(lost) >= n_calls:
             ran_changes = False
             reason = (f"change verifier: every one of {n_calls} read(s) "
@@ -614,11 +974,17 @@ def verify_run(run_dir: str | Path, provider, model: str, usage: Usage, *,
             log.error("verify_run: %s", reason)
     if run_walk:
         _take_losses("walk")
-        residuals = walk_finished_text(accepted, provider, model, usage,
-                                       context=context, max_tokens=max_tokens,
-                                       concurrency=concurrency)
-        lost = _take_losses("walk")
         n_calls = len(_walk_reads(accepted, DEFAULT_WALK_CHARS))
+        with checkpoint("walk") as cp:
+            residuals = walk_finished_text(accepted, provider, model, usage,
+                                           context=context, max_tokens=max_tokens,
+                                           concurrency=concurrency, checkpoint=cp)
+            lost = _take_losses("walk")
+            if cp is not None:
+                provenance["walk"] = cp.finish(n_calls, evidence_available
+                    and not lost and not UNREAD and len(residuals) < MAX_RESIDUALS)
+                from docproof.fanout import fold_usage
+                fold_usage(recovered_usage, cp.recovered_usage)
         if n_calls and len(lost) >= n_calls:
             ran_walk = False
             reason = (reason + "; " if reason else "") + (
@@ -626,7 +992,9 @@ def verify_run(run_dir: str | Path, provider, model: str, usage: Usage, *,
                 f"({lost[0][1]}: {lost[0][2][:200]})")
             log.error("verify_run: %s", reason)
     return VerifyRunResult(problems, residuals, ran_changes=ran_changes,
-                           ran_walk=ran_walk, reason=reason)
+                           ran_walk=ran_walk, reason=reason,
+                           verification_provenance=provenance,
+                           recovered_usage=recovered_usage)
 
 
 def verify_delta(run_dir: str | Path, para_ids: Sequence[str], provider,
@@ -703,8 +1071,10 @@ def build_fingerprints(run_dir: str | Path) -> dict[str, Any]:
 
 
 def _load_artifact(path: Path) -> dict[str, Any]:
+    def invalid_constant(value):
+        raise ValueError("Non-finite JSON number")
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"), parse_constant=invalid_constant)
     except (OSError, ValueError):
         return {}
     return payload if isinstance(payload, dict) else {}
@@ -719,12 +1089,85 @@ def _merge_rows(old_rows: list, new_rows: list, para_ids: set[str],
     return kept + list(new_rows)
 
 
+def reusable_clean_verification(run_dir, provider, model, *, context="", engine="",
+                                max_tokens=DEFAULT_MAX_TOKENS, pass_id=None,
+                                required_pass_ids=None, policy_id=None,
+                                config_sha256="") -> bool:
+    """Prove both clean full gates for this exact build and explicit policy.
+
+    This is an explicit reuse operation, reserved for settlement's clean entry.
+    Ordinary completed verification invocations remain independent fresh reads.
+    Until artifacts can represent every separate pass, policies requiring more
+    than one pass conservatively miss rather than collapsing independent reads.
+    """
+    policy = _policy(pass_id, required_pass_ids, policy_id)
+    if policy is None or policy["required_pass_ids"] != [policy["pass_id"]]:
+        return False
+    run = Path(run_dir)
+    findings = _load_artifact(run / "findings.json")
+    if not isinstance(findings.get("findings"), list):
+        return False
+    original, accepted = paragraph_views(run)
+    if not accepted:
+        return False
+    edits, fp = applied_edits(run), build_fingerprints(run)
+    for gate, filename, rows_key, unread_key in (
+            ("changes", "change_verify.json", "problems", "unread_batches"),
+            ("walk", "finished_walk.json", "residuals", "unread_paragraphs")):
+        artifact = _load_artifact(run / filename)
+        if (artifact.get("ran") is not True or artifact.get(rows_key) != []
+                or artifact.get(unread_key) != [] or artifact.get("unverified_paragraphs") != []
+                or artifact.get("reason") or artifact.get("paragraphs_verified") is not None
+                or artifact.get("engine") != engine or artifact.get("model") != model
+                or not fp or any(artifact.get(k) != v for k, v in fp.items())):
+            return False
+        proof = artifact.get("verification_provenance")
+        if not isinstance(proof, dict) or proof.get("complete") is not True:
+            return False
+        identity = _verification_identity(run, original, accepted, edits, provider, model,
+                                          context, max_tokens, engine, policy,
+                                          config_sha256, gate)
+        if (proof.get("identity") != identity or proof.get("identity_sha256") != _digest(identity)
+                or proof.get("proof_sha256") != _digest({k: v for k, v in proof.items() if k != "proof_sha256"})):
+            return False
+        scope, invocation = proof.get("scope"), proof.get("invocation_id")
+        if any(not isinstance(value, str) or len(value) != size
+               or any(c not in "0123456789abcdef" for c in value)
+               for value, size in ((scope, 64), (invocation, 32))):
+            return False
+        schema, name = _change_schema() if gate == "changes" else _walk_schema()
+        system = (_CHANGE_SYSTEM + _context_block(context, "verifier") if gate == "changes"
+                  else _WALK_SYSTEM + _context_block(context, "proofreader"))
+        windows = (_chunks(edits, DEFAULT_CHANGE_BATCH) if gate == "changes"
+                   else _walk_reads(accepted, DEFAULT_WALK_CHARS))
+        expected = {}
+        for n, window in enumerate(windows, 1):
+            user = (_change_user(window, accepted, original) if gate == "changes"
+                    else _walk_user(window))
+            key = _digest(dict(model=model, system=system, user=user, schema=schema,
+                               schema_name=name, max_tokens=max_tokens,
+                               window_id=(f"change batch {n}/{len(windows)}" if gate == "changes"
+                                          else f"walk read {n}/{len(windows)}")))
+            saved = _load_artifact(run / _CHECKPOINT_DIR / scope / invocation / (key + ".json"))
+            body = saved.get("parsed")
+            if (not _valid_schema(body, schema) or body.get(name) != []
+                    or saved.get("identity_sha256") != _digest(identity)
+                    or saved.get("request_sha256") != key
+                    or saved.get("result_sha256") != _digest(body)):
+                return False
+            expected[key] = saved["result_sha256"]
+        if proof.get("expected_windows") != len(windows) or proof.get("windows") != expected:
+            return False
+    return True
+
+
 def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
                     walk: VerifyRunResult, *, model: str, engine: str,
                     usage_changes: Usage, usage_walk: Usage,
                     applied: int, paragraphs: int,
                     para_ids: Sequence[str] | None = None,
-                    merge: bool = False) -> tuple[Path, Path]:
+                    merge: bool = False,
+                    source_run_dir: str | Path | None = None) -> tuple[Path, Path]:
     """Write change_verify.json and finished_walk.json in the shape the CLI
     writes and certify reads (generated_at, ran/reason, cost, coverage, and
     the BUILD BINDING: `build_sha256` / `accepted_sha256` /
@@ -737,13 +1180,19 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
     from datetime import datetime, timezone
 
     from docproof.contract import build_envelope
+    from docproof.fanout import fold_usage
+    total_changes, total_walk = Usage(), Usage()
+    for total, current, result in ((total_changes, usage_changes, changes),
+                                   (total_walk, usage_walk, walk)):
+        fold_usage(total, current)
+        fold_usage(total, result.recovered_usage)
     now = datetime.now(timezone.utc).isoformat()
     run = Path(run_dir)
     run.mkdir(parents=True, exist_ok=True)
     cv_path = run / "change_verify.json"
     fw_path = run / "finished_walk.json"
     ids = {str(p) for p in (para_ids or [])}
-    fp = build_fingerprints(run)
+    fp = build_fingerprints(source_run_dir if source_run_dir is not None else run)
     old_cv = _load_artifact(cv_path) if merge else {}
     old_fw = _load_artifact(fw_path) if merge else {}
     partial = para_ids is not None
@@ -779,7 +1228,7 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
           "ran": ran_changes, "reason": reason_cv,
           "applied_edits": applied, "problems": problems,
           "unread_batches": unread_batches,
-          "cost": build_envelope(findings=(), usage=usage_changes,
+          "cost": build_envelope(findings=(), usage=total_changes,
                                  fallback_model=model)["cost"]}
     cv.pop("settled", None)
 
@@ -803,7 +1252,7 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
           "ran": ran_walk, "reason": reason_fw,
           "paragraphs": paragraphs, "residuals": residuals,
           "unread_paragraphs": unread,
-          "cost": build_envelope(findings=(), usage=usage_walk,
+          "cost": build_envelope(findings=(), usage=total_walk,
                                  fallback_model=model)["cost"]}
     fw.pop("settled", None)
 
@@ -839,6 +1288,16 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
         if ran and not failed and not dirty:
             payload["build_sha256"] = fp["build_sha256"]
             payload["accepted_sha256"] = fp["accepted_sha256"]
+    # A full policy proof belongs to a full successful read. Partial reads,
+    # skipped/failed gates and legacy results must never inherit an old proof.
+    for payload, result, gate, ran in ((cv, changes, "changes", changes.ran_changes),
+                                       (fw, walk, "walk", walk.ran_walk)):
+        payload.pop("verification_provenance", None)
+        proof = result.verification_provenance.get(gate)
+        if (not partial and ran and fp and proof and proof.get("complete") is True
+                and not payload.get("unverified_paragraphs")
+                and not payload.get("unread_batches") and not payload.get("unread_paragraphs")):
+            payload["verification_provenance"] = proof
     cv_path.write_text(json.dumps(cv, indent=2, ensure_ascii=False),
                        encoding="utf-8")
     fw_path.write_text(json.dumps(fw, indent=2, ensure_ascii=False),
@@ -873,4 +1332,6 @@ __all__ = [
     "paragraph_fingerprints", "mark_unverified",
     "applied_edits", "deliverable_docx", "paragraph_views", "verify_changes",
     "walk_finished_text", "verify_run", "MAX_PROBLEMS", "MAX_RESIDUALS",
+    "VERIFICATION_POLICY", "reusable_clean_verification",
+    "verification_invocation",
 ]

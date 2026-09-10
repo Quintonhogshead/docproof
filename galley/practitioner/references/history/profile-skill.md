@@ -5,12 +5,8 @@ description: Profile a manuscript before any paid work — genre, posture, tics,
 
 # /profile — read the book before you touch it
 
-Read `references/intake.md` once for this phase. Load only `references/findings.md`
-when writing an intent-zone or import file; all paths are workspace-relative.
-
-Goal: a profile JSON the plan and every later stage trusts. Driver intake spends
-nothing. A standalone cheap genre/tic confirmation requires explicit approved
-spend; it is never an exception to the plan gate.
+Goal: a profile JSON the plan and every later stage trusts. Spend nothing, or
+at most one cheap model call to confirm genre and curate tics.
 
 **Context discipline (this stage is where the book leaks in).** Do NOT read the
 whole extracted manuscript into your context — that block then rides every turn

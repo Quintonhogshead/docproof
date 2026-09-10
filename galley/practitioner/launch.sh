@@ -3,7 +3,7 @@
 #
 #   BOOK=/path/to/Book.docx SLUG=book-slug [WORKROOT=~/galley-workspaces] ./launch.sh
 #
-# Builds the workspace (manual + knobs + skills + source), then starts a
+# Builds the workspace (common policy + references + skills + source), then starts a
 # headless Claude Code session at the intake step. The session stops at the
 # plan gate and waits for a human reply before any paid work beyond wave-1
 # defaults. For the phase-at-a-time loop (profile → approve → sweeps → ladder →
@@ -55,6 +55,10 @@ fi
 mkdir -p "$WS/source" "$WS/runs" "$WS/deliverable" "$WS/.claude"
 cp "$HERE/CLAUDE.md" "$WS/CLAUDE.md"
 cp "$HERE/KNOBS.md"  "$WS/KNOBS.md"
+if [ -d "$HERE/references" ]; then
+  mkdir -p "$WS/references"
+  cp -R "$HERE/references/." "$WS/references/"
+fi
 rm -rf "$WS/.claude/skills"
 cp -R "$HERE/skills" "$WS/.claude/skills"
 cp "$BOOK" "$WS/source/"
@@ -88,6 +92,7 @@ exec env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY \
      PATH="$WRAPBIN:$PATH" \
      CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
      claude -p "Intake: a new manuscript is at source/$(basename "$BOOK"). \
-Follow the loop in CLAUDE.md. Start with /profile, then /draft-plan, and STOP \
+Read only references/intake.md and references/config.md for this phase. \
+Start with /profile, then /draft-plan, and STOP \
 at the plan gate for approval." \
   --model "$MODEL" --effort "$EFFORT" --permission-mode "$PERM"

@@ -1,98 +1,79 @@
 ---
 name: settle
-description: Close every open item the verify gates raised — absorb, add, drop with a reason, or query — until the run has zero open candidates and a recorded outcome.
+description: Close every open verification item through the engine, preserving internal repairs and the recorded editorial outcome.
 ---
 
-# /settle — zero open candidates
+# /settle — close candidates without forwarding internal work
 
-Galley finishes with **no to-do list**. Every finding a lane ever raised ends
-as an APPLIED tracked edit, a DROPPED row with a recorded reason, or an author
-QUERY. The finished-text walk and the change verifier raise the last open
-items; this stage closes them **through the engine** — never by hand-patching
-a row's replacement (that leaked editor notes and overran the edit guard on
-Redding).
+Read `references/house-rules.md` and `references/comment-reconciliation.md` once.
+All paths are workspace-relative. Load `references/settlement-contracts.md` only
+for exact artifact/owner-map fields; use `references/findings.md` only when an
+import/replay contract is needed. Do not read old release notes or full KNOBS.
 
-## Preconditions
+## Preconditions and exact driver policy
 
-- `galley verify` has run on the current build (`finished_walk.json` +
-  `change_verify.json` are fresher than `findings.json`).
-- The run's `--config` is the $0 replay config the final build used.
+Verify must have current, complete evidence for the actual build. Use that build's
+$0 replay config, from the workspace root so intent-zone paths resolve; never
+rewrite the paid config frozen in approval. Every applied edit and accepted
+paragraph still requires the planned independent two-pass verification.
+
+The driver supplies exact flags: by default
+`--until-clean --rounds 3 --quiet-floor 4 --quiet-share 0`.
+At most three rounds; new items <= 4 is quiet; the percentage rule is off.
+Use explicit run overrides exactly. Standalone CLI defaults (quiet floor 3,
+quiet share 0.02) are different; do not substitute them for the driver flags.
+A cap stops work without proving it complete. Preserve internal repairs and all
+nonconvergence evidence rather than relabeling it as author questions.
 
 ## Procedure
 
-1. **See what is open** — `docproof galley residuals RUN --source BOOK
-   --config C` lists every residual and flagged edit with its owner
-   resolution (`untouched` / `inside` an applied edit / `straddle`).
-2. **Settle** — `docproof galley settle RUN --source BOOK --config C
-   [--rounds 3] [--engine auto|subagent|provider|none] [--context BRIEF]
-   [--approval A --budget N]`. Per round it:
-   - translates each residual to a SOURCE span through the build's edit map
-     (`editmap.json`, the engine's own offsets — no text matching);
-   - decides deterministically first: duplicate → drop; inside a locked
-     intent zone → drop; editorial note → stripped (nothing left → query);
-     **a number/name/title/date/quoted line change → query, never an edit**;
-     a space-only deletion → EDIT when the dictionary knows the closed form
-     (`closed_compound`), else query (`space_deletion`); a deletion of a
-     verbatim repeated run → EDIT (`duplicate_passage`, bypasses the fact
-     and rewrite-class guards); a second question on a span already queried
-     → DROP (`duplicate_query`); unanchorable → drop (recorded);
-   - otherwise absorbs (revises the owning edit as ONE composite, absorbing
-     every row it touches whole) or adds (a new edit on untouched text);
-   - asks the narrow judge only when there is no usable suggestion or the
-     composite grew past 1.5× — the judge answers absorb / add / drop / query
-     for the FLAGGED SPAN ONLY, and its answer faces the same guards;
-   - rebuilds at $0, re-verifies ONLY the touched paragraphs; a verifier flag
-     on a composite reverts it to the owner's previous text and queries;
-   - repeats until nothing is open or `--rounds` is spent; leftovers ship as
-     `unresolved_after_N` queries carrying the walker's suggestion.
-   For an unattended sweep add **`--until-clean`**: she keeps going while a
-   round still finds real work (100 new items after re-reading 2,000 edits
-   means keep looking) and stops after a quiet round (≤3 new, or ≤2% of what
-   the round re-read) or the turn budget (`--max-turns 400`). A sweep that
-   is STILL noisy when it has to stop is itself evidence: the outcome flips
-   to `needs_human`. A settled fix propagates to the same word in the same
-   and neighbouring paragraphs, so one flagged "recieve" fixes its twin.
-3. **Read the counts** in `settlement.json` (`counts`, `notes`, `open` must
-   be `[]`) and the verdict in `outcome.json`.
-4. **Advance** — `galley state WS --advance settled --results RUN --source
-   BOOK --config C` (refuses, exit 7, while anything is open). Then certify.
+1. Inspect bounded counts from `docproof galley residuals RUN --source BOOK
+   --config C`; read only the needed residuals and their owner resolution.
+2. Run `docproof galley settle RUN --source BOOK --config C --engine subagent
+   --approval approval.json` with the phase's exact settlement flags, output
+   redirected to runs/settle.log. Run in the FOREGROUND and wait for exit.
+3. The engine translates accepted-view residuals through editmap.json into source
+   spans, then drops disproved/duplicate/voice/intent-zone findings, absorbs a
+   correction into its existing owner as one composite, adds a correction on
+   untouched text, asks a specific author-knowledge question, or keeps an
+   unresolved repair internal. The narrow judge must identify a mechanical
+   category and preserve meaning. Chapter/part labels and equivalent number/time
+   formatting are mechanics; actual value changes are facts.
+4. Dictionary-known closed compounds and accidental verbatim repeated passages
+   can be edits; duplicate questions are drops. No dictionary, failed anchors,
+   editorial notes, exhausted rounds, or a tool error alone justify an author
+   comment. Distinct genuine questions in one sentence stay distinct. Preserve
+   every independent repair even when several changes touch the same paragraph.
+5. The engine rebuilds at $0 and independently verifies touched paragraphs.
+   A composite verifier flag gets the guarded second look; failed/reverted
+   corrections remain evidenced and cannot be silently shipped. Rebase retries
+   through the current edit map; never hand-patch an owner's replacement.
+   Planned-result mismatches, missing edits, and introduced duplication restore
+   verified text and leave failed repairs internal. Normal word-shaped settlement
+   fixes may propagate to identical sites in the same/neighboring paragraphs;
+   curated/imported one-offs do not seed book-wide propagation.
+6. Inspect settlement.json counts, notes, and open; record every unresolved item
+   and outcome honestly. `galley state . --advance settled --results RUN
+   --source BOOK --config C` refuses while open work remains. Never fake the
+   state or delete a repair to make it advance.
 
-## The query count is a ceiling, not an outlet
+## Queries and outcome
 
-A round that closes most of its items as questions is forwarding, not
-settling (the Fable Georgis run: 108 of 242 residuals became comments and a
-61-comment ceiling became 153). Before certify, read `settlement.json`'s
-`counts.query` against the budget in `approval.json` (`comment_budget`);
-`certify`'s **comment budget** check FAILS the delivered document over it.
-The fix is never to raise the number: collapse same-rule families to one
-comment, and re-decide every question the book itself answers — a verbatim
-repeat, a dictionary compound, a pronoun the sentence disambiguates, a comma
-splice. Every question that survives is one question plus one sentence of
-evidence, never a grammar diagnosis.
+Compare actual questions with approval's comment_budget before certification.
+Collapse same-rule families and decide anything the book answers; never raise
+its ceiling. Each surviving question is one specific question plus one sentence
+of evidence. Reconcile comments against final text, preserving original author
+comments and requiring a fresh hash-bound reconciliation after a document change.
 
-## Engine doctrine
+Enrolled (`astra-review-required.json`) workspaces leave the final editorial
+verdict to the driver's Astra review. Preserve a valid tracked snapshot and all
+Verify/settlement evidence; never overrule Astra, turn a technical error into
+needs_human, or resume an extra Claude review after its final decision. Open
+internal repairs still block certification. Without enrollment the legacy driver
+records nonconvergence/outcome and its best-available handoff; an incomplete or
+stopped handoff is not a certified completion.
 
-`--engine auto` picks the **$0 subscription subagent lane** when this machine
-has the Agent SDK and a Claude login (the judge and the delta verify run as
-fenced single turns of Claude Code, Opus by default — set `--model sonnet`
-for easy books); falls back to the configured API model (bills; carry
-`--approval`/`--budget`); `none` is deterministic-only and queries what it
-cannot decide. A headless run is as empowered as a session: the loop
-iterates on its own.
-
-## Outcome
-
-`galley settle` ends by writing `outcome.json`: **`done`** (no more errors the
-loop can find or decide) or **`needs_human`** with the reason — reserved for a
-book with major grammatical problems where most sentences must be rewritten
-(≥50 % of paragraphs took rewrite-class work, ≥60 edits per 1,000 words, ≥25 %
-of paragraphs left as undecidable questions, or the verifier flagged ≥20 % of
-applied edits). `galley outcome RUN --set needs_human --reason "…"` overrules
-with a stated reason. The file carries the HubSpot property/value DocWatch
-flips (`docproof` → `Proofing Complete` / `Needs Human PR`).
-
-## Never
-
-- Hand-edit an owning row's replacement to fit a residual in — run settle.
-- Leave a residual as a "candidate" or a "note for the next wave."
-- Ship with `settlement.json` absent or `open` non-empty; certify refuses.
+Keep the approved subscription model/effort. The driver explicitly uses
+`--engine subagent`; never replace it with an automatic API fallback or a cheaper
+unapproved model. Every final finding must be applied, dropped with a reason,
+or a justified author query; otherwise the internal work remains open.

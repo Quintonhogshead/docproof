@@ -366,6 +366,9 @@ def build_parser() -> argparse.ArgumentParser:
              "reading --help or the source. $0")
     cap.add_argument("--json", action="store_true",
                      help="the default output IS json; accepted for symmetry")
+    cap.add_argument("command_path", nargs="*", metavar="COMMAND",
+                     help="print only this command's capabilities, e.g. "
+                          "galley verify; omit for the full manifest")
     return ap
 
 
@@ -446,6 +449,7 @@ def _galley_parser(sub) -> None:
                          "make (one per 30 applied edits, one per ~6k chars of "
                          "accepted text); no API call, no keys, nothing written")
     _engine_arg(gv)
+    _verification_pass_args(gv)
     gv.add_argument("--paragraphs", metavar="IDS",
                     help="verify ONLY these paragraphs (comma-separated para "
                          "ids, or @FILE holding one per line) — the delta "
@@ -885,6 +889,7 @@ def _galley_parser(sub) -> None:
                           "Implied by an --approval whose manifest says "
                           "mechanical_only")
     _engine_arg(gse)
+    _verification_pass_args(gse)
     gse.add_argument("--context", help="a file of house-style / voice notes "
                                        "for the judge and the delta verify")
     gse.add_argument("--no-verify", action="store_true",
@@ -1235,6 +1240,21 @@ def _common(p: argparse.ArgumentParser) -> None:
              "command REFUSES to run (exit 5) if the manuscript, the effective "
              "config, or any active model route deviates from what was "
              "approved — the immutable-manifest gate.")
+
+
+def _verification_pass_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--verification-pass", default="primary", metavar="ID",
+        help="identity of this independent verification pass (default primary); "
+             "different passes never share completed reads")
+    p.add_argument(
+        "--verification-policy", default="mechanical-verification-v1", metavar="ID",
+        help="versioned verification policy required for evidence reuse")
+    p.add_argument(
+        "--required-verification-passes", default="primary", metavar="IDS",
+        help="comma-separated independent pass IDs required by the policy; "
+             "must include --verification-pass (default primary). Declares "
+             "coverage only; run each required pass separately")
 
 
 def _profile_arg(p: argparse.ArgumentParser) -> None:

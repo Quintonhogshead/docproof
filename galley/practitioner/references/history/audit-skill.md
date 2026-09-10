@@ -5,9 +5,6 @@ description: Audit a finished wave for missed errors — density anomalies, samp
 
 # /audit — what did we miss, and is another wave worth it?
 
-Read `references/house-rules.md` once; all paths are workspace-relative.
-Mechanical-only runs record hypotheses but do not launch a wave-2 reread.
-
 ## Procedure
 
 1. **Density table.** Findings per 1,000 words by chapter
@@ -23,7 +20,7 @@ Mechanical-only runs record hypotheses but do not launch a wave-2 reread.
    span hint, confidence. A short honest list beats a long speculative one —
    every hypothesis is a paid re-read.
 3. **Reject-all + artifact audit** if not already run this wave (see
-   `references/findings.md` and `references/delivery.md`). New bugs found here become deterministic rules or fix
+   merge-desk §3–4). New bugs found here become deterministic rules or fix
    plans, not silent hand-edits.
 4. **Judgment-quality spot check.** Sample the REJECTED and HELD edits, not
    just the applied ones — a confused meaning gate wrongly holding correct
@@ -34,10 +31,9 @@ Mechanical-only runs record hypotheses but do not launch a wave-2 reread.
    estimated total ≈ a·b/m; residual ≈ estimate − union. Report it in the
    letter honestly. Seeded-recall (`galley seed`/`score`) calibrates the same
    number between books.
-6. **Decide within scope.** On a mechanical-only run, record hypotheses
-   and stop; no wave-2 reread follows. Only explicitly approved legacy reread
-   work turns them into targeted chapter × error-class reads, priced like any
-   plan line. Stop at the marginal-cost ceiling or a quiet audit. A quiet
+6. **Decide.** Hypotheses → targeted single-pass re-reads (chapter × error
+   classes), priced like any plan line. Stop when the marginal cost per
+   finding crosses the plan's ceiling or the audit comes back quiet. A quiet
    audit is a RESULT, not a failure — say so and converge.
 
 ## Checks that have caught real money

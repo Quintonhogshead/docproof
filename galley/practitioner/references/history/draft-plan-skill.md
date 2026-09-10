@@ -5,9 +5,6 @@ description: Turn a profile into a priced, gated execution plan — lanes, model
 
 # /draft-plan — price it before you spend it
 
-Read `references/config.md` and `references/lanes.md` once before pricing.
-Look up individual knob rows only as needed; all paths are workspace-relative.
-
 Goal: a plan the human can approve in one read: what runs, what it costs, what
 it should find, and when you'll stop.
 
@@ -62,12 +59,10 @@ the skeleton's shape.
    the PROOFREAD text, judge posture from the profile's genre) is a
    COPY-EDIT-SCOPE line — include it only when the run is not mechanical-only.
 2. **Config discipline.** Get knob names, defaults, and mechanics from
-   `references/config.md`; look up only needed rows in `references/knobs.md`.
-   Materialize the full proposed config with `genre-pack` before approval.
-   If hand-building is explicitly necessary, use `references/config-defaults.md`
-   and restate `error_types` and `sweeps` (omission disables them). Never read
-   source/default YAML into context or rewrite the config after approval.
-   Per-category `passes`/`token_budget` knobs are per-run only.
+   `KNOBS.md` — never `cat` `config.py`/`default.yaml`/`sweeps.py` into context.
+   Write the full run config; restate every section you touch (a config REPLACES
+   default.yaml — an omitted `sweeps:` kills all sweeps). Per-category
+   `passes`/`token_budget` knobs are per-run only.
 3. **Price each line** = words/1000 × calibrated rate. Sum, add 15% headroom,
    compare to the API ceiling — **$10 per book** unless the gate says another
    figure. That ceiling is what `approval.json` freezes and what every paid

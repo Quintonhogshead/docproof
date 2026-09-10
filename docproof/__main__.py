@@ -30,7 +30,7 @@ def main(argv=None) -> int:
     ap = build_parser()
     args = ap.parse_args(argv)
     if args.cmd == "capabilities":
-        return _cmd_capabilities(ap)
+        return _cmd_capabilities(ap, args.command_path)
     return {"inventory": cmd_inventory, "review": cmd_review,
             "submit": cmd_submit, "status": cmd_status,
             "collect": cmd_collect, "prep": cmd_prep, "rejudge": cmd_rejudge,
@@ -92,14 +92,35 @@ def _capabilities_tree(parser) -> list[dict] | None:
     return out
 
 
-def _cmd_capabilities(ap) -> int:
-    """The compact capability manifest — the whole command tree plus the config
-    section names, as one JSON document."""
+def _cmd_capabilities(ap, command_path: list[str] | None = None) -> int:
+    """Print the full manifest, or the exact subtree for a command path."""
+    commands = _capabilities_tree(ap) or []
+    if command_path:
+        choices = commands
+        matched: list[str] = []
+        for name in command_path:
+            node = next((c for c in choices if c["name"] == name), None)
+            if node is None:
+                if choices:
+                    location = " ".join(matched) or "docproof"
+                    ap.error(
+                        f"unknown capability path {' '.join(command_path)!r}; "
+                        f"available commands under {location!r}: "
+                        + ", ".join(c["name"] for c in choices))
+                ap.error(
+                    f"'docproof {' '.join(matched)}' has no subcommands; "
+                    f"pass only command names: "
+                    f"docproof capabilities {' '.join(matched)}")
+            matched.append(name)
+            choices = node.get("subcommands", [])
+        print(json.dumps(node, indent=2, ensure_ascii=False))
+        return 0
+
     from .config import Config
     manifest = {
         "tool": "docproof",
         "version": __version__,
-        "commands": _capabilities_tree(ap) or [],
+        "commands": commands,
         "config_sections": sorted(Config.model_fields.keys()),
         "genres": list(_genre_choices()),
         "stages": list(_stage_choices()),
@@ -1798,6 +1819,33 @@ def _paragraph_ids(spec: str | None) -> list[str] | None:
     return [x.strip() for x in spec.split(",") if x.strip()]
 
 
+def _verification_policy(args, cfg) -> dict:
+    """Validate pass identity before constructing any verification model lane."""
+    import hashlib
+
+    pass_id = str(getattr(args, "verification_pass", "primary")).strip()
+    policy_id = str(getattr(args, "verification_policy", "mechanical-verification-v1")).strip()
+    required = tuple(part.strip() for part in str(
+        getattr(args, "required_verification_passes", "primary")).split(","))
+    valid_id = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+    if not valid_id.fullmatch(pass_id) or not valid_id.fullmatch(policy_id):
+        raise ValueError("verification pass and policy IDs must contain 1–128 "
+                         "letters, digits, dots, underscores or hyphens, "
+                         "starting with a letter or digit")
+    if (not required or any(not valid_id.fullmatch(item) for item in required)
+            or len(set(required)) != len(required)):
+        raise ValueError("--required-verification-passes must contain distinct, "
+                         "nonempty pass IDs separated by commas")
+    if pass_id not in required:
+        raise ValueError("--verification-pass must be included in "
+                         "--required-verification-passes")
+    canonical = json.dumps(cfg.model_dump(mode="json"), ensure_ascii=False,
+                           sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return {"pass_id": pass_id, "policy_id": policy_id,
+            "required_pass_ids": required,
+            "config_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest()}
+
+
 def _galley_settle(args) -> int:
     """`docproof galley settle`: the residual-settlement loop (galley/settle.py).
     Reads the run's verify artifacts, closes every open item through the
@@ -1823,6 +1871,7 @@ def _galley_settle(args) -> int:
         return 2
     try:
         cfg = _effective_cfg(args)
+        verification = _verification_policy(args, cfg)
     except (FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -1892,6 +1941,10 @@ def _galley_settle(args) -> int:
             return 2
     opts = SettleOptions(rounds=max(0, int(_rounds)), engine=engine,
                          model=model, context=context,
+                         verification_pass=verification["pass_id"],
+                         verification_policy=verification["policy_id"],
+                         required_verification_passes=verification["required_pass_ids"],
+                         verification_config_sha256=verification["config_sha256"],
                          verify_delta=not args.no_verify,
                          until_clean=bool(args.until_clean),
                          quiet_floor=int(args.quiet_floor),
@@ -1914,7 +1967,11 @@ def _galley_settle(args) -> int:
               "far; re-run the same command once the lane is available.",
               file=sys.stderr)
         return 2
-    cost = cost_of_usage(result.usage, fallback_model=model or None) or 0.0
+    total_usage = Usage()
+    for used in (result.usage, getattr(result, "recovered_usage", None)):
+        if used is not None:
+            _fold_usage(total_usage, used)
+    cost = cost_of_usage(total_usage, fallback_model=model or None) or 0.0
     _galley_over_budget(args, cost)
 
     outcome = None
@@ -1929,7 +1986,7 @@ def _galley_settle(args) -> int:
           f"{len(st.latest())} settled in {st.rounds} round(s) "
           f"({', '.join(f'{k}={v}' for k, v in sorted(counts.items())) or 'none'}), "
           f"{len(st.open)} open; engine={engine} "
-          f"({result.usage.api_calls} model call(s), ${cost:.4f})"
+          f"({total_usage.api_calls} model call(s), ${cost:.4f})"
           f"{' — mechanical only' if mechanical_only else ''}.")
     for note in st.notes[-(st.rounds + 1):]:
         print(f"  {note}")
@@ -1940,7 +1997,7 @@ def _galley_settle(args) -> int:
         print("  editorial outcome: pending the final Astra review")
         print(f"\n  {run / 'settlement.json'}")
     if args.json:
-        print(json.dumps(_envelope(findings=(), usage=result.usage,
+        print(json.dumps(_envelope(findings=(), usage=total_usage,
                                    model=model or cfg.api.model,
                                    extra={"settlement": st.to_json(),
                                           "outcome": outcome.to_json() if outcome else None}),
@@ -2291,6 +2348,11 @@ def _galley_verify(args) -> int:
     from .providers import cost_of_usage, estimate_cost
 
     cfg = load_config(args.config)
+    try:
+        verification = _verification_policy(args, cfg)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     results = Path(args.results)
     if not (results / "findings.json").exists():
         print(f"error: no findings.json in {results} — point the results "
@@ -2383,58 +2445,72 @@ def _galley_verify(args) -> int:
 
     para_ids = _paragraph_ids(getattr(args, "paragraphs", None))
 
-    concurrency = _lane_concurrency(cfg, engine, model)
-    # Separate per-gate usage prevents certification from double-counting
-    # spend.
-    usage_changes, usage_walk = Usage(), Usage()
-    from .agent_lane import AgentLaneUnavailable
-    try:
-        if para_ids is not None:
-            from galley.verify import verify_delta
-            changes = verify_delta(results, para_ids, provider, model,
-                                   usage_changes, concurrency=concurrency,
-                                   context=context,
-                                   run_changes=run_changes, run_walk=False)
-            walk = verify_delta(results, para_ids, provider, model, usage_walk,
-                                concurrency=concurrency,
-                                context=context, run_changes=False,
-                                run_walk=run_walk)
-        else:
-            changes = verify_run(results, provider, model, usage_changes,
-                                 concurrency=concurrency,
-                                 context=context, run_changes=run_changes,
-                                 run_walk=False)
-            walk = verify_run(results, provider, model, usage_walk,
-                              concurrency=concurrency,
-                              context=context, run_changes=False,
-                              run_walk=run_walk)
-    except AgentLaneUnavailable as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 2
-    problems, residuals = changes.problems, walk.residuals
-    usage = Usage()
-    for u in (usage_changes, usage_walk):
-        _fold_usage(usage, u)
-    cost = cost_of_usage(usage, fallback_model=model) or 0.0
-    _galley_over_budget(args, cost)
+    from contextlib import nullcontext
+    from galley.verify import verification_invocation
+    transaction = (verification_invocation(
+        results, provider, model, output_dir=out, context=context, engine=engine,
+        run_changes=run_changes, run_walk=run_walk, **verification)
+        if para_ids is None else nullcontext(None))
+    verification_complete = True
+    with transaction as invocation:
+        concurrency = _lane_concurrency(cfg, engine, model)
+        # Separate per-gate usage prevents certification from double-counting
+        # spend.
+        usage_changes, usage_walk = Usage(), Usage()
+        from .agent_lane import AgentLaneUnavailable
+        try:
+            if para_ids is not None:
+                from galley.verify import verify_delta
+                changes = verify_delta(results, para_ids, provider, model,
+                                       usage_changes, concurrency=concurrency,
+                                       context=context,
+                                       run_changes=run_changes, run_walk=False)
+                walk = verify_delta(results, para_ids, provider, model, usage_walk,
+                                    concurrency=concurrency,
+                                    context=context, run_changes=False,
+                                    run_walk=run_walk)
+            else:
+                changes = verify_run(results, provider, model, usage_changes,
+                                     concurrency=concurrency,
+                                     context=context, run_changes=run_changes,
+                                     run_walk=False, engine=engine, command_id=invocation.command_id, **verification)
+                walk = verify_run(results, provider, model, usage_walk,
+                                  concurrency=concurrency,
+                                  context=context, run_changes=False,
+                                  run_walk=run_walk, engine=engine, command_id=invocation.command_id, **verification)
+        except AgentLaneUnavailable as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        problems, residuals = changes.problems, walk.residuals
+        usage = Usage()
+        for u in (usage_changes, usage_walk, getattr(changes, "recovered_usage", None),
+                  getattr(walk, "recovered_usage", None)):
+            if u is not None:
+                _fold_usage(usage, u)
+        cost = cost_of_usage(usage, fallback_model=model) or 0.0
+        _galley_over_budget(args, cost)
 
-    from galley.verify import write_artifacts
-    # Preserve disabled gates when an earlier artifact exists. The writer
-    # replaces a successful full read and merges only named-paragraph reads.
-    walk_paras = sum(1 for t in accepted.values() if t.strip())
-    if not changes.ran_changes and not args.walk_only and (
-            out / "change_verify.json").exists() and not para_ids:
-        print("  kept the previous change_verify.json's verdicts: this gate "
-              "read nothing", file=sys.stderr)
-    if not walk.ran_walk and not args.changes_only and (
-            out / "finished_walk.json").exists() and not para_ids:
-        print("  kept the previous finished_walk.json's verdicts: this gate "
-              "read nothing", file=sys.stderr)
-    cv_path, fw_path = write_artifacts(
-        out, changes, walk, model=model, engine=engine,
-        usage_changes=usage_changes, usage_walk=usage_walk,
-        applied=len(edits), paragraphs=walk_paras, para_ids=para_ids,
-        merge=bool(para_ids) or (out / "change_verify.json").exists())
+        from galley.verify import write_artifacts
+        # Preserve disabled gates when an earlier artifact exists. The writer
+        # replaces a successful full read and merges only named-paragraph reads.
+        walk_paras = sum(1 for t in accepted.values() if t.strip())
+        if not changes.ran_changes and not args.walk_only and (
+                out / "change_verify.json").exists() and not para_ids:
+            print("  kept the previous change_verify.json's verdicts: this gate "
+                  "read nothing", file=sys.stderr)
+        if not walk.ran_walk and not args.changes_only and (
+                out / "finished_walk.json").exists() and not para_ids:
+            print("  kept the previous finished_walk.json's verdicts: this gate "
+                  "read nothing", file=sys.stderr)
+        cv_path, fw_path = write_artifacts(
+            out, changes, walk, model=model, engine=engine,
+            usage_changes=usage_changes, usage_walk=usage_walk,
+            applied=len(edits), paragraphs=walk_paras, para_ids=para_ids,
+            source_run_dir=results,
+            merge=bool(para_ids) or (out / "change_verify.json").exists())
+
+        if invocation is not None:
+            verification_complete = invocation.mark_complete(changes, walk)
 
     print(f"\nchange verifier: {len(problems)} problem(s) of {len(edits)} "
           f"applied edit(s); finished-text walk: {len(residuals)} residual(s) "
@@ -2466,6 +2542,10 @@ def _galley_verify(args) -> int:
                                    extra={"change_verify": payload_changes,
                                           "finished_walk": payload_walk}),
                          ensure_ascii=False))
+    if not verification_complete:
+        print("error: verification coverage is incomplete; rerun the same command "
+              "to resume its validated reads", file=sys.stderr)
+        return 2
     # A requested gate that did not run must fail.
     if (run_changes and not changes.ran_changes) or \
             (run_walk and not walk.ran_walk):
@@ -3150,14 +3230,8 @@ def _cost_field(usage: Usage, model: str) -> dict:
 
 def _fold_usage(into: Usage, other: Usage) -> None:
     """Add every counter of `other` into `into`, per-model buckets included."""
-    for f in ("input_tokens", "output_tokens", "cache_creation_input_tokens",
-              "cache_read_input_tokens", "api_calls", "sapling_chars"):
-        setattr(into, f, getattr(into, f) + getattr(other, f))
-    into.sapling_cost += other.sapling_cost
-    for model, bucket in other.by_model.items():
-        dst = into.by_model.setdefault(model, {"api_calls": 0})
-        for k, v in bucket.items():
-            dst[k] = dst.get(k, 0) + v
+    from .fanout import fold_usage
+    fold_usage(into, other)
 
 
 def _review_shaped(rows: list) -> bool:

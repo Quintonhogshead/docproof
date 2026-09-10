@@ -10,7 +10,8 @@ instruments.
 ```
 workspace/<book-slug>/
   CLAUDE.md          <- copied from galley/practitioner/CLAUDE.md
-  KNOBS.md           <- copied from galley/practitioner/KNOBS.md
+  KNOBS.md           <- small selective-reference index
+  references/        <- current phase contracts + archive-only history
   .claude/skills/    <- copied from galley/practitioner/skills/
   .claude/settings.local.json   (seeded once: Bash allowlist for docproof +
                                  grep/head/tail/wc/ls/cat runs/*; never
@@ -36,6 +37,24 @@ Flush the workspace at intake of a new book. Persistent memory — the
 `galley_memory.db` store (house rulings, precedents, authors) and the
 calibration file — lives OUTSIDE the workspace and carries across books.
 
+## Phase references and context
+
+Only the compact CLAUDE.md policy is automatically loaded. The driver prompt
+names each phase's references, and skills add only a needed contract. KNOBS.md
+is an index: look up a named knob or schema, not the whole former manual.
+`seed_workspace` and `launch.sh` both copy `references/` so every path works
+from the book workspace; no source checkout path is needed. Existing workspace
+reference files and local settings are preserved during refresh.
+
+Complete old manuals and skills are retained byte-for-byte under
+`references/history/` with archive-only precedence and hashes in its README.
+They are for a targeted regression/precedent search, never routine phase input.
+Current policy and exact driver flags supersede stale historical instructions.
+The driver defaults to settle 3 rounds / quiet floor 4 / quiet share 0; standalone
+CLI defaults remain distinct. Approved configs are reused after the gate, never
+rewritten by ladder. Editorial models, lanes, independent readers, and two-pass
+coverage are unchanged by this reference layout.
+
 ## Launch
 
 For a whole book unattended, use `docproof galley drive` (below). `launch.sh`
@@ -45,7 +64,7 @@ starts the intake phase only, with a person watching:
 BOOK=/path/to/Book.docx SLUG=book-slug ./launch.sh
 ```
 
-`launch.sh` builds the workspace, copies the manual, KNOBS, and skills, seeds
+`launch.sh` builds the workspace, copies common policy, references, and skills, seeds
 the permission allowlist, drops the source in place, and starts a headless
 session with the intake prompt. The session then follows the loop in
 CLAUDE.md: profile → plan → **gate (it stops and waits for a human reply)** →

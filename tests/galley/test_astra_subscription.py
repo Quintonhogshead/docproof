@@ -249,7 +249,12 @@ def test_large_final_aggregation_uses_complete_file_manifest(run, monkeypatch):
     assert "complete_final_input_path" in evidence
     assert len(ar._load(run / sub.DIRECTORY / "final-input.json")["extra"]) == 200_000
     assert len(runner.calls[-1][0].encode("utf-8")) < sub.DEFAULT_MAX_CHUNK_BYTES
-    assert len(evidence["chunk_review_files"]) == len(runner.calls) - 1
+    assert "chunk_review_files" not in evidence
+    assert "single authoritative representation" in evidence["file_read_requirement"]
+    final_input = ar._load(run / sub.DIRECTORY / "final-input.json")
+    assert len(final_input["chunk_reviews"]) == len(runner.calls) - 1
+    for review, bound in zip(final_input["chunk_reviews"], final_input["coverage_manifest"]["chunks"]):
+        assert ar._hash(review) == bound["review_sha256"]
 
 
 def test_final_must_acknowledge_every_chunk(run):

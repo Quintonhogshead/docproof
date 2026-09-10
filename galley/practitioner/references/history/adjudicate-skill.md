@@ -5,9 +5,6 @@ description: Screen the accumulated findings with the practitioner rulebook, the
 
 # /adjudicate — the screening rulebook
 
-Read `references/house-rules.md` and `references/findings.md` once; all paths
-are workspace-relative. Only authorized copyediting uses the posture/merge lane.
-
 Every finding that reaches the deliverable passes this screen. **Read the
 whole sentence with the change applied before deciding; reject if the applied
 sentence is ungrammatical** (Georgis: "standing silent" → "stood silent" read
@@ -61,8 +58,8 @@ write rules; the engine writes the document.
    on ingested text as stale comments).
 4. `docproof import-findings` / `replay` (or `--mock-findings` where those
    verbs are absent), sweeps and normalize regenerating, all paid passes off.
-5. Then closing checks: artifact scan to clean, reject-all round trip
-   byte-identical. Cross-lane merge-desk work requires copy-edit authorization.
+5. Then the merge-desk closing checks: artifact scan to clean, reject-all
+   round trip byte-identical.
 6. What verify raises on the rebuilt text is NOT re-adjudicated by hand: run
    `/settle`. Never patch an owning row's replacement to fit a residual in.
 

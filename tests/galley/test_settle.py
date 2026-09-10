@@ -44,7 +44,7 @@ class _Provider:
 
     def complete_structured(self, **kwargs):
         self.calls.append(kwargs)
-        body = self._bodies.pop(0) if self._bodies else {}
+        body = self._bodies.pop(0) if self._bodies else {kwargs["schema_name"]: []}
         return ProviderResult(parsed=body, usage=NormalizedUsage(10, 5),
                               stop_reason="ok")
 

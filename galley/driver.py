@@ -234,8 +234,8 @@ def _now() -> str:
 # basename.
 _PROMPTS: dict[str, str] = {
     "profile": (
-        "Intake: manuscript at source/{book}. Read CLAUDE.md's Context "
-        "discipline first. Open the state machine (`docproof galley state . "
+        "Intake: manuscript at source/{book}. Follow the common Context "
+        "discipline. Open the state machine (`docproof galley state . "
         "--advance intake --source source/{book} --config CONFIG` — always "
         "BOTH flags). Run /profile then /draft-plan (both $0). The profile "
         "includes the NUMBER AUDIT extraction: every numeral and spelled "
@@ -263,7 +263,7 @@ _PROMPTS: dict[str, str] = {
         "NOT spend."),
     "sweeps": (
         "Phase: bespoke sweeps. Read PLAN.md for the approved sweep list and "
-        "KNOBS.md for the sweep contract. Author all sweep files in one batch, "
+        "references/sweeps.md for the sweep contract. Author all sweep files in one batch, "
         "dry-run each (`docproof sweep IN --rule F > runs/sweep_<key>.txt`; "
         "read only the match summary), and apply only the sweeps PLAN.md "
         "approved — a sweep whose blast radius exceeds the plan's figure is an "
@@ -274,8 +274,8 @@ _PROMPTS: dict[str, str] = {
         "line 1 — `chapter_sweep` on Luna in the run config (the "
         "mechanical-wave stage enables it) PLUS the six-window Sonnet $0 "
         "session-subagent sweep, imported before the ladder's own findings. "
-        "Write the run config from PLAN.md + "
-        "KNOBS.md (config REPLACES default.yaml — restate every section). Run "
+        "Reuse the exact approved config unchanged from PLAN.md and "
+        "approval.json; do not rewrite or regenerate it after approval. Run "
         "`docproof review … --approval approval.json` to runs/ladder/ with "
         "output redirected to runs/ladder.log. Run it in the FOREGROUND and "
         "WAIT for it to exit — never background it, never end your turn "
@@ -344,8 +344,13 @@ _PROMPTS: dict[str, str] = {
         "intent_zones_file resolves). Those flags are REQUIRED and exact: "
         "sweep until a round comes back quiet, at most {settle_rounds} "
         "round(s); a round raising fewer than {settle_noisy} new item(s) is "
-        "quiet and the book is done. If the last round is still noisy the book "
-        "needs a human proofreader — report that, do not sweep again. A "
+        "quiet under the absolute rule; a nonzero --quiet-share adds the "
+        "specified percentage rule. If the last round is still noisy, "
+        "preserve that evidence and do not sweep again. In an enrolled "
+        "astra-review-required.json workspace leave the editorial verdict "
+        "to Astra; otherwise the legacy driver records nonconvergence. "
+        "Internal repairs stay open and block certification, never becoming "
+        "author questions because a round limit was reached. A "
         "residual closes as an EDIT or a DROP whenever the book itself "
         "answers it (a verbatim repeat, a dictionary compound, a pronoun the "
         "sentence disambiguates, a comma splice); it closes as a QUERY only "
@@ -394,6 +399,22 @@ _PROMPTS: dict[str, str] = {
         "change/comment counts, and the outcome. If certify's plan-ledger or "
         "comment-premises check failed, deliver NOTHING: account for the "
         "plan line, or drop the stale query and rebuild, then certify again."),
+}
+
+# Small, explicit readings for each session. The common manual is automatic;
+# operational detail and historical evidence are not loaded for unrelated phases.
+_PHASE_REFERENCES: dict[str, tuple[str, ...]] = {
+    "profile": ("intake.md", "config.md"),
+    "approve": ("config.md",),
+    "sweeps": ("house-rules.md", "sweeps.md", "findings.md"),
+    "ladder": ("house-rules.md", "lanes.md", "findings.md", "judgment.md"),
+    "flights": ("legacy-copyedit.md", "house-rules.md", "findings.md"),
+    "audit": ("house-rules.md",),
+    "reread": ("legacy-copyedit.md", "house-rules.md"),
+    "verify": ("house-rules.md", "verification.md"),
+    "settle": ("house-rules.md", "comment-reconciliation.md"),
+    "certify": ("delivery.md",),
+    "deliver": ("delivery.md",),
 }
 
 # Scope restrictions appended to the relevant phase prompts.
@@ -457,20 +478,28 @@ def phase_prompt(phase: str, book: str, *, mechanical_only: bool = True,
         settle_rounds=settle_rounds, settle_noisy=settle_quiet_floor + 1)
     if mechanical_only:
         prompt += _MECHANICAL_NOTE.get(phase, "")
-    return prompt + _UNATTENDED_NOTE
+    readings = ", ".join(f"references/{name}"
+                         for name in _PHASE_REFERENCES[phase])
+    return (f"Read only these phase references once (workspace-relative): "
+            f"{readings}. Skills may name an additional needed contract; "
+            f"do not load the full reference directory or historical manuals. "
+            + prompt + _UNATTENDED_NOTE)
 
 
-# Appended to every phase prompt. The manual says it too (directive 6), but a
+# Appended to every phase prompt. The common manual says it too, but a
 # brain that has just read a 65k-word intake reaches for `galley ask` the way
 # a person would reach for a colleague, and unattended there is no colleague.
 _UNATTENDED_NOTE = (
     " UNATTENDED RUN: nobody is on the other end of `docproof galley ask` — "
-    "the driver sees a new QUESTIONS.md entry and ends the run as "
-    "needs_human with your question as the reason. So do not ask; decide, "
+    "the driver sees a new QUESTIONS.md entry and stops the run. "
+    "So do not ask; decide within the approved scope, "
     "and record the decision in the decision log. Escalate only what "
     "genuinely blocks the book: an unreadable source, a tool that fails, a "
     "cap you would exceed. Anything a proofreader would put to the author "
-    "goes in the deliverable as a margin query, not to `galley ask`.")
+    "goes in the deliverable as a margin query, not to `galley ask`. "
+    "In an Astra-enrolled workspace a technical blocker preserves the "
+    "editorial verdict; it never becomes an author question or a manual "
+    "needs_human overrule.")
 
 
 def phases_for(mechanical_only: bool = True) -> tuple[str, ...]:
@@ -613,6 +642,11 @@ def seed_workspace(book: str | Path, slug: str, *,
     manual = source_dir or practitioner_dir()
     shutil.copy2(manual / "CLAUDE.md", ws / "CLAUDE.md")
     shutil.copy2(manual / "KNOBS.md", ws / "KNOBS.md")
+    if (manual / "references").is_dir():
+        # Refresh shipped references without deleting a workspace's own files.
+        # Older custom manuals may not supply this optional directory.
+        shutil.copytree(manual / "references", ws / "references",
+                        dirs_exist_ok=True)
     skills = ws / ".claude" / "skills"
     if skills.exists():
         shutil.rmtree(skills)
