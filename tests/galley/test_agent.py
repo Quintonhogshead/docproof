@@ -970,22 +970,19 @@ def test_explicit_reset_rereads_once_in_a_fresh_workspace(env, tmp_path):
     assert entry["state"] == ga.FINISHED
 
 
-# --- a question nobody answers holds the book for new code -------------------
+# --- concrete failures after bounded recovery -------------------------------
 
-def test_a_question_block_holds_the_book_until_a_new_version(env, tmp_path,
+def test_exhausted_recovery_holds_the_book_until_a_new_version(env, tmp_path,
                                                              monkeypatch):
-    """Bradshaw Book 1 (2026-09-10) blocked at settle on a QUESTIONS.md entry
-    and was resumed five minutes later toward the same question. A question
-    stop now waits for a different DocProof version."""
+    """A repeated real failure is held; a local question cannot cause a hold."""
     import docproof
     ran = []
 
     def asked(**kw):
         ran.append(kw)
-        r = FakeResult(outcome="blocked", reason="phase settle escalated a "
-                       "question and there is nobody to answer it",
-                       uploaded=())
-        r.asked = True
+        r = FakeResult(outcome="blocked", reason="Required settle operation "
+                       "failed after automatic recovery", uploaded=())
+        r.recovery_exhausted = True
         return r
 
     alerts = []
@@ -997,7 +994,7 @@ def test_a_question_block_holds_the_book_until_a_new_version(env, tmp_path,
     entry = agent.ledger().claimed("drive-1")
     assert entry["state"] == ga.CLAIMED
     assert entry["operational_status"] == ga.HELD_FOR_CODE
-    assert any("held until the next deploy" in s for s in alerts)
+    assert any("automatic recovery could not finish" in s for s in alerts)
 
     report = agent.poll_once()                       # same version: held
     assert len(ran) == 1
@@ -1019,5 +1016,20 @@ def test_an_infrastructure_block_still_resumes_on_the_next_poll(env, tmp_path):
     agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
                    download=_downloader(tmp_path), run_driver=blocked)
     agent.poll_once()
+    agent.poll_once()
+    assert len(ran) == 2
+
+
+def test_a_legacy_question_flag_alone_cannot_hold_the_unattended_queue(env, tmp_path):
+    ran = []
+    def questioned(**kw):
+        ran.append(kw)
+        result = FakeResult(outcome="blocked", reason="legacy note", uploaded=())
+        result.asked = True
+        return result
+    agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
+                   download=_downloader(tmp_path), run_driver=questioned)
+    agent.poll_once()
+    assert agent.ledger().claimed("drive-1")["operational_status"] != ga.HELD_FOR_CODE
     agent.poll_once()
     assert len(ran) == 2

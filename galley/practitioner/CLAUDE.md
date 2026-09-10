@@ -117,18 +117,37 @@ already read evidence. Each phase is its own session.
 | Certification, letters, final comments | `references/delivery.md` |
 | Explicitly authorized copyediting | `references/legacy-copyedit.md` |
 
-## Blockers and escalation
+## Work through the final handoff without human intervention
 
-Decide within the approved scope and record reasons. In unattended sessions nobody
-is waiting at `galley ask`; a new QUESTIONS.md entry stops the driver. Author
-questions belong in the manuscript, not that channel. Escalate only a real blocker:
-unapproved spend/scope, unreadable source, unavailable tool/knob, unresolved intent
-that prevents a safe decision, or a request to weaken audit. For a required
-escalation, append the question, recommendation, and blocked work to QUESTIONS.md,
-then `docproof galley ask "subject" --file QUESTIONS.md --book "book"`; report a
-failed send honestly. Never invent the reply. In enrolled runs a technical blocker
-is not an editorial `needs_human` verdict; preserve Astra's authority.
-No human answers QUESTIONS.md: the book is held until a new DocProof version is
-deployed, then resumes from its last state. Write the entry as an engine defect
-report (what the engine could not do, item ids, evidence paths), never as a
-request for approval.
+Assume no human will check your work, approve an intermediate decision, or answer
+a question until the end. Own the complete approved proofreading and independent
+verification. The automatic plan gate supplies approval within the configured
+scope and budget; finish the plan phase and let the driver run that gate.
+
+- Decide mechanics from the book and house rules; record decisions and evidence.
+  Preserve wording whose intent is uncertain. Only missing author knowledge
+  (fact, identity, intent) earns an anchored margin query in the final manuscript.
+  Continue all other work without waiting for the author. Never manufacture an
+  answer, turn a tool failure into an author query, or assume a human will catch
+  an unverified edit later.
+- Fix ordinary command, anchor, and artifact problems through supported tools.
+  Inspect the exact failure, resume existing checkpoints, complete missing work,
+  and rerun the affected verification. Never repeat a completed paid lane simply
+  because a session restarted. A sweep with more matches than estimated must be
+  narrowed to the approved cases; adjudicate the remaining candidates through
+  existing authorized lanes so required coverage is retained.
+- Before approval, correct an invalid draft plan/config inside the existing
+  scope, routes, coverage, and budget. After approval, its source/config/routes
+  and spending limit stay frozen. No unanswered question authorizes more spend,
+  a broader edit, reduced coverage, skipped verification, or a forged stamp.
+- `galley ask` in unattended runs records a local note only. It sends no email,
+  expects no reply, and does not pause the book. QUESTIONS.md is historical
+  evidence, not a stop signal. Keep technical notes in the decision log; include
+  useful author questions in the final deliverable through the normal guarded
+  query path. Do not use this channel to request instructions.
+- If supported recovery cannot complete a required operation within the caps,
+  preserve the last valid artifacts and report the failed operation, attempted
+  repairs, and evidence paths. The driver records an operational failure and
+  continues serving other books. Never certify incomplete work or recast an
+  engine defect as an editorial `needs_human` verdict. Astra retains final
+  editorial authority; any human review it requires happens at the final handoff.
