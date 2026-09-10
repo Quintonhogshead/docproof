@@ -10,11 +10,12 @@ opened itself.
 from __future__ import annotations
 
 import contextlib
-import fcntl
+from docproof import platform_io as fcntl
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
@@ -204,6 +205,7 @@ def _decorate_report(report: dict[str, Any], paths: Mapping[str, Path],
         missing_fonts = [f for f in report["fonts"]
                          if "missing" in str(f.get("status", "")).lower()
                          or "notinstalled" in str(f.get("status", "")).lower()
+                         or "substituted" in str(f.get("status", "")).lower()
                          or "error" in str(f.get("status", "")).lower()]
     if not missing_links:
         missing_links = [l for l in report["links"]
@@ -271,12 +273,13 @@ def build_jsx(action: str, source: str | Path, work_dir: str | Path,
 class InDesignWorker:
     """Run read-only audits and anchored edits through native InDesign."""
 
-    def __init__(self, *, runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    def __init__(self, *, runner: Callable[..., subprocess.CompletedProcess] = fcntl.run_bounded,
                  timeout: int = TIMEOUT_SECONDS,
-                 bundle_id: str = BUNDLE_ID) -> None:
+                 bundle_id: str = BUNDLE_ID, platform: str | None = None) -> None:
         self.runner = runner
         self.timeout = timeout
         self.bundle_id = bundle_id
+        self.platform = platform or sys.platform
 
     def inspect(self, source: Path, work_dir: Path) -> dict[str, Any]:
         source, work_dir = _as_path(source), _as_path(work_dir)
@@ -323,8 +326,16 @@ class InDesignWorker:
                         f'(POSIX file {json.dumps(str(script), ensure_ascii=True)}) '
                         "language javascript")
                 try:
-                    done = self.runner(["osascript", "-e", tell], capture_output=True,
-                                       text=True, timeout=self.timeout)
+                    interpreter = Path(sys.executable)
+                    if self.platform == "win32" and interpreter.name.lower() == "pythonw.exe":
+                        interpreter = interpreter.with_name("python.exe")
+                    command = ([str(interpreter), "-m", "docproof.interior.com_runner", str(script)]
+                               if self.platform == "win32" else ["osascript", "-e", tell])
+                    options = ({"creationflags": subprocess.CREATE_NO_WINDOW,
+                                "env": dict(os.environ, PYTHONIOENCODING="utf-8")}
+                               if self.platform == "win32" else {})
+                    done = self.runner(command, capture_output=True, encoding="utf-8",
+                                       timeout=self.timeout, **options)
                 except subprocess.TimeoutExpired as exc:
                     raise NativeError(
                         f"InDesign took longer than {self.timeout // 60} minutes") from exc
@@ -525,7 +536,7 @@ function pageTexts(doc) {
 }
 function missingFont(status) {
     var s = String(status).toLowerCase();
-    return s.indexOf("missing") >= 0 || s.indexOf("notinstalled") >= 0 || s.indexOf("error") >= 0;
+    return s.indexOf("missing") >= 0 || s.indexOf("notinstalled") >= 0 || s.indexOf("substituted") >= 0 || s.indexOf("error") >= 0;
 }
 function missingLink(status) {
     var s = String(status).toLowerCase();
@@ -612,13 +623,30 @@ function preflight(doc) {
                     throw new Error("edits overlap in story " + sid);
             }
             occupied[sid].push({start: start, end: end});
-            plan.push({edit: edit, story: story, start: start, end: end});
+            plan.push({edit: edit, story: story, story_id: sid, start: start, end: end});
         }
     }
     // Applying right-to-left keeps every preflight offset anchored to the
     // original story, even where edits change paragraph lengths.
-    plan.sort(function(a, b) { return text(a.story.id) === text(b.story.id) ?
-        b.start - a.start : text(a.story.id) < text(b.story.id) ? -1 : 1; });
+    // Keep native DOM property access out of Array.sort callbacks. Use frozen
+    // primitive keys and explicitly order edits before creating any mutation.
+    for (var sortIndex = 1; sortIndex < plan.length; sortIndex++) {
+        var current = plan[sortIndex], previous = sortIndex - 1;
+        while (previous >= 0 && (plan[previous].story_id > current.story_id ||
+               plan[previous].story_id === current.story_id && plan[previous].start < current.start)) {
+            plan[previous + 1] = plan[previous];
+            previous--;
+        }
+        plan[previous + 1] = current;
+    }
+    var order = [];
+    for (var checked = 0; checked < plan.length; checked++) {
+        if (checked > 0 && plan[checked - 1].story_id === plan[checked].story_id &&
+                plan[checked - 1].start < plan[checked].start)
+            throw new Error("native edit order must run from the end of each story");
+        order.push({id: plan[checked].edit.id, story_id: plan[checked].story_id, start: plan[checked].start});
+    }
+    writeJson(SNAPSHOT + ".edit-order.json", order);
     return plan;
 }
 function applyFontStyle(target, start, end, style) {
@@ -714,6 +742,14 @@ function applyCapturedFormatting(story, start, replacement, formatting) {
         }
     }
 }
+var EXPECTED_STORIES = {};
+function assertExpectedStories(doc, stage) {
+    for (var sid in EXPECTED_STORIES) if (EXPECTED_STORIES.hasOwnProperty(sid)) {
+        var checkedStory = storyById(doc, sid);
+        if (!checkedStory || text(checkedStory.contents) !== EXPECTED_STORIES[sid])
+            throw new Error("story " + sid + " changed unexpectedly " + stage);
+    }
+}
 function applyOne(item) {
     var edit = item.edit, story = item.story, start = item.start, end = item.end;
     var kind = text(edit.kind || "replace"), find = text(edit.find), replacement = text(edit.replacement);
@@ -723,7 +759,15 @@ function applyOne(item) {
     } else if (kind !== "replace" && kind !== "style") {
         throw new Error("unknown edit kind: " + kind);
     }
-    var target = story.characters.itemByRange(start, end - 1);
+    var beforeText = text(story.contents);
+    var checkedId = text(story.id);
+    if (EXPECTED_STORIES.hasOwnProperty(checkedId) && EXPECTED_STORIES[checkedId] !== beforeText)
+        throw new Error("story " + checkedId + " changed between edits");
+    if (beforeText.substr(start, end - start) !== find)
+        throw new Error("edit " + edit.id + " preflight anchor moved before replacement");
+    var target = story.characters.itemByRange(start, end - 1).getElements()[0];
+    if (text(target.contents) !== find)
+        throw new Error("edit " + edit.id + " native character range differs from its exact anchor");
     if (kind === "style") {
         applyFontStyle(story, start, end, text(edit.font_style));
         return;
@@ -734,6 +778,9 @@ function applyOne(item) {
     // boat names.
     var formatting = captureFormatting(story, start, end);
     target.contents = replacement;
+    var expectedText = beforeText.substr(0, start) + replacement + beforeText.substr(end);
+    if (text(story.contents) !== expectedText)
+        throw new Error("edit " + edit.id + " changed text outside its replacement range");
     applyCapturedFormatting(story, start, replacement, formatting);
     var styleBase = start;
     if (kind === "insert" && text(edit.position || "after").toLowerCase() !== "before")
@@ -745,6 +792,9 @@ function applyOne(item) {
     for (var i = 0; i < spans.length; i++)
         applyFontStyle(story, styleBase + Number(spans[i].start), styleBase + Number(spans[i].end),
                        text(spans[i].font_style));
+    if (text(story.contents) !== expectedText)
+        throw new Error("edit " + edit.id + " changed text while restoring formatting");
+    EXPECTED_STORIES[checkedId] = expectedText;
 }
 function exportArtifacts(doc) {
     var pdf = new File(PDF_OUT), idml = new File(IDML_OUT);
@@ -860,8 +910,10 @@ function main() {
             for (var pi = 0; pi < plan.length; pi++) applyOne(plan[pi]);
         }
         try { opened.recompose(); } catch (recomposeError) { throw new Error("recompose failed: " + recomposeError); }
+        if (ACTION === "apply") assertExpectedStories(opened, "during recomposition");
         if (ACTION === "apply") opened.save();
         try { opened.recompose(); } catch (recomposeAfterSaveError) { throw new Error("recompose failed: " + recomposeAfterSaveError); }
+        if (ACTION === "apply") assertExpectedStories(opened, "after saving");
         var result = audit(opened);
         exportArtifacts(opened);
         writeJson(SNAPSHOT, result);

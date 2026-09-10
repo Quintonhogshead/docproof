@@ -62,6 +62,24 @@ def test_public_hubspot_cdn_is_downloaded_without_auth_and_filename_is_safe(tmp_
     assert calls[0].get_header("Authorization") is None
 
 
+def test_authorized_file_with_failed_cdn_uses_complete_form_signature_without_bearer(tmp_path):
+    calls = []
+    source = ('https://api-na1.hubspot.com/form-integrations/v1/uploaded-files/'
+              'signed-url-redirect/12?portalId=1&sign=valid&conversionId=c&filename=notes.pdf')
+    def opener(request, timeout=60):
+        calls.append(request)
+        if len(calls) == 1:
+            return Response(b'{"url":"https://f.hubspotusercontent00.net/private"}')
+        if len(calls) == 2:
+            raise urllib.error.HTTPError(request.full_url, 403, 'Forbidden', {}, io.BytesIO())
+        return Response(b'corrections')
+    result = native_files.download_file('token', source, tmp_path, opener=opener)
+    assert result.read_bytes() == b'corrections'
+    assert len(calls) == 3
+    assert calls[2].full_url == source
+    assert calls[2].header_items() == []
+
+
 def test_public_hubspot_cdn_subdomain_is_downloaded_without_auth(tmp_path):
     calls = []
 
@@ -74,6 +92,13 @@ def test_public_hubspot_cdn_subdomain_is_downloaded_without_auth(tmp_path):
         tmp_path, opener=opener)
     assert target.name == "proof.pdf"
     assert calls[0].get_header("Authorization") is None
+
+
+def test_login_html_cannot_be_saved_as_a_correction_document(tmp_path):
+    with pytest.raises(HubSpotError, match='HTML sign-in page'):
+        native_files.download_file('token', 'https://f.hubspotusercontent00.net/notes.docx', tmp_path,
+                                   opener=lambda *_a, **_k: Response(b'<!DOCTYPE html><html>Sign in</html>'))
+    assert not list(tmp_path.glob('*.docx'))
 
 
 @pytest.mark.parametrize("url", [

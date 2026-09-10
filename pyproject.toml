@@ -25,7 +25,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+interior = [
+    "docproof[app]",
+    "mcp>=1.28,<2",
+    "pywin32>=306; sys_platform == 'win32'",
+]
 app = [
+    # Windows does not ship the IANA data used by the local schedule panel.
+    "tzdata; sys_platform == 'win32'",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",

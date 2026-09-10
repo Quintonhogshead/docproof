@@ -27,10 +27,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-try:
-    import fcntl
-except ImportError:                           # pragma: no cover - Windows
-    fcntl = None                              # see docs/windows.md
+from docproof import platform_io as fcntl
 
 log = logging.getLogger("docproof.app.lock")
 
@@ -67,11 +64,6 @@ class FolderLock:
         """Claim the folder, or raise FolderInUse naming who has it."""
         if self._fd is not None:
             return self                       # already ours; acquiring is idempotent
-        if fcntl is None:                     # pragma: no cover - Windows
-            log.warning("No file locking on this platform; not checking "
-                        "whether another DocProof owns %s", self.root)
-            return self
-
         self.root.mkdir(parents=True, exist_ok=True)
         fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
         try:

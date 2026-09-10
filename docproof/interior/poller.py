@@ -1,11 +1,53 @@
-"""Mac worker entry point that runs only native interior correction jobs."""
+"""Desktop worker entry point that runs only native interior correction jobs."""
 from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+import threading
 
 from .workflow import save_json
+
+
+def collect_once(home: Path, *, get_key=None, opener=None):
+    """Capture HubSpot form events without refreshing Drive or running a book."""
+    from app.settings import get_api_key
+    from app.watch import hubspot, native_intake, native_queue
+    from app.watch.settings import HUBSPOT_KEY, WatchSettings
+
+    home = Path(home).resolve()
+    try:
+        ws = WatchSettings.load(home)
+        if not ws.corrections_enabled or ws.corrections_engine != "native":
+            return {"state": "paused"}
+        if not ws.corrections_native_form_poll or not ws.corrections_native_start_after:
+            raise ValueError("Configure the correction form and its start date before starting the collector.")
+        read = get_key or get_api_key
+        token = read(HUBSPOT_KEY)
+        if not token:
+            raise ValueError("Connect HubSpot before starting the collector.")
+        return native_intake.collect(home, ws, token,
+                                     opener=opener or hubspot._open_url)
+    except Exception as exc:
+        # The collector runs in a daemon thread; persist only a bounded type
+        # marker so a provider error can never put credentials in local state.
+        native_queue.record_error(home, f"{type(exc).__name__}: native collection failed")
+        raise
+
+
+def _collector_loop(home: Path, interval: int, stop: threading.Event,
+                    *, get_key=None, opener=None):
+    """Keep intake alive while the serialized native worker is busy."""
+    delay = max(60, int(interval))
+    while not stop.is_set():
+        try:
+            collect_once(home, get_key=get_key, opener=opener)
+        except Exception:
+            # collect_once records a sanitized error; the daemon must not take
+            # down the worker when HubSpot is unavailable for one poll.
+            pass
+        if stop.wait(delay):
+            return
 
 
 def poll_once(home: Path, *, get_key=None, opener=None, local_only=False):

@@ -111,10 +111,8 @@ def _job_dir(home: Path, job_id: str) -> Path:
 
 
 def _write_json(path: Path, value: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(path.suffix + ".writing")
-    temp.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(temp, path)
+    from docproof.interior.workflow import save_json
+    save_json(path, value)
 
 
 def _read_jobs(home: Path) -> list[dict]:
@@ -125,10 +123,11 @@ def _read_jobs(home: Path) -> list[dict]:
     for path in sorted(root.glob("*/job.json")):
         try:
             payload = json.loads(path.read_text("utf-8"))
-            if isinstance(payload, dict):
-                jobs.append(payload)
-        except (OSError, json.JSONDecodeError):
-            log.warning("Ignoring unreadable native job %s", path)
+            if not isinstance(payload, dict) or not payload.get('job_id'):
+                raise ValueError('Invalid native job receipt')
+            jobs.append(payload)
+        except (OSError, ValueError) as exc:
+            raise NativeCorrectionError('A native job receipt is unreadable. Restore it before processing more submissions.') from exc
     return jobs
 
 
@@ -151,11 +150,19 @@ def _manual_files_ready(job: dict, home: Path) -> bool:
     cached = getattr(native_files, "cached_file", None)
     if cached is None:
         return False
-    urls = [str(item.get("url", "")) for item in missing
-            if isinstance(item, dict)]
+    if not isinstance(missing, list):
+        return False
+    urls = []
+    for item in missing:
+        if not isinstance(item, dict):
+            return False
+        url = str(item.get("url", "")).strip()
+        if not url or not native_files.file_id(url):
+            return False
+        urls.append(url)
     try:
         cache_root = home / "manual-attachments"
-        for url in urls.values():
+        for url in urls:
             if not url or cached(url, cache_root):
                 continue
             file_id = getattr(native_files, "file_id", lambda _url: None)(url)
@@ -375,7 +382,7 @@ def _folder_for(token: str, ws, record, *, opener) -> str | None:
     children = drive.find_children(token, author, folders_only=True, opener=opener)
     wanted = " ".join(ws.corrections_folder_name.split()).casefold()
     hits = [f for f in children if " ".join(f.name.split()).casefold() == wanted]
-    return hits[0].id if len({f.id for f in hits}) == 1 else author
+    return hits[0].id if len(hits) == 1 else None
 
 
 def _assets(token: str, folder_id: str, *, opener, root: Path,
@@ -720,6 +727,16 @@ def run_stage(token: str, home: Path, ws, state, runner, store, *, mock: bool,
     """Run at most one native book at a time and resume its own job ledger."""
     if not ws.corrections_enabled or ws.corrections_engine != "native" or not hs_token:
         return
+    if ws.corrections_native_form_poll:
+        from . import native_intake
+        try:
+            native_intake.run_stage(token, home, ws, opener=opener,
+                                    hs_token=hs_token, report=report, mock=mock)
+        except hubspot.HubSpotAuthError:
+            raise
+        except Exception as exc:
+            report.failed.append(('native corrections', str(exc)))
+        return
     try:
         # Delivery retries outrank newly discovered books, but local hold-mode
         # results must not starve the queue while publishing is disabled.
@@ -748,6 +765,10 @@ def run_stage(token: str, home: Path, ws, state, runner, store, *, mock: bool,
 def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
              hs_token: str, report) -> None:
     record, folder_id, source_info, listing, *event_data = work
+    batch = event_data[1] if len(event_data) > 1 else None
+    if batch:
+        from . import native_queue
+        native_queue.assert_active(home, batch['batch_id'])
     source = source_info.file
     urls, text, marker = _submission_properties(ws, record)
     # Pending jobs carry the frozen event even when CRM properties changed
@@ -791,6 +812,9 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
                "submission_marker": marker, "submission_urls": urls,
                "submission_text": text, "record_properties": dict(record.properties),
                "status": "queued", "uploaded": {}, "created_at": datetime.now(timezone.utc).isoformat()}
+        if batch:
+            job.update(batch_id=batch['batch_id'], book_identity=batch['book'],
+                       submission_receipts=batch['events'])
         _write_json(job_dir / "job.json", job)
     else:
         job_dir = _job_dir(home, job["job_id"])
@@ -803,11 +827,18 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
         source_dir = job_dir / "source"
         source_dir.mkdir(parents=True, exist_ok=True)
         local_source = source_dir / _safe(job.get("source_name") or source.name)
+        if batch and job.get('source_remote_fingerprint') != _fingerprint(source):
+            raise native_queue.QueueError('The registered source changed after this batch began.')
         if local_source.is_file() and job.get("source_local_hash"):
             if _hash(local_source) != job["source_local_hash"]:
                 raise NativeCorrectionError("the frozen local source was changed; restore it before retrying")
         else:
             local_source = drive.download(token, source.id, local_source, opener=opener)
+            if batch and source.md5_checksum:
+                with local_source.open('rb') as stream:
+                    actual_md5 = hashlib.file_digest(stream, 'md5').hexdigest()
+                if actual_md5 != source.md5_checksum:
+                    raise native_queue.QueueError('The downloaded InDesign file does not match its frozen Drive checksum.')
             job["source_local_hash"] = _hash(local_source)
             job["source_remote_fingerprint"] = _fingerprint(source)
             _write_json(job_dir / "job.json", job)
@@ -825,7 +856,12 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
         }
         attachments: list[Path] = []
         missing: list[dict[str, str]] = []
-        for index, url in enumerate(urls):
+        if batch:
+            from .native_attachments import gather
+            attachments, missing = gather(job, job_dir, urls, hs_token, home,
+                                           opener=opener, save=lambda: _write_json(job_dir / 'job.json', job))
+            saved_by_index = job.get('submission_paths_by_index', {})
+        for index, url in enumerate([] if batch else urls):
             prior = Path(saved_by_index.get(str(index), ""))
             if prior.is_file():
                 attachments.append(prior)
@@ -891,6 +927,12 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
                                               relative=Path("Document fonts"),
                                               capture=True))
         job["asset_paths"] = [str(path) for path in package_assets]
+        if batch:
+            asset_hashes = {str(path): _hash(path) for path in package_assets}
+            if 'asset_hashes' in job and job['asset_hashes'] != asset_hashes:
+                raise native_queue.QueueError('A frozen font or linked book asset changed. The batch requires recovery.')
+            job['asset_hashes'] = asset_hashes
+            _write_json(job_dir / 'job.json', job)
         # A result is immutable once the local workflow has returned. A tick
         # that died during upload resumes from this manifest and never edits
         # the source a second time.
@@ -903,6 +945,9 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
             rules = {"source_id": source.id, "source_fingerprint": source_fingerprint,
                      "submission_marker": marker, "job_id": job["job_id"],
                      "asset_paths": [str(path) for path in package_assets]}
+            if batch:
+                native_queue.assert_active(home, batch['batch_id'])
+                rules['book_identity'] = batch['book']
             result = _call_workflow(local_source, attachments, text, job_dir / "output", rules)
             status = str(result.get("status", "technical_block"))
             job.update({"status": status, "result": result,
@@ -1009,6 +1054,8 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
             report.needs_human.append((source.name, reason))
             return
         for path, name in artifacts:
+            if batch:
+                native_queue.assert_active(home, batch['batch_id'])
             existing = next((f for f in latest if f.name == name and
                              f.app_properties.get(NATIVE_JOB_PROP) == job["job_id"]
                              and f.app_properties.get("docproof.native_hash") == hashes[name]), None)
@@ -1031,13 +1078,17 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
                                        allow=set(props), opener=opener)
                 job["crm_written"] = True
         job["status"] = status
+        job.pop('delivery_error', None)
         _write_json(job_dir / "job.json", job)
         report.corrected.append(f"{source.name}: {status}")
     except Exception as exc:  # noqa: BLE001 - persisted technical block
         # Preserve a completed local result when delivery or CRM writeback
         # fails.  The next tick can adopt receipts and finish the external
         # boundary without invoking InDesign a second time.
-        if (isinstance(job.get("result"), dict)
+        if batch and isinstance(exc, native_queue.QueueError):
+            job['blocked'] = 'batch_integrity'
+            job['reason'] = str(exc)
+        elif (isinstance(job.get("result"), dict)
                 and job.get("status") in {"verified", "designer_needed", "clarification_needed"}):
             job["delivery_error"] = str(exc)
         else:

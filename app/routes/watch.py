@@ -20,7 +20,7 @@ from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import RedirectResponse, FileResponse
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, StrictInt, StrictStr
 
 from docproof.providers import lookup
 
@@ -78,6 +78,9 @@ class WatchUpdate(BaseModel):
     corrections_native_submission_property: str | None = None
     corrections_native_form_id: str | None = None
     corrections_native_form_poll: bool | None = None
+    corrections_native_quiet_seconds: int | None = Field(default=None, ge=10800, le=604800)
+    corrections_native_form_project_property: str | None = None
+    corrections_native_form_file_count_property: str | None = None
     corrections_native_start_after: str | None = None
     corrections_native_form_first_property: str | None = None
     corrections_native_form_last_property: str | None = None
@@ -174,6 +177,20 @@ class ProofRelease(BaseModel):
 
 class ClearMarker(BaseModel):
     file_id: str = Field(min_length=1, max_length=200)
+
+
+class NativeBook(BaseModel):
+    """An operator-confirmed mapping for one native correction book."""
+
+    project_id: StrictStr = Field(min_length=1, max_length=500)
+    title: StrictStr = Field(min_length=1, max_length=500)
+    author: StrictStr = Field(min_length=1, max_length=500)
+    surname: StrictStr = Field(min_length=1, max_length=500)
+    folder_id: StrictStr = Field(min_length=1, max_length=500)
+    source_id: StrictStr = Field(min_length=1, max_length=500)
+    source_version: StrictInt = Field(ge=1)
+    title_aliases: list[StrictStr] = Field(default_factory=list)
+    author_aliases: list[StrictStr] = Field(default_factory=list)
 
 
 def _drive_token_or_none(home) -> str | None:
@@ -277,6 +294,80 @@ def register(app: FastAPI) -> None:
                 temporary.unlink(missing_ok=True)
         return {"saved": True, "file_id": file_id,
                 "message": "Saved locally. The worker can resume this submission on its next check."}
+
+    @app.get("/api/watch/native/queue", dependencies=[Depends(may_manage)])
+    def native_queue_status():
+        """Return the local native inbox and verified-book registry."""
+        from ..watch import native_queue as queue
+
+        home = Path(app.state.watch.home)
+        ws = WatchSettings.load(home)
+        return queue.status(
+            home, quiet_seconds=ws.corrections_native_quiet_seconds)
+
+    @app.post("/api/watch/native/books", dependencies=[Depends(may_manage)])
+    def native_book_register(body: NativeBook):
+        """Verify a Drive mapping by reads, then save it in the local queue."""
+        from ..watch import drive, native_corrections, native_queue as queue
+
+        home = Path(app.state.watch.home)
+        ws = WatchSettings.load(home)
+        token = _drive_token_or_none(home)
+        if not token:
+            raise HTTPException(
+                503, "Google Drive is not connected. Sign in before saving a verified book.")
+        try:
+            metadata = drive._json_call(
+                drive._request(drive._url(
+                    f"{drive.API}/files/{body.folder_id}", {
+                        "fields": "id,name,mimeType,trashed",
+                        **drive.SHARED_DRIVE,
+                    }), token),
+                opener=drive._open_url,
+                what="verify the Interior Design folder")
+        except DriveError as exc:
+            raise HTTPException(503, str(exc)) from None
+        if (metadata.get("id") != body.folder_id
+                or metadata.get("name") != "Interior Design"
+                or metadata.get("mimeType") != drive.FOLDER_MIME
+                or metadata.get("trashed")):
+            raise HTTPException(
+                400, "The Interior Design folder ID must name an untrashed Drive folder named Interior Design.")
+        try:
+            listing = drive.list_folder(token, body.folder_id)
+        except DriveError as exc:
+            raise HTTPException(503, str(exc)) from None
+        source, issue = native_corrections.pick_source(listing, body.surname)
+        if issue == "tie":
+            raise HTTPException(
+                409, "The highest matching InDesign export is ambiguous. Resolve the duplicate before saving.")
+        if source is None:
+            raise HTTPException(
+                400, "No matching InDesign export was found in the Interior Design folder.")
+        parsed = native_corrections.versioned_name(source.name)
+        if (source.id != body.source_id or not parsed
+                or parsed[1] != body.source_version):
+            raise HTTPException(
+                409, "The submitted InDesign file is not the unique highest export for this surname and version.")
+        try:
+            queue.register_book(home, body.model_dump())
+        except queue.QueueError as exc:
+            raise HTTPException(409, str(exc)) from None
+        return queue.status(
+            home, quiet_seconds=ws.corrections_native_quiet_seconds)
+
+    @app.post('/api/watch/native/batches/{batch_id}/resume-delivery', dependencies=[Depends(may_manage)])
+    def native_resume_delivery(batch_id: str):
+        from ..watch import native_queue as queue
+        home = Path(app.state.watch.home)
+        ws = WatchSettings.load(home)
+        if not ws.corrections_native_auto_upload:
+            raise HTTPException(409, 'Drive delivery is disabled. This verified result will remain local.')
+        try:
+            queue.resume_delivery(home, batch_id)
+        except queue.QueueError as exc:
+            raise HTTPException(409, str(exc)) from None
+        return queue.status(home, quiet_seconds=ws.corrections_native_quiet_seconds)
 
     def callback_uri(request: Request) -> str:
         """Where Google sends the browser back to, on this same server.

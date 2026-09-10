@@ -1220,7 +1220,8 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                 <label class="checkbox"><input type="checkbox" id="corrections-native-upload">
                   Upload verified native results to Drive</label>
                 <label class="checkbox"><input type="checkbox" id="corrections-native-partial">
-                  Also upload completed work when a designer is needed</label>
+                  Also upload completed work when a designer is needed
+                  <small class="muted">Automatic form batches always require full verification.</small></label>
                 <details><summary>Native workflow connections</summary>
                   <p class="muted">Use HubSpot's internal property names and option values. The job log always keeps the full outcome.</p>
                   <label class="field"><span>HubSpot app token</span><input id="corrections-hubspot-token" type="password" autocomplete="new-password" placeholder="Stored securely; never shown again"></label>
@@ -1240,6 +1241,8 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                   <label class="field"><span>Form first-name field</span><input id="corrections-native-form-first" type="text" placeholder="firstname"></label>
                   <label class="field"><span>Form last-name field</span><input id="corrections-native-form-last" type="text" placeholder="lastname"></label>
                   <label class="field"><span>Form book field</span><input id="corrections-native-form-book" type="text" placeholder="which_book_are_these_corrections_for_"></label>
+                  <label class="field"><span>Form Project ID field</span><input id="corrections-native-form-project" type="text" placeholder="docproof_project_id"></label>
+                  <label class="field"><span>Form attachment-count field (optional)</span><input id="corrections-native-form-file-count" type="text"></label>
                   <label class="field"><span>Form file-upload field</span><input id="corrections-native-form-file" type="text" placeholder="interior_design_corrections_documents"></label>
                   <label class="field"><span>Form notes field</span><input id="corrections-native-form-notes" type="text" placeholder="anything_else_"></label>
                   <label class="field"><span>Project ID property</span><input id="corrections-native-project-id" type="text" placeholder="Optional Projects property"></label>
@@ -1302,7 +1305,7 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                 </div>
                 <p id="wf-corrections-note" class="action-note" hidden></p>
                 <div class="wf-readout" id="native-worker-readout" aria-live="polite">
-                  <h4>Mac native worker</h4>
+                  <h4>InDesign worker</h4>
                   <p id="native-worker-line" class="small"></p>
                   <p id="native-worker-detail" class="muted small"></p>
                   <p id="native-worker-error" class="small wf-agent-error" hidden></p>
@@ -1313,6 +1316,31 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                   <ul id="native-intake-list"></ul>
                   <p id="native-intake-error" class="small wf-agent-error" hidden></p>
                 </div>
+                <div class="wf-readout" id="native-queue-readout" aria-live="polite" hidden>
+                  <h4>Native correction intake</h4>
+                  <p id="native-queue-line" class="small"></p>
+                  <div id="native-queue-events"></div>
+                  <div id="native-queue-batches"></div>
+                  <p id="native-queue-error" class="small wf-agent-error" hidden></p>
+                </div>
+                <details class="wf-readout" id="native-books-panel">
+                  <summary>Verified books</summary>
+                  <p class="muted small">Save a deliberate local mapping before a book can enter native correction intake.</p>
+                  <form id="native-book-form">
+                    <label class="field"><span>HubSpot Project ID</span><input id="native-book-project-id" required></label>
+                    <label class="field"><span>Book title</span><input id="native-book-title" required></label>
+                    <label class="field"><span>Author</span><input id="native-book-author" required></label>
+                    <label class="field"><span>Filename surname</span><input id="native-book-surname" required></label>
+                    <label class="field"><span>Interior Design folder ID</span><input id="native-book-folder-id" required></label>
+                    <label class="field"><span>Current InDesign file ID</span><input id="native-book-source-id" required></label>
+                    <label class="field"><span>Book version</span><input id="native-book-source-version" type="number" min="1" step="1" required></label>
+                    <label class="field"><span>Other accepted titles (optional, one per line)</span><textarea id="native-book-title-aliases"></textarea></label>
+                    <label class="field"><span>Other accepted author bylines (optional, one per line)</span><textarea id="native-book-author-aliases"></textarea></label>
+                    <div class="job-actions"><button type="submit" class="primary" id="native-book-save">Save verified book</button></div>
+                  </form>
+                  <p id="native-book-note" class="action-note" hidden></p>
+                  <div id="native-book-list" aria-live="polite"></div>
+                </details>
                 <p class="hint">If private HubSpot file access is unavailable, a waiting submission will let you supply its downloaded attachment here. Files and correction results stay local while Drive uploads are blocked.</p>
                 <div id="native-correction-jobs" aria-live="polite"></div>
               </div>

@@ -6,7 +6,7 @@ stops for operational recovery instead of silently spending the allowance twice.
 """
 from __future__ import annotations
 
-import fcntl
+from docproof import platform_io as fcntl
 import hashlib
 import json
 import os
@@ -14,6 +14,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from contextlib import contextmanager
@@ -29,7 +30,8 @@ _TAIL_BYTES = 64 * 1024
 _EVENT_TYPES = {"thread.started", "turn.started", "turn.completed", "turn.failed",
                 "item.started", "item.updated", "item.completed", "error"}
 _ENV_KEYS = {"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR", "TMP",
-             "TEMP", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "SYSTEMROOT"}
+             "TEMP", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "SYSTEMROOT",
+             "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA", "PATHEXT", "COMSPEC", "WINDIR"}
 _AUTH_OPTIONS = ["-c", 'model_provider="openai"', "-c", 'forced_login_method="chatgpt"',
                  "-c", 'cli_auth_credentials_store="file"']
 
@@ -53,7 +55,7 @@ def _now() -> str:
 
 def _private_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path.chmod(0o700)
+    fcntl.private_path(path, 0o700)
     return path
 
 
@@ -66,11 +68,7 @@ def _atomic(path: Path, value: Any) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        fcntl.sync_directory(path.parent)
     finally:
         temp.unlink(missing_ok=True)
 
@@ -102,7 +100,7 @@ def child_env(home: Path) -> dict[str, str]:
     can never turn this subscription request into a metered provider request.
     """
     env = {key: value for key, value in os.environ.items()
-           if key in _ENV_KEYS or key.startswith("LC_")}
+           if key.upper() in _ENV_KEYS or key.startswith("LC_")}
     env.update(CODEX_HOME=str(home), NO_COLOR="1", TERM="dumb")
     return env
 
@@ -153,11 +151,14 @@ def _serialized(home: Path, deadline: float):
     _private_dir(home)
     lock = home / ".galley-review.lock"
     fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+    acquired = False
     try:
-        os.fchmod(fd, 0o600)
+        if os.name != "nt":
+            os.fchmod(fd, 0o600)
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
                 break
             except BlockingIOError:
                 remaining = deadline - time.monotonic()
@@ -166,7 +167,8 @@ def _serialized(home: Path, deadline: float):
                 time.sleep(min(0.2, remaining))
         yield
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        if acquired:
+            fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
 
 
@@ -225,27 +227,24 @@ def _execute(argv: list[str], *, prompt: str | None, env: dict[str, str], cwd: P
     """Unlinked temporary transcripts prevent log leaks and unbounded RAM use."""
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
         try:
+            options = ({"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
+                       if os.name == "nt" else {"start_new_session": True})
             proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr,
-                                    env=env, cwd=cwd, start_new_session=True)
+                                    env=env, cwd=cwd, **options)
         except OSError as exc:
             raise _StartError("Codex process did not start") from exc
-        timed_out = False
-        try:
-            proc.communicate(None if prompt is None else prompt.encode("utf-8"), timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
+        with fcntl.process_job(proc):
+            timed_out = False
             try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                proc.communicate(timeout=5)
+                proc.communicate(None if prompt is None else prompt.encode("utf-8"), timeout=timeout)
             except subprocess.TimeoutExpired:
+                timed_out = True
+                fcntl.terminate_process_tree(proc)
                 try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                proc.communicate(timeout=5)
+                    proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    fcntl.terminate_process_tree(proc, force=True)
+                    proc.communicate(timeout=5)
         return {"returncode": proc.returncode, "timed_out": timed_out,
                 "stdout_tail": _tail(stdout), "stderr_tail": _tail(stderr),
                 "events": _safe_events(stdout)}
@@ -329,8 +328,8 @@ def reset_failed_request(work_dir: Path, request_id: str, *, reason: str) -> dic
             if source.exists():
                 destination = archive / filename
                 shutil.copyfile(source, destination)
-                destination.chmod(0o600)
-                with destination.open("rb") as copied:
+                fcntl.private_path(destination, 0o600)
+                with destination.open("rb+") as copied:
                     os.fsync(copied.fileno())
         authorization = {"request_id": request_id, "request_sha256": old["request_sha256"],
                          "previous_receipt_sha256": _hash(old), "previous_attempt": attempt,
@@ -342,33 +341,44 @@ def reset_failed_request(work_dir: Path, request_id: str, *, reason: str) -> dic
             (directory / filename).unlink(missing_ok=True)
         _atomic(directory / "receipt.json", {
             "protocol_version": PROTOCOL_VERSION, "request_sha256": old["request_sha256"],
-            "transport": "codex_subscription", "model": MODEL, "reasoning_effort": REASONING_EFFORT,
+            "transport": "codex_subscription", "model": request["model"], "reasoning_effort": request["reasoning_effort"],
             "status": "preflight", "submitted": False, "attempt": attempt + 1,
             "retry_authorization": authorization, "created_at": _now()})
         return {"status": "retry_authorized", **authorization}
 
 
 def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str,
-                   timeout_seconds: int = 1800, codex_bin: str | None = None) -> dict:
-    """Return a structured Astra-high answer using the worker's ChatGPT login.
+                   timeout_seconds: int = 1800, codex_bin: str | None = None,
+                   model: str = MODEL, reasoning_effort: str = REASONING_EFFORT) -> dict:
+    """Return a structured answer using the worker's ChatGPT login.
 
     All calls sharing GALLEY_CODEX_HOME serialize, including authentication.
     The timeout includes queueing. Preflight failures may be tried again after
     configuration is repaired; a generation that started is never auto-replayed.
     A result is an editorial input, never itself a human-proofreading verdict.
     """
+    if (Path(work_dir) / 'cancel-review.txt').exists():
+        raise AstraReviewError('This local review was cancelled before model submission. Inspect cancel-review.txt.')
     if not isinstance(prompt, str) or not prompt.strip():
         raise AstraReviewError("The Codex review prompt is empty.")
     if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 256:
         raise AstraReviewError("The Codex review request ID is invalid.")
     if type(timeout_seconds) is not int or timeout_seconds < 1:
         raise AstraReviewError("The Codex review timeout must be a positive number of seconds.")
+    allowed = {MODEL: {'low', 'medium', 'high', 'xhigh', 'max'},
+               'gpt-5.6-luna': {'low', 'medium', 'high', 'xhigh', 'max'}}
+    if model not in allowed or reasoning_effort not in allowed[model]:
+        raise AstraReviewError("Unsupported subscription model or reasoning effort.")
     _check_schema(schema)
     if schema["type"] != "object":
         raise AstraReviewError("The Codex review output must be a structured object.")
     request = {"protocol_version": PROTOCOL_VERSION, "request_id": request_id,
-               "transport": "codex_subscription", "model": MODEL,
-               "reasoning_effort": REASONING_EFFORT, "prompt": prompt, "schema": schema}
+               "transport": "codex_subscription", "model": model,
+               "reasoning_effort": reasoning_effort, "prompt": prompt, "schema": schema}
+    evidence_path = Path(work_dir).resolve() / 'astra-evidence.json'
+    evidence = _load(evidence_path) if evidence_path.exists() else None
+    if evidence is not None:
+        request['evidence'] = evidence
     request_sha256 = _hash(request)
     deadline = time.monotonic() + timeout_seconds
     home = codex_home()
@@ -396,8 +406,8 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
         if output_path.exists():
             raise AstraReviewError("Unexpected unfinished Codex output requires operational reconciliation.")
         receipt = {"protocol_version": PROTOCOL_VERSION, "request_sha256": request_sha256,
-                   "transport": "codex_subscription", "model": MODEL,
-                   "reasoning_effort": REASONING_EFFORT, "status": "preflight",
+                   "transport": "codex_subscription", "model": model,
+                   "reasoning_effort": reasoning_effort, "status": "preflight",
                    "submitted": False, "created_at": _now(), **retry_fields}
         _atomic(receipt_path, receipt)
         binary = _binary(codex_bin)
@@ -411,15 +421,36 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise AstraReviewError("Codex review timed out during preflight; no model request was submitted.")
-        argv = [binary, "exec", "--model", MODEL, "-c", f'model_reasoning_effort="{REASONING_EFFORT}"',
+        argv = [binary, "exec", "--model", model, "-c", f'model_reasoning_effort="{reasoning_effort}"',
                 *_AUTH_OPTIONS, "--sandbox", "read-only", "--ignore-user-config", "--ignore-rules",
                 "--skip-git-repo-check", "--ephemeral", "-c", 'approval_policy="never"',
                 "--output-schema", str(schema_path), "--output-last-message", str(output_path),
                 "--json", "-"]
+        if evidence is not None:
+            # Only this request's frozen JSON/image registry is exposed. The
+            # server has no command execution, writes, credentials or network tools.
+            registry = directory / 'evidence.json'
+            _atomic(registry, evidence)
+            configuration = {
+                'command': sys.executable,
+                'args': ['-m', 'docproof.interior.evidence_server', '--manifest', str(registry)],
+                'cwd': str(Path(__file__).resolve().parent.parent),
+                'required': True, 'startup_timeout_sec': 60, 'tool_timeout_sec': 60,
+                'enabled_tools': ['list_evidence', 'read_evidence', 'read_json_field',
+                                  'find_in_stories', 'find_story_anchors',
+                                  'view_evidence_image', 'view_evidence_images'],
+            }
+            overrides = []
+            for key, value in configuration.items():
+                overrides.extend(['-c', 'mcp_servers.docproof_evidence.'+key+'='+_json(value)])
+            argv[2:2] = overrides
         receipt.update(status="running", submitted=True, started_at=_now())
         _atomic(receipt_path, receipt)
         try:
-            executed = _execute(argv, prompt=prompt, env=env, cwd=directory, timeout=remaining)
+            # Model tools start beside the materialized evidence. The receipt
+            # directory is private to the desktop account on Windows, where
+            # tool processes can run under a separate sandbox identity.
+            executed = _execute(argv, prompt=prompt, env=env, cwd=Path(work_dir).resolve(), timeout=remaining)
         except _StartError as exc:
             receipt.update(status="preflight_failed", submitted=False, failure_category="cli_start")
             _atomic(receipt_path, receipt)
@@ -447,7 +478,7 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
             raise AstraReviewError("Codex returned an incomplete or invalid structured review. "
                                    "No automatic retry was submitted.") from None
         _atomic(directory / "result.json", result)
-        output_path.chmod(0o600)
+        fcntl.private_path(output_path, 0o600)
         receipt.update(status="completed", result_sha256=_hash(result))
         _atomic(receipt_path, receipt)
         return result

@@ -2,12 +2,19 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from docproof.interior.native import InDesignWorker, NativeError, build_jsx
+
+
+@pytest.fixture(autouse=True)
+def isolated_native_lock(monkeypatch, tmp_path):
+    # Fake runner tests must never contend with a real desktop book operation.
+    monkeypatch.setattr('docproof.interior.native._LOCK_PATH', tmp_path / 'native-test.lock')
 
 
 def _runner_for(work_dir: Path, *, output: Path | None = None,
@@ -23,7 +30,8 @@ def _runner_for(work_dir: Path, *, output: Path | None = None,
     }
 
     def run(command, **kwargs):
-        script_path = Path(command[-1].split('POSIX file ')[1].split(') language')[0].strip()[1:-1])
+        script_path = (Path(command[-1]) if "docproof.interior.com_runner" in command else
+                       Path(command[-1].split('POSIX file ')[1].split(') language')[0].strip()[1:-1]))
         script = script_path.read_text(encoding="ascii")
         if output is not None:
             output.parent.mkdir(parents=True, exist_ok=True)
@@ -84,6 +92,41 @@ def test_inspect_writes_and_returns_baseline_audit(tmp_path):
     assert result["baseline_idml"] == str(work / "baseline.idml")
     assert result["missing_fonts"] == []
     assert result["ok"] is True
+
+
+def test_substituted_fonts_are_unresolved(tmp_path):
+    source = tmp_path / 'source.indd'
+    source.write_bytes(b'source')
+    work = tmp_path / 'work'
+    report = {'fonts': [{'name': 'Minion Pro Medium', 'status': 'SUBSTITUTED'}]}
+    result = InDesignWorker(runner=_runner_for(work, report=report)).inspect(source, work)
+    assert result['unresolved_assets'] and not result['ok']
+    assert result['missing_fonts'] == report['fonts']
+
+
+def test_native_preflight_orders_edits_without_resolving_dom_ids(tmp_path):
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('JavaScript runtime is unavailable')
+    jsx = build_jsx('apply', tmp_path / 'source.indd', tmp_path, tmp_path / 'out.indd', [])
+    code = jsx[jsx.index('function preflight(doc)'):jsx.index('function applyFontStyle')]
+    harness = r'''
+const vm = require('node:vm');
+const code = require('node:fs').readFileSync(0, 'utf8');
+const story = {contents:'first second third'};
+Object.defineProperty(story, 'id', {get(){throw Error('Do not resolve DOM ids while sorting');}});
+const context = {
+    EDITS: ['first','third','second'].map(find => ({id:find, story_id:'42', find, replacement:find, expected_count:1})),
+    text:String, storyById:()=>story, checkStyleRanges:()=>{},
+    allMatches:(text, find)=>[text.indexOf(find)], writeJson:()=>{}, SNAPSHOT:'unused'
+};
+vm.createContext(context);
+vm.runInContext(code, context);
+const result = context.preflight({}).map(row=>({id:row.edit.id, start:row.start}));
+process.stdout.write(JSON.stringify(result));
+'''
+    done = subprocess.run([node, '-e', harness], input=code, text=True, capture_output=True, check=True)
+    assert json.loads(done.stdout) == [{'id': 'third', 'start': 13}, {'id': 'second', 'start': 6}, {'id': 'first', 'start': 0}]
 
 
 def test_apply_uses_output_copy_and_reports_final_artifacts(tmp_path):
