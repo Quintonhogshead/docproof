@@ -77,7 +77,27 @@ The form and Project note fields are different. Native form mode reads the actua
 
 The worker requires a start date. Older submissions remain out of the automatic queue unless deliberately included. Missing or ambiguous identity must be resolved before applying an author's instructions to a book. Book-title variations and typos can require a person to match the submission.
 
-The Google author root is configured in watch settings for the older property-driven workflow. Guarded form intake uses the verified registry's exact folder and source IDs. Source selection uses the highest numeric `Last Name - Book N.indd` within that registered folder; duplicate highest versions require attention. The operator maps each verified source through the local UI before a book can be claimed.
+Guarded form intake uses the verified registry's exact folder and source IDs. Source selection uses the highest numeric `Last Name - Book N.indd` within that registered folder; duplicate highest versions require attention. Sources can be mapped through the local UI or through the opt-in shared-form checks below.
+
+### Existing shared form
+
+Enable `corrections_native_shared_form` to retain the existing shared form link.
+When no Project ID is supplied, the typed book title must match exactly one
+readable HubSpot Project after case/spacing/punctuation normalization or an
+explicit registered title alias. The lookup includes incomplete Projects, so a
+duplicate title cannot disappear because its author name is missing. The
+submitter's name is not used as the author's identity. No fuzzy or model-based
+title selection is allowed.
+
+For a previously unregistered Project, the worker requires complete CRM author
+first/last names, no second Project for that author, exactly one matching author
+folder under the configured Drive root, one Interior Design child, and a unique
+highest numbered InDesign source. All relevant folder listings are paginated.
+It saves that mapping locally, then the normal native frontmatter title/byline
+check must pass before edits. Existing mappings are never automatically replaced;
+a newer source or a multi-book author needs reviewed mapping through the panel.
+Ambiguities and Drive lookup failures preserve the original submissions with hold
+reasons. The background HubSpot collector remains independent of Drive and InDesign.
 
 ## Guarded form queue
 
@@ -292,12 +312,12 @@ queue is considered:
 - Install the Windows prerequisites, sign into the interactive desktop session,
   and pass the native-test and review rehearsals. Keep the installed launcher
   local-only until a separate launch review authorizes delivery.
-- Configure the HubSpot form with the hidden `docproof_project_id` field using
-  the actual configured field name, a book-title field, and preferably an
-  attachment-count field. Confirm form, Project, and private-file permissions.
+- Configure a book-title field and either explicit `docproof_project_id` values
+  or the opt-in shared-form matching mode above. Prefer an attachment-count
+  field when the form supports it. Confirm form, Project, and private-file permissions.
 - Register every book with one verified Project, title, author, surname, source,
-  and one `Interior Design` folder. Map the source through the local UI and
-  resolve title/byline aliases before collecting live work.
+  and one `Interior Design` folder. Shared-form mode can onboard unambiguous
+  Projects automatically; other mappings and title/byline aliases need review.
 - Confirm the three-hour per-book quiet period and reconcile the intake cutoff.
   Prior jobs are imported automatically when they are in the same worker home;
   a ledger copied from a Mac is not trusted as a drop-in replacement and must

@@ -86,6 +86,21 @@ class LunaFirstReviewer(AstraReviewer):
         _materialize(root, 'luna-plan.json', draft)
         edits = {row['id']: row for row in draft['edits']}
         escalated = [row for row in draft['instructions'] if _complex(row, edits)]
+        # A model may leave a formatting/designer instruction unassigned after
+        # another Luna instruction claimed the same submitted evidence unit.
+        # Escalating that row alone gives Astra the whole source but no
+        # evidence ownership, which invites it to repeat Luna's accepted edit.
+        # Escalate the complete source-owned group in that case so one planner
+        # owns every instruction attached to the shared evidence.
+        unassigned_sources = {
+            source for row in escalated if not row['covered_evidence_ids']
+            for source in row['source_ids']
+        }
+        if unassigned_sources:
+            original_ids = {row['id'] for row in escalated}
+            escalated = [row for row in draft['instructions']
+                         if row['id'] in original_ids
+                         or set(row['source_ids']) & unassigned_sources]
         if not escalated:
             _materialize(root, 'model-routing.json', receipt)
             return draft

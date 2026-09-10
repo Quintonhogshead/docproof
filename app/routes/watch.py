@@ -78,6 +78,7 @@ class WatchUpdate(BaseModel):
     corrections_native_submission_property: str | None = None
     corrections_native_form_id: str | None = None
     corrections_native_form_poll: bool | None = None
+    corrections_native_shared_form: bool | None = None
     corrections_native_quiet_seconds: int | None = Field(default=None, ge=10800, le=604800)
     corrections_native_form_project_property: str | None = None
     corrections_native_form_file_count_property: str | None = None
