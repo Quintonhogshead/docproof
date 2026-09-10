@@ -31,9 +31,11 @@ Google Drive uses its existing OAuth connection.
 `python tools/install_native_interior_windows.py --home C:\DocProof\review`
 generates review-only startup tasks for inspection. Add `--install` to register
 them for this user's logon. They use the interactive desktop token, prevent
-overlapping task instances, and restart after failures. The worker always uses
-`--local-only`; installing it cannot enable uploads. The review UI does not
-start unrelated DocWatch stages. Logs live under the worker home's `logs/`.
+overlapping task instances, and restart after failures. Staging is local-only by
+default; a separately reviewed `--enable-delivery` staging can remove
+`--local-only` only when both saved delivery settings are already enabled. The
+review UI does not start unrelated DocWatch stages. Logs live under the worker
+home's `logs/`.
 
 Before enabling a production queue, pause any old worker and reconcile its
 ledger, cutoff, and receipts with the destination home. Complete the real Astra

@@ -124,6 +124,74 @@ def test_installed_launcher_bakes_delivery_opt_in_without_shell_arguments(tmp_pa
     assert "runpy.run_path(sys.argv[0],run_name='__main__')" in source
 
 
+def test_installer_stages_local_only_by_default_and_delivery_only_when_opted_in(tmp_path, monkeypatch):
+    module = _load_tool('install_native_interior_windows.py', 'windows_installer_staging')
+    import types
+
+    runtime = tmp_path / 'runtime'
+    runtime.mkdir()
+    (runtime / 'pythonw.exe').write_bytes(b'fake')
+    token = types.SimpleNamespace(Close=lambda: None)
+    security = types.SimpleNamespace(
+        TOKEN_QUERY=1, TokenUser=2,
+        OpenProcessToken=lambda *args: token,
+        GetTokenInformation=lambda *args: (b'user',),
+        ConvertSidToStringSid=lambda value: 'S-1-5-21-test',
+    )
+    api = types.SimpleNamespace(GetCurrentProcess=lambda: object())
+    monkeypatch.setitem(sys.modules, 'win32api', api)
+    monkeypatch.setitem(sys.modules, 'win32security', security)
+    monkeypatch.setattr(module.sys, 'platform', 'win32')
+    monkeypatch.setattr(module.sys, 'executable', str(runtime / 'python.exe'))
+    monkeypatch.setattr(module.sys, 'argv', ['installer', '--home', str(tmp_path / 'local')])
+    module.main()
+    local_launcher = (tmp_path / 'local' / 'startup' / 'launch.py').read_text()
+    assert "action == 'poll' and False" in local_launcher
+    assert f"repo_root=Path({str(Path(__file__).resolve().parents[1])!r})" in local_launcher
+    assert (tmp_path / 'local' / 'startup' / 'poll.xml').exists()
+
+    from app.watch.settings import WatchSettings
+    delivery_home = tmp_path / 'delivery'
+    WatchSettings(corrections_native_auto_upload=True,
+                  corrections_native_form_poll=True).save(delivery_home / 'watch')
+    monkeypatch.setattr(module.sys, 'argv', [
+        'installer', '--home', str(delivery_home), '--enable-delivery'])
+    module.main()
+    delivery_launcher = (delivery_home / 'startup' / 'launch.py').read_text()
+    assert "['--enable-delivery'] if action == 'poll'" in delivery_launcher
+    assert "sys.path.insert(0,str(repo_root))" in delivery_launcher
+    assert "os.environ['PYTHONPATH']=str(repo_root)" in delivery_launcher
+
+
+def test_generated_launcher_pins_parent_and_child_imports_to_checkout(tmp_path):
+    module = _load_tool('install_native_interior_windows.py', 'windows_launcher_imports')
+    selected = tmp_path / 'selected'
+    (selected / 'tools').mkdir(parents=True)
+    old = tmp_path / 'old'
+    old.mkdir()
+    (selected / 'originmod.py').write_text("ORIGIN='selected'\n", encoding='utf-8')
+    (old / 'originmod.py').write_text("ORIGIN='old'\n", encoding='utf-8')
+    result = tmp_path / 'origins.json'
+    tool = selected / 'tools' / 'fake_worker.py'
+    tool.write_text(
+        "import json, os, subprocess, sys\n"
+        "from pathlib import Path\n"
+        "import originmod\n"
+        "child = subprocess.check_output([sys.executable, '-c', "
+        "'import originmod; print(originmod.ORIGIN)'], text=True, timeout=10).strip()\n"
+        "Path(os.environ['ORIGINS']).write_text(json.dumps({'parent': originmod.ORIGIN, 'child': child}))\n",
+        encoding='utf-8')
+    launcher = tmp_path / 'launch.py'
+    (tmp_path / 'home').mkdir()
+    launcher.write_text(module.launcher_source(
+        tmp_path / 'home', tool, 8767, '', '', enable_delivery=False), encoding='utf-8')
+    env = dict(os.environ, PYTHONPATH=str(old), ORIGINS=str(result))
+    subprocess.run([sys.executable, str(launcher), 'ui'], env=env, check=True,
+                   capture_output=True, text=True, timeout=30)
+    assert json.loads(result.read_text(encoding='utf-8')) == {
+        'parent': 'selected', 'child': 'selected'}
+
+
 def test_review_manifest_includes_instructions_without_edits():
     from docproof.interior.astra import _review_manifest
     result=_review_manifest({}, {'stories':[]},
