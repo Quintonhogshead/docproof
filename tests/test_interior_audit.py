@@ -110,9 +110,14 @@ def test_changed_completed_artifact_invalidates_saved_text_proof(tmp_path):
     assert any('Saved-change proof is no longer current' in row['Result'] for row in data['details'])
 
 
-def test_xlsx_exact_source_text_long_rows_counts_and_no_executable_input(tmp_path):
+@pytest.mark.parametrize('payload', [
+    '=HYPERLINK("https://example.invalid","do not execute") ' + 'Long requested wording. ' * 1600,
+    '2026-09-10T16:19:01+00:00',
+    '09/10/2026',
+    '000123',
+], ids=['long-literal', 'iso-date', 'date', 'leading-zeros'])
+def test_xlsx_exact_source_text_long_rows_counts_and_no_executable_input(tmp_path, payload):
     result = seed(tmp_path)
-    payload = '=HYPERLINK("https://example.invalid","do not execute") ' + 'Long requested wording. ' * 1600
     packet = json.loads((tmp_path / 'packet.json').read_text())
     packet['evidence'][0]['text'] = payload
     save_json(tmp_path / 'packet.json', packet)
@@ -124,6 +129,8 @@ def test_xlsx_exact_source_text_long_rows_counts_and_no_executable_input(tmp_pat
         shared = [''.join(n.itertext()) for n in strings]
         cells = {c.attrib['r']: c for c in root.findall('.//x:sheetData/x:row/x:c', ns)}
         def value(cell):
+            if cell.get('t') == 'inlineStr':
+                return ''.join(cell.find('x:is', ns).itertext())
             v = cell.find('x:v', ns)
             return shared[int(v.text)] if cell.get('t') == 's' else v.text if v is not None else ''
         rows = sorted(int(addr[1:]) for addr in cells if addr.startswith('C') and int(addr[1:]) >= 10)
@@ -131,8 +138,8 @@ def test_xlsx_exact_source_text_long_rows_counts_and_no_executable_input(tmp_pat
         assert value(cells['G4']) == '1'
         assert value(cells['G6']) == '0'
         for r in rows:
-            formula = cells[f'C{r}'].find('x:f', ns).text
-            assert formula.startswith('"') and formula.endswith('"')
+            assert cells[f'C{r}'].find('x:f', ns) is None
+            assert cells[f'C{r}'].get('t') == 'inlineStr'
         assert root.find('.//x:pane', ns).get('topLeftCell') == 'C10'
         assert archive.testzip() is None
 

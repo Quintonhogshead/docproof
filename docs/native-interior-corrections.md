@@ -178,8 +178,8 @@ count and list all available file receipts rather than asserting zero requests.
 The reviewer currently returns a whole-book verdict, not per-item visual approvals.
 
 Long text continues in numbered Part rows. Summary totals count only the first
-part of each item. Source text is written as quoted string expressions to prevent
-spreadsheet formula execution and preserve literal wording; counts remain numeric.
+part of each item. Source text is serialized as literal spreadsheet text to prevent
+formula execution or automatic date conversion; counts remain numeric.
 
 Spreadsheet generation requires Node.js and `@oai/artifact-tool` on the desktop
 worker. The bundled Codex Windows runtime is discovered automatically. Other

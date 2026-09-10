@@ -154,6 +154,27 @@ def test_resume_never_reapplies_and_rejects_changed_artifact(tmp_path):
     assert n.calls == 1
 
 
+def test_spreadsheet_is_packaged_frozen_and_tamper_blocks_resume(tmp_path):
+    from zipfile import ZipFile
+    from docproof.interior.workflow import digest
+    native = Native()
+    first = run(tmp_path, native=native)
+    assert first['status'] == 'verified'
+    audit = Path(first['audit_spreadsheet'])
+    report = Path(first['report'])
+    report_sha = digest(report)
+    receipt = json.loads((tmp_path / 'job/workflow.json').read_text())
+    assert receipt['artifact_hashes'][str(audit)] == digest(audit)
+    with ZipFile(first['output_package']) as package:
+        name = next(n for n in package.namelist() if n.endswith('/correction-audit.xlsx'))
+        assert package.read(name) == audit.read_bytes()
+    audit.write_bytes(b'changed audit')
+    blocked = run(tmp_path, native=native)
+    assert blocked['status'] == 'technical_block'
+    assert Path(blocked['audit_spreadsheet']).name == 'correction-audit-blocked.xlsx'
+    assert digest(report) == report_sha and native.calls == 1
+
+
 def test_review_checkpoint_reuses_native_verification_after_model_failure(tmp_path):
     class FailOnce(Astra):
         calls = 0

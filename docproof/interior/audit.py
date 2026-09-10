@@ -11,6 +11,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+from xml.dom import minidom
+from zipfile import ZipFile
 
 from .verify import check_saved, prepare_edits, validate_plan
 
@@ -290,6 +292,46 @@ def _runtime():
     return node, modules
 
 
+def _preserve_literal_cells(path):
+    """Repair a missing exporter capability: date-like strings become numbers.
+
+    Layout and calculations are authored by artifact-tool. Only its quoted
+    constant-string cells are serialized as native XLSX inline text here; all
+    calculated formulas and their caches remain untouched. This also makes
+    author text beginning with '=' inert, ordinary spreadsheet text.
+    """
+    fixed = path.with_name('literal-audit.xlsx')
+    with ZipFile(path) as source, ZipFile(fixed, 'w') as destination:
+        for entry in source.infolist():
+            raw = source.read(entry.filename)
+            if re.fullmatch(r'xl/worksheets/sheet\d+\.xml', entry.filename):
+                document = minidom.parseString(raw)
+                namespace = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+                for cell in document.getElementsByTagNameNS(namespace, 'c'):
+                    formulas = cell.getElementsByTagNameNS(namespace, 'f')
+                    if not formulas:
+                        continue
+                    formula = ''.join(n.data for n in formulas[0].childNodes if n.nodeType == n.TEXT_NODE)
+                    if not re.fullmatch(r'"(?:[^"]|"")*"', formula):
+                        continue
+                    text = formula[1:-1].replace('""', '"')
+                    for child in list(cell.childNodes):
+                        if child.nodeType == child.ELEMENT_NODE and child.localName in {'f', 'v', 'is'}:
+                            cell.removeChild(child)
+                    cell.setAttribute('t', 'inlineStr')
+                    prefix = cell.prefix + ':' if cell.prefix else ''
+                    inline = document.createElementNS(namespace, prefix + 'is')
+                    value = document.createElementNS(namespace, prefix + 't')
+                    value.setAttribute('xml:space', 'preserve')
+                    value.appendChild(document.createTextNode(text))
+                    inline.appendChild(value)
+                    cell.appendChild(inline)
+                raw = document.toxml(encoding='utf-8')
+                document.unlink()
+            destination.writestr(entry, raw)
+    os.replace(fixed, path)
+
+
 def write_audit(work: Path, result: dict, plan=None, *, context=None, destination=None, render_dir=None) -> Path:
     """Atomically publish the XLSX; failure blocks completion and delivery."""
     work = Path(work)
@@ -307,5 +349,6 @@ def write_audit(work: Path, result: dict, plan=None, *, context=None, destinatio
         response = subprocess.run(command, capture_output=True, text=True, timeout=180)
         if response.returncode or not output.is_file() or not output.stat().st_size:
             raise RuntimeError('The corrections spreadsheet could not be generated; delivery is blocked. Check the local spreadsheet runtime.')
+        _preserve_literal_cells(output)
         os.replace(output, destination)
     return destination
