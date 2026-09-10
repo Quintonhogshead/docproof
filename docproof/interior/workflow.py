@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .verify import VerificationError, check_saved, prepare_edits, validate_plan
+from .versions import next_version, version_text
 
 
 def digest(path: Path) -> str:
@@ -64,10 +65,10 @@ def worker_lock():
 
 
 def next_name(source: Path) -> str:
-    match = re.fullmatch(r"(.+?\s*[-–—]\s*Book\s*)(\d+)\.indd", source.name, re.I)
+    match = re.fullmatch(r"(.+?\s*[-–—]\s*Book\s*)(\d+(?:\.5)?)\.indd", source.name, re.I)
     if not match:
         raise ValueError("The source must be named 'Last Name - Book N.indd'.")
-    return f"{match[1]}{int(match[2]) + 1}.indd"
+    return f"{match[1]}{version_text(next_version(float(match[2])))}.indd"
 
 
 def review_pages(before_pdf: Path, after_pdf: Path, work_dir: Path, *, render=True) -> dict:
@@ -255,9 +256,15 @@ def _restore_review_checkpoint(work: Path, source: Path, checkpoint: dict,
 
 
 def _report(work: Path, result: dict, plan: dict | None = None) -> Path:
+    from .audit import write_audit
+    result['audit_spreadsheet'] = str(write_audit(work, result, plan))
     path = work / "correction-report.json"
     packet_path = work / "packet.json"
-    packet = json.loads(packet_path.read_text(encoding='utf-8')) if packet_path.exists() else {}
+    try:
+        packet = json.loads(packet_path.read_text(encoding='utf-8')) if packet_path.exists() else {}
+        packet = packet if isinstance(packet, dict) else {}
+    except (OSError, ValueError):
+        packet = {}
     save_json(path, {**result, "instructions": (plan or {}).get("instructions", []),
                      "edits": (plan or {}).get("edits", []), "source_evidence": packet.get("evidence", [])})
     lines = ["InDesign corrections", "", f"Outcome: {result['status']}",
@@ -276,7 +283,8 @@ def package_result(work: Path, output: Path, pdf: Path, idml: Path) -> Path:
         for path, name in ((output, output.name), (pdf, output.with_suffix(".pdf").name),
                            (idml, output.with_suffix(".idml").name),
                            (work / "correction-report.json", "correction-report.json"),
-                           (work / "correction-report.txt", "correction-report.txt")):
+                           (work / "correction-report.txt", "correction-report.txt"),
+                           (work / "correction-audit.xlsx", "correction-audit.xlsx")):
             archive.write(path, output.stem + "/" + name)
         for folder in ("Links", "Document fonts"):
             for path in sorted((output.parent / folder).rglob("*")):
@@ -307,6 +315,7 @@ def run_local(source: Path, attachments: list[Path], text: str, work_dir: Path,
     plan = None
     result = {"status": "technical_block", "needs_designer": None, "reasons": [],
               "job_dir": str(work), "output_indd": "", "output_pdf": "", "output_idml": "",
+              "source_name": source.name, "submitted_attachments": [{"name": p.name} for p in attachments],
               "report": str(work / "correction-report.json")}
     try:
         with worker_lock():
@@ -368,9 +377,11 @@ def run_local(source: Path, attachments: list[Path], text: str, work_dir: Path,
             if not plan_path.exists():
                 save_json(plan_path, plan)
             if plan_only:
-                return {**result, 'status': 'planned', 'counts': {
+                result.update(status='planned', counts={
                     'instructions': len(plan['instructions']), 'edits': len(plan['edits']),
-                    'unresolved': sum(row['disposition'] in {'designer', 'clarification'} for row in plan['instructions'])}}
+                    'unresolved': sum(row['disposition'] in {'designer', 'clarification'} for row in plan['instructions'])})
+                _report(work, result, plan)
+                return result
             if not plan['edits'] and any(row.get('disposition') in {'clarification', 'designer'} for row in plan['instructions']):
                 raise RuntimeError('No actionable corrections were established. InDesign was not asked to create an unchanged book: '+
                                    '; '.join(plan.get('questions', []) + plan.get('designer_reasons', [])))
@@ -389,6 +400,9 @@ def run_local(source: Path, attachments: list[Path], text: str, work_dir: Path,
             else:
                 # Always inspect the actual saved INDD rather than trust the edit script.
                 final = native.verify(output, work)
+                # Keep failed saved-document evidence too; an apply receipt
+                # alone never proves that a correction survived saving.
+                save_json(work / 'saved.json', final)
                 if final.get("style_inventory_complete") is False or baseline.get("style_inventory_complete") is False:
                     raise VerificationError("InDesign did not return a complete formatting inventory.")
                 verification = check_saved(baseline, final, plan["edits"])
@@ -434,14 +448,35 @@ def run_local(source: Path, attachments: list[Path], text: str, work_dir: Path,
             _report(work, result, plan)
             package = package_result(work, output, after_pdf, idml)
             result["output_package"] = str(package)
-            hashes = {str(p): digest(p) for p in (output, after_pdf, idml, package, work / "correction-report.json")}
+            hashes = {str(p): digest(p) for p in (output, after_pdf, idml, package, work / "correction-report.json", work / 'correction-audit.xlsx')}
             save_json(receipt_path, {"stage": "complete", "result": result, "artifact_hashes": hashes})
             return result
     except Exception as exc:
+        result['status'] = 'technical_block'
+        result['needs_designer'] = None
         result["reasons"] = [f"{type(exc).__name__}: {exc}"]
         # A failed resume must not overwrite the report protected by a completed receipt.
         report = work / "correction-report.json"
-        if not report.exists():
-            _report(work, result, plan)
+        completed = False
+        try:
+            completed = json.loads((work / 'workflow.json').read_text(encoding='utf-8')).get('stage') == 'complete'
+        except (OSError, ValueError):
+            pass
+        if not completed:
+            try:
+                _report(work, result, plan)
+            except Exception as audit_error:
+                result.pop('audit_spreadsheet', None)
+                result['reasons'].append(f'Corrections spreadsheet unavailable: {type(audit_error).__name__}. Delivery is blocked.')
+                save_json(report, result)
+        else:
+            # Keep the original completed audit immutable and give the failed
+            # resume its own current report, with stale proof downgraded.
+            result['report'] = str(work / 'technical-block.json')
+            try:
+                from .audit import write_audit
+                result['audit_spreadsheet'] = str(write_audit(work, result, destination=work / 'correction-audit-blocked.xlsx'))
+            except Exception:
+                result['reasons'].append('The failed-resume spreadsheet could not be generated. Delivery is blocked.')
         save_json(work / "technical-block.json", result)
         return result

@@ -21,7 +21,7 @@ from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import RedirectResponse, FileResponse
-from pydantic import BaseModel, Field, SecretStr, StrictInt, StrictStr
+from pydantic import BaseModel, Field, SecretStr, StrictFloat, StrictInt, StrictStr, field_validator
 
 from docproof.providers import lookup
 
@@ -79,6 +79,7 @@ class WatchUpdate(BaseModel):
     corrections_native_submission_property: str | None = None
     corrections_native_form_id: str | None = None
     corrections_native_form_poll: bool | None = None
+    corrections_native_shared_form: bool | None = None
     corrections_native_quiet_seconds: int | None = Field(default=None, ge=10800, le=604800)
     corrections_native_form_project_property: str | None = None
     corrections_native_form_file_count_property: str | None = None
@@ -194,9 +195,18 @@ class NativeBook(BaseModel):
     surname: StrictStr = Field(min_length=1, max_length=500)
     folder_id: StrictStr = Field(min_length=1, max_length=500)
     source_id: StrictStr = Field(min_length=1, max_length=500)
-    source_version: StrictInt = Field(ge=1)
+    source_version: StrictInt | StrictFloat = Field(ge=1)
     title_aliases: list[StrictStr] = Field(default_factory=list)
     author_aliases: list[StrictStr] = Field(default_factory=list)
+
+    @field_validator("source_version")
+    @classmethod
+    def _native_version(cls, value):
+        from docproof.interior.versions import native_version
+        try:
+            return native_version(value)
+        except ValueError as exc:
+            raise ValueError("source_version must be a positive integer or .5 version") from exc
 
 
 def _drive_token_or_none(home) -> str | None:
@@ -244,7 +254,8 @@ def register(app: FastAPI) -> None:
     def native_job_file(job_id: str, which: str):
         """Serve only saved deliverables inside the selected native job."""
         import re
-        keys = {"indd": "output_indd", "pdf": "output_pdf", "package": "output_package", "report": "report"}
+        keys = {"indd": "output_indd", "pdf": "output_pdf", "package": "output_package",
+                "report": "report", "spreadsheet": "audit_spreadsheet"}
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", job_id) or which not in keys:
             raise HTTPException(404, "Correction file not found.")
         folder = (Path(app.state.watch.home) / "native_jobs" / job_id).resolve()

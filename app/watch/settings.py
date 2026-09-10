@@ -368,6 +368,7 @@ class WatchSettings:
     # it explicit so a configured CRM file/notes property works without a
     # surprise 403 on every watch tick.
     corrections_native_form_poll: bool = False
+    corrections_native_shared_form: bool = False
     corrections_native_quiet_seconds: int = 10800
     corrections_native_form_project_property: str = "docproof_project_id"
     corrections_native_form_file_count_property: str = ""

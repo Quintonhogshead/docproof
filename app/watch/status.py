@@ -113,6 +113,7 @@ def status(home: str | Path, *, get_key=None,
         # have to go and borrow it from.
         "hubspot_enabled": ws.hubspot_enabled,
         "hubspot_write_back": ws.hubspot_write_back,
+        "corrections_native_shared_form": ws.corrections_native_shared_form,
         # The proofing stage, whole: the Automations panel's Proofread drawer
         # both draws from and writes back every one of these.
         "proofing_enabled": ws.proofing_enabled,
@@ -468,7 +469,7 @@ def native_correction_jobs(home) -> list[dict]:
                          "missing_attachments": [{"file_id": str(item.get("file_id", "")),
                                                    "filename": str(item.get("filename", "Downloaded correction file"))}
                                                   for item in data.get("missing_attachments", []) if isinstance(item, dict)],
-                         "outputs": [name for name, key in {"indd": "output_indd", "pdf": "output_pdf", "package": "output_package", "report": "report"}.items() if result.get(key)],
+                         "outputs": [name for name, key in {"indd": "output_indd", "pdf": "output_pdf", "package": "output_package", "report": "report", "spreadsheet": "audit_spreadsheet"}.items() if result.get(key)],
                          "uploaded": data.get("uploaded", {}),
                          "created_at": data.get("created_at", "")})
         except (ValueError, OSError):

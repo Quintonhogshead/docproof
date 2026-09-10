@@ -25,6 +25,8 @@ from app.lock import FolderInUse, FolderLock
 from . import drive, folders, hubspot, native_files
 from .drive import DriveFile
 from .stages import SOURCE_PROP
+from docproof.interior.versions import (native_filename, native_version as validate_version,
+                                         next_version, version_text)
 
 log = logging.getLogger("docproof.app.watch.native_corrections")
 
@@ -32,7 +34,7 @@ NATIVE_MARKER = "docproof.native_corrections"
 NATIVE_JOB_PROP = "docproof.native_job"
 NATIVE_SOURCE_PROP = "docproof.native_source"
 NATIVE_STATUS_PROP = "docproof.native_status"
-_BOOK = re.compile(r"^(?P<surname>.+?)\s*[-\u2013\u2014]\s*Book\s*(?P<number>\d+)\s*\.indd$", re.I)
+_BOOK = re.compile(r"^(?P<surname>.+?)\s*[-\u2013\u2014]\s*Book\s*(?P<number>\d+(?:\.5)?)\s*\.indd$", re.I)
 
 
 class NativeCorrectionError(RuntimeError):
@@ -42,16 +44,19 @@ class NativeCorrectionError(RuntimeError):
 @dataclass(frozen=True)
 class NativeSource:
     file: DriveFile
-    version: int
+    version: int | float
     surname: str
 
 
-def versioned_name(name: str) -> tuple[str, int] | None:
-    """Return the surname and integer Book version from a native filename."""
+def versioned_name(name: str) -> tuple[str, int | float] | None:
+    """Return the surname and constrained Book version from a native filename."""
     match = _BOOK.match(Path(name).name.strip())
     if not match:
         return None
-    return match.group("surname").strip(), int(match.group("number"))
+    try:
+        return match.group("surname").strip(), validate_version(float(match.group("number")))
+    except ValueError:
+        return None
 
 
 def pick_source(listing: list[DriveFile], surname: str) -> tuple[DriveFile | None, str]:
@@ -62,7 +67,7 @@ def pick_source(listing: list[DriveFile], surname: str) -> tuple[DriveFile | Non
     impossible to audit.
     """
     wanted = (surname or "").strip().casefold()
-    candidates: list[tuple[int, DriveFile]] = []
+    candidates: list[tuple[int | float, DriveFile]] = []
     for entry in listing:
         parsed = versioned_name(entry.name)
         if entry.is_folder or parsed is None or parsed[0].casefold() != wanted:
@@ -77,12 +82,12 @@ def pick_source(listing: list[DriveFile], surname: str) -> tuple[DriveFile | Non
     return hits[0], ""
 
 
-def newer_export(listing: list[DriveFile], surname: str, version: int) -> DriveFile | None:
+def newer_export(listing: list[DriveFile], surname: str, version: int | float) -> DriveFile | None:
     """Return the highest export beyond the one result version can follow."""
     candidates = [entry for entry in listing
                   if (parsed := versioned_name(entry.name))
                   and parsed[0].casefold() == surname.casefold()
-                  and parsed[1] > version + 1]
+                  and parsed[1] > next_version(version)]
     return max(candidates, key=lambda entry: versioned_name(entry.name)[1], default=None)
 
 
@@ -337,25 +342,38 @@ def _project_records(token: str, ws, *, opener) -> list[hubspot.HubSpotRecord]:
                          ws.corrections_native_project_book_property) if p]
     records: list[hubspot.HubSpotRecord] = []
     after = ""
+    seen: set[str] = set()
+    seen_ids: set[str] = set()
     while True:
-        # HubSpot search requires one filter group; HAS_PROPERTY keeps this an
-        # all-Projects read without inventing a status value.
-        body = {"filterGroups": [{"filters": [{
-            "propertyName": project_first,
-            "operator": "HAS_PROPERTY"}]}],
-                "properties": props, "limit": 100}
-        if after:
-            body["after"] = after
-        request = hubspot._request(
-            f"{hubspot.API}/crm/v3/objects/{ws.hubspot_object}/search", token,
-            data=json.dumps(body).encode(), method="POST")
+        if ws.corrections_native_shared_form:
+            # Include incomplete Projects: their titles still make a shared
+            # form ambiguous, even when the author's name is missing.
+            query = urllib.parse.urlencode({"properties": ','.join(props), "limit": 100,
+                                            **({"after": after} if after else {})})
+            request = hubspot._request(
+                f"{hubspot.API}/crm/v3/objects/{ws.hubspot_object}?{query}", token)
+        else:
+            body = {"filterGroups": [{"filters": [{"propertyName": project_first,
+                    "operator": "HAS_PROPERTY"}]}], "properties": props, "limit": 100}
+            if after:
+                body['after'] = after
+            request = hubspot._request(f"{hubspot.API}/crm/v3/objects/{ws.hubspot_object}/search",
+                                      token, data=json.dumps(body).encode(), method='POST')
         answer = hubspot._json_call(request, opener=opener,
                                     what="find Projects for native corrections")
-        records.extend(hubspot.HubSpotRecord.from_api(row)
-                       for row in answer.get("results") or [] if isinstance(row, dict))
+        for raw in answer.get('results') or []:
+            if not isinstance(raw, dict) or not raw.get('id') or str(raw['id']) in seen_ids:
+                raise NativeCorrectionError('HubSpot pagination returned an invalid or repeated Project; no title match is safe.')
+            seen_ids.add(str(raw['id']))
+            records.append(hubspot.HubSpotRecord.from_api(raw))
+        if len(records) > 50000:
+            raise NativeCorrectionError('HubSpot Projects exceed 50000 records; no partial title matching is allowed.')
         after = str((answer.get("paging") or {}).get("next", {}).get("after") or "")
         if not after:
             return records
+        if after in seen:
+            raise NativeCorrectionError("HubSpot Projects pagination is invalid or exceeds 50000 records")
+        seen.add(after)
 
 
 def _folder_for(token: str, ws, record, *, opener) -> str | None:
@@ -475,7 +493,8 @@ def _artifact_paths(result: dict, source: Path, out_dir: Path, next_name: str) -
               ("output_pdf", Path(next_name).with_suffix(".pdf").name),
               ("output_package", Path(next_name).with_suffix(".zip").stem + " - package.zip"),
               ("report", Path(next_name).with_suffix(".report.json").name),
-              ("report_path", Path(next_name).with_suffix(".report.json").name))
+              ("report_path", Path(next_name).with_suffix(".report.json").name),
+              ("audit_spreadsheet", Path(next_name).with_suffix(".corrections.xlsx").name))
     for key, fallback in values:
         value = result.get(key)
         if not value:
@@ -501,6 +520,29 @@ def _artifact_paths(result: dict, source: Path, out_dir: Path, next_name: str) -
         if path.is_file() and not any(existing == path for existing, _ in paths):
             paths.append((path, path.name))
     return paths
+
+
+def _write_minimal_audit(job_dir: Path, job: dict, *, status: str, reason: str) -> None:
+    """Persist an early receipt without replacing a completed workflow result."""
+    existing = job.get("result")
+    if isinstance(existing, dict):
+        if existing.get('status') in {'verified', 'designer_needed', 'clarification_needed'}:
+            return
+    result = {"status": status, "needs_designer": None, "reasons": [reason],
+              "job_dir": str(job_dir), "output_indd": "", "output_pdf": "",
+              "output_idml": ""}
+    try:
+        from docproof.interior.audit import write_audit
+    except ImportError:
+        return
+    try:
+        audit = write_audit(job_dir / "output", result, plan=None, context=job)
+    except Exception as exc:  # noqa: BLE001 - preserve the original native receipt
+        log.warning("Could not write early native audit for %s: %s", job.get("job_id"), exc)
+        return
+    if audit:
+        result["audit_spreadsheet"] = str(Path(audit).resolve())
+        job["result"] = result
 
 
 def _call_workflow(source: Path, attachments: list[Path], text: str,
@@ -905,6 +947,9 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
                         "missing_attachments": missing,
                         "submission_paths_by_index": saved_by_index,
                         "reason": "", "delivery_error": ""})
+            _write_minimal_audit(
+                job_dir, job, status="awaiting_attachment",
+                reason="A submitted correction attachment is still required before native work can start.")
             _write_json(job_dir / "job.json", job)
             report.needs_human.append((source.name,
                                        "manual attachment upload is required before native corrections can run"))
@@ -964,7 +1009,7 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
             report.needs_human.append((source.name, job["reason"]))
             return
         artifacts = _artifact_paths(result, local_source, job_dir / "output",
-                                    f"{source_info.surname} - Book {source_info.version + 1}.indd")
+                                    native_filename(source_info.surname, next_version(source_info.version)))
         if status == "technical_block" or (status == "clarification_needed" and not ws.corrections_native_partial_upload):
             details = result.get("reasons") or result.get("reason") or status
             details = "; ".join(map(str, details)) if isinstance(details, (list, tuple)) else str(details)
@@ -974,11 +1019,13 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
                 report.needs_human.append((source.name, details))
             return
         roles = {name for _, name in artifacts}
-        expected = {f"{source_info.surname} - Book {source_info.version + 1}.indd",
-                    f"{source_info.surname} - Book {source_info.version + 1}.pdf",
-                    f"{source_info.surname} - Book {source_info.version + 1}.report.json"}
+        next_book = next_version(source_info.version)
+        expected = {native_filename(source_info.surname, next_book),
+                    native_filename(source_info.surname, next_book, ".pdf"),
+                    native_filename(source_info.surname, next_book, ".report.json")}
+        expected.add(native_filename(source_info.surname, next_book, ".corrections.xlsx"))
         if result.get("output_package"):
-            expected.add(f"{source_info.surname} - Book {source_info.version + 1} - package.zip")
+            expected.add(native_filename(source_info.surname, next_book, " - package.zip"))
         if not expected.issubset(roles):
             missing = sorted(expected - roles)
             job["status"] = "technical_block"
@@ -1013,12 +1060,12 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
         # A Book N+1 with a different receipt is somebody else's work. Never
         # overwrite or upload beside it: the result needs a human decision.
         latest = drive.list_folder(token, folder_id, opener=opener)
-        result_version = source_info.version + 1
+        result_version = next_version(source_info.version)
         own_output_names = {
-            f"{source_info.surname} - Book {result_version}.indd",
-            f"{source_info.surname} - Book {result_version}.pdf",
-            f"{source_info.surname} - Book {result_version}.report.json",
-            f"{source_info.surname} - Book {result_version} - package.zip",
+            native_filename(source_info.surname, result_version),
+            native_filename(source_info.surname, result_version, ".pdf"),
+            native_filename(source_info.surname, result_version, ".report.json"),
+            native_filename(source_info.surname, result_version, " - package.zip"),
         }
         source_listing = [entry for entry in latest
                           if not (entry.name in own_output_names
@@ -1094,6 +1141,9 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
         else:
             job["status"] = "technical_block"
             job["reason"] = str(exc)
+        _write_minimal_audit(
+            job_dir, job, status=str(job.get("status") or "technical_block"),
+            reason=str(job.get("reason") or exc))
         _write_json(job_dir / "job.json", job)
         report.failed.append((source.name, str(exc)))
 

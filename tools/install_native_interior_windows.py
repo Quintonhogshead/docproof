@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -43,14 +44,17 @@ def launcher_source(home: Path, tool: Path, port: int, path_value: str,
     return '''import os,runpy,sys
 from pathlib import Path
 home=Path(%r)
+repo_root=Path(%r)
+sys.path.insert(0,str(repo_root))
 home.joinpath('logs').mkdir(exist_ok=True)
 action=sys.argv[1]
 sys.stdout=sys.stderr=open(home/'logs'/(action+'.log'),'a',encoding='utf-8',buffering=1)
 os.environ['PATH']=%r
 os.environ['GALLEY_CODEX_BIN']=%r
+os.environ['PYTHONPATH']=str(repo_root) + (os.pathsep + os.environ['PYTHONPATH'] if os.environ.get('PYTHONPATH') else '')
 sys.argv=[%r,action,'--home',str(home),'--port',%r] + (['--enable-delivery'] if action == 'poll' and %r else [])
 runpy.run_path(sys.argv[0],run_name='__main__')
-''' % (str(home), path_value, codex_bin, str(tool), str(port), enable_delivery)
+''' % (str(home), str(tool.parent.parent), path_value, codex_bin, str(tool), str(port), enable_delivery)
 
 
 def main():

@@ -57,10 +57,12 @@ def harness(tmp_path, monkeypatch):
     def workflow(source, attachments, text, out, rules):
         calls.append(dict(attachments=list(attachments), text=text, rules=rules))
         out.mkdir(parents=True, exist_ok=True)
-        for name, value in [('book.indd', b'corrected'), ('book.pdf', b'pdf'), ('report.json', b'{}')]:
+        for name, value in [('book.indd', b'corrected'), ('book.pdf', b'pdf'),
+                            ('report.json', b'{}'), ('corrections.xlsx', b'xlsx')]:
             (out / name).write_bytes(value)
         return {'status': 'verified', 'output_indd': str(out / 'book.indd'),
-                'output_pdf': str(out / 'book.pdf'), 'report': str(out / 'report.json')}
+                'output_pdf': str(out / 'book.pdf'), 'report': str(out / 'report.json'),
+                'audit_spreadsheet': str(out / 'corrections.xlsx')}
     monkeypatch.setattr(native, '_call_workflow', workflow)
     def upload(_token, folder, path, *, name, app_properties, **kw):
         fid = 'out-' + str(len(uploads))
@@ -104,9 +106,9 @@ def test_seven_received_files_wait_three_hours_and_deliver_once(harness):
     assert len(job['submission_receipts']) == 7
     assert job['book_identity']['author'] == 'Bill Sibley'  # proxy submitter did not select the book
     assert queue.status(h.tmp_path)['batches'][0]['state'] == 'delivered'
-    assert queue.books(h.tmp_path)['project']['source_version'] == 5
+    assert queue.books(h.tmp_path)['project']['source_version'] == 4.5
     h.run()
-    assert len(h.calls) == 1 and len(h.uploads) == 3
+    assert len(h.calls) == 1 and len(h.uploads) == 4
 
 
 def test_one_missing_file_blocks_all_edits_and_preserves_other_receipts(harness):
@@ -184,8 +186,52 @@ def test_upload_failure_reuses_output_after_restart(harness, monkeypatch):
     h.run()
     assert queue.status(h.tmp_path)['batches'][0]['state'] == 'delivery'
     h.run()
-    assert len(h.calls) == 1 and len(h.uploads) == 3
+    assert len(h.calls) == 1 and len(h.uploads) == 4
     assert queue.status(h.tmp_path)['batches'][0]['state'] == 'delivered'
+
+
+def test_missing_corrections_spreadsheet_blocks_delivery(harness, monkeypatch):
+    h = harness
+
+    def workflow_without_audit(source, attachments, text, out, rules):
+        out.mkdir(parents=True, exist_ok=True)
+        for name, value in [('book.indd', b'corrected'), ('book.pdf', b'pdf'),
+                            ('report.json', b'{}')]:
+            (out / name).write_bytes(value)
+        return {'status': 'verified', 'output_indd': str(out / 'book.indd'),
+                'output_pdf': str(out / 'book.pdf'), 'report': str(out / 'report.json')}
+
+    monkeypatch.setattr(native, '_call_workflow', workflow_without_audit)
+    h.add('book', note='Fix it')
+    h.run()
+    h.clock[0] += 10800
+    h.run()
+
+    job = native._read_jobs(h.tmp_path)[0]
+    assert job['status'] == 'technical_block'
+    assert 'corrections.xlsx' in job['reason']
+    assert not h.uploads
+    assert queue.status(h.tmp_path)['batches'][0]['state'] == 'held'
+
+
+def test_source_mismatch_before_workflow_keeps_all_slots_and_writes_audit(harness):
+    h = harness
+    h.files[0] = DriveFile('source', 'Sibley - Book 3.indd', 'application/octet-stream')
+    h.add('book', [f'https://files.test/{i}.txt' for i in range(2)], note='Fix both')
+    h.run()
+    h.clock[0] += 10800
+    h.run()
+
+    assert not h.calls and not h.uploads
+    state = queue.status(h.tmp_path)
+    assert state['batches'][0]['state'] == 'held'
+    job = native._read_jobs(h.tmp_path)[0]
+    assert job['status'] == 'technical_block'
+    assert job['expected_attachment_count'] == 2
+    assert len(job['submission_receipts']) == 1
+    assert len(job['submission_receipts'][0]['urls']) == 2
+    audit = Path(job['result']['audit_spreadsheet'])
+    assert audit.is_file() and audit.parent == Path(job['result']['job_dir']) / 'output'
 
 
 def test_bad_remote_checksum_does_not_advance_registered_book(harness, monkeypatch):
@@ -236,7 +282,7 @@ def test_later_event_during_native_work_is_frozen_into_next_batch(harness, monke
     h.clock[0] += 10800
     h.run()
     assert len(h.calls) == 2 and 'Fix first' not in h.calls[1]['text']
-    assert queue.books(h.tmp_path)['project']['source_version'] == 6
+    assert queue.books(h.tmp_path)['project']['source_version'] == 5.5
 
 
 def test_project_read_failure_preserves_new_submissions(harness, monkeypatch):
@@ -304,7 +350,7 @@ def test_explicit_local_release_delivers_saved_result_without_reapplying(harness
     queue.resume_delivery(h.tmp_path, batch['batch_id'])
     h.ws.corrections_native_auto_upload = True
     h.run()
-    assert len(h.calls) == 1 and len(h.uploads) == 3
+    assert len(h.calls) == 1 and len(h.uploads) == 4
     assert queue.status(h.tmp_path)['batches'][0]['state'] == 'delivered'
     with pytest.raises(queue.QueueError):
         queue.resume_delivery(h.tmp_path, batch['batch_id'])

@@ -31,9 +31,11 @@ Google Drive uses its existing OAuth connection.
 `python tools/install_native_interior_windows.py --home C:\DocProof\review`
 generates review-only startup tasks for inspection. Add `--install` to register
 them for this user's logon. They use the interactive desktop token, prevent
-overlapping task instances, and restart after failures. The worker always uses
-`--local-only`; installing it cannot enable uploads. The review UI does not
-start unrelated DocWatch stages. Logs live under the worker home's `logs/`.
+overlapping task instances, and restart after failures. Staging is local-only by
+default; a separately reviewed `--enable-delivery` staging can remove
+`--local-only` only when both saved delivery settings are already enabled. The
+review UI does not start unrelated DocWatch stages. Logs live under the worker
+home's `logs/`.
 
 Before enabling a production queue, pause any old worker and reconcile its
 ledger, cutoff, and receipts with the destination home. Complete the real Astra
@@ -42,7 +44,7 @@ submission start date. Do not use a rehearsal home as the live queue. Production
 delivery requires a separately reviewed launch without `--local-only`, as
 described below.
 
-**Installation defaults to local review.** The Windows launcher remains `--local-only`; it does not enable live delivery. A later, separately reviewed staging may pass `--enable-delivery`; that flag only removes `--local-only` when the saved watch settings already have both `corrections_native_auto_upload` and `corrections_native_form_poll` enabled. It never changes settings itself. Enable Drive delivery only after a separately reviewed launch decision confirms that the live queue contains no test jobs. Use a separate watch home for synthetic tests; source editions are preserved and delivery creates a new Book N+1.
+**Installation defaults to local review.** The Windows launcher remains `--local-only`; it does not enable live delivery. A later, separately reviewed staging may pass `--enable-delivery`; that flag only removes `--local-only` when the saved watch settings already have both `corrections_native_auto_upload` and `corrections_native_form_poll` enabled. It never changes settings itself. Enable Drive delivery only after a separately reviewed launch decision confirms that the live queue contains no test jobs. Use a separate watch home for synthetic tests; source editions are preserved and delivery creates a new half-step Book edition.
 
 The continuous native poller starts a background HubSpot collector so new submissions are captured while the serialized InDesign worker is busy. It does not activate the workflow or process historical submissions by itself. Private attachments can be supplied manually while HubSpot file permission is pending. A dedicated Mac can use the same guarded worker later after its own setup and ledger reconciliation; no Mac worker or historical cache is assumed by this guide.
 
@@ -75,7 +77,27 @@ The form and Project note fields are different. Native form mode reads the actua
 
 The worker requires a start date. Older submissions remain out of the automatic queue unless deliberately included. Missing or ambiguous identity must be resolved before applying an author's instructions to a book. Book-title variations and typos can require a person to match the submission.
 
-The Google author root is configured in watch settings for the older property-driven workflow. Guarded form intake uses the verified registry's exact folder and source IDs. Source selection uses the highest numeric `Last Name - Book N.indd` within that registered folder; duplicate highest versions require attention. The operator maps each verified source through the local UI before a book can be claimed.
+Guarded form intake uses the verified registry's exact folder and source IDs. Source selection uses the highest numeric `Last Name - Book N.indd` within that registered folder; duplicate highest versions require attention. Sources can be mapped through the local UI or through the opt-in shared-form checks below.
+
+### Existing shared form
+
+Enable `corrections_native_shared_form` to retain the existing shared form link.
+When no Project ID is supplied, the typed book title must match exactly one
+readable HubSpot Project after case/spacing/punctuation normalization or an
+explicit registered title alias. The lookup includes incomplete Projects, so a
+duplicate title cannot disappear because its author name is missing. The
+submitter's name is not used as the author's identity. No fuzzy or model-based
+title selection is allowed.
+
+For a previously unregistered Project, the worker requires complete CRM author
+first/last names, no second Project for that author, exactly one matching author
+folder under the configured Drive root, one Interior Design child, and a unique
+highest numbered InDesign source. All relevant folder listings are paginated.
+It saves that mapping locally, then the normal native frontmatter title/byline
+check must pass before edits. Existing mappings are never automatically replaced;
+a newer source or a multi-book author needs reviewed mapping through the panel.
+Ambiguities and Drive lookup failures preserve the original submissions with hold
+reasons. The background HubSpot collector remains independent of Drive and InDesign.
 
 ## Guarded form queue
 
@@ -112,6 +134,15 @@ book, so later submissions cannot overtake it.
 
 ## Applying and checking corrections
 
+Native correction editions use `.5`: `Writer - Book 4.indd` produces
+`Writer - Book 4.5.indd`; a later accepted round based on that edition produces
+`Writer - Book 5.5.indd`. An integer source uses the half-step immediately above
+it; a half-step source advances by one. Both integer and `.5` sources participate
+in numeric highest-version selection. Other fractional versions are rejected.
+Source registration, collision checks and registry advancement use the same rule.
+Existing completed jobs retain their frozen filenames and hashes; they are not
+silently renamed or republished under the new convention.
+
 On Windows, the subscription worker receives a per-request read-only MCP evidence
 server. It exposes only the job's registered JSON and page images, checks their
 hashes on every read, and provides exact story searches without shell access.
@@ -128,18 +159,62 @@ stops before the native apply stage.
 1. Save the source identity, revision, attachment files, notes, and extracted evidence in a local job folder.
 2. Inspect the book in InDesign and export a baseline PDF and IDML.
 3. Have Luna (medium reasoning) account for each correction evidence entry and propose straightforward text edits. Exact anchors, complete evidence ownership and non-overlap are checked locally. Route ambiguous, layout, style, or repeated-anchor instructions to Astra (high reasoning) before applying the merged plan. Unsupported work remains assigned to a designer or clarification.
-4. Apply supported text and font-style corrections to a separate Book N+1 document.
+4. Apply supported text and font-style corrections to a separate half-step Book document.
 5. Reopen that saved document in InDesign. Check every story's text, preserved formatting, fonts, links, and overset text.
 6. Compare every PDF page, then have Astra visually review changed pages and adjacent pages against the original evidence.
-7. Recheck the source revision and conflicting newer editions. Read back and verify the remote checksums and file identities before any HubSpot writeback or registry/book-version advance. Only then can the verified INDD, PDF, correction report, and portable package ZIP be delivered.
+7. Recheck the source revision and conflicting newer editions. Read back and verify the remote checksums and file identities before any HubSpot writeback or registry/book-version advance. Only then can the verified INDD, PDF, correction spreadsheet, JSON report, and portable package ZIP be delivered.
 
 The package contains the verified INDD/PDF/IDML, reports, copied links and document fonts, and original submitted attachments. Corrections requiring frame movement, artwork redesign, or unsupported layout operations remain explicitly recorded for a designer.
+
+## Corrections spreadsheet
+
+Every new local workflow outcome includes `correction-audit.xlsx`, downloadable
+as **Corrections spreadsheet**. Delivery names it alongside the book, for example
+`Writer - Book 4.5.corrections.xlsx`, and includes it in the portable package.
+The workbook is required and hash-protected: missing or changed spreadsheets
+block delivery, and a retry reuses the completed report rather than rewriting it.
+Older jobs without this artifact require reviewed recovery before delivery.
+
+The report is built locally from saved evidence and receipts without another
+model request. Its five sheets contain:
+
+- **Corrections:** every planned instruction plus explicit uncovered evidence,
+  source wording, status, reason, saved-text/formatting confirmation and source references.
+- **Changes:** every proposed edit, exact before/replacement wording, confirmed
+  saved replacement, occurrence counts, formatting requests and story offsets.
+- **Evidence:** every extracted evidence unit, including context, source location,
+  coverage and preserved correction wording/formatting metadata.
+- **Files:** every submitted attachment slot, including missing files and duplicate
+  bytes, with hashes and originating submission IDs. Identical files are analyzed
+  once but their separate receipts remain visible.
+- **Run details:** book identity, stage, verification/review coverage, all recorded
+  blockers and output checksums. Upload status remains in the separate delivery receipt.
+
+**Done — verified** requires saved text and formatting checks plus the complete
+whole-book review. **Applied — book review required** confirms the saved text but
+does not claim the book is ready. **No edit** records a planner assessment and
+whether the reviewer covered it; it is never counted as an applied change.
+Designer requests, clarification, invalid plans, uncovered evidence and interrupted
+apply operations stay explicit. Pre-plan failures report an unknown correction
+count and list all available file receipts rather than asserting zero requests.
+The reviewer currently returns a whole-book verdict, not per-item visual approvals.
+
+Long text continues in numbered Part rows. Summary totals count only the first
+part of each item. Source text is serialized as literal spreadsheet text to prevent
+formula execution or automatic date conversion; counts remain numeric.
+
+Spreadsheet generation requires Node.js and `@oai/artifact-tool` on the desktop
+worker. The bundled Codex Windows runtime is discovered automatically. Other
+installations may set `DOCPROOF_AUDIT_NODE` to the Node executable and
+`DOCPROOF_AUDIT_MODULES` to the directory containing `@oai/artifact-tool`.
+The report builder ships in the Python package. A missing or failing spreadsheet
+runtime causes a technical block and cannot yield a verified delivery.
 
 ## Outcomes
 
 | Outcome | Delivery behavior |
 | --- | --- |
-| Verified | Deliver the completed Book N+1 artifacts after remote identity/checksum readback. |
+| Verified | Deliver the completed half-step Book artifacts after remote identity/checksum readback. |
 | Designer needed | Hold the batch and reserve its book; no partial automatic upload. |
 | Clarification needed | Hold the batch and record the unresolved questions; no partial automatic upload. |
 | Technical block | Keep the evidence and error locally, hold the batch, and do not publish an unverified document. |
@@ -237,12 +312,12 @@ queue is considered:
 - Install the Windows prerequisites, sign into the interactive desktop session,
   and pass the native-test and review rehearsals. Keep the installed launcher
   local-only until a separate launch review authorizes delivery.
-- Configure the HubSpot form with the hidden `docproof_project_id` field using
-  the actual configured field name, a book-title field, and preferably an
-  attachment-count field. Confirm form, Project, and private-file permissions.
+- Configure a book-title field and either explicit `docproof_project_id` values
+  or the opt-in shared-form matching mode above. Prefer an attachment-count
+  field when the form supports it. Confirm form, Project, and private-file permissions.
 - Register every book with one verified Project, title, author, surname, source,
-  and one `Interior Design` folder. Map the source through the local UI and
-  resolve title/byline aliases before collecting live work.
+  and one `Interior Design` folder. Shared-form mode can onboard unambiguous
+  Projects automatically; other mappings and title/byline aliases need review.
 - Confirm the three-hour per-book quiet period and reconcile the intake cutoff.
   Prior jobs are imported automatically when they are in the same worker home;
   a ledger copied from a Mac is not trusted as a drop-in replacement and must
