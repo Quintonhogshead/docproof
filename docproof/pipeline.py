@@ -266,6 +266,7 @@ def _collapse_repeated_comments(validated: list, doc: DocumentModel,
     keeps one counted comment for the whole class and points at the report;
     below it, a query is still its own question (two speaker-change questions
     stay two questions). Returns how many comments were silenced."""
+    import re
     if threshold <= 0:
         return 0
     order = {p.para_id: i for i, p in enumerate(doc.paragraphs)}
@@ -282,6 +283,11 @@ def _collapse_repeated_comments(validated: list, doc: DocumentModel,
             order.get(validated[i].para_id, len(order)),
             validated[i].anchor.start if validated[i].anchor else 0))
         first = idxs[0]
+        # Replayed findings can already carry the collapse suffix. A rebuild
+        # replaces that generated note instead of appending another copy.
+        expl = re.sub(r"(?: Applied \d+ times in this manuscript; the "
+                      r"comment appears once here, and the change log lists every "
+                      r"instance\.)+$", "", expl)
         validated[first] = replace(validated[first], explanation=(
             f"{expl} Applied {len(idxs)} times in this manuscript; the "
             f"comment appears once here, and the change log lists every "
@@ -2384,7 +2390,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
            out_dir: str | Path, source_path: str | Path,
            batch: bool = False, coverage=None, verify_provider=None,
            judge_held: list[dict] | None = None,
-           chapter_batch_reads: dict | None = None, on_phase=None) -> Outputs:
+           chapter_batch_reads: dict | None = None, on_phase=None,
+           settle_locked_queries: bool = False) -> Outputs:
     """Validate, write tracked changes, save, and report.
 
     `coverage` (a CoverageLedger, if the caller tracked one) records which
@@ -2596,6 +2603,16 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
             [p for p in prepared.doc.paragraphs if p.para_id in covered_ids],
             validated, max_per_rule=cfg.residuals.max_per_rule)
         validated += _validate(residual)
+    if settle_locked_queries and cfg.intent_zones_file:
+        from .intent_zones import load_intent_zones, resolve
+        resolved = resolve(load_intent_zones(cfg.intent_zones_file),
+                           list(prepared.doc.paragraphs))
+        for i, finding in enumerate(validated):
+            anchor = finding.anchor
+            if (finding.status == "query" and anchor is not None
+                    and resolved.locked_cover(finding.para_id, anchor.start, anchor.end)):
+                validated[i] = replace(finding, status="rejected_intent_zone",
+                                       force_query=False)
     # One comment per repeated rule explanation, the rest silenced — after
     # every gate has settled which edits stand, so the count in the surviving
     # comment is the count in the manuscript.

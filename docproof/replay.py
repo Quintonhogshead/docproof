@@ -455,7 +455,8 @@ class RebuildResult:
 def rebuild_from_rows(cfg: Config, *, manuscript: str | Path, rows: list[dict],
                       error_dir: str | Path, remap_unchanneled: bool,
                       id_prefix: str, after_sweeps: bool = False,
-                      dry_run: bool = False) -> RebuildResult:
+                      dry_run: bool = False,
+                      settle_locked_queries: bool = False) -> RebuildResult:
     """The $0 rebuild both `import-findings`/`replay` and the settle loop
     share: silence every paid pass, prepare the manuscript, shape the rows into
     findings, validate them, and (unless `dry_run`) run finish() to write the
@@ -549,7 +550,8 @@ def rebuild_from_rows(cfg: Config, *, manuscript: str | Path, rows: list[dict],
     from .models import Usage
     usage = Usage()
     outputs = finish(prepared, findings, usage, cfg,
-                     out_dir=Path(cfg.output_dir), source_path=str(manuscript))
+                     out_dir=Path(cfg.output_dir), source_path=str(manuscript),
+                     settle_locked_queries=settle_locked_queries)
     # A formatting row that reached the change channel deletes the sentence it
     # should only have marked, and the reject-all audit cannot see it. Catch it
     # by word count before calling the deliverable done.

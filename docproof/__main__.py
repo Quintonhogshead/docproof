@@ -1941,6 +1941,7 @@ def _galley_settle(args) -> int:
             return 2
     opts = SettleOptions(rounds=max(0, int(_rounds)), engine=engine,
                          model=model, context=context,
+                         queries_file=getattr(args, "queries", None),
                          verification_pass=verification["pass_id"],
                          verification_policy=verification["policy_id"],
                          required_verification_passes=verification["required_pass_ids"],

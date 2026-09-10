@@ -110,7 +110,10 @@ class RunStateMachine(BaseModel):
         """Return mismatches against recorded source/config hashes and artifact
         hashes.
 
-        Compare inputs with all stamped transitions. A hash supplied on only
+        Compare source identity with all stamped transitions. For config,
+        use the latest non-empty stamp per state: re-advancing the same stage
+        can correct its config without erasing the append-only audit trail.
+        Stamps from other stages still have to agree. A hash supplied on only
         one side is a mismatch. When artifact_hasher is supplied, check
         every recorded path against its latest hash, allowing later stages
         to replace earlier versions.
@@ -122,6 +125,13 @@ class RunStateMachine(BaseModel):
         for label, current, attr in (("source", source_sha256, "source_sha256"),
                                      ("config", config_sha256, "config_sha256")):
             stamped = [r for r in self.history if getattr(r, attr)]
+            if label == "config":
+                # advance() allows a stage to be repeated. Its earlier config
+                # is historical evidence, not an additional active input.
+                # Never let an unstamped repeat erase a hash, or a later stage
+                # mask drift from a different stage. Source stamps stay strict:
+                # changing manuscript content requires an explicit revision.
+                stamped = list({r.state: r for r in stamped}.values())
             if current and not stamped:
                 out.append(
                     f"no {label} hash was stamped at {last.state!r}; "

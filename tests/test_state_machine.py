@@ -195,6 +195,77 @@ def test_verify_resume_reports_each_distinct_stamped_hash_once():
         "source changed since 'intake'", "source changed since 'plan_approved'"]
 
 
+@pytest.mark.parametrize("current_state", ["plan_approved", "audited"])
+def test_verify_resume_accepts_config_corrected_at_repeated_intake(current_state):
+    # Aragon and Bradshaw both corrected a draft config before approval, using
+    # the supported append-only re-advance. Historical stamps remain evidence.
+    m = RunStateMachine()
+    m.advance("intake", source_sha256="source", config_sha256="draft")
+    m.advance("intake", source_sha256="source", config_sha256="approved")
+    m.advance("plan_approved", source_sha256="source", config_sha256="approved")
+    if current_state != "plan_approved":
+        m.advance(current_state, source_sha256="source", config_sha256="approved")
+    before = m.model_dump_json()
+
+    assert m.verify_resume(source_sha256="source", config_sha256="approved") == []
+    assert m.model_dump_json() == before
+
+
+def test_verify_resume_cannot_hide_config_drift_in_a_different_stage():
+    m = RunStateMachine()
+    m.advance("intake", config_sha256="old")
+    m.advance("plan_approved", config_sha256="new")
+    assert m.verify_resume(config_sha256="new") == [
+        "config changed since 'intake': now new…, recorded old…"]
+
+
+def test_verify_resume_unstamped_repeat_does_not_erase_config():
+    m = RunStateMachine()
+    m.advance("intake", config_sha256="old")
+    m.advance("intake")
+    assert m.verify_resume(config_sha256="new") == [
+        "config changed since 'intake': now new…, recorded old…"]
+    assert "resume supplied none" in m.verify_resume()[0]
+
+
+def test_verify_resume_checks_the_latest_repeated_config_not_an_older_match():
+    m = RunStateMachine()
+    m.advance("intake", config_sha256="old")
+    m.advance("intake", config_sha256="new")
+    assert m.verify_resume(config_sha256="old") == [
+        "config changed since 'intake': now old…, recorded new…"]
+
+
+def test_verify_resume_repeated_intake_cannot_hide_a_source_change():
+    m = RunStateMachine()
+    m.advance("intake", source_sha256="original")
+    m.advance("intake", source_sha256="changed")
+    assert m.verify_resume(source_sha256="changed") == [
+        "source changed since 'intake': now changed…, recorded original…"]
+
+
+def test_cli_resume_after_preapproval_config_correction(tmp_path, capsys):
+    ws = tmp_path / "ws"
+    source = tmp_path / "source.docx"
+    source.write_bytes(b"unchanged source")
+    config = tmp_path / "mech.yaml"
+    config.write_text("api:\n  model: gpt-5.6-luna\n")
+    argv = ["galley", "state", str(ws), "--source", str(source),
+            "--config", str(config)]
+    assert main([*argv, "--advance", "intake"]) == 0
+    config.write_text("api:\n  model: gpt-5.6-sol\n")
+    assert main([*argv, "--verify-resume"]) == 6
+    assert main([*argv, "--advance", "intake"]) == 0
+    assert main([*argv, "--advance", "plan_approved"]) == 0
+    before = (ws / "state.json").read_bytes()
+
+    assert main([*argv, "--verify-resume"]) == 0
+    assert "safe to resume from 'plan_approved'" in capsys.readouterr().out
+    assert (ws / "state.json").read_bytes() == before
+    config.write_text("api:\n  model: gpt-5.6-terra\n")
+    assert main([*argv, "--verify-resume"]) == 6
+
+
 def test_state_machine_round_trips(tmp_path):
     m = RunStateMachine()
     m.advance("intake", source_sha256="s")
