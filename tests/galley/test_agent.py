@@ -968,3 +968,56 @@ def test_explicit_reset_rereads_once_in_a_fresh_workspace(env, tmp_path):
     assert entry["request_id"] == "2026-09-10T12:00:00Z"
     assert entry["previous_runs"] == [previous]
     assert entry["state"] == ga.FINISHED
+
+
+# --- a question nobody answers holds the book for new code -------------------
+
+def test_a_question_block_holds_the_book_until_a_new_version(env, tmp_path,
+                                                             monkeypatch):
+    """Bradshaw Book 1 (2026-09-10) blocked at settle on a QUESTIONS.md entry
+    and was resumed five minutes later toward the same question. A question
+    stop now waits for a different DocProof version."""
+    import docproof
+    ran = []
+
+    def asked(**kw):
+        ran.append(kw)
+        r = FakeResult(outcome="blocked", reason="phase settle escalated a "
+                       "question and there is nobody to answer it",
+                       uploaded=())
+        r.asked = True
+        return r
+
+    alerts = []
+    agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
+                   download=_downloader(tmp_path), run_driver=asked,
+                   alert=lambda s, b: alerts.append(s))
+    report = agent.poll_once()
+    assert report.outcome == "blocked"
+    entry = agent.ledger().claimed("drive-1")
+    assert entry["state"] == ga.CLAIMED
+    assert entry["operational_status"] == ga.HELD_FOR_CODE
+    assert any("held until the next deploy" in s for s in alerts)
+
+    report = agent.poll_once()                       # same version: held
+    assert len(ran) == 1
+    assert any("held for new code" in s for s in report.skipped)
+
+    monkeypatch.setattr(docproof, "__version__", "999.0.0")
+    agent.poll_once()                                # new code: resumes
+    assert len(ran) == 2
+
+
+def test_an_infrastructure_block_still_resumes_on_the_next_poll(env, tmp_path):
+    ran = []
+
+    def blocked(**kw):
+        ran.append(kw)
+        return FakeResult(outcome="blocked", reason="Drive said no",
+                          uploaded=())
+
+    agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
+                   download=_downloader(tmp_path), run_driver=blocked)
+    agent.poll_once()
+    agent.poll_once()
+    assert len(ran) == 2

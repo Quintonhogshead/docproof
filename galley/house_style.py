@@ -19,7 +19,10 @@ HOUSE_RULES: tuple[str, ...] = (
     "Periods and commas sit INSIDE closing quotation marks.",
     "Dialogue takes double quotation marks; a quotation inside dialogue "
     "takes single marks.",
-    "Whole numbers from one through one hundred are spelled out in prose.",
+    "Whole numbers from one through one hundred are spelled out in prose — "
+    "except where Chicago keeps digits: parts of a book (“book 1”, "
+    "“chapter 5”, “page 7”) and eras (“45 BC”, “AD 70”). Chapter and "
+    "part HEADINGS follow the book's own label style.",
 )
 
 

@@ -86,6 +86,31 @@ _UNIT_AFTER = frozenset({
 })
 
 
+# The labels and tails where Chicago itself keeps the digits, so there is no
+# judgment for the margin either: a part-of-book locator ("book 1", "chapter
+# 5", "page 7" — CMOS 9.26) and an era ("45 BC" — CMOS 9.35). Querying them
+# asked the author to waive a rule that does not apply (Bradshaw, 2026-09-10:
+# "book 1" and "45 BC" came back as comments on every rebuild, and settle's
+# judge, told to spell out one through one hundred, applied "book one").
+_CHICAGO_LOCATOR_BEFORE = frozenset({
+    "chapter", "chapters", "page", "pages", "figure", "fig", "table", "line",
+    "lines", "verse", "verses", "act", "scene", "section", "part", "volume",
+    "vol", "book", "paragraph", "article", "psalm", "note", "appendix",
+})
+_ERA_AFTER_RE = re.compile(r"[ \t ]*(?:B\.?C\.?(?:E\.?)?|C\.?E\.?|A\.?D\.?)"
+                           r"(?![A-Za-z])")
+_ERA_BEFORE_RE = re.compile(r"(?<![A-Za-z])A\.?D\.?[ \t ]*$")
+
+
+def chicago_keeps_numeral(text: str, start: int, end: int) -> bool:
+    """Whether the numeral at [start, end) sits where Chicago keeps digits:
+    after a part-of-book locator, or beside an era ("45 BC", "AD 70")."""
+    if _word_before(text, start).lower() in _CHICAGO_LOCATOR_BEFORE:
+        return True
+    return bool(_ERA_AFTER_RE.match(text, end)
+                or _ERA_BEFORE_RE.search(text[max(0, start - 8):start]))
+
+
 def _word_before(text: str, i: int) -> str:
     """The alphabetic word immediately before position i (skipping one run of
     spaces), or "" if what precedes is punctuation, a digit, or the start."""
@@ -138,6 +163,8 @@ def _numeral_sites(text: str):
             continue
         word = cardinal_word(n)
         if word is None:
+            continue
+        if chicago_keeps_numeral(text, m.start(), m.end()):
             continue
         if _prose_numeral(text, m.start(), m.end()):
             # Clear prose: convert it as a tracked change rather than ask.

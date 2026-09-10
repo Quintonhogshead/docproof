@@ -56,6 +56,16 @@ def test_a_judgment_case_stays_a_query():
                for f in found)
 
 
+def test_chicago_numeral_forms_are_neither_converted_nor_queried():
+    """Parts of a book (CMOS 9.26) and eras (9.35) keep their digits under
+    Chicago itself — there is no rule to waive, so no margin question
+    (Bradshaw, 2026-09-10: "book 1" and "45 BC" queried on every rebuild)."""
+    assert q(["As he wrote in book 1 of the memoir, the siege ended.",
+              "The comet was seen in 45 BC and again in 12 B.C.E. by some.",
+              "Turn to page 7 and then to chapter 12 for the map.",
+              "The temple fell in AD 70, the scholars agree."]) == []
+
+
 def test_a_site_a_validated_edit_touches_is_not_residue():
     p = para("It took 17 minutes to land.")
     start = p.text.index("17")
