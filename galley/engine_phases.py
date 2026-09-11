@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Callable
 
@@ -24,6 +26,21 @@ def _json(path):
 
 class EnginePhaseError(ValueError):
     pass
+
+
+def _profile_comment_budget(value) -> int:
+    """Extract a stated ceiling without rounding or removing its constraint."""
+    if isinstance(value, Mapping):
+        value = value.get("ceiling")
+    if type(value) is float and math.isfinite(value) and value.is_integer():
+        value = int(value)
+    # The approval manifest treats zero as no ceiling, so it cannot be passed
+    # through as a valid constraint. Bool is also not an editorial count.
+    if type(value) is not int or value <= 0:
+        raise EnginePhaseError(
+            "profile.json comment_budget must be a positive integer or an "
+            "object with a positive integer ceiling")
+    return value
 
 
 def review_action(*, coverage_complete: bool, open_ids: set[str],
@@ -161,8 +178,13 @@ class EnginePhases:
                     "--budget", str(self.driver.budget_usd), "--out", str(approval),
                     "--mechanical-only", "--note", "Approved by the code-owned plan gate"]
             profile = self.ws / "profile.json"
-            if profile.is_file() and _json(profile).get("comment_budget"):
-                args += ["--comment-budget", str(_json(profile)["comment_budget"])]
+            if profile.is_file():
+                profile_data = _json(profile)
+                if not isinstance(profile_data, Mapping):
+                    raise EnginePhaseError("profile.json must be an object")
+                if "comment_budget" in profile_data:
+                    args += ["--comment-budget",
+                             str(_profile_comment_budget(profile_data["comment_budget"]))]
             self._command("approve", "approve", args, [approval])
         else:
             from galley.manifest import sha256_file, config_hash
