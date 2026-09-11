@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from docproof import agent_lane
+from docproof.subscription_limits import UsageLimitError, is_usage_limited, resume_after
 from galley.driver import CredentialsError
 
 log = logging.getLogger("docproof.galley.agent")
@@ -35,6 +36,7 @@ log = logging.getLogger("docproof.galley.agent")
 DEFAULT_ENV_FILE = agent_lane.DEFAULT_CREDENTIALS_FILE
 #: The ledger of what this machine has claimed, finished and failed.
 LEDGER_NAME = ".agent-state.json"
+USAGE_PAUSE_NAME = ".subscription-pause.json"
 #: Where the service writes everything the agent says, on either platform.
 LOG_NAME = "agent.log"
 # launchd service label.
@@ -173,6 +175,13 @@ def check_credentials(values: dict[str, str], *, runner=subprocess.run,
     except subprocess.TimeoutExpired:
         return f"`claude -p` did not answer within {timeout_s:.0f}s"
     output = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+    try:
+        reply = json.loads(proc.stdout or "{}")
+        detail = str(reply.get("result") or output) if isinstance(reply, dict) else output
+    except ValueError:
+        detail = output
+    if is_usage_limited(detail):
+        return f"Claude subscription usage limit: {detail[:800]}"
     if detect_credential_failure(output):
         line = next((ln.strip() for ln in output.splitlines()
                      if detect_credential_failure(ln)), "")
@@ -453,6 +462,7 @@ class Agent:
     #: claiming while the token is known to be bad. None skips it — the
     #: driver still recognises a rejected token mid-run.
     preflight: Callable[[dict[str, str]], str] | None = None
+    wall_clock: Callable[[], float] = time.time
     _status: dict[str, Any] = field(default_factory=dict, repr=False)
     _poll_error: str = field(default="", repr=False)
     #: The current credentials failure, or "" while the token works.
@@ -578,6 +588,11 @@ class Agent:
                          f"the subscription token works again.")
             return report
 
+        if self._usage_waiting():
+            report.halted = str(self._usage_pause().get("reason")
+                                or self._halt or "Claude usage limit")
+            return report
+
         for book in books:
             state = ledger.state(book.file_id)
             if state in (FINISHED, FAILED, PENDING_DELIVERY):
@@ -633,6 +648,59 @@ class Agent:
         except AgentError as e:
             self.log(f"credentials file not reloaded: {e}")
 
+    def _usage_pause(self) -> dict[str, Any]:
+        import math
+        try:
+            data = json.loads((self.root / USAGE_PAUSE_NAME).read_text("utf-8"))
+            until = data.get("resume_after") if isinstance(data, dict) else None
+            if type(until) in (int, float) and math.isfinite(until):
+                return data
+        except (OSError, ValueError):
+            pass
+        return {}
+
+    def _usage_beat(self, pause: dict[str, Any]) -> None:
+        reason = str(pause.get("reason") or "Claude subscription usage limit")
+        self._beat(state="halted", phase=None, credentials_error="",
+                   usage_limit=reason[:800], last_error=reason[:800],
+                   usage_resets_at=datetime.fromtimestamp(
+                       pause["resume_after"], timezone.utc).isoformat(),
+                   last_outcome="held", last_reason=reason[:800])
+
+    def pause_for_usage(self, reason: str, *, book: str = "", slug: str = "") -> None:
+        from docproof.utils.files import write_atomic
+        now = self.wall_clock()
+        pause = {"reason": reason, "recorded_at": now,
+                 "resume_after": resume_after(reason, now=now),
+                 "book": book, "slug": slug}
+        write_atomic(self.root / USAGE_PAUSE_NAME, json.dumps(pause, indent=2))
+        self._halt = ""  # A quota is not a revoked token.
+        self._usage_beat(pause)
+        self.log(f"Claude usage limit: queue paused until "
+                 f"{self._status['usage_resets_at']}; checkpoints preserved.")
+
+    def _usage_waiting(self) -> bool:
+        pause = self._usage_pause()
+        if not pause:
+            return False
+        if self.wall_clock() < pause["resume_after"]:
+            self._usage_beat(pause)
+            return True
+        # Only one availability check after the deadline, never a whole book
+        # as a quota probe. A continuing limit establishes another cooldown.
+        self._reload_env()
+        error = self._preflight() if self.preflight is not None else ""
+        if is_usage_limited(error):
+            self.pause_for_usage(error)
+            return True
+        (self.root / USAGE_PAUSE_NAME).unlink(missing_ok=True)
+        self._beat(usage_limit="", usage_resets_at="", last_error="")
+        if error:
+            self.halt(error)
+            return True
+        self.log("Claude subscription is available again; resuming checkpointed work.")
+        return False
+
     def _token_recovered(self) -> bool:
         """While halted: re-read the credentials and try to sign in. Without
         a preflight the next claim is the test."""
@@ -640,6 +708,9 @@ class Agent:
         if self.preflight is not None:
             error = self._preflight()
             if error:
+                if is_usage_limited(error):
+                    self.pause_for_usage(error)
+                    return True
                 if error != self._halt:
                     self._halt = error
                     self.log(f"still halted: {error}")
@@ -708,7 +779,15 @@ class Agent:
                    last_error="")
         # Find out now whether the token signs in, not after a book's first
         # phase has been written off.
+        if self._usage_pause():
+            # The first poll honors/checks the persisted deadline. No token
+            # probe is needed while the same subscription is cooling down.
+            self._usage_beat(self._usage_pause())
+            return
         problem = self._preflight() if self.preflight is not None else ""
+        if is_usage_limited(problem):
+            self.pause_for_usage(problem)
+            return
         self._alarm(
             f"Galley agent started on {self.host}"
             + (" — but its token is rejected" if problem else ""),
@@ -740,7 +819,7 @@ class Agent:
         folder = self.drive_folder_override or book.folder_id
         ledger.record(book.file_id, CLAIMED, name=book.name, slug=slug,
                       folder_id=folder, request_id=book.request_id,
-                      operational_status="")
+                      operational_status="", reason="")
         self.log(f"{'Resuming' if resume else 'Claiming'} {book.name} "
                  f"(workspace {slug}).")
         self._status = {k: v for k, v in self._status.items()
@@ -761,6 +840,13 @@ class Agent:
         self._file_id = book.file_id
         try:
             result = self.drive_book(local, slug, folder, resume=resume)
+        except UsageLimitError as e:
+            report.outcome, report.reason = "held", str(e)
+            ledger.record(book.file_id, CLAIMED, name=book.name, slug=slug,
+                          folder_id=folder, operational_status="waiting_for_usage",
+                          reason=str(e)[:800])
+            self.pause_for_usage(str(e), book=book.name, slug=slug)
+            return
         except CredentialsError as e:
             # The token, not the book. The claim stands and the run resumes
             # from the same phase once the token is replaced.

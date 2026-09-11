@@ -151,3 +151,10 @@ scope and budget; finish the plan phase and let the driver run that gate.
   continues serving other books. Never certify incomplete work or recast an
   engine defect as an editorial `needs_human` verdict. Astra retains final
   editorial authority; any human review it requires happens at the final handoff.
+
+Claude subscription exhaustion is a service pause, not an editorial or engine
+failure. Preserve checkpoints and report the exact limit/reset message. Do not
+retry other readers, switch to paid Claude API calls, or treat an old build as
+proof that verification or settlement ran. The agent waits for the reported reset
+and checks availability before resuming; nobody needs to answer a question or
+rotate a valid token for a usage limit.

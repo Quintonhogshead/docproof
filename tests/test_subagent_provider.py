@@ -351,3 +351,16 @@ def test_the_lane_reports_its_usage_as_unbilled(monkeypatch):
         schema_name="reply", max_tokens=100)
     assert result.usage.output_tokens == 900
     assert result.usage.billed is False
+
+
+def test_subscription_limit_is_not_an_empty_or_salvaged_reader_result(monkeypatch, tmp_path):
+    import pytest
+    from docproof.subscription_limits import UsageLimitError
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    result = _Result("You've hit your session limit · resets 3:10am (UTC)")
+    result.is_error, result.subtype = True, "success"
+    sdk = _fake_sdk([_Assistant('{"problems": []}'), result], [])
+    provider = subagent.SubagentProvider(sdk=sdk, cwd=tmp_path)
+    with pytest.raises(UsageLimitError, match="resets 3:10am"):
+        provider.complete_structured(model="opus", system="s", user="u",
+                                     schema={}, schema_name="x", max_tokens=1)

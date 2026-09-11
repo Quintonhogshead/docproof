@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import agent_lane
+from ..subscription_limits import UsageLimitError, is_usage_limited
 from .base import NormalizedUsage, ProviderResult
 
 log = logging.getLogger("docproof.providers.subagent")
@@ -335,6 +336,8 @@ class SubagentProvider:
                                     "is_error=%s turns=%s", model, subtype,
                                     getattr(msg, "is_error", None),
                                     getattr(msg, "num_turns", None))
+                        if is_usage_limited(reply) or is_usage_limited(last_text):
+                            raise UsageLimitError(reply if is_usage_limited(reply) else last_text)
                         if _not_logged_in(reply):
                             # The CLI's own "Not logged in · Please run
                             # /login": /login is a slash command nobody
@@ -345,13 +348,15 @@ class SubagentProvider:
                                 f"this machine in with `claude setup-token` "
                                 f"and set CLAUDE_CODE_OAUTH_TOKEN (or run "
                                 f"`claude auth login`), then {_REMEDY}.")
-        except agent_lane.AgentLaneUnavailable:
+        except (agent_lane.AgentLaneUnavailable, UsageLimitError):
             raise
         except sdk.CLINotFoundError as e:
             log.error("subagent lane: Claude Code CLI not found (%s)", e)
             raise agent_lane.AgentLaneUnavailable(_CLI_HINT) from e
         except (sdk.ProcessError, sdk.ResultError) as e:
             said = "\n".join(cli_stderr)
+            if is_usage_limited(str(e) + "\n" + said):
+                raise UsageLimitError(said or str(e)) from e
             log.error("subagent lane: the CLI session failed: %s: %s%s",
                       type(e).__name__, e,
                       f"\nCLI stderr:\n{said}" if said else
