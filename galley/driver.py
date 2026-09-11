@@ -863,6 +863,15 @@ def spawn_claude(spec: PhaseSpec) -> PhaseResult:
     result to classify termination; fall back to transcript detection when
     it is absent.
     """
+    if os.name == "nt":
+        # Check containment support before starting a child. Import failure
+        # inside Popen's context would otherwise wait for an unbounded phase.
+        try:
+            __import__("win32api")
+            __import__("win32job")
+        except ImportError as exc:
+            raise DriverError("Windows phase containment requires pywin32; "
+                              "install docproof[galley].") from exc
     spec.log_path.parent.mkdir(parents=True, exist_ok=True)
     stream_path = spec.log_path.with_suffix(".stream.jsonl")
     with open(spec.log_path, "w", encoding="utf-8") as fh:
@@ -872,13 +881,31 @@ def spawn_claude(spec: PhaseSpec) -> PhaseResult:
         fh.flush()
         timed_out = False
         with open(stream_path, "w", encoding="utf-8") as raw:
-            try:
-                proc = subprocess.run(spec.argv, cwd=str(spec.workspace),
-                                      env=spec.env, stdout=raw,
-                                      stderr=subprocess.STDOUT, text=True,
-                                      timeout=spec.timeout_s)
-            except subprocess.TimeoutExpired:
-                timed_out = True
+            from docproof.platform_io import process_job, terminate_process_tree
+            containment = ({"creationflags": subprocess.CREATE_NO_WINDOW |
+                            subprocess.CREATE_NEW_PROCESS_GROUP}
+                           if os.name == "nt" else {"start_new_session": True})
+            with subprocess.Popen(spec.argv, cwd=str(spec.workspace),
+                                  env=spec.env, stdout=raw,
+                                  stderr=subprocess.STDOUT, text=True,
+                                  **containment) as proc:
+                with process_job(proc):
+                    try:
+                        proc.wait(timeout=spec.timeout_s)
+                    except subprocess.TimeoutExpired:
+                        timed_out = True
+                        terminate_process_tree(proc)
+                        try:
+                            proc.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            pass
+                    finally:
+                        # A shell/tool child may outlive the supervisor, even
+                        # when that supervisor exits promptly on SIGTERM.
+                        # A phase owns all of its work: no children may keep
+                        # rebuilding after timeout, interruption, or completion.
+                        terminate_process_tree(proc, force=True)
+                        proc.wait(timeout=5)
         # the raw stream is closed now; render it into the readable log
         _render_stream(stream_path, fh)
         if timed_out:

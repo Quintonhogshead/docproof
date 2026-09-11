@@ -58,6 +58,7 @@ canvas = [
     "claude-agent-sdk>=0.2",
 ]
 galley = [
+    "pywin32>=306; sys_platform == 'win32'",
     # The Galley agent's subagent lane (api.claude_lane: subagent, which the
     # mechanical-wave stage pins) drives Claude Code through the SDK, so the
     # sifters bill the Max subscription instead of the Anthropic API. Without

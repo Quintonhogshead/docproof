@@ -11,6 +11,7 @@ import copy
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,9 @@ SETTLEMENT_NAME = "settlement.json"
 SETTLEMENT_SCHEMA_VERSION = 1
 SETTLE_TYPE = "galley_settle"
 DEFAULT_ROUNDS = 3
+# Recovery isolates conflicting edits and their neighboring paragraph context.
+# Bound each replay while letting unrelated paragraphs share its full build.
+RECOVERY_BATCH_PARAGRAPHS = 32
 # A composite may not grow the region it revises past this: the settlement
 # changes a word, not the sentence around it. Beyond it the model rewrote.
 MAX_GROWTH = 1.5
@@ -1767,6 +1771,8 @@ class Settler:
 
     def _rebuild(self, rows: list[dict[str, Any]], *, snapshot: str) -> Any:
         from docproof.replay import rebuild_from_rows
+        started = time.monotonic()
+        log.info("settle: rebuilding %s (%d finding rows)", snapshot, len(rows))
         cfg = copy.deepcopy(self.cfg)
         cfg.output_dir = str(self.run_dir)
         if self.opt.keep_snapshots:
@@ -1781,6 +1787,7 @@ class Settler:
                                    error_dir=self.error_dir,
                                    remap_unchanneled=False, id_prefix="settle",
                                    settle_locked_queries=True)
+        log.info("settle: rebuilt %s in %.1fs", snapshot, time.monotonic() - started)
         return result
 
     def _load_state(self) -> tuple[dict[str, dict[str, Any]], emap.EditMap,
@@ -1940,7 +1947,8 @@ class Settler:
             failed[rid] = "missing_settlement_row"
         return failed
 
-    def round(self, round_no: int, items: list[Residual], *, _recovering: bool = False) -> list[Residual]:
+    def round(self, round_no: int, items: list[Residual], *, _recovering: bool = False,
+              _recovery_batch: int = 0) -> list[Residual]:
         """Settle `items`; return the NEW open items the delta verify raised
         (empty when the engine cannot verify or nothing new surfaced)."""
         working, em, accepted = self._load_state()
@@ -2026,7 +2034,12 @@ class Settler:
                 plans.setdefault(pid, []).append((lo, hi, text, rid))
 
         rows = list(working.values()) + new_rows
-        result = self._rebuild(rows, snapshot=f"round{round_no}")
+        snapshot = (f"round{round_no}-recovery{_recovery_batch}" if _recovering
+                    else f"round{round_no}")
+        if rows == list(baseline.values()):
+            log.info("settle: %s leaves finding rows unchanged; no rebuild needed", snapshot)
+        else:
+            self._rebuild(rows, snapshot=snapshot)
         env = load_envelope(self.run_dir)
         failed = self._settled_ok(env.get("findings") or [],
                                   {r.residual_id for r in records
@@ -2045,7 +2058,7 @@ class Settler:
             for key, row in baseline.items():
                 if row.get("para_id") in bad_paras:
                     current[f"baseline-{key}"] = row
-            self._rebuild(list(current.values()), snapshot=f"round{round_no}-restore")
+            self._rebuild(list(current.values()), snapshot=snapshot + "-restore")
             for res in items:
                 if res.para_id in bad_paras:
                     reverted[res.id] = bad_paras[res.para_id]
@@ -2065,31 +2078,7 @@ class Settler:
         if _recovering:
             self._recovery_removed.update(removed_by)
             return []
-        # Retry from fresh coordinates, one correction per rebuild. Recovery
-        # is bounded independently of the editorial reread round budget.
-        from galley.mechanics import rebase_correction
-        for res in items:
-            if res.id in reverted:
-                retry = copy.deepcopy(res)
-                if res.kind == "residual":
-                    _, _, now = self._load_state()
-                    current = now.get(res.para_id, "")
-                    fix = rebase_correction(accepted.get(res.para_id, ""), current,
-                                            res.quote, res.suggestion)
-                    if fix is not None:
-                        retry.quote, retry.suggestion = current, fix
-                self.round(round_no, [retry], _recovering=True)
-            elif res.kind == "residual" and res.para_id in self.touched:
-                prior = self.settlement.latest().get(res.id)
-                if prior and prior.action == "internal_repair" and prior.reason == "unanchorable":
-                    current_rows, current_map, current_text = self._load_state()
-                    retry = copy.deepcopy(res)
-                    if (current_text.get(res.para_id) != accepted.get(res.para_id)
-                            and resolve(retry, current_map, current_text, current_rows) is None):
-                        # A source-restoring edit can make another flag's exact
-                        # quote available again. Judge it once on this build,
-                        # instead of carrying an already-repaired anchor forever.
-                        self.round(round_no, [retry], _recovering=True)
+        self._recover(round_no, items, reverted, accepted)
         removed_by.update(self._recovery_removed)
         records = [self.settlement.latest().get(rec.residual_id, rec) for rec in records]
 
@@ -2196,6 +2185,95 @@ class Settler:
                         fresh.append(item)
         self.touched = set()
         return fresh
+
+    def _recover(self, round_no: int, items: list[Residual],
+                 reverted: Mapping[str, str], accepted: Mapping[str, str]) -> None:
+        """Retry each failed correction once, sharing builds across paragraphs.
+
+        A batch contains at most one correction per paragraph, with neighboring
+        paragraphs in separate batches so repeat-deletion evidence stays current.
+        Later corrections rebase onto the preceding batch's actual output, and
+        the normal recovery guard restores only paragraphs that failed. Recovery
+        never starts another editorial read or recursively retries a failure.
+        """
+        from galley.mechanics import rebase_correction
+        latest = self.settlement.latest()
+        pending = [res for res in items if res.id in reverted or (
+            res.kind == "residual" and res.para_id in self.touched
+            and res.id in latest and latest[res.id].action == "internal_repair"
+            and latest[res.id].reason == "unanchorable")]
+        if not pending:
+            return
+        total, batch_no = len(pending), 0
+        attempted: list[str] = []
+        directory = self.run_dir / "settle"
+        directory.mkdir(exist_ok=True)
+
+        def progress(status: str, batch: Sequence[Residual] = ()) -> None:
+            # Advisory progress only: this is not a verification receipt or a
+            # crash-resume checkpoint. Settlement authority is finalized later.
+            latest = self.settlement.latest()
+            value = {"round": round_no, "status": status, "batch": batch_no,
+                     "candidate_count": total, "attempted_count": len(attempted),
+                     "current_ids": [res.id for res in batch],
+                     "remaining_ids": [res.id for res in pending],
+                     "unresolved_ids": [rid for rid in attempted
+                         if latest[rid].action == "internal_repair"],
+                     "updated_at": _now()}
+            path = directory / "recovery-progress.json"
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(value, indent=1), encoding="utf-8")
+            temporary.replace(path)
+
+        progress("pending")
+        while pending:
+            current_rows, current_map, current_text = self._load_state()
+            ordered = sorted(current_text)    # Same neighborhood as _para_neighbours.
+            positions = {pid: i for i, pid in enumerate(ordered)}
+            batch: list[Residual] = []
+            remaining: list[Residual] = []
+            paragraphs: set[str] = set()
+            blocked: set[str] = set()
+            for res in pending:
+                if (res.para_id in blocked
+                        or len(batch) >= RECOVERY_BATCH_PARAGRAPHS):
+                    remaining.append(res)
+                    continue
+                retry = copy.deepcopy(res)
+                current = current_text.get(res.para_id, "")
+                if res.id in reverted:
+                    if res.kind == "residual":
+                        fix = rebase_correction(accepted.get(res.para_id, ""), current,
+                                                res.quote, res.suggestion)
+                        if fix is not None:
+                            retry.quote, retry.suggestion = current, fix
+                elif (current == accepted.get(res.para_id)
+                      or resolve(retry, current_map, current_text, current_rows) is not None):
+                    # Source restoration may make an earlier flag anchor again.
+                    # Retry it only when this build actually supplies that anchor.
+                    continue
+                batch.append(retry)
+                paragraphs.add(res.para_id)
+                blocked.add(res.para_id)
+                if res.para_id in positions:
+                    pos = positions[res.para_id]
+                    blocked.update(ordered[max(0, pos - 1):pos + 2])
+            pending = remaining
+            if not batch:
+                break
+            batch_no += 1
+            log.info("settle: recovery batch %d: %d corrections in %d paragraphs; "
+                     "%d candidates remain", batch_no, len(batch), len(paragraphs), len(pending))
+            progress("rebuilding", batch)
+            self.round(round_no, batch, _recovering=True, _recovery_batch=batch_no)
+            attempted.extend(res.id for res in batch)
+            progress("pending" if pending else "completed")
+            log.info("settle: recovery batch %d complete; %d/%d candidates attempted",
+                     batch_no, len(attempted), total)
+        progress("completed")
+        self.settlement.notes.append(
+            f"round {round_no}: recovery attempted {len(attempted)}/{total} "
+            f"candidate(s) in {batch_no} batch(es)")
 
     def _merge_coverage(self, vr, para_ids) -> None:
         """Fold a delta read into the run's verify artifacts: rows for the

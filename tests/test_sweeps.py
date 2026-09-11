@@ -382,6 +382,42 @@ def test_every_sweep_is_idempotent_so_remaining_is_zero():
         assert r.remaining == 0, f"{r.key} still matches its own output"
 
 
+@pytest.mark.parametrize("text", [
+    "He called it ‘the long way’",
+    "He called it ‘the long way.’",
+    "She whispered ‘go!’",
+    "She asked ‘why?’",
+    "She whispered ‘don’t’",
+    "He called it ‘home,’ then ‘away’",
+])
+def test_quote_punctuation_ignores_a_single_quote_at_paragraph_end(text):
+    # No following character is not a period or comma. A no-op finding here
+    # used to survive every idempotence rescan and every settlement rebuild.
+    _, paras = _doc(text)
+    findings, (report,) = run_sweeps(paras, ["sweep_quote_punctuation"])
+    assert findings == []
+    assert report.flagged == report.remaining == 0
+
+
+@pytest.mark.parametrize("before,after", [
+    ("He called it ‘the long way’.", "He called it ‘the long way.’"),
+    ("She whispered ‘go!’.", "She whispered ‘go!’"),
+    ("She asked ‘why?’.", "She asked ‘why?’"),
+    ("She whispered ‘don’t’.", "She whispered ‘don’t.’"),
+])
+def test_quote_punctuation_finishes_single_quote_repairs_in_one_pass(before, after):
+    doc, paras = _doc(before)
+    findings, (report,) = run_sweeps(paras, ["sweep_quote_punctuation"])
+    assert report.flagged == 1
+    assert report.remaining == 0
+    assert len(findings) == 1
+    validated = validate_findings(findings, doc, "medium")
+    assert validated[0].status == "validated"
+    anchor = validated[0].anchor
+    assert before[:anchor.start] + anchor.insert_text + before[anchor.end:] == after
+    assert unchanged("sweep_quote_punctuation", after)
+
+
 def test_findings_anchor_and_apply_cleanly_through_the_validator():
     """The sweeps' whole reason for producing Findings is to ride the same
     validator as the model. An edit that cannot anchor is worth nothing."""

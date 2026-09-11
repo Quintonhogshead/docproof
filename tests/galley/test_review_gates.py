@@ -233,18 +233,16 @@ def test_actual_turn_exhaustion_is_still_detected():
     assert gd.parse_session_result(stream)["subtype"] == "error_max_turns"
 
 
-def test_spawn_claude_reads_the_structured_result(tmp_path, monkeypatch):
-    import subprocess
+def test_spawn_claude_reads_the_structured_result(tmp_path):
+    import sys
 
-    def fake_run(argv, cwd, env, stdout, stderr, text, timeout):
-        stdout.write('{"type":"assistant","message":{"content":[{"type":"text",'
-                     '"text":"Done: wrote runs/sweeps.txt"}]}}\n')
-        stdout.write('{"type":"result","subtype":"success","num_turns":2,'
-                     '"is_error":false}\n')
-        return subprocess.CompletedProcess(argv, 0)
-    monkeypatch.setattr(gd.subprocess, "run", fake_run)
+    stream = ('{"type":"assistant","message":{"content":[{"type":"text",'
+              '"text":"Done: wrote runs/sweeps.txt"}]}}\n'
+              '{"type":"result","subtype":"success","num_turns":2,'
+              '"is_error":false}\n')
     spec = gd.PhaseSpec("sweeps", "p", tmp_path, tmp_path / "sweeps.log",
-                        ["claude"], {}, max_turns=120, timeout_s=10)
+                        [sys.executable, "-c", f"print({stream!r})"], {},
+                        max_turns=120, timeout_s=10)
     out = gd.spawn_claude(spec)
     assert out.ok and out.limit is None and out.subtype == "success"
     assert out.num_turns == 2
