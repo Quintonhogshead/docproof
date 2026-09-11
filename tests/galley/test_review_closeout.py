@@ -214,3 +214,38 @@ def test_exact_original_rows_share_astra_issue_identity(case):
     sources = {(source['artifact'], source['collection']) for source in issues[0]['sources']}
     assert {('finished_walk.json', 'residuals'), ('settlement.json', 'open'),
             ('settlement.json', 'residuals_seen')} <= sources
+
+
+def test_astra_packet_projects_only_machine_budget_audit_with_full_digest_binding(case):
+    from galley.astra_review import build_packet, _hash, _project_budget_closeout
+    run, kwargs, *_ = case
+    path = close_review_budget(run, **kwargs)
+    first = build_packet(run)
+    data = json.loads(path.read_text())
+    audit = data['convergence']['resource_budget_closeout']
+    audit['binding']['protected_files'].update({
+        f'/machine-only-audit-path/{i}': 'a' * 64 for i in range(2000)})
+    audit['issues'] *= 200
+    path.write_text(json.dumps(data))
+    raw = path.read_bytes()
+    packet = build_packet(run)
+    projected = packet['artifacts']['settlement.json']
+    summary = projected['convergence']['resource_budget_closeout']
+    assert path.read_bytes() == raw
+    assert len(json.dumps(summary)) < 1000
+    assert 'protected_files' not in summary and 'issues' not in summary
+    assert '/machine-only-audit-path/' not in json.dumps(packet)
+    assert summary['audit_sha256'] == _hash(audit)
+    assert summary['binding_sha256'] == _hash(audit['binding'])
+    assert summary['review_budget'] == audit['binding']['review_budget']
+    assert summary['incomplete_round'] == 1
+    for key in ('open', 'residuals_seen', 'notes'):
+        assert projected[key] == data[key]
+    assert {k: v for k, v in projected['convergence'].items() if k != 'resource_budget_closeout'} == {
+        k: v for k, v in data['convergence'].items() if k != 'resource_budget_closeout'}
+    assert packet['issue_index'] == first['issue_index']
+    assert packet['packet_sha256'] != first['packet_sha256']
+    assert summary['audit_sha256'] != first['artifacts']['settlement.json']['convergence']['resource_budget_closeout']['audit_sha256']
+    ordinary = copy.deepcopy(data)
+    ordinary['convergence']['stopped'] = 'rounds'
+    assert _project_budget_closeout(ordinary) == ordinary

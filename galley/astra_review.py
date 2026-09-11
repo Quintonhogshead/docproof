@@ -171,6 +171,28 @@ def _paragraph_format(p, definitions):
     return {"runs": spans, "paragraph_properties": _node(props) if props is not None else None}
 
 
+def _project_budget_closeout(settlement):
+    """Bind the full machine audit without repeating it in editorial input."""
+    if not isinstance(settlement, dict):
+        return settlement
+    convergence = settlement.get('convergence') or {}
+    if not isinstance(convergence, dict):
+        return settlement
+    audit = convergence.get('resource_budget_closeout') or {}
+    if (not isinstance(audit, dict) or convergence.get('stopped') != 'resource_budget_exhausted'
+            or audit.get('kind') != 'resource_budget_exhausted'
+            or not isinstance(audit.get('binding'), dict)):
+        return settlement
+    binding = audit['binding']
+    summary = {'kind': audit['kind'], 'audit_sha256': _hash(audit),
+               'binding_sha256': _hash(binding),
+               'review_budget': binding.get('review_budget'),
+               'completed_rounds': binding.get('completed_rounds'),
+               'incomplete_round': binding.get('incomplete_round')}
+    return {**settlement, 'convergence': {**convergence,
+            'resource_budget_closeout': summary}}
+
+
 def build_packet(run_dir, *, docx_path=None, context_paths=(), require_artifacts=True) -> dict:
     """Build complete deterministic evidence; never truncate to fit a model."""
     from docproof.utils.xml_helpers import DocxPackage, walk_package, qn
@@ -180,6 +202,8 @@ def build_packet(run_dir, *, docx_path=None, context_paths=(), require_artifacts
     if missing and require_artifacts:
         raise AstraReviewError("Missing required review artifacts: " + ", ".join(missing))
     artifacts = {name: _load(run / name) for name in REQUIRED_ARTIFACTS if name not in missing}
+    if 'settlement.json' in artifacts:
+        artifacts['settlement.json'] = _project_budget_closeout(artifacts['settlement.json'])
     from galley.settlement_inputs import CANDIDATES, REGISTRY, refresh_candidate_dispositions
     if (run / REGISTRY).is_file():
         try:
