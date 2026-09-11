@@ -1487,7 +1487,12 @@ def _one(token: str, home: Path, ws: WatchSettings, file: DriveFile,
 
     _finish_hubspot(hs_token, ws, file, rec, state, uploaded, opener=opener)
 
-    prep.mark_source(token, file, job, rec, state, opener=opener)
+    completed_name = None
+    if ws.formatting_drive_only:
+        from .formatting import done_name
+        completed_name = done_name(file.name)
+    prep.mark_source(token, file, job, rec, state, opener=opener,
+                     completed_name=completed_name)
 
     # The book is in the folder, marked, and moved on in HubSpot: a pass that
     # was asked to says so, once, with the whole log. `completion_emailed`
@@ -1647,6 +1652,16 @@ def _refuse(token: str, ws: WatchSettings, file: DriveFile, job: Job, rec,
 
 def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
          mock: bool = False, opener=None, get_key=None) -> TickReport:
+    if ws.formatting_drive_only and not ws.corrections_native_worker_only:
+        from .formatting import tick as formatting_tick
+        return formatting_tick(home, ws, dry_run=dry_run, mock=mock,
+                               opener=opener, get_key=get_key or get_api_key)
+    return _legacy_tick(home, ws, dry_run=dry_run, mock=mock,
+                        opener=opener, get_key=get_key)
+
+
+def _legacy_tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
+                 mock: bool = False, opener=None, get_key=None) -> TickReport:
     """Look once, do what is there, and hand back what happened.
 
     The folder lock is the caller's job, not this function's: `once` takes it
@@ -1684,8 +1699,10 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
             ("hubspot_object", ws.hubspot_object),
             ("hubspot_key_property", ws.hubspot_key_property),
             ("hubspot_status_property", ws.hubspot_status_property),
-            ("hubspot_format_ready_value", ws.hubspot_format_ready_value),
-            ("hubspot_format_done_value", ws.hubspot_format_done_value),
+            ("hubspot_format_ready_value", ws.hubspot_format_ready_value
+             if ws.formatting_enabled else True),
+            ("hubspot_format_done_value", ws.hubspot_format_done_value
+             if ws.formatting_enabled else True),
         ) if not value]
         if blanks:
             raise NotConfigured(
@@ -1875,7 +1892,7 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
         # where each book's outputs belong.
         listing, routes = _discover(token, hs_token, ws, state,
                                     stage=format_stage(ws), opener=opener,
-                                    report=report, dry_run=dry_run)
+                                    report=report, dry_run=dry_run) if ws.formatting_enabled else ([], {})
     else:
         listing = drive.list_folder(token, ws.folder_id, opener=opener)
         if not dry_run:
@@ -1935,8 +1952,9 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     collect_finished(token, ws, listing, state, store, opener=opener,
                      report=report)
     submit_ready(token, ws, listing, state, store, opener=opener, report=report)
-    run_prep(token, root, ws, listing, state, runner, store, mock=mock,
-             opener=opener, hs_token=hs_token, routes=routes, report=report)
+    if ws.formatting_enabled:
+        run_prep(token, root, ws, listing, state, runner, store, mock=mock,
+                 opener=opener, hs_token=hs_token, routes=routes, report=report)
     # Proofing runs after formatting, on its own value of the same dropdown and
     # its own marker, over its own listing — so a book is never in both stages
     # at once (one dropdown, one value at a time) and neither touches the
@@ -2005,7 +2023,7 @@ def _preview_rows(ws: WatchSettings, listing: list[DriveFile],
     real pass, and the only caller is the dry-run branch.
     """
     rows = [(f.name, Stage.NEW_MANUSCRIPT.value) for f in listing
-            if classify(f) is Stage.NEW_MANUSCRIPT
+            if ws.formatting_enabled and classify(f) is Stage.NEW_MANUSCRIPT
             and (not ws.subfolders_enabled or f.id in routes)
             and (not ws.require_source_label or naming.has_source_label(f.name))]
     if ws.proofing_enabled:

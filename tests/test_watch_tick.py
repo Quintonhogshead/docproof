@@ -1,4 +1,4 @@
-"""One pass over the folder, end to end, with a fake Drive and a fake model.
+"""Legacy CRM-gated formatting: one pass over the folder, end to end, with a fake Drive and a fake model.
 
 The properties worth holding this to are all about money and the author's
 words: a manuscript is prepared once and only once, a tick that dies partway
@@ -37,7 +37,7 @@ MANUSCRIPT = (FIXTURES / "googledoc.docx").read_bytes()
 
 @pytest.fixture
 def ws():
-    return WatchSettings(folder_id=FOLDER, model="claude-haiku-4-5",
+    return WatchSettings(formatting_drive_only=False, folder_id=FOLDER, model="claude-haiku-4-5",
                          client_id="client-1", client_secret="secret-1")
 
 
@@ -676,7 +676,7 @@ def test_a_dry_run_leaves_no_stamp(tmp_path, ws, provider):
 
 def test_no_folder_yet_says_which_command_sets_one(tmp_path, provider):
     with pytest.raises(ticklib.NotConfigured, match="docproof-watch init"):
-        run(tmp_path, WatchSettings(), fake_drive())
+        run(tmp_path, WatchSettings(formatting_drive_only=False), fake_drive())
 
 
 def test_no_sign_in_yet_says_which_command_does_it(tmp_path, ws, provider):
@@ -686,7 +686,7 @@ def test_no_sign_in_yet_says_which_command_does_it(tmp_path, ws, provider):
 
 
 def test_no_oauth_client_yet_points_at_the_walkthrough(tmp_path, provider):
-    ws = WatchSettings(folder_id=FOLDER)
+    ws = WatchSettings(formatting_drive_only=False, folder_id=FOLDER)
     with pytest.raises(ticklib.NotConfigured, match="docs/watch.md"):
         run(tmp_path, ws, fake_drive())
 
@@ -792,6 +792,7 @@ def hs_ws(**over):
                   hubspot_format_ready_value="Ready for Formatting",
                   hubspot_format_done_value="Formatting Complete")
     fields.update(over)
+    fields.setdefault("formatting_drive_only", False)
     return WatchSettings(**fields)
 
 
@@ -1334,7 +1335,7 @@ def test_require_source_label_bites_in_flat_mode_too(tmp_path, provider):
     Google Doc dropped in a flat watched folder is left alone rather than
     formatted into a "- book 0" — the exact miss the production state file
     showed, where the switch was set but silently did nothing here."""
-    ws = WatchSettings(folder_id=FOLDER, model="claude-haiku-4-5",
+    ws = WatchSettings(formatting_drive_only=False, folder_id=FOLDER, model="claude-haiku-4-5",
                        client_id="client-1", client_secret="secret-1",
                        require_source_label=True)
     opener = fake_drive(folder(
@@ -1353,7 +1354,7 @@ def test_require_source_label_bites_in_flat_mode_too(tmp_path, provider):
 def test_flat_mode_without_the_label_switch_is_unchanged(tmp_path, provider):
     """With the switch off, the flat folder behaves exactly as before: every
     manuscript is prepared, whatever it is called."""
-    ws = WatchSettings(folder_id=FOLDER, model="claude-haiku-4-5",
+    ws = WatchSettings(formatting_drive_only=False, folder_id=FOLDER, model="claude-haiku-4-5",
                        client_id="client-1", client_secret="secret-1")
     opener = fake_drive(folder(
         f_1=drive_entry("Johnson - Book Original.docx"),

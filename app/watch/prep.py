@@ -197,6 +197,9 @@ def artifacts(job: Job, ws: WatchSettings) -> list[Artifact]:
     if not out.is_dir():
         return []
     base = naming.format_base(Path(job.filename).stem or "manuscript")
+    if ws.formatting_drive_only:
+        from .formatting import output_name
+        base = Path(output_name(job.filename)).stem
     book = sorted(out.glob("book_*.docx"))
     # The InDesign-ready deliverable is an IDML the designer opens, not a .docx.
     tagged = sorted(out.glob("tagged_*.idml"))
@@ -253,7 +256,7 @@ def upload_outputs(token: str, file: DriveFile, job: Job, ws: WatchSettings,
             continue
         new_id = drive.upload(token, dest, artifact.path,
                               name=artifact.name, mime_type=artifact.mime,
-                              app_properties={OUTPUT_PROP: "1",
+                              app_properties={OUTPUT_PROP: "format" if ws.formatting_drive_only else "1",
                                               SOURCE_PROP: file.id,
                                               JOB_PROP: job.id},
                               opener=opener)
@@ -277,7 +280,7 @@ def _already_there(listing: list[DriveFile], source_id: str,
 
 def mark_source(token: str, file: DriveFile, job: Job, rec: FileRecord,
                 state: WatchState, *, failed: str | None = None,
-                opener=drive._open_url) -> None:
+                opener=drive._open_url, completed_name: str | None = None) -> None:
     """Say what happened to this manuscript, on the manuscript.
 
     Last, always. This marker is what makes the file invisible to the next
@@ -287,7 +290,10 @@ def mark_source(token: str, file: DriveFile, job: Job, rec: FileRecord,
              AT_PROP: datetime.now(timezone.utc).isoformat(timespec="seconds")}
     if failed:
         props[REASON_PROP] = failed[:REASON_LIMIT]
-    drive.set_app_properties(token, file.id, props, opener=opener)
+    drive.set_app_properties(token, file.id, props, opener=opener,
+                             name=completed_name if not failed else None)
+    if completed_name and not failed:
+        rec.name = completed_name
     rec.marked = props[STATE_PROP]
     state.record(rec)
 

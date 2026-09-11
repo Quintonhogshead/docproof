@@ -32,7 +32,7 @@ PLAN_DOC = "Wolves - marketing plan.docx"
 
 
 def plan_ws(**over) -> WatchSettings:
-    fields = dict(folder_id=FOLDER, model="claude-haiku-4-5",
+    fields = dict(formatting_drive_only=False, folder_id=FOLDER, model="claude-haiku-4-5",
                   client_id="client-1", client_secret="secret-1",
                   hubspot_enabled=True, hubspot_object="0-970",
                   hubspot_key_property="author_last_name",

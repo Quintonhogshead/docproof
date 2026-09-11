@@ -76,6 +76,10 @@ class WatchSettings:
     """What to watch and what to do with it. No secrets."""
 
     folder_id: str = ""
+    # Formatting discovers Book Originals directly in Drive. Existing settings
+    # inherit this default; HubSpot remains available to the other stages.
+    formatting_drive_only: bool = True
+    formatting_enabled: bool = True
     # Off by default, so the flat single-folder behaviour is unchanged. On, the
     # folder above is read as the parent "Author Folder" — one subfolder per
     # author, named `First Last` — and each book is routed into its author's own

@@ -225,7 +225,7 @@ def is_proof_candidate(file: DriveFile) -> bool:
     if file.is_folder:
         return False
     props = file.app_properties
-    if props.get(OUTPUT_PROP):
+    if props.get(OUTPUT_PROP) and props.get(OUTPUT_PROP) != "format":
         return False
     if props.get(PROOF_PROP) in PROOF_TERMINAL:
         return False

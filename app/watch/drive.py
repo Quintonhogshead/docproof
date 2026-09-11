@@ -441,13 +441,16 @@ def _upload_by_session(token: str, metadata: dict, source: Path,
 
 
 def set_app_properties(token: str, file_id: str, props: dict[str, str], *,
-                       opener=_open_url) -> None:
+                       opener=_open_url, name: str | None = None) -> None:
     """Mark a file with what DocProof has done to it.
 
     A patch, so the properties already there survive, and a property set to
     None would be the way to remove one. Nothing else about the file is
     touched — least of all its content, which belongs to the author."""
-    body = json.dumps({"appProperties": props}).encode()
+    metadata = {"appProperties": props}
+    if name is not None:
+        metadata["name"] = name
+    body = json.dumps(metadata).encode()
     url = _url(f"{API}/files/{file_id}", {"fields": "id", **SHARED_DRIVE})
     request = _request(url, token, data=body, method="PATCH",
                        content_type="application/json")

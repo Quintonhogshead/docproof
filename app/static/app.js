@@ -7793,13 +7793,15 @@ function renderWatch(body, quiet) {
   if (quiet) return;
 
   $('watch-folder').value = w.folder_id || '';
+  const driveFormatting = w.formatting_drive_only !== false;
+  $('watch-formatting-description').hidden = !driveFormatting;
   $('watch-output').value = w.prep_output || 'indesign';
   $('watch-failure-note').checked = w.upload_failure_note;
   // Meaningful in both modes: in a flat folder it prepares only files named
   // "<surname> - Book Original"; in subfolder mode the surname comes from the
   // ready record. Always shown — a hidden switch that silently did nothing in
   // the flat folder is the bug this closes.
-  $('watch-require-label-field').hidden = false;
+  $('watch-require-label-field').hidden = driveFormatting;
   $('watch-require-label').checked = w.require_source_label;
   // Proofing. Every one of these has a fallback, because the config on the Fly
   // volume predates the stage and carries none of these keys — the panel still

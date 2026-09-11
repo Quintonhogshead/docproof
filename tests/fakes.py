@@ -341,6 +341,8 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
             _maybe_fail("patch")
             file_id = path.rsplit("/", 1)[-1]
             entry = store.setdefault(file_id, {"id": file_id})
+            if "name" in json.loads(request.data):
+                entry["name"] = json.loads(request.data)["name"]
             props = entry.setdefault("appProperties", {})
             # Drive removes a property whose value is null; the fake does the
             # same, so a test of `clear_marker` sees the key go, not stay as

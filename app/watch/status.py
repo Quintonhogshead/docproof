@@ -107,6 +107,7 @@ def status(home: str | Path, *, get_key=None,
         # mode is on to decide whether to show it.
         "subfolders_enabled": ws.subfolders_enabled,
         "require_source_label": ws.require_source_label,
+        "formatting_drive_only": ws.formatting_drive_only,
         # Whether the CRM gate is on at all. The panel needs it to say why a
         # HubSpot-triggered workflow cannot run yet, and it is a fact about this
         # watcher rather than about promo — which is where the panel used to

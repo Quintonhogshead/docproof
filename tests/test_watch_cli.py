@@ -45,7 +45,7 @@ def home(tmp_path, monkeypatch):
 
 
 def configured(home, **over) -> WatchSettings:
-    fields = {"folder_id": FOLDER, "model": "claude-haiku-4-5",
+    fields = {"formatting_drive_only": False, "folder_id": FOLDER, "model": "claude-haiku-4-5",
               "client_id": "client-1", "client_secret": "secret-1", **over}
     ws = WatchSettings(**fields)
     ws.save(home)

@@ -64,7 +64,7 @@ def proof_ws(**over) -> WatchSettings:
     that actually reads a book. The tests that care about waiting on a
     practitioner say `proof_runner="external"` out loud, and the shipped default
     is asserted on a bare `WatchSettings()` below."""
-    fields = dict(folder_id=FOLDER, model="claude-haiku-4-5",
+    fields = dict(formatting_drive_only=False, folder_id=FOLDER, model="claude-haiku-4-5",
                   client_id="client-1", client_secret="secret-1",
                   hubspot_enabled=True, hubspot_object="0-970",
                   hubspot_key_property="author_last_name",
@@ -822,7 +822,7 @@ def test_the_defaults_are_no_new_behaviour():
 
 
 def test_the_settings_survive_a_save_and_load(tmp_path):
-    ws = WatchSettings(folder_id=FOLDER, proofing_enabled=True,
+    ws = WatchSettings(formatting_drive_only=False, folder_id=FOLDER, proofing_enabled=True,
                        proof_runner="external", proof_tier="T3",
                        proof_budget_usd=42.5,
                        hubspot_proof_ready_value="Ready for Proofing",

@@ -8,44 +8,40 @@ That second step is the one this removes.
 > for safekeeping, and read back after a loss — is configured on the same
 > DocWatch screen and shares this Google sign-in. See [archive.md](archive.md).
 
-`docproof-watch` looks in **one folder**, a few times a day. Anything in it
-that looks like a manuscript and has not been prepared yet gets
-[prepped](prep.md) and the results put back beside the original:
+`docproof-watch` scans the configured Drive folder and all descendant folders
+for Word files containing **Book Original**, without consulting HubSpot or
+matching author names. Formatting uses the existing manuscript exporter unchanged: Times New Roman,
+12-point body text and 14-point chapter headings, with the same verification
+and layout rules as before.
 
 ```
-Grest - Book Original.docx   ← the author's file, untouched
-Grest - book 0.docx          ← what a designer places
+Grest - Book Original_done.docx   ← source, renamed after successful delivery
+Grest - Book One.docx             ← formatted copy, in the same folder
 ```
 
-The house convention is a stage series: an author manuscript named
-`<surname> - Book Original` comes back as `<surname> - book 0`, with the
-tracked-changes copy (`… - book 0 - tracked changes.docx`) beside it. A file that
-does not carry the `- Book Original` token keeps its whole name and has
-`- book 0` appended, so there is always one predictable deliverable.
+Folders and Drive file IDs distinguish authors, including identical surnames.
+The original's contents are never overwritten. The output upload completes
+before the original is atomically renamed and marked formatted.
 
-The prep **log** — what prep decided and flagged — is deliberately kept out of
-the author's folder, which holds only the deliverable. It goes to the DocProof
-storage folder (the [output archive](archive.md)) instead, alongside the rest of
-DocProof's record of the run.
+Existing completed originals are not reformatted. The watcher checks Drive
+completion markers, its saved completion/upload records, source-linked outputs,
+and existing Book 0, Book 1/One, Book 2/Two or later numbered manuscripts in the
+same folder. These older originals receive the `_done` suffix without another
+formatting run. Multiple unmarked Book Originals in one folder are flagged for
+review, not guessed at. Failed originals remain flagged until explicitly reset.
+A dry run lists new work without changing files or state.
 
-**The interior is plain by design.** What DocWatch hands back is the manuscript
-in the plainest possible dress — Times New Roman, 12 point, US Letter, one-inch
-margins, a centered page number at the foot, no running heads, no drop caps —
-rather than the Atmosphere paperback sketch the app's manual
-[prep](prep.md#the-book-output) produces. It is the same `book_<name>.docx` output, dressed by a different
-interior file: **`config/prep/book_manuscript.yaml`** (the config key is
-`prep.watch_book_design`). To change what the watched folder hands back, edit
-that file, or drop a replacement into the prep override directory — it wins
-wholesale, exactly like the app's own book design. The app's paperback output is
-untouched.
+This is the default for existing and new installations
+(`formatting_drive_only: true` in `watch.json`). HubSpot settings still govern
+proofreading and the other optional workflows; failures there do not prevent
+formatting from finishing. New Book One outputs remain eligible for the
+separately gated proofreading workflow. The existing per-pass limit still caps
+new formatting work; old completion markers can be migrated without using it.
 
-Then it marks the original as done and exits. There is no daemon and nothing
-running in the background: `launchd` starts it, it does what it finds, and it
-stops.
-
-**It does not review or copy edit anything yet.** Prep only. The places copy
-editing joins are named at the [end of this page](#what-comes-next), and they
-are seams in the code rather than a rewrite.
+The remaining references below to formatting's HubSpot gate, `book 0` output,
+model selection and manuscript layout template describe the **legacy** mode
+(`formatting_drive_only: false`). They do not apply to default automatic
+formatting. Manual preparation in the app is unchanged.
 
 ## From inside the app, or from a terminal
 
