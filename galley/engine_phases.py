@@ -278,6 +278,15 @@ class EnginePhases:
         run = self.driver._final_run()
         if run is None:
             raise EnginePhaseError("Verification needs a completed manuscript")
+        exhausted = self._exhausted_review_budget()
+        if cycle == 0 and ((self.directory / "initial-coverage.json").exists() or exhausted):
+            if not self._initial_coverage_saved(run) or not self._coverage(run, require_full_passes=True):
+                raise EnginePhaseError("Saved independent reads do not prove current full coverage")
+            # Preserve the original archive and operation receipts. An explicit
+            # package transition can leave current projections with other bytes.
+            return
+        if exhausted:
+            raise EnginePhaseError("Review budget exhausted; a fresh verification cycle cannot start")
         for pass_id, model in READER_MODELS.items():
             out = run if pass_id == "primary" else run / "verification" / pass_id
             args = ["verify", str(run), "--config", str(self._config()),
@@ -332,6 +341,33 @@ class EnginePhases:
                 return False
         return True
 
+    def _exhausted_review_budget(self):
+        """Read actual persisted review ceilings, never configured fresh limits."""
+        from docproof.resource_ledger import summarize
+        from galley.manifest import sha256_file
+        path = self.directory.parent / "resources.jsonl"
+        if not path.is_file():
+            return None
+        raw = path.read_bytes()
+        summary = summarize(path)
+        if path.read_bytes() != raw:
+            raise EnginePhaseError("Review accounting changed during budget inspection")
+        group = summary.get("groups", {}).get("review")
+        if not isinstance(group, dict):
+            return None
+        exhausted = any(type(group.get(limit)) is int and group[limit] > 0
+                        and group.get(used, 0) >= group[limit]
+                        for limit, used in (("max_calls", "calls"),
+                                            ("max_output_tokens", "charged_output_tokens")))
+        if not exhausted:
+            return None
+        source = sha256_file(self.driver.book)
+        if any(json.loads(line).get("source_sha256") != source for line in raw.splitlines() if line.strip()):
+            raise EnginePhaseError("Review resource ledger belongs to another source")
+        if group.get("unknown_output_attempts") or group.get("reserved_output_tokens"):
+            raise EnginePhaseError("Review budget has unresolved usage reservations")
+        return {"path": path, "sha256": hashlib.sha256(raw).hexdigest(), "group": group}
+
     def settle(self):
         from galley.settle import open_items
         from galley.verify import accepted_text, build_fingerprints
@@ -351,6 +387,26 @@ class EnginePhases:
             raise EnginePhaseError("Review requires one or two repair rounds")
         max_rounds = min(state.get("max_rounds", self.driver.review_rounds), self.driver.review_rounds)
         state["max_rounds"] = max_rounds
+        exhausted = self._exhausted_review_budget()
+        if exhausted:
+            if state.get("pending_verify_cycle") is not None:
+                raise EnginePhaseError("Budget closeout cannot skip pending repair verification")
+            if not self._initial_coverage_saved(run) or not self._coverage(run, require_full_passes=True):
+                raise EnginePhaseError("Budget closeout requires both saved independent reads and current full coverage")
+            from galley.review_closeout import close_review_budget
+            initial = self.directory / "initial-coverage.json"
+            settlement = close_review_budget(run,
+                ledger_path=exhausted["path"], expected_ledger_sha256=exhausted["sha256"],
+                initial_coverage_path=initial, expected_initial_coverage_sha256=sha256_file(initial),
+                source_sha256=sha256_file(self.driver.book), config_sha256=sha256_file(self._config()),
+                round_no=state["rounds"],
+                validate_current_coverage=lambda: self._coverage(run, require_full_passes=True))
+            state["budget_closeout"] = {"settlement_sha256": sha256_file(settlement),
+                                       "ledger_sha256": exhausted["sha256"],
+                                       "final_review_required": True}
+            write_atomic(state_path, json.dumps(state, indent=2))
+            self._advance("settled")
+            return
         if state.get("pending_verify_cycle") is not None:
             self.verify(cycle=state["pending_verify_cycle"])
             state.pop("pending_verify_cycle")
