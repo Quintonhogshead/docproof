@@ -585,6 +585,38 @@ def test_open_discovery_findings_enter_the_same_ledger():
     assert run.production_matches[candidate_id][0]["finding_id"] == "f-1"
 
 
+def test_cost_metrics_distinguish_all_errors_from_unmatched_candidates(monkeypatch):
+    from docproof.candidate_screening import _markdown_report
+
+    paras = (_para("body-0000", "This is is wrong."),
+             _para("body-0001", "That was was wrong."))
+    doc = _doc(*paras)
+    cfg = Config(candidate_screening={
+        "mode": "shadow", "candidate_types": ["repeated_word"],
+        "judgment_enabled": False,
+    })
+    run = prepare_candidate_screening(cfg, doc, paragraphs=paras)
+    finding = Finding(
+        "f-1", "chunk-000", paras[0].para_id, "repeated_word", paras[0].text, 1,
+        "This is wrong.", "Repeated word.", "high", status="validated",
+        anchor=Anchor(5, 10, "is is", "is"))
+    run.observe_findings([finding], applied_ids=("f-1",))
+    monkeypatch.setattr("docproof.candidate_screening.cost_of_usage", lambda *a, **k: 2.0)
+    report = run.report(cfg.candidate_screening, source=doc.source_path)
+
+    assert report["comparison"]["candidate_errors"] == 2
+    assert report["comparison"]["candidate_errors_without_production_match"] == 1
+    assert report["metrics"]["error_candidates_per_dollar"] == 1.0
+    assert report["metrics"]["unmatched_error_candidates_per_dollar"] == 0.5
+    assert "additional_error_candidates_per_dollar" not in report["metrics"]
+    assert "not a measured causal gain" in _markdown_report(report)
+
+    monkeypatch.setattr("docproof.candidate_screening.cost_of_usage", lambda *a, **k: 0.0)
+    free = run.report(cfg.candidate_screening, source=doc.source_path)["metrics"]
+    assert free["error_candidates_per_dollar"] is None
+    assert free["unmatched_error_candidates_per_dollar"] is None
+
+
 def test_verdict_schema_requires_explanations_for_nontrivial_decisions():
     with pytest.raises(ValueError, match="require an explanation"):
         Verdict(

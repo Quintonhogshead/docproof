@@ -525,7 +525,7 @@ def _certify_plan_ledger(run: Path) -> Check:
     ledger_path = ws / "runs" / LEDGER_NAME
     status, detail = check(plan.read_text(encoding="utf-8"),
                            load_ledger(ledger_path),
-                           ledger_exists=ledger_path.is_file())
+                           ledger_exists=ledger_path.is_file(), workspace=ws)
     return Check("plan ledger", status, detail)
 
 
@@ -768,6 +768,29 @@ def _certify_settlement(run: Path) -> Check:
     verification evidence is absent.
     """
     from galley.settle import Settlement, unsettled
+    from galley.settlement_inputs import CANDIDATES, unresolved_candidates
+    try:
+        pending = unresolved_candidates(run)
+    except (ValueError, OSError) as exc:
+        return Check("residual settlement", "fail", f"Invalid registered verification evidence: {exc}")
+    if pending:
+        snapshot = _astra_editorial_snapshot(run)
+        closed = set()
+        if snapshot is not None:
+            receipt, packet = snapshot
+            reviewed = packet.get("artifacts", {}).get(CANDIDATES, {}).get("open_candidates", [])
+            decisions = {row["issue_id"]: row["action"] for row in receipt["review"].get("issue_decisions", [])}
+            indices = {source["index"] for issue in packet.get("issue_index", [])
+                       if decisions.get(issue["id"]) in ("drop", "edit", "author_query")
+                       for source in issue["sources"]
+                       if (source["artifact"], source["collection"]) == (CANDIDATES, "open_candidates")}
+            closed = {row["candidate_id"] for row in pending
+                      if any(i < len(reviewed) and reviewed[i] == row for i in indices)}
+        missing = [row for row in pending if row["candidate_id"] not in closed]
+        if missing:
+            return Check("residual settlement", "fail",
+                         f"{len(missing)} registered reader candidate(s) have no exact settlement or final-review disposition: "
+                         + ", ".join(row["candidate_id"] for row in missing[:6]))
     if all(_astra_closed_collection(run, artifact, collection) for artifact, collection in (
             ("change_verify.json", "problems"), ("finished_walk.json", "residuals"),
             ("settlement.json", "open"), ("settlement.json", "residuals_seen"))):
@@ -800,6 +823,23 @@ def _certify_settlement(run: Path) -> Check:
         return Check("residual settlement", "fail",
                      f"{n_open} item(s) in the verify artifacts have no "
                      f"settlement record — re-run `galley settle`")
+    queries = [record for record in settlement.latest().values() if record.action == "query"]
+    if queries:
+        from galley.comment_reconcile import actual_comments
+        from galley.verify import deliverable_docx
+        path = deliverable_docx(run)
+        try:
+            comments = actual_comments(path) if path else []
+        except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            return Check("residual settlement", "fail", f"Cannot check delivered author questions: {exc}")
+        delivered = {(row["para_id"], " ".join(row["explanation"].split())) for row in comments}
+        missing_queries = [record.residual_id for record in queries
+                           if not record.question.strip() or
+                           (record.para_id, " ".join(record.question.split())) not in delivered]
+        if missing_queries:
+            return Check("residual settlement", "fail",
+                         f"{len(missing_queries)} accepted author question(s) have no matching actual comment: "
+                         + ", ".join(missing_queries[:6]))
     counts = settlement.counts()
     return Check("residual settlement", "pass",
                  f"{len(settlement.latest())} item(s) settled in "

@@ -33,10 +33,14 @@ import logging
 import os
 import re
 import tempfile
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 from .. import agent_lane
+from ..resource_ledger import (append_usage, record_claude_result,
+                               current_context, use_context)
 from ..subscription_limits import UsageLimitError, is_usage_limited
 from .base import NormalizedUsage, ProviderResult
 
@@ -219,7 +223,12 @@ class SubagentProvider:
     name = "subagent"
 
     def __init__(self, *, model: str | None = None, sdk: Any = None,
-                 cwd: str | Path | None = None, max_turns: int = MAX_TURNS):
+                 cwd: str | Path | None = None, max_turns: int = MAX_TURNS,
+                 effort: str | None = None):
+        if effort not in (None, "low", "medium", "high", "xhigh", "max"):
+            raise ValueError("Unsupported Claude subscription effort")
+        self.effort = effort
+        self._resource_context = current_context()
         self.model = resolve_model(model)
         self._sdk = sdk
         self._cwd = Path(cwd) if cwd else None
@@ -231,22 +240,51 @@ class SubagentProvider:
     def complete_structured(self, *, model: str, system: str, user: str,
                             schema: dict[str, Any], schema_name: str,
                             max_tokens: int) -> ProviderResult:
-        sdk = self._sdk or agent_lane.sdk(_INSTALL_HINT)
-        agent_lane.require_login(_LOGIN_HINT)
+        with use_context(self._resource_context):
+            return self._complete_structured(model=model, system=system, user=user,
+                schema=schema, schema_name=schema_name, max_tokens=max_tokens)
+
+    def _complete_structured(self, *, model, system, user, schema, schema_name,
+                             max_tokens) -> ProviderResult:
+        if type(max_tokens) is not int or max_tokens <= 0:
+            raise ValueError("Subscription max_tokens must be a positive integer")
         target = resolve_model(model) if is_subagent_model(model) else self.model
         prompt = self._prompt(user, schema, schema_name)
+        operation = uuid.uuid4().hex
+        fields = dict(operation_id=operation, receipt_id=operation, model=target,
+                      transport="claude_subscription", effort=self.effort,
+                      max_output_tokens=max_tokens, lane=schema_name)
+        append_usage(**fields, status="started")
+        evidence = {}
+        started = time.monotonic()
         try:
-            return asyncio.run(self._turn(sdk, target, system, prompt))
-        except RuntimeError as e:
-            # Inside a running loop (the app's async job runner) — run the
-            # turn on a private loop in a thread.
-            if "asyncio.run() cannot be called" not in str(e):
-                raise
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                return ex.submit(
-                    lambda: asyncio.run(self._turn(sdk, target, system,
-                                                   prompt))).result()
+            sdk = self._sdk or agent_lane.sdk(_INSTALL_HINT)
+            agent_lane.require_login(_LOGIN_HINT)
+            def run():
+                return asyncio.run(self._turn(sdk, target, system, prompt,
+                                             max_tokens=max_tokens, evidence=evidence))
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                result = run()
+            else:
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    result = ex.submit(run).result()
+            evidence["stop_reason"] = result.stop_reason
+            return result
+        except BaseException as exc:
+            evidence["error_type"] = type(exc).__name__
+            raise
+        finally:
+            msg = evidence.get("result")
+            status = "error" if evidence.get("error_type") or evidence.get("stop_reason") != "ok" else "completed"
+            record_claude_result({"usage": getattr(msg, "usage", None),
+                "model_usage": getattr(msg, "model_usage", None),
+                "is_error": status == "error",
+                "duration_ms": round((time.monotonic() - started) * 1000)},
+                **fields, error_type=evidence.get("error_type"),
+                stop_reason=evidence.get("stop_reason"))
 
     def submit_batch(self, *, model: str, requests, **kwargs):  # pragma: no cover
         raise NotImplementedError("the subagent lane has no batch mode")
@@ -261,7 +299,7 @@ class SubagentProvider:
                 f"{json.dumps(schema, ensure_ascii=False)}")
 
     def _options(self, sdk: Any, model: str, system: str,
-                 stderr: Any = None) -> Any:
+                 stderr: Any = None, max_tokens: int = 4096) -> Any:
         cwd = self._cwd
         if cwd is None:
             cwd = Path(tempfile.mkdtemp(prefix="docproof-subagent-"))
@@ -284,12 +322,16 @@ class SubagentProvider:
             permission_mode="acceptEdits",
             max_turns=self.max_turns,
             cwd=str(cwd),
-            env=agent_lane.child_env(),
+            # Supported CLI override, documented at code.claude.com/docs/en/env-vars.
+            # The SDK exposes effort directly but has no max-output field.
+            env={**agent_lane.child_env(), "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(max_tokens),
+                 "CLAUDE_CODE_EFFORT_LEVEL": self.effort or "auto"},
+            effort=self.effort,
             stderr=stderr,
         )
 
     async def _turn(self, sdk: Any, model: str, system: str,
-                    prompt_text: str) -> ProviderResult:
+                    prompt_text: str, *, max_tokens: int, evidence: dict) -> ProviderResult:
         # The CLI's stderr is the only account of why a session died. The SDK
         # drops it unless given a sink, which is how a failed lane reached the
         # log as "Command failed with exit code 1 / Error output: Check stderr
@@ -303,7 +345,7 @@ class SubagentProvider:
             if text:
                 cli_stderr.append(text)
 
-        options = self._options(sdk, model, system, stderr=keep)
+        options = self._options(sdk, model, system, stderr=keep, max_tokens=max_tokens)
 
         async def prompt():
             yield {"type": "user",
@@ -323,6 +365,7 @@ class SubagentProvider:
                     if spoken.strip():
                         last_text = spoken.strip()
                 elif isinstance(msg, sdk.ResultMessage):
+                    evidence["result"] = msg
                     self.cost_usd += float(getattr(msg, "total_cost_usd", 0.0)
                                            or 0.0)
                     usage = _usage_of(msg)

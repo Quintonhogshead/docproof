@@ -718,6 +718,10 @@ class CandidateScreeningRun:
         errors = states.get("error", 0)
         queries = states.get("uncertain", 0) + states.get("deferred", 0)
         matched = len(self.production_matches)
+        unmatched_errors = sum(
+            self.ledger.status(candidate.candidate_id) == CandidateStatus.ERROR
+            and candidate.candidate_id not in self.production_matches
+            for candidate in self.ledger.candidates)
         incomplete = sum(not row.get("complete", False)
                          and row.get("failure") != "configured_cost_ceiling"
                          for row in self.packet_records)
@@ -767,11 +771,7 @@ class CandidateScreeningRun:
             "comparison": {
                 "candidate_errors": errors,
                 "candidates_overlapping_production_findings": matched,
-                "candidate_errors_without_production_match": sum(
-                    self.ledger.status(candidate.candidate_id)
-                    == CandidateStatus.ERROR
-                    and candidate.candidate_id not in self.production_matches
-                    for candidate in self.ledger.candidates),
+                "candidate_errors_without_production_match": unmatched_errors,
                 "production_matches": self.production_matches,
                 "open_discovery_candidates": len(self.discovery_ids),
             },
@@ -791,8 +791,14 @@ class CandidateScreeningRun:
                 "screening_recall": None,
                 "screening_precision": None,
                 "human_baseline_required": True,
-                "additional_error_candidates_per_dollar": (
+                "error_candidates_per_dollar": (
                     round(errors / cost, 3) if cost else None),
+                "unmatched_error_candidates_per_dollar": (
+                    round(unmatched_errors / cost, 3) if cost else None),
+                "comparison_limit": (
+                    "Observed candidate verdicts and overlap with this run's "
+                    "production findings; unmatched candidates are not a "
+                    "measured causal gain or human-confirmed additional errors."),
             },
             "packet_records": self.packet_records,
             "usage": dataclasses.asdict(self.usage),
@@ -1274,7 +1280,8 @@ def _markdown_report(report: dict) -> str:
             f"- Not applied by downstream safeguards: **{application['not_applied']:,}**",
         ]
     lines += ["", "Recall and precision remain unset until these candidate "
-              "verdicts are compared with human proofreading results.", ""]
+              "verdicts are compared with human proofreading results.",
+              report["metrics"]["comparison_limit"], ""]
     return "\n".join(lines)
 
 

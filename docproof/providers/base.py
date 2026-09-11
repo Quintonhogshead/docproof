@@ -44,6 +44,11 @@ class ProviderResult:
     usage: NormalizedUsage = field(default_factory=NormalizedUsage)
     stop_reason: str = "ok"          # ok | refusal | max_tokens | error
     error: str | None = None
+    # Optional transport evidence for the resource ledger. Legacy Usage remains
+    # unchanged; missing provider fields must not become measured zeros.
+    resource_usage: dict[str, Any] | None = None
+    actual_model: str | None = None
+    provider_response_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -888,6 +888,7 @@ def _galley_parser(sub) -> None:
                           "Implied by an --approval whose manifest says "
                           "mechanical_only")
     _engine_arg(gse)
+    gse.add_argument("--model", default=None, help="explicit settlement reader model")
     _verification_pass_args(gse)
     gse.add_argument("--context", help="a file of house-style / voice notes "
                                        "for the judge and the delta verify")
@@ -1046,6 +1047,14 @@ def _galley_parser(sub) -> None:
     gdr.add_argument("--workspace-root", default=None,
                      help="where per-book workspaces live "
                           "(default: ~/galley-workspaces)")
+    gdr.add_argument("--execution-mode", choices=["code", "session"], default=None,
+                     help="code-owned mechanical orchestration (default); session preserves the legacy driver")
+    gdr.add_argument("--review-rounds", type=int, default=2,
+                     help="bounded repair cycles before final Astra judgment: 1 or 2 (default 2)")
+    gdr.add_argument("--review-calls", type=int, default=400,
+                     help="shared verify/settle model-call ceiling, preserved on restart")
+    gdr.add_argument("--review-output-tokens", type=int, default=2_000_000,
+                     help="shared review output-token engineering ceiling; not a subscription allowance")
     gdr.add_argument("--budget", type=float, default=None, metavar="USD",
                      help="the API ceiling in USD for the whole book "
                           "(default: $10). Frozen into approval.json as "
@@ -1141,7 +1150,7 @@ def _galley_parser(sub) -> None:
     gdr.add_argument("--settle-quiet-floor", type=int, default=None,
                      metavar="N",
                      help="a settle round raising N new items or fewer is "
-                          "quiet and the book is done (default 4, i.e. fewer "
+                          "quiet; this is not a clean certificate (default 4, fewer "
                           "than five)")
     gdr.add_argument("--settle-quiet-share", type=float, default=None,
                      metavar="SHARE",

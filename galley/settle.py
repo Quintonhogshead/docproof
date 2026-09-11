@@ -153,12 +153,16 @@ class SettlementRecord:
     # edit once the deliverable is rebuilt (2026-09-07). The journal resolves
     # this key against the build it renders.
     owner_row_key: list[Any] | None = None
+    # The exact candidate this decision ruled on. The stable residual ID groups
+    # readers at one quote, but is not proof that different proposed fixes agree.
+    input_evidence: dict[str, Any] | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {"residual_id": self.residual_id, "round": self.round,
                 "action": self.action,
                 "owner_finding_id": self.owner_finding_id,
                 "owner_row_key": self.owner_row_key,
+                "input_evidence": self.input_evidence,
                 "before_replacement": self.before_replacement,
                 "after_replacement": self.after_replacement,
                 "reason": self.reason, "verified_by": self.verified_by,
@@ -171,6 +175,8 @@ class SettlementRecord:
                    round=int(d.get("round", 0) or 0),
                    action=str(d.get("action", "")),
                    owner_finding_id=d.get("owner_finding_id"),
+                   input_evidence=(dict(d["input_evidence"])
+                                   if isinstance(d.get("input_evidence"), dict) else None),
                    before_replacement=str(d.get("before_replacement", "")),
                    after_replacement=str(d.get("after_replacement", "")),
                    reason=str(d.get("reason", "")),
@@ -257,6 +263,8 @@ class Settlement:
         p = Path(run_dir) / SETTLEMENT_NAME
         p.write_text(json.dumps(self.to_json(), indent=1, ensure_ascii=False),
                      encoding="utf-8")
+        from galley.settlement_inputs import refresh_candidate_dispositions
+        refresh_candidate_dispositions(run_dir, self)
         return p
 
     @classmethod
@@ -357,7 +365,18 @@ def open_items(run_dir: str | Path) -> list[Residual]:
     out: list[Residual] = []
     seen: set[str] = set()
     from galley.settlement_inputs import verification_dirs
-    inputs = [(directory / name, kind) for directory in verification_dirs(run)
+    directories = verification_dirs(run)
+    for directory in directories:
+        pair = []
+        for filename in ("finished_walk.json", "change_verify.json"):
+            try:
+                payload = json.loads((directory / filename).read_text("utf-8"))
+            except (OSError, ValueError):
+                payload = {}
+            pair.append(payload.get("verification_pair_id") if isinstance(payload, dict) else None)
+        if len(set(pair)) != 1:
+            raise ValueError(f"Incomplete verification artifact pair: {directory}")
+    inputs = [(directory / name, kind) for directory in directories
               for name, kind in (("finished_walk.json", "residual"),
                                  ("change_verify.json", "edit_damage"))]
     for path, kind in inputs:
@@ -1360,11 +1379,14 @@ def second_look(problem: Residual, paragraph: str, provider, model: str,
             f"Is the edit objectively correct under the house rules? "
             f"Answer keep or revert.")
     schema, name = _second_look_schema()
+    from docproof.resource_ledger import ResourceBudgetExceeded
     try:
         result = provider.complete_structured(model=model, system=system,
                                               user=user, schema=schema,
                                               schema_name=name,
                                               max_tokens=max_tokens)
+    except ResourceBudgetExceeded:
+        raise
     except Exception as e:                                   # noqa: BLE001
         log.warning("settle: second look failed (%s: %s); the verifier's "
                     "flag stands", type(e).__name__, e)
@@ -1463,6 +1485,7 @@ def apply_decision(res: Residual, dec: Decision,
     rec, new_rows, removed = _apply_decision(res, dec, working, source,
                                              round_no, verified_by=verified_by)
     rec.owner_row_key = key
+    rec.input_evidence = res.to_json()
     return rec, new_rows, removed
 
 
@@ -1984,10 +2007,13 @@ class Settler:
                     dec = Decision("internal_repair", dec.reason)
                 else:
                     judged += 1
+                    from docproof.resource_ledger import ResourceBudgetExceeded
                     try:
                         jd = prefetched.get(res.id) or judge(
                             res, em, source, working, self.provider,
                             self.opt.model, self.usage, context=self.opt.context)
+                    except ResourceBudgetExceeded:
+                        raise
                     except Exception as exc:
                         log.warning("settle: internal judge unavailable: %s", exc)
                         jd = Decision("internal_repair", "judge_unavailable")
@@ -2279,14 +2305,15 @@ class Settler:
         """Fold a delta read into the run's verify artifacts: rows for the
         re-read paragraphs replaced, coverage merged, the build binding
         advanced only when nothing is left unread or dirty."""
-        from galley.verify import UNREAD, applied_edits, write_artifacts
+        from galley.verify import UNREAD, accepted_text, applied_edits, write_artifacts
         ids = {str(p) for p in para_ids}
         self._dirty -= (ids - set(UNREAD)) if vr.ran_walk else set()
         write_artifacts(self.run_dir, vr, vr, model=self.opt.model,
                         engine=self.opt.engine, usage_changes=Usage(),
                         usage_walk=Usage(),
                         applied=len(applied_edits(self.run_dir)),
-                        paragraphs=len(self._source), para_ids=sorted(ids),
+                        paragraphs=sum(bool(text.strip()) for text in accepted_text(self.run_dir).values()),
+                        para_ids=sorted(ids),
                         merge=True)
 
     def _prefetch_judgments(self, items, em, accepted, source, working,
@@ -2648,8 +2675,6 @@ class Settler:
                 stopped = "clean"
                 break
             stopped = "rounds"
-            if not self.opt.until_clean:
-                continue
             if self.usage.api_calls >= self.opt.max_turns:
                 stopped = "turn_budget"
                 note = (f"round {round_no}: turn budget reached "
@@ -2658,6 +2683,8 @@ class Settler:
                 log.warning("settle: %s", note)
                 self.settlement.notes.append(note)
                 break
+            if not self.opt.until_clean:
+                continue
             if self._quiet(len(items)):
                 stopped = "quiet"
                 note = (f"round {round_no}: quiet — {len(items)} new item(s) "
@@ -2823,10 +2850,15 @@ def rewrite_verify_artifacts(run_dir: str | Path, settlement: Settlement, *,
         merged = dict(prior)
         for rid, row in rows.items():
             merged[rid] = {**prior.get(rid, {}), **row}
+        original_rows = payload.get(key)
         payload[key] = list(merged.values())
         have = set(payload.get("unverified_paragraphs") or [])
         payload["unverified_paragraphs"] = sorted(
             have | {str(p) for p in unverified if p})
+        if payload[key] != original_rows or payload["unverified_paragraphs"]:
+            # The immutable intake snapshot retains the reader's original
+            # proof. A settlement projection is not that reader response.
+            payload.pop("verification_provenance", None)
         payload["unsettled"] = [
             r.get("residual_id") or r.get("problem_id")
             for r in payload[key]

@@ -178,7 +178,7 @@ def _resolve_engine(args, cfg, *, default_model: str | None = None
                   f"no model is configured; --engine auto falls back to "
                   f"deterministic-only.", file=sys.stderr)
     if engine == "subagent":
-        prov = SubagentProvider(model=model or None)
+        prov = SubagentProvider(model=model or None, effort=cfg.api.effort)
         return "subagent", prov, f"subagent:{resolve_model(model or None)}"
     if engine == "provider":
         model = model or default_model or cfg.api.model
@@ -1760,7 +1760,11 @@ def _galley_drive(args) -> int:
         astra_budget_usd=args.astra_budget,
         astra_transport=args.astra_transport,
         astra_chunk_bytes=args.astra_chunk_bytes,
-        astra_max_output_tokens=args.astra_max_output_tokens, **kwargs)
+        astra_max_output_tokens=args.astra_max_output_tokens,
+        execution_mode=getattr(args, "execution_mode", None),
+        review_rounds=getattr(args, "review_rounds", 2),
+        review_calls=getattr(args, "review_calls", 400),
+        review_output_tokens=getattr(args, "review_output_tokens", 2_000_000), **kwargs)
 
     if args.dry_run:
         try:
@@ -1769,6 +1773,7 @@ def _galley_drive(args) -> int:
             phases = gd.select_phases(mechanical_only=mechanical_only,
                                       start=args.from_phase, only=args.phases,
                                       astra_review=drv.astra_review)
+            drv.resolve_execution_mode()
             review_settings = gd.astra_review_settings(drv._final_run() or ws,
                 transport=drv.astra_transport, max_chunk_bytes=drv.astra_chunk_bytes)
         except gd.DriverError as e:
@@ -1776,6 +1781,8 @@ def _galley_drive(args) -> int:
             return 2
         print(f"workspace {ws}")
         print(f"phases: {' -> '.join(phases)}")
+        print(f"execution: {drv.execution_mode}; review: {drv.review_rounds} repair rounds, "
+              f"{drv.review_calls} calls, {drv.review_output_tokens:,} output tokens maximum")
         print(f"gate: --approve {args.approve} at ${drv.budget_usd:.2f}"
               f"{' (mechanical only)' if mechanical_only else ''}")
         try:
@@ -2070,7 +2077,7 @@ def _galley_plan_line(args) -> int:
           + (f" ({entry['reason']})" if entry["reason"] else ""))
     plan = ws / "PLAN.md"
     if plan.is_file():
-        rows = audit(plan.read_text(encoding="utf-8"), load_ledger(ledger))
+        rows = audit(plan.read_text(encoding="utf-8"), load_ledger(ledger), workspace=ws)
         open_lines = [it.label for it, st, why in rows if why]
         print(f"  {len(rows) - len(open_lines)} of {len(rows)} plan line(s) "
               f"accounted for"
@@ -2436,7 +2443,7 @@ def _galley_verify(args) -> int:
     if engine == "subagent":
         from .providers.subagent import SubagentProvider, resolve_model
         try:
-            provider = SubagentProvider(model=args.model or None)
+            provider = SubagentProvider(model=args.model or None, effort=cfg.api.effort)
         except Exception as e:                              # noqa: BLE001
             print(f"error: {e}", file=sys.stderr)
             return 2

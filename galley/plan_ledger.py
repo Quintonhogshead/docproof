@@ -86,7 +86,33 @@ def record(path: str | Path, label: str, status: str, *,
     return entry
 
 
-def audit(plan_text: str, ledger: Mapping[str, Mapping[str, Any]] | None
+def _evidence_problem(evidence: str, workspace: str | Path | None) -> str:
+    """Resolve artifact references against the plan, never the process cwd.
+
+    Directory evidence is an existing public contract (for example a sweep's
+    output directory), but an empty directory proves no output was produced.
+    """
+    if workspace is None:
+        return "ran, but artifact workspace is unknown"
+    root = Path(workspace).resolve()
+    try:
+        path = (root / evidence).resolve()
+        path.relative_to(root)
+    except (OSError, ValueError, RuntimeError):
+        return "ran, but artifact is outside the workspace"
+    try:
+        if path.is_file():
+            return ""
+        if path.is_dir() and any(p.is_file() and p.resolve().is_relative_to(root)
+                                 for p in path.rglob("*")):
+            return ""
+    except (OSError, RuntimeError):
+        pass
+    return "ran, but artifact is missing or contains no files"
+
+
+def audit(plan_text: str, ledger: Mapping[str, Mapping[str, Any]] | None,
+          *, workspace: str | Path | None = None
           ) -> list[tuple[PlanItem, str, str]]:
     """``(item, status, problem)`` per plan line. ``status`` is the ledger's
     (or ``"unrecorded"``); ``problem`` is empty when the line is accounted
@@ -104,6 +130,8 @@ def audit(plan_text: str, ledger: Mapping[str, Mapping[str, Any]] | None
             out.append((item, status, f"unknown status {status!r}"))
         elif status == "ran" and not evidence:
             out.append((item, status, "ran, but names no artifact"))
+        elif status == "ran":
+            out.append((item, status, _evidence_problem(evidence, workspace)))
         elif status == "skipped" and not reason:
             out.append((item, status, "skipped without a reason"))
         elif status == "deferred" and not (evidence or reason):
@@ -114,7 +142,7 @@ def audit(plan_text: str, ledger: Mapping[str, Mapping[str, Any]] | None
 
 
 def check(plan_text: str, ledger: Mapping[str, Mapping[str, Any]] | None,
-          *, ledger_exists: bool) -> tuple[str, str]:
+          *, ledger_exists: bool, workspace: str | Path | None = None) -> tuple[str, str]:
     """``(status, detail)`` for the certificate."""
     items = plan_items(plan_text)
     if not items:
@@ -122,7 +150,7 @@ def check(plan_text: str, ledger: Mapping[str, Mapping[str, Any]] | None,
     if not ledger_exists:
         return "fail", (f"{len(items)} plan line(s) and no {LEDGER_NAME} — "
                         f"record each with `docproof galley plan-line`")
-    rows = audit(plan_text, ledger)
+    rows = audit(plan_text, ledger, workspace=workspace)
     bad = [(it, st, why) for it, st, why in rows if why]
     if bad:
         return "fail", "; ".join(
@@ -133,11 +161,15 @@ def check(plan_text: str, ledger: Mapping[str, Mapping[str, Any]] | None,
     return "pass", ", ".join(f"{n} {st}" for st, n in sorted(counts.items()))
 
 
-def not_done(plan_text: str, ledger: Mapping[str, Mapping[str, Any]] | None
+def not_done(plan_text: str, ledger: Mapping[str, Mapping[str, Any]] | None,
+             *, workspace: str | Path | None = None
              ) -> list[tuple[PlanItem, str, str]]:
     """The promised lines that did not run: ``(item, status, explanation)``."""
     out = []
-    for it, st, _why in audit(plan_text, ledger):
+    for it, st, _why in audit(plan_text, ledger, workspace=workspace):
+        if st == "ran" and _why:
+            out.append((it, st, _why))
+            continue
         if st in ("skipped", "deferred", "unrecorded"):
             entry = (ledger or {}).get(it.label) or {}
             why = str(entry.get("reason") or entry.get("evidence") or

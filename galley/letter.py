@@ -780,7 +780,7 @@ def _section_plan_ledger(src: JournalSources) -> list[str]:
         return []
     ledger_path = src.workspace / "runs" / LEDGER_NAME
     ledger = load_ledger(ledger_path) if ledger_path.is_file() else None
-    rows = not_done(src.plan, ledger)
+    rows = not_done(src.plan, ledger, workspace=src.workspace)
     if not rows:
         return []
     out = ["## Plan lines that did not run", ""]
@@ -1483,7 +1483,8 @@ def render_author_letter(cf: CaseFile, out_dir: str | Path, *,
         from galley.plan_ledger import LEDGER_NAME, load_ledger, not_done
         lp = src.workspace / "runs" / LEDGER_NAME
         for item, status, why in not_done(
-                src.plan, load_ledger(lp) if lp.is_file() else None):
+                src.plan, load_ledger(lp) if lp.is_file() else None,
+                workspace=src.workspace):
             skipped.append(f"{_clip(item.text, 90)} — {status}"
                            + (f": {_clip(why, 160)}" if why else ""))
     if skipped:

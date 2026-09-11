@@ -274,6 +274,22 @@ def test_verify_verdicts_and_settle_records(workspace, run_dir):
     assert "stopped because: **quiet**" in text
 
 
+def test_current_audit_serialization_retains_the_suspected_problem(workspace, run_dir):
+    from galley.audit import AuditResult, parse_hypotheses
+
+    result = AuditResult(parse_hypotheses({"hypotheses": [{
+        "chapter": 2, "error_class": "continuity",
+        "why": "Mara is twelve here but was fourteen in the previous summer.",
+        "span_hint": "On her twelfth birthday", "confidence": "high",
+    }]}))
+    (run_dir / "audit.json").write_text(json.dumps(result.to_json()), encoding="utf-8")
+    text = jr.render_journal(run_dir, workspace=workspace)
+    assert "Chapter 2: continuity" in text
+    assert "Mara is twelve here but was fourteen in the previous summer." in text
+    assert "On her twelfth birthday" in text
+    assert "confidence: high" in text
+
+
 def test_certify_checks_and_the_outcome(workspace, run_dir):
     text = jr.render_journal(run_dir, workspace=workspace)
     assert "| source hash | **PASS** |" in text

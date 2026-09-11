@@ -1376,6 +1376,7 @@ def _run_driver(**kwargs: Any) -> Any:
 
     upload = kwargs.pop("upload", None)
     kwargs.setdefault("on_source_change", "revise")
+    kwargs.setdefault("execution_mode", None)
     # The driver's phase banners go through the logger, not print(): under a
     # service manager stdout is block-buffered and a "--- phase settle ---"
     # line would surface hours late, after the run.
@@ -1404,9 +1405,17 @@ def _run_driver(**kwargs: Any) -> Any:
                      model=formatting_model, effort=None)
     driver.log("Formatting Book 1 before proofreading.")
     try:
-        formatted = format_for_proof(driver.book, driver.workspace,
-            progress=lambda done, total: driver.log(
-                f"Formatting: labelled window {done} of {total}."))
+        from docproof.resource_ledger import context_env, use_context
+        from galley.intake import INTAKE_DIR, configuration
+        from galley.manifest import config_hash
+        source_hash = sha256_file(driver.book)
+        intake_resources = driver.workspace / INTAKE_DIR / source_hash / "resources.jsonl"
+        resource_context = context_env(intake_resources, source_hash, config_hash(configuration()))
+        resource_context["GALLEY_BRAIN_PHASE"] = "formatting"
+        with use_context(resource_context):
+            formatted = format_for_proof(driver.book, driver.workspace,
+                progress=lambda done, total: driver.log(
+                    f"Formatting: labelled window {done} of {total}."))
     except Exception:
         driver._progress("phase_end", phase="formatting", ok=False)
         raise

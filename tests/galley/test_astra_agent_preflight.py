@@ -21,6 +21,7 @@ def test_subscription_login_checked_before_any_book_phase(tmp_path, monkeypatch)
 
 def test_explicit_api_review_does_not_require_subscription_login(tmp_path, monkeypatch):
     from galley import intake
+    (tmp_path / "book.docx").write_bytes(b"offline source identity")
     calls = []
     monkeypatch.setattr(codex_runner, "check_login", lambda: calls.append("auth"))
     monkeypatch.setattr(driver.Driver, "run", lambda self: calls.append("book"))

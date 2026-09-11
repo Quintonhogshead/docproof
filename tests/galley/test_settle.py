@@ -687,7 +687,8 @@ def test_until_clean_stops_after_a_quiet_round(tmp_path, monkeypatch):
     assert any("quiet" in n for n in st.notes)
 
 
-def test_until_clean_respects_the_turn_budget(tmp_path, monkeypatch):
+@pytest.mark.parametrize("until_clean", [False, True])
+def test_until_clean_respects_the_turn_budget(tmp_path, monkeypatch, until_clean):
     src = _manuscript(tmp_path)
     ids, _doc = _para_ids(src)
     run = _build(tmp_path, src, [
@@ -714,7 +715,7 @@ def test_until_clean_respects_the_turn_budget(tmp_path, monkeypatch):
     _fake_engine(monkeypatch, prov)
     rc = main(["galley", "settle", str(run), "--source", str(src), "--config",
                _replay_config(tmp_path), "--engine", "provider",
-               "--until-clean", "--max-turns", "2"])
+               *(["--until-clean"] if until_clean else []), "--max-turns", "2"])
     assert rc == 1
     recs, st = _records(run)
     assert st.rounds == 1 and st.open

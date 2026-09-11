@@ -263,9 +263,9 @@ def test_a_stopped_run_ships_its_transcripts_beside_the_verdict(book, tmp_path):
     bundle = tmp_path / "handoff" / "Ford - Book 2 - diagnostics.zip"
     names = set(zipfile.ZipFile(bundle).namelist())
     # Every phase the driver ran left a transcript, and all of them are in.
-    assert {"runs/driver/profile.log", "runs/driver/sweeps.log",
-            "runs/driver/ladder.log", "runs/outcome.json",
-            "PLAN.md"} <= names
+    for phase in ("profile", "sweeps", "ladder"):
+        assert any(n.startswith(f"runs/driver/{phase}-") and n.endswith(".log") for n in names)
+    assert {"runs/outcome.json", "PLAN.md"} <= names
     assert "runs/driver/driver.json" in names
     # Raw stream files are the transcript's source, not evidence twice over.
     assert not any(n.endswith(".stream.jsonl") for n in names)

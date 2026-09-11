@@ -132,26 +132,40 @@ def result_from_response(body: dict[str, Any]) -> ProviderResult:
     surface identical stop reasons."""
     usage = _usage(body.get("usage") or {})
 
+    def result(**kwargs):
+        raw = body.get("usage")
+        resource = None
+        if isinstance(raw, dict) and raw:
+            resource = {**raw, "cached_input_tokens":
+                        (raw.get("input_tokens_details") or {}).get("cached_tokens", 0)}
+            reasoning = (raw.get("output_tokens_details") or {}).get("reasoning_tokens")
+            if reasoning is not None:
+                resource["thinking_tokens"] = reasoning
+        return ProviderResult(**kwargs, resource_usage=resource,
+                              actual_model=body.get("model"),
+                              provider_response_id=body.get("id"))
+
+
     refusal = _first_refusal(body)
     if refusal is not None:
-        return ProviderResult(usage=usage, stop_reason="refusal", error=refusal)
+        return result(usage=usage, stop_reason="refusal", error=refusal)
 
     if body.get("status") == "incomplete":
         reason = (body.get("incomplete_details") or {}).get("reason", "")
         if reason == "max_output_tokens":
-            return ProviderResult(usage=usage, stop_reason="max_tokens",
+            return result(usage=usage, stop_reason="max_tokens",
                                   error="output truncated")
-        return ProviderResult(usage=usage, stop_reason="error",
+        return result(usage=usage, stop_reason="error",
                               error=f"incomplete: {reason or 'unknown'}")
 
     text = _output_text(body)
     if not text:
-        return ProviderResult(usage=usage, stop_reason="error",
+        return result(usage=usage, stop_reason="error",
                               error="empty response")
     try:
-        return ProviderResult(parsed=json.loads(text), usage=usage)
+        return result(parsed=json.loads(text), usage=usage)
     except json.JSONDecodeError as e:
-        return ProviderResult(usage=usage, stop_reason="error",
+        return result(usage=usage, stop_reason="error",
                               error=f"unparseable JSON: {e}")
 
 

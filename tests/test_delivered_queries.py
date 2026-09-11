@@ -53,6 +53,9 @@ def test_a_delivered_question_is_marked_delivered(tmp_path):
     assert row["status"] == "query"
     assert row["queried"] is True and row["unplaced"] is False
     assert row["applied"] is False          # the other channel, untouched
+    summary = Path(_out.summary_md).read_text(encoding="utf-8")
+    assert "1 of these finding(s) have a margin comment" in summary
+    assert "[comment written]" in summary
 
 
 def test_a_tracked_change_is_not_marked_queried(tmp_path):
@@ -94,6 +97,10 @@ def test_a_question_in_a_footnote_is_marked_unplaced_not_delivered(tmp_path):
     # This is the overcount the change exists to expose: `queried` counts the
     # question that was generated, the deliverable contains none.
     assert out.queried == 1
+    summary = Path(out.summary_md).read_text(encoding="utf-8")
+    assert "0 of these finding(s) have a margin comment" in summary
+    assert "1 comment(s) could not be placed" in summary
+    assert "[comment could not be placed]" in summary
 
 
 def test_queried_and_unplaced_survive_a_rejudge_round_trip(tmp_path):
@@ -146,15 +153,14 @@ def test_repeated_rule_comments_collapse_to_one_counted_note():
     assert validated[1].explanation == why
 
 
-def test_collapse_leaves_small_groups_alone_and_collapses_query_types():
-    """Small edit groups stay; queries collapse ONE PER TYPE past the
-    threshold (Quinton, 2026-08-27 — the Purpura margins carried 56 per-site
-    number notes). At or below the threshold a query is its own question."""
+def test_collapse_leaves_small_groups_alone_and_groups_shared_house_rules():
+    """Shared generated rule questions retain the approved grouping; a type
+    alone is not evidence that site-specific questions are interchangeable."""
     from docproof.models import Anchor, Finding, DocumentModel, ParagraphRef
     from docproof.pipeline import _collapse_repeated_comments
 
     paras = tuple(ParagraphRef(f"body-{i:04d}", "word/document.xml", "body",
-                               "text", "Normal") for i in range(4))
+                               "text", "Normal") for i in range(5))
     doc = DocumentModel(source_path="x.docx", paragraphs=paras)
     small = [Finding(f"s-{i}", "sweep", f"body-{i:04d}", "sweep_dash",
                      "text", 1, "text2", "same why", "high",
@@ -168,9 +174,9 @@ def test_collapse_leaves_small_groups_alone_and_collapses_query_types():
     assert _collapse_repeated_comments(validated, doc, threshold=3) == 0
     assert not any(f.silent for f in validated)
 
-    many_queries = [Finding(f"n-{i}", "residual", f"body-{i % 4:04d}",
+    many_queries = [Finding(f"n-{i}", "residual", f"body-{i:04d}",
                             "number_style", "text", 1, "text",
-                            f"site-specific note {i}", "medium",
+                            "Should these prose numbers be spelled out?", "medium",
                             status="query", anchor=Anchor(0, 4, "text", ""))
                     for i in range(5)]
     validated = small + few_queries + many_queries
@@ -181,6 +187,89 @@ def test_collapse_leaves_small_groups_alone_and_collapses_query_types():
     assert "5 places" in kept[0].explanation
     assert not any(f.silent for f in validated
                    if f.error_type == "unclosed_quote")
+
+
+def test_distinct_continuity_questions_all_reach_word_and_the_summary(tmp_path):
+    from zipfile import ZipFile
+    from lxml import etree
+
+    questions = ["Was Mara twelve or fourteen?", "Is the departure in May or June?",
+                 "Which character is holding the key?", "Does the journey take two days?"]
+    d = docx.Document()
+    for _ in questions:
+        d.add_paragraph(PARA)
+    src = tmp_path / "book.docx"
+    d.save(src)
+    cfg = load_config("config/default.yaml")
+    cfg.audit = "off"
+    cfg.error_types, cfg.sweeps = [], []
+    cfg.comment_collapse = 3
+    prepared = prepare(cfg, src, ERRORS)
+    findings = [_query(fid=f"q-{i}", para_id=f"body-{i:04d}", explanation=q)
+                for i, q in enumerate(questions)]
+    out = finish(prepared, findings, Usage(), cfg, out_dir=tmp_path / "run",
+                 source_path=src)
+    rows = json.loads(Path(out.findings_json).read_text(encoding="utf-8"))["findings"]
+    assert sum(r["queried"] for r in rows) == 4
+    with ZipFile(next((tmp_path / "run").glob("*Proofreader.docx"))) as package:
+        comments = etree.fromstring(package.read("word/comments.xml"))
+    text = " ".join(comments.itertext())
+    summary = Path(out.summary_md).read_text(encoding="utf-8")
+    assert all(q in text and q in summary for q in questions)
+    assert "4 of these finding(s) have a margin comment" in summary
+
+
+def test_identical_question_at_different_passages_is_not_a_duplicate():
+    from docproof.models import Anchor, DocumentModel, ParagraphRef
+    from docproof.pipeline import _collapse_repeated_comments
+
+    doc = DocumentModel("x.docx", tuple(
+        ParagraphRef(f"body-{i:04d}", "word/document.xml", "body", PARA, "Normal")
+        for i in range(4)))
+    findings = [_query(fid=f"q-{i}", para_id=f"body-{i:04d}", status="query",
+                       anchor=Anchor(0, len(PARA), PARA, "")) for i in range(4)]
+    assert _collapse_repeated_comments(findings, doc, threshold=3) == 0
+    # Actual duplicates at the same passage can share the first question.
+    findings = [_query(fid=f"q-{i}", status="query",
+                       anchor=Anchor(0, len(PARA), PARA, "")) for i in range(4)]
+    assert _collapse_repeated_comments(findings, doc, threshold=3) == 3
+    assert sum(not f.silent for f in findings) == 1
+    assert "places" not in findings[0].explanation
+    # Different proposed alternatives at the same passage are not duplicates.
+    alternatives = [_query(fid=f"q-{i}", status="query",
+                           corrected_text="He left." if i < 2 else "She left.",
+                           anchor=Anchor(0, len(PARA), PARA, "")) for i in range(4)]
+    assert _collapse_repeated_comments(alternatives, doc, threshold=3) == 0
+
+
+def test_continuity_summary_counts_writer_receipts_not_the_pass_kept_count(tmp_path):
+    from docproof.continuity import ChapterContinuityReport
+    from docproof.formats import DOCX
+    from docproof.models import DocumentModel, ParagraphRef
+    from docproof.reporting import write_summary_md
+
+    doc = DocumentModel("x.docx", (
+        ParagraphRef("body-0000", "word/document.xml", "body", PARA, "Normal"),))
+    findings = [_query(fid=f"q-{i}", error_type="chapter_continuity", status="query")
+                for i in range(4)]
+    path = tmp_path / "summary.md"
+    write_summary_md(
+        path, doc=doc, findings=findings, usage=Usage(),
+        cfg=load_config("config/default.yaml"), applied_ids=(), fmt=DOCX,
+        chapter_continuity=ChapterContinuityReport(chapters=1, proposed=4, kept=4),
+        queried_ids=("q-0",), unplaced_ids=("q-1",))
+    section = path.read_text(encoding="utf-8").split("## Chapter continuity", 1)[1]
+    assert "4 question(s) retained by the pass" in section
+    assert "1 of these finding(s) have a margin comment" in section
+    assert "1 comment(s) could not be placed" in section
+    assert "4 question(s) in the margin" not in section
+
+    # Older callers without writer receipts must not infer delivery from status.
+    write_summary_md(path, doc=doc, findings=findings, usage=Usage(),
+                     cfg=load_config("config/default.yaml"), applied_ids=(), fmt=DOCX)
+    text = path.read_text(encoding="utf-8")
+    assert "Comment delivery was not recorded" in text
+    assert "each is a margin comment" not in text
 
 
 def test_shipped_default_quiets_edit_explanations_but_not_questions():

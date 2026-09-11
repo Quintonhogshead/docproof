@@ -344,7 +344,8 @@ def _settings_section(cfg: Config, batch: bool) -> list[str]:
              + (f"on ({len(cfg.sweeps)} rule(s))" if cfg.sweeps else "off"))
     L.append("- **Passes:** "
              + " · ".join(f"{name} {state}" for name, state in passes))
-    L.append(f"- **Writes:** margin comments {on(cfg.comments)}, "
+    L.append(f"- **Writes:** edit-explanation comments {on(cfg.comments)}, "
+             f"query comments {on(cfg.query_comments)}, "
              f"change reasons {on(cfg.report_explanations)}, "
              f"reject-all audit {cfg.audit}")
     L.append("")
@@ -357,13 +358,15 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                      fmt=None, sweeps=None, spell=None, normalization=None,
                      audit=None, consistency=None, coverage=None,
                      judges=None, smoothing=None, chapter_continuity=None,
-                     examination=None) -> None:
+                     examination=None, queried_ids: tuple[str, ...] | None = None,
+                     unplaced_ids: tuple[str, ...] = ()) -> None:
     paras = index_paragraphs(doc)
     applied = [f for f in findings if f.finding_id in set(applied_ids)]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
     queries = [f for f in findings if f.status == "query"]
     # The "Queries" section is for genuine questions — an asking pass, a name
-    # pair — which always reach the margin. A withheld edit (a judge's or the
+    # pair. Writer receipts, not the query status, establish delivery: a query
+    # can be grouped, disabled, or unplaceable. A withheld edit (a judge's or the
     # verifier's, "Not applied: …") is a different animal: it has its own gate
     # section below, and by default it stays out of the document, so listing it
     # here as a margin question would double-count it and overstate what the
@@ -374,13 +377,28 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
     oversized = [f for f in findings if f.status == "rejected_oversized"]
     rejected = [f for f in findings if f.status.startswith("rejected")
                 and f.status != "rejected_oversized"]
-    # The below-gate and oversized findings reach the margin only when
-    # not_applied_comments puts declined corrections there AND query_comments
-    # still admits these two kinds. Off by default, they live here and in the
-    # change log, not in the document — so only claim the comment when it exists.
-    in_margin = (f", and each is a {fmt.comment_noun} in the reviewed "
-                 f"file" if (cfg.query_comments and cfg.not_applied_comments)
-                 else "")
+    queried = set(queried_ids) if queried_ids is not None else None
+    unplaced = set(unplaced_ids)
+
+    def delivery_note(rows):
+        if queried is None:
+            return "Comment delivery was not recorded for these findings."
+        written = sum(f.finding_id in queried for f in rows)
+        failed = sum(f.finding_id in unplaced for f in rows)
+        note = (f"{written} of these finding(s) have a {fmt.comment_noun} "
+                "in the reviewed file.")
+        if failed:
+            note += f" {failed} comment(s) could not be placed."
+        return note
+
+    def delivery_label(f):
+        if queried is None:
+            return "delivery not recorded"
+        if f.finding_id in queried:
+            return "comment written"
+        if f.finding_id in unplaced:
+            return "comment could not be placed"
+        return "no separate comment written"
 
     L: list[str] = []
     L.append(f"# docproof review — {Path(doc.source_path).name}\n")
@@ -626,7 +644,7 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
         L.append(f"This book writes clock times with minutes "
                  f"(`{t.example}`, {t.with_minutes} time(s)), but "
                  f"{len(t.outliers)} bare hour(s) — “around 4”, “at 8” — "
-                 f"stand without them. Each is asked about in the margins; "
+                 f"stand without them. These sites generated questions; "
                  f"no edit is made, since a bare hour can be a deliberate "
                  f"register.\n")
 
@@ -695,11 +713,12 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
         L.append(f"{len(genuine_queries)} finding(s) from types that ask rather "
                  f"than correct, because the answer is the author's to make — "
                  f"where a line of dialogue belongs is not a punctuation fix. "
-                 f"Nothing here changed the document, and each is a "
-                 f"{fmt.comment_noun} in the reviewed file.\n")
+                 f"These questions do not change the text. "
+                 f"{delivery_note(genuine_queries)}\n")
         for f in genuine_queries:
             L.append(f"- **{f.para_id}** ({f.error_type}): "
-                     f"{f.original_text!r} — {f.explanation}")
+                     f"{f.original_text!r} — {f.explanation} "
+                     f"[{delivery_label(f)}]")
         L.append("")
 
     # The smoothing pass reports its own volume, because the number it chose NOT
@@ -713,10 +732,11 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
     if smoothing is not None and (smoothing.proposed or smoothing.windows_failed):
         L.append("## Language smoothing\n")
         if smoothing.proposed:
-            L.append(f"{smoothing.kept} suggestion(s) in the margin, from "
-                     f"{smoothing.proposed} the line-editing pass proposed. These "
-                     f"are questions of taste, not corrections: every one is a "
-                     f"{fmt.comment_noun} and none of them changed the text.\n")
+            sm_rows = [f for f in findings if f.error_type == "smoothing"]
+            sm_applied = sum(f.finding_id in set(applied_ids) for f in sm_rows)
+            L.append(f"{smoothing.kept} suggestion(s) retained by the pass, from "
+                     f"{smoothing.proposed} proposed. {sm_applied} became tracked "
+                     f"changes. {delivery_note(sm_rows)}\n")
             if smoothing.withheld:
                 L.append(f"**{smoothing.withheld} further suggestion(s) withheld**"
                          f" — this manuscript's cap is {smoothing.cap}, and the "
@@ -750,10 +770,11 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
     # section matters most — hiding it would report the failure as restraint.
     if cc is not None and (cc.proposed or cc.read_failed):
         L.append("## Chapter continuity\n")
-        L.append(f"{cc.kept} question(s) in the margin, from {cc.proposed} "
+        cc_rows = [f for f in findings if f.error_type == "chapter_continuity"]
+        L.append(f"{cc.kept} question(s) retained by the pass, from {cc.proposed} "
                  f"in-chapter break(s) the read proposed across {cc.chapters} "
-                 f"chapter(s). These are questions, not corrections: every one is "
-                 f"a {fmt.comment_noun} and none of them changed the text.\n")
+                 f"chapter(s). These questions do not change the text. "
+                 f"{delivery_note(cc_rows)}\n")
         if cc.refused:
             L.append(f"The judge set aside {cc.refused} as not genuine breaks — "
                      f"a device the reader is meant to hold open, or a "
@@ -823,7 +844,7 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                  f"In fiction that usually means the model read the passage as "
                  f"deliberate: dialogue rhythm, dialect, voice, a name that "
                  f"only looks misspelled. Nothing was changed in the "
-                 f"document{in_margin}.\n")
+                 f"document. {delivery_note(low)}\n")
         for f in low:
             L.append(f"- **{f.para_id}** ({f.error_type}): "
                      f"{f.original_text!r} — {f.explanation}")
@@ -836,7 +857,7 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                  f"should — a run-on split into two sentences, a restructured "
                  f"list. Applying that as a tracked change would be the model "
                  f"rewriting rather than correcting, so it is left for you to "
-                 f"make by hand{in_margin}.\n")
+                 f"make by hand. {delivery_note(oversized)}\n")
         for f in oversized:
             suggestion = (f" → {f.corrected_text}"
                           if f.corrected_text
