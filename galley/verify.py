@@ -178,7 +178,7 @@ class _ReadCheckpoint:
         fcntl.flock(self.lock.fileno(), fcntl.LOCK_UN)
         self.lock.close()
 
-    def load(self, request, validate):
+    def load(self, request, validate, *, anchor_read=None):
         key = _digest(request)
         saved = _load_artifact(self.directory / (key + ".json"))
         body = saved.get("parsed")
@@ -189,9 +189,73 @@ class _ReadCheckpoint:
             self.windows[key] = saved["result_sha256"]
             from docproof.providers.base import ProviderResult
             return ProviderResult(parsed=body, usage=None, stop_reason="ok")
+        if anchor_read is not None:
+            return self._recover_anchor_repair(request, validate, anchor_read)
         return None
 
-    def record(self, request, result, validate):
+    def _recover_anchor_repair(self, request, validate, read, *, persist=True):
+        """Reconstruct only a bound, previously rejected anchor-only retry."""
+        if (self.identity.get("gate") != "walk" or request.get("schema_name") != "findings"
+                or request.get("user") != _walk_user(read)):
+            return None
+        key = _digest(request)
+        base_request = {k: v for k, v in request.items() if k != "window_id"}
+        records = []
+        for path in (self.directory / "rejected" / key).glob("*.json"):
+            row = _load_artifact(path)
+            if (row.get("identity_sha256") == self.identity_sha256
+                    and row.get("request_sha256") == key and row.get("stop_reason") == "ok"):
+                records.append((path, row))
+        candidates = {}
+        for initial_path, initial in records:
+            original = initial.get("parsed")
+            if (initial.get("stage") != "initial_rejected"
+                    or initial.get("actual_request_sha256") != _digest(base_request)
+                    or ("actual_request" in initial and initial["actual_request"] != base_request)
+                    or not _valid_schema(original, request["schema"])
+                    or initial.get("response_sha256") != _digest(original) or validate(original)):
+                continue
+            plan = _walk_anchor_retry(base_request, original, read)
+            if plan is None or initial.get("anchor_issues") != plan["issues"]:
+                continue
+            for repair_path, repair in records:
+                reply = repair.get("parsed")
+                if (repair.get("stage") != "anchor_repair" or repair.get("repair_accepted") is not False
+                        or repair.get("reconstructed_sha256") is not None
+                        or repair.get("rejected_response_sha256") != _digest(original)
+                        or repair.get("anchor_issues") != plan["issues"]
+                        or not _valid_schema(reply, plan["request"]["schema"])
+                        or repair.get("response_sha256") != _digest(reply)):
+                    continue
+                proved_plan = _archived_anchor_plan(base_request, original, read,
+                    repair.get("actual_request_sha256"), plan, diagnostic=repair)
+                if proved_plan is None:
+                    continue
+                canonicalizations = []
+                merged = _merge_walk_anchor_repair(original, reply, read, plan["issues"],
+                    plan["request"]["schema"], canonicalizations=canonicalizations)
+                if merged is None or not canonicalizations or not validate(merged):
+                    continue
+                candidates[_digest(merged)] = (merged, repair, proved_plan, {
+                    "initial_diagnostic": str(initial_path.relative_to(self.directory)),
+                    "repair_diagnostic": str(repair_path.relative_to(self.directory)),
+                    "rejected_response_sha256": _digest(original),
+                    "repair_response_sha256": _digest(reply),
+                    "anchor_canonicalizations": canonicalizations})
+        if len(candidates) != 1:  # Conflicting archived judgments cannot choose their own winner.
+            return None
+        from docproof.providers.base import ProviderResult
+        merged, repair, plan, recovery = next(iter(candidates.values()))
+        result = ProviderResult(parsed=merged, usage=None, stop_reason="ok")
+        if not persist:
+            return result
+        self.record_diagnostic(request, plan["request"],
+            ProviderResult(parsed=repair["parsed"], usage=None, stop_reason="ok"),
+            stage="anchor_repair_recovered", reconstructed_sha256=_digest(merged), **recovery)
+        self.record(request, result, validate, recovery=recovery)
+        return result
+
+    def record(self, request, result, validate, *, recovery=None):
         if (result.stop_reason != "ok" or not _valid_schema(result.parsed, request["schema"])
                 or not validate(result.parsed)):
             self.complete = False
@@ -199,7 +263,8 @@ class _ReadCheckpoint:
         key, result_sha = _digest(request), _digest(result.parsed)
         _save_json(self.directory / (key + ".json"), {
             "identity_sha256": self.identity_sha256, "request_sha256": key,
-            "result_sha256": result_sha, "parsed": result.parsed})
+            "result_sha256": result_sha, "parsed": result.parsed,
+            **({"anchor_recovery": recovery} if recovery else {})})
         self.windows[key] = result_sha
 
     def record_usage(self, request, result):
@@ -228,7 +293,8 @@ class _ReadCheckpoint:
             response_sha = None
         _save_json(self.directory / "rejected" / key / (uuid.uuid4().hex + ".json"), {
             "identity_sha256": self.identity_sha256, "request_sha256": key,
-            "actual_request_sha256": _digest(actual_request), "stage": stage,
+            "actual_request_sha256": _digest(actual_request), "actual_request": actual_request,
+            "stage": stage,
             "parsed": result.parsed, "response_sha256": response_sha,
             "stop_reason": result.stop_reason, "error": result.error,
             **details})
@@ -693,7 +759,7 @@ def _ask_with_retry(provider, *, model: str, system: str, user: str,
         return result
 
     if checkpoint is not None:
-        cached = checkpoint.load(cache_request, validate)
+        cached = checkpoint.load(cache_request, validate, anchor_read=anchor_read)
         if cached is not None:
             return cached
     result = provider.complete_structured(**request)
@@ -725,12 +791,15 @@ def _ask_with_retry(provider, *, model: str, system: str, user: str,
     if retry.usage is not None:
         usage.add(retry.usage, model=model)
     if repair is not None:
+        canonicalizations = []
         merged = (_merge_walk_anchor_repair(original.parsed, retry.parsed, anchor_read,
-                                            repair["issues"], retry_request["schema"])
+                                            repair["issues"], retry_request["schema"],
+                                            canonicalizations=canonicalizations)
                   if retry.stop_reason == "ok" else None)
         checkpoint.record_diagnostic(cache_request, retry_request, retry,
             stage="anchor_repair", rejected_response_sha256=_digest(original.parsed),
             anchor_issues=repair["issues"], repair_accepted=merged is not None,
+            anchor_canonicalizations=canonicalizations if merged is not None else [],
             reconstructed_sha256=_digest(merged) if merged is not None else None)
         retry = (replace(retry, parsed=merged) if merged is not None else
                  replace(retry, parsed=None, stop_reason="error",
@@ -823,7 +892,56 @@ def _walk_anchor_retry(request, body, read):
             "schema": strict_json_schema(_Anchors), "schema_name": "anchors"}}
 
 
-def _merge_walk_anchor_repair(original, reply, read, issues, schema):
+def _canonical_repair_quote(quote, text):
+    """Recover only a unique equal-length horizontal-space spelling."""
+    if not quote.strip():
+        return None
+    if quote in text:
+        return quote, None
+    translation = str.maketrans({"\u00a0": " ", "\u202f": " "})
+    needle, haystack = quote.translate(translation), text.translate(translation)
+    start = haystack.find(needle)
+    if start < 0 or haystack.find(needle, start + 1) >= 0:
+        return None
+    end = start + len(quote)
+    return text[start:end], (start, end)
+
+
+def _archived_anchor_plan(request, original, read, request_sha256, plan, *, diagnostic):
+    """Prove a saved retry prompt despite diagnostics sorting JSON keys.
+
+    The old prompt serialized provider field order, which the diagnostic
+    writer did not retain. Try at most 5! common field orders, accepting only
+    the exact archived request hash. Never guess a match or alter any value.
+    """
+    if "actual_request" in diagnostic:
+        actual = diagnostic["actual_request"]
+        if not isinstance(actual, dict) or not isinstance(actual.get("user"), str):
+            return None
+        marker = "PREVIOUS FINDINGS (indices are zero-based array positions):\n"
+        start = actual["user"].rfind(marker)
+        if start < 0:
+            return None
+        try:
+            ordered, _ = json.JSONDecoder().raw_decode(actual["user"][start + len(marker):])
+            if _digest(ordered) != _digest(original) or _digest(actual) != request_sha256:
+                return None
+        except (TypeError, ValueError):
+            return None
+        candidate = _walk_anchor_retry(request, ordered, read)
+        return candidate if candidate["request"] == actual else None
+    if request_sha256 == _digest(plan["request"]):
+        return plan
+    from itertools import permutations
+    for order in permutations(("para_id", "quote", "problem", "suggestion", "severity")):
+        body = {"findings": [{key: row[key] for key in order} for row in original["findings"]]}
+        candidate = _walk_anchor_retry(request, body, read)
+        if request_sha256 == _digest(candidate["request"]):
+            return candidate
+    return None
+
+
+def _merge_walk_anchor_repair(original, reply, read, issues, schema, *, canonicalizations=None):
     if not _valid_schema(reply, schema):
         return None
     anchors = reply["anchors"]
@@ -831,11 +949,22 @@ def _merge_walk_anchor_repair(original, reply, read, issues, schema):
     if len(anchors) != len(expected) or {row["index"] for row in anchors} != set(expected):
         return None
     rows = [dict(row) for row in original["findings"]]
+    text = dict(read)
     for row in anchors:
         required = expected[row["index"]].get("required_para_id")
         if required is not None and row["para_id"] != required:
             return None
-        rows[row["index"]].update(para_id=row["para_id"], quote=row["quote"])
+        if row["para_id"] not in text:
+            return None
+        recovered = _canonical_repair_quote(row["quote"], text[row["para_id"]])
+        if recovered is None:
+            return None
+        quote, offsets = recovered
+        if offsets is not None and canonicalizations is not None:
+            canonicalizations.append({"index": row["index"], "para_id": row["para_id"],
+                "method": "unique-horizontal-space-v1", "raw_quote": row["quote"],
+                "canonical_quote": quote, "source_start": offsets[0], "source_end": offsets[1]})
+        rows[row["index"]].update(para_id=row["para_id"], quote=quote)
     merged = {"findings": rows}
     return merged if _valid_walk_window(merged, read) else None
 
