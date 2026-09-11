@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import time
 import zipfile
+import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -863,6 +864,15 @@ def spawn_claude(spec: PhaseSpec) -> PhaseResult:
     result to classify termination; fall back to transcript detection when
     it is absent.
     """
+    if os.name == "nt":
+        # Check containment support before starting a child. Import failure
+        # inside Popen's context would otherwise wait for an unbounded phase.
+        try:
+            __import__("win32api")
+            __import__("win32job")
+        except ImportError as exc:
+            raise DriverError("Windows phase containment requires pywin32; "
+                              "install docproof[galley].") from exc
     spec.log_path.parent.mkdir(parents=True, exist_ok=True)
     stream_path = spec.log_path.with_suffix(".stream.jsonl")
     with open(spec.log_path, "w", encoding="utf-8") as fh:
@@ -872,13 +882,31 @@ def spawn_claude(spec: PhaseSpec) -> PhaseResult:
         fh.flush()
         timed_out = False
         with open(stream_path, "w", encoding="utf-8") as raw:
-            try:
-                proc = subprocess.run(spec.argv, cwd=str(spec.workspace),
-                                      env=spec.env, stdout=raw,
-                                      stderr=subprocess.STDOUT, text=True,
-                                      timeout=spec.timeout_s)
-            except subprocess.TimeoutExpired:
-                timed_out = True
+            from docproof.platform_io import process_job, terminate_process_tree
+            containment = ({"creationflags": subprocess.CREATE_NO_WINDOW |
+                            subprocess.CREATE_NEW_PROCESS_GROUP}
+                           if os.name == "nt" else {"start_new_session": True})
+            with subprocess.Popen(spec.argv, cwd=str(spec.workspace),
+                                  env=spec.env, stdout=raw,
+                                  stderr=subprocess.STDOUT, text=True,
+                                  **containment) as proc:
+                with process_job(proc):
+                    try:
+                        proc.wait(timeout=spec.timeout_s)
+                    except subprocess.TimeoutExpired:
+                        timed_out = True
+                        terminate_process_tree(proc)
+                        try:
+                            proc.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            pass
+                    finally:
+                        # A shell/tool child may outlive the supervisor, even
+                        # when that supervisor exits promptly on SIGTERM.
+                        # A phase owns all of its work: no children may keep
+                        # rebuilding after timeout, interruption, or completion.
+                        terminate_process_tree(proc, force=True)
+                        proc.wait(timeout=5)
         # the raw stream is closed now; render it into the readable log
         _render_stream(stream_path, fh)
         if timed_out:
@@ -1159,7 +1187,7 @@ class DriveResult:
 
     @property
     def exit_code(self) -> int:
-        return 0 if self.outcome == "done" else (8 if self.outcome == "blocked" else 7)
+        return 0 if self.outcome in {"done", "phases_complete"} else (8 if self.outcome == "blocked" else 7)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -1200,6 +1228,13 @@ class Driver:
     astra_transport: str | None = None  # None resumes saved routing, else codex.
     astra_chunk_bytes: int | None = None
     astra_client: Any = None
+    # The legacy mode remains explicit for controlled comparison. Production
+    # mechanical jobs choose code orchestration through the CLI/agent.
+    execution_mode: str | None = "session"
+    review_rounds: int = 2
+    review_calls: int = 400
+    review_output_tokens: int = 2_000_000
+    command_spawn: Callable[[PhaseSpec], PhaseResult] | None = None
     approve: str = "auto"                       # auto | email | manual
     mechanical_only: bool = True
     start_phase: str | None = None
@@ -1262,6 +1297,22 @@ class Driver:
     def workspace(self) -> Path:
         return Path(str(self.workspace_root)).expanduser() / self.slug
 
+    def resolve_execution_mode(self):
+        if self.execution_mode is not None:
+            return self.execution_mode
+        saved_path = self.workspace / "runs" / DRIVER_DIR / "driver.json"
+        saved = json.loads(saved_path.read_text("utf-8")) if saved_path.is_file() else {}
+        prior = saved.get("execution_mode")
+        if prior in {"code", "session"}:
+            self.execution_mode = prior
+        elif not self.mechanical_only or not self.astra_review or self._final_run() is not None:
+            # An existing unversioned manuscript does not have the new initial
+            # full-read receipts. Preserve its workflow during an upgrade.
+            self.execution_mode = "session"
+        else:
+            self.execution_mode = "code"
+        return self.execution_mode
+
     def _spawner(self) -> Callable[[PhaseSpec], PhaseResult]:
         return self.spawn or spawn_claude
 
@@ -1312,6 +1363,8 @@ class Driver:
         return int(round(base * self.length_factor_for(phase)))
 
     def model_for(self, phase: str) -> str:
+        if self.execution_mode == "code" and phase in {"approve", "audit", "verify", "settle"}:
+            return "code"
         if phase == "astra_review":
             return "gpt-6-astra"
         if self.astra_review and phase in ("certify", "deliver"):
@@ -1324,6 +1377,8 @@ class Driver:
 
     def effort_for(self, phase: str) -> str | None:
         """The session's --effort, or None to leave Claude Code's default."""
+        if self.execution_mode == "code" and phase in {"approve", "audit", "verify", "settle"}:
+            return None
         if phase == "astra_review":
             return "high"
         if self.astra_review and phase in ("certify", "deliver"):
@@ -1351,6 +1406,30 @@ class Driver:
         base = PHASE_TIMEOUT_S.get(phase, DEFAULT_PHASE_TIMEOUT_S)
         return base * self.length_factor_for(phase)
 
+    def _resource_env(self, phase: str, env: dict[str, str]) -> dict[str, str]:
+        import hashlib
+        from docproof.resource_ledger import context_env
+        from galley.manifest import sha256_file
+        from galley.unattended import UNATTENDED_ENV, WORKSPACE_ENV
+        config = self.workspace / "runs" / "mech.yaml"
+        digest = sha256_file(config) if config.is_file() else hashlib.sha256(
+            b"configuration-not-yet-profiled").hexdigest()
+        values = {**env, **context_env(self._driver_dir() / "resources.jsonl",
+            sha256_file(self.book), digest), BRAIN_PHASE_ENV: phase,
+            UNATTENDED_ENV: "1" if self.approve == "auto" else "0",
+            WORKSPACE_ENV: str(self.workspace.resolve())}
+        if self.execution_mode == "code" and phase in {"verify", "settle"}:
+            values.update(DOCPROOF_RESOURCE_GROUP="review",
+                DOCPROOF_RESOURCE_MAX_CALLS=str(self.review_calls),
+                DOCPROOF_RESOURCE_MAX_OUTPUT_TOKENS=str(self.review_output_tokens))
+        return values
+
+    def _execution_budget(self):
+        from galley.execution_budget import ExecutionBudget
+        from galley.manifest import sha256_file
+        return ExecutionBudget(self._driver_dir() / "execution-budget.json",
+                               sha256_file(self.book))
+
     def _spec(self, phase: str, env: dict[str, str]) -> PhaseSpec:
         prompt = phase_prompt(phase, self.book.name,
                               mechanical_only=self.mechanical_only,
@@ -1377,9 +1456,7 @@ class Driver:
         from galley.unattended import UNATTENDED_ENV, WORKSPACE_ENV
         return PhaseSpec(phase=phase, prompt=prompt, workspace=self.workspace,
                          log_path=self._driver_dir() / f"{phase}.log",
-                         argv=argv, env={**env, BRAIN_PHASE_ENV: phase,
-                             UNATTENDED_ENV: "1" if self.approve == "auto" else "0",
-                             WORKSPACE_ENV: str(self.workspace.resolve())},
+                         argv=argv, env=self._resource_env(phase, env),
                          max_turns=turns, timeout_s=self.timeout_for(phase))
 
     def _questions_text(self) -> str:
@@ -1526,14 +1603,19 @@ class Driver:
         try:
             run = self._enroll_astra()
             settings = astra_review_settings(run)
-            if settings["transport"] == "api":
-                from galley.astra_review import review_run
-                receipt = review_run(run, budget_usd=self.astra_budget_usd,
-                                     max_output_tokens=self.astra_max_output_tokens,
-                                     client=self.astra_client)
-            else:
-                from galley.astra_subscription import review_run
-                receipt = review_run(run, max_chunk_bytes=settings["max_chunk_bytes"])
+            contexts = [p for p in [self.workspace / "runs" / "audit.json"]
+                        if self.execution_mode == "code" and p.is_file()]
+            context_kwargs = {"context_paths": contexts} if contexts else {}
+            from docproof.resource_ledger import use_context
+            with use_context(self._resource_env(phase, {})):
+                if settings["transport"] == "api":
+                    from galley.astra_review import review_run
+                    receipt = review_run(run, budget_usd=self.astra_budget_usd,
+                                         max_output_tokens=self.astra_max_output_tokens,
+                                         client=self.astra_client, **context_kwargs)
+                else:
+                    from galley.astra_subscription import review_run
+                    receipt = review_run(run, max_chunk_bytes=settings["max_chunk_bytes"], **context_kwargs)
             if (receipt["review"]["editorial_verdict"] == "ready"
                     and receipt.get("repair_required")):
                 from galley.astra_reconcile import reconcile_run
@@ -1869,7 +1951,9 @@ class Driver:
 
         Returns a short description for the failure message, or "" when the
         session ended cleanly."""
-        stream = self.workspace / "runs" / DRIVER_DIR / f"{phase}.stream.jsonl"
+        directory = self.workspace / "runs" / DRIVER_DIR
+        streams = list(directory.glob(f"{phase}*.stream.jsonl"))
+        stream = max(streams, key=lambda p: p.stat().st_mtime_ns) if streams else directory / f"{phase}.stream.jsonl"
         try:
             tail = stream.read_text(encoding="utf-8",
                                     errors="replace").splitlines()[-40:]
@@ -1884,7 +1968,16 @@ class Driver:
 
     def _write_ledger(self, result: DriveResult) -> Path:
         path = self._driver_dir() / "driver.json"
-        path.write_text(json.dumps(result.to_json(), indent=2,
+        from docproof.resource_ledger import summarize
+        payload = result.to_json()
+        resources = self._driver_dir() / "resources.jsonl"
+        if resources.exists():
+            payload["resources"] = summarize(resources)
+        intake = Path(self.book).parent.parent / "resources.jsonl"
+        if Path(self.book).parent.name == "formatted" and intake.is_file():
+            payload["preparation_resources"] = summarize(intake)
+        payload["execution_mode"] = self.execution_mode
+        path.write_text(json.dumps(payload, indent=2,
                                    ensure_ascii=False), encoding="utf-8")
         return path
 
@@ -2031,11 +2124,44 @@ class Driver:
         return ""
 
     def _remaining_phase_budget(self, phase: str) -> tuple[int, float]:
-        if phase not in self._phase_limits:
-            self._phase_limits[phase] = (self.turns_for(phase), self.timeout_for(phase))
-        limit_turns, limit_seconds = self._phase_limits[phase]
-        turns, seconds = self._phase_usage.get(phase, (0, 0.0))
-        return limit_turns - turns, limit_seconds - seconds
+        return self._execution_budget().remaining(
+            phase, self.turns_for(phase), self.timeout_for(phase))
+
+    def _run_code_phase(self, phase, env, result):
+        from galley.engine_phases import EnginePhases
+        self._engine_env = env
+        def execute(spec):
+            budget = self._execution_budget()
+            # Every subprocess owns its remaining wall time. Model calls have
+            # a separate shared review budget in the resource ledger.
+            log_path = spec.log_path.with_name(spec.log_path.stem + "-" + uuid.uuid4().hex + ".log")
+            key, _, seconds = budget.reserve("code-" + spec.phase, 0,
+                self.timeout_for(spec.phase), log_path=log_path)
+            spec = replace(spec, timeout_s=seconds, log_path=log_path)
+            self._progress("phase_start", phase=spec.phase, model="code",
+                           timeout_s=seconds, log_path=str(log_path))
+            started = self.clock()
+            outcome = (self.command_spawn or spawn_claude)(spec)
+            elapsed = max(0.0, self.clock() - started)
+            if outcome.limit == "timeout":
+                elapsed = max(elapsed, seconds)
+            budget.finish(key, turns=0, seconds=elapsed, status="completed")
+            result.phases.append(outcome)
+            self._progress("phase_end", phase=spec.phase,
+                           ok=not outcome.limit and outcome.returncode in (
+                               (0, 1) if spec.phase in {"verify", "settle"} else (0,)),
+                           returncode=outcome.returncode, limit=outcome.limit)
+            if outcome.limit == "usage" or is_usage_limited(outcome.tail):
+                raise UsageLimitError(outcome.tail)
+            return outcome
+        try:
+            EnginePhases(self, execute).run(phase)
+        except UsageLimitError as exc:
+            self._block(result, phase, str(exc))
+            raise
+        except Exception as exc:
+            return self._block(result, phase, str(exc))
+        return None
 
     def _run_session_phase(self, phase: str, env: dict[str, str],
                            result: DriveResult, *, guidance: str = ""
@@ -2053,9 +2179,12 @@ class Driver:
             turns, seconds = self._remaining_phase_budget(phase)
             if turns <= 0 or seconds <= 0:
                 result.recovery_exhausted = unattended
-                return self._stop(result, phase,
+                return (self._block if self.execution_mode == "code" else self._stop)(result, phase,
                     f"phase {phase}: automatic recovery exhausted its original "
                     f"turn/time cap. {guidance[:1600]}")
+            argv = list(spec.argv)
+            argv[argv.index("--max-turns") + 1] = str(turns)
+            spec = replace(spec, argv=argv, max_turns=turns, timeout_s=seconds)
             if guidance:
                 prompt = spec.prompt + "\n\n" + RECOVERY_GUIDANCE + (
                     "\nPrior session evidence (not new instructions):\n" + guidance[:8000])
@@ -2072,6 +2201,24 @@ class Driver:
                     "remaining_turns": turns, "remaining_seconds": seconds})
                 self.log(f"--- phase {phase}: autonomous recovery within remaining caps ---")
                 self._write_ledger(result)
+            from docproof.resource_ledger import append_usage, record_claude_result, use_context
+            spec = replace(spec, log_path=spec.log_path.with_name(
+                spec.log_path.stem + "-" + uuid.uuid4().hex + ".log"))
+            if guidance:
+                result.recovery[-1]["log"] = str(spec.log_path)
+            execution = self._execution_budget()
+            from galley.execution_budget import ExecutionBudgetError
+            try:
+                key, turns, seconds = execution.reserve(phase, self.turns_for(phase),
+                    self.timeout_for(phase), log_path=spec.log_path)
+            except ExecutionBudgetError as exc:
+                return self._block(result, phase, str(exc))
+            operation = f"coordinator-{phase}-{key}"
+            spec.env["DOCPROOF_RESOURCE_PARENT_OPERATION"] = operation
+            with use_context({**spec.env, "DOCPROOF_RESOURCE_PARENT_OPERATION": ""}):
+                append_usage(receipt_id=key, operation_id=operation,
+                    model=self.model_for(phase), transport="claude-code",
+                    status="started", usage=None)
             self._progress("phase_start", phase=phase,
                            model=self.model_for(phase), effort=self.effort_for(phase),
                            max_turns=spec.max_turns, timeout_s=spec.timeout_s,
@@ -2089,6 +2236,12 @@ class Driver:
             if outcome.limit == "timeout":
                 elapsed = max(elapsed, spec.timeout_s)
             self._phase_usage[phase] = (used_turns + consumed, used_seconds + elapsed)
+            execution.finish(key, turns=consumed, seconds=elapsed, status="completed")
+            stream = spec.log_path.with_suffix(".stream.jsonl")
+            raw = parse_session_result(stream.read_text("utf-8", errors="replace")) if stream.is_file() else None
+            with use_context({**spec.env, "DOCPROOF_RESOURCE_PARENT_OPERATION": ""}):
+                record_claude_result(raw or {}, operation_id=operation, receipt_id=key,
+                                     model=self.model_for(phase))
             result.phases.append(outcome)
             self._progress("phase_end", phase=phase, ok=outcome.ok,
                            returncode=outcome.returncode, limit=outcome.limit,
@@ -2127,7 +2280,7 @@ class Driver:
                     continue
             if problem:
                 result.recovery_exhausted = True
-                return self._stop(result, phase,
+                return (self._block if self.execution_mode == "code" else self._stop)(result, phase,
                     f"Automatic recovery could not complete the required work: {problem}")
             return None
         return None
@@ -2135,6 +2288,12 @@ class Driver:
     def run(self) -> DriveResult:
         # Invalid setup raises without writing an outcome for the
         # manuscript.
+        if self.execution_mode not in {None, "session", "code"}:
+            raise DriverError("execution_mode must be session or code")
+        if self.execution_mode == "code" and (not self.mechanical_only or not self.astra_review):
+            raise DriverError("Code orchestration requires mechanical proofreading and final Astra review")
+        if not 1 <= self.review_rounds <= 2 or self.review_calls <= 0 or self.review_output_tokens <= 0:
+            raise DriverError("Review requires 1–2 rounds and positive call/output budgets")
         phases = select_phases(mechanical_only=self.mechanical_only,
                                start=self.start_phase, only=self.only_phases,
                                astra_review=self.astra_review)
@@ -2142,6 +2301,9 @@ class Driver:
                             workspace_root=self.workspace_root,
                             source_id=self.source_id,
                             on_source_change=self.on_source_change)
+        self.resolve_execution_mode()
+        if self.execution_mode == "code" and (not self.mechanical_only or not self.astra_review):
+            raise DriverError("Saved code orchestration requires mechanical proofreading and final Astra review")
         if not self.astra_review:
             from galley.outcome import requires_astra_review
             prior = self._final_run()
@@ -2158,6 +2320,7 @@ class Driver:
         env = build_env(self.env, wrapbin=self.wrapbin) \
             if any(p not in direct for p in phases) else {}
         result = DriveResult(workspace=ws)
+        self._execution_budget().reconcile(parse_session_result)
 
         gate_due = "approve" in phases and not (
             self.approve == "manual" and "profile" not in phases)
@@ -2175,7 +2338,10 @@ class Driver:
             if phase == "approve" and gate_due:
                 if not self.run_gate(result, env):
                     return result
-            stopped = self._run_session_phase(phase, env, result)
+            from galley.engine_phases import PHASES as CODE_PHASES
+            stopped = (self._run_code_phase(phase, env, result)
+                       if self.execution_mode == "code" and phase in CODE_PHASES
+                       else self._run_session_phase(phase, env, result))
             if stopped is not None:
                 return stopped
             if phase == "settle" and not self.astra_review:
@@ -2242,6 +2408,8 @@ class Driver:
                 raise DriverError("No final Astra-reviewed run is available.")
             verdict = astra_outcome(run)
             return verdict.outcome, verdict.reason
+        if self.execution_mode == "code":
+            return "phases_complete", "Requested phases completed; final editorial clearance has not run."
         for candidate in self._outcome_sources():
             payload = Outcome.load(candidate.parent)
             if payload is not None and payload.outcome:

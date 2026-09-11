@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 import docx
+import pytest
 import yaml
 
 import docproof.__main__ as m
@@ -686,7 +687,8 @@ def test_until_clean_stops_after_a_quiet_round(tmp_path, monkeypatch):
     assert any("quiet" in n for n in st.notes)
 
 
-def test_until_clean_respects_the_turn_budget(tmp_path, monkeypatch):
+@pytest.mark.parametrize("until_clean", [False, True])
+def test_until_clean_respects_the_turn_budget(tmp_path, monkeypatch, until_clean):
     src = _manuscript(tmp_path)
     ids, _doc = _para_ids(src)
     run = _build(tmp_path, src, [
@@ -713,7 +715,7 @@ def test_until_clean_respects_the_turn_budget(tmp_path, monkeypatch):
     _fake_engine(monkeypatch, prov)
     rc = main(["galley", "settle", str(run), "--source", str(src), "--config",
                _replay_config(tmp_path), "--engine", "provider",
-               "--until-clean", "--max-turns", "2"])
+               *(["--until-clean"] if until_clean else []), "--max-turns", "2"])
     assert rc == 1
     recs, st = _records(run)
     assert st.rounds == 1 and st.open
@@ -1116,6 +1118,220 @@ def test_self_check_recovers_failed_composite_individually(
                for row in env["findings"])
     assert st.open == []
     assert any("failed the self-check" in n for n in st.notes)
+
+
+@pytest.mark.parametrize("batch_limit, expected_retries", [(32, 1), (3, 3)])
+def test_recovery_shares_bounded_builds_across_independent_paragraphs(
+        tmp_path, monkeypatch, batch_limit, expected_retries):
+    """Eight failed paragraphs need bounded shared replays, not eight rebuilds."""
+    import galley.settle as gs
+    paragraphs = [PARAGRAPHS[0]]
+    for i in range(8):
+        paragraphs.extend([
+            f"The courier at gate {i} will recieve the letter before sunset.",
+            "A lantern burned beside the tall window."])
+    src = _manuscript(tmp_path, paragraphs)
+    ids, _ = _para_ids(src)
+    targets = ids[1::2]
+    run = _build(tmp_path, src, [{"para_id": ids[0], "original_text": "teh",
+        "corrected_text": "the", "confidence": "high"}])
+    _walk(run, [{"para_id": pid, "quote": "recieve", "suggestion": "receive",
+                 "problem": "misspelling", "severity": "high"} for pid in targets])
+    check, rebuild = gs.Settler._self_check, gs.Settler._rebuild
+    snapshots, failures = [], set(targets)
+
+    def fail_first_build(self, *args):
+        bad = check(self, *args)
+        bad.update({pid: "composite_mismatch" for pid in failures})
+        failures.clear()
+        return bad
+
+    def count_builds(self, rows, *, snapshot):
+        snapshots.append(snapshot)
+        return rebuild(self, rows, snapshot=snapshot)
+
+    monkeypatch.setattr(gs, "RECOVERY_BATCH_PARAGRAPHS", batch_limit)
+    monkeypatch.setattr(gs.Settler, "_self_check", fail_first_build)
+    monkeypatch.setattr(gs.Settler, "_rebuild", count_builds)
+    settler = gs.Settler(run, cfg=load_config(_replay_config(tmp_path)),
+        manuscript=src, error_dir="config/error_types",
+        options=gs.SettleOptions(verify_delta=False, propagate=False))
+    result = settler.run()
+
+    assert result.open == 0
+    assert snapshots == ["round1", "round1-restore"] + [
+        f"round1-recovery{i}" for i in range(1, expected_retries + 1)]
+    original, accepted = paragraph_views(run)
+    assert list(original.values()) == paragraphs
+    assert all("receive" in accepted[pid] for pid in targets)
+    assert settler._dirty == set(targets)     # Recovery did not claim a reread.
+    walk = json.loads((run / "finished_walk.json").read_text())
+    assert set(walk["unverified_paragraphs"]) == set(targets)
+    progress = json.loads((run / "settle" / "recovery-progress.json").read_text())
+    assert progress["status"] == "completed" and progress["attempted_count"] == 8
+    assert progress["batch"] == expected_retries
+    assert progress["remaining_ids"] == progress["unresolved_ids"] == []
+    assert (run / "settle" / "round1" / "findings.json").exists()
+    assert (run / "settle" / "round1-recovery1" / "findings.json").exists()
+
+
+def test_recovery_rebases_later_correction_in_the_same_paragraph(tmp_path, monkeypatch):
+    """Successive repairs preserve the earlier repair and its tracked source."""
+    from galley.settle import Settler, SettleOptions
+    paragraphs = ["The lamp on teh desk flickerd, then finally caught, and Maria sighed."]
+    src = _manuscript(tmp_path, paragraphs)
+    ids, _ = _para_ids(src)
+    pid = ids[0]
+    run = _build(tmp_path, src, [{"para_id": pid, "original_text": "teh",
+        "corrected_text": "thee", "confidence": "high"}])
+    _walk(run, [{"para_id": pid, "quote": "thee desk", "suggestion": "the desk",
+                 "problem": "wrong word", "severity": "high"},
+                {"para_id": pid, "quote": "desk flickerd", "suggestion": "desk flickered",
+                 "problem": "misspelling", "severity": "high"}])
+    check, rebuild = Settler._self_check, Settler._rebuild
+    snapshots = []
+
+    def fail_first_build(self, *args):
+        bad = check(self, *args)
+        if snapshots == ["round1"]:
+            bad[pid] = "composite_mismatch"
+        return bad
+
+    def count_builds(self, rows, *, snapshot):
+        snapshots.append(snapshot)
+        return rebuild(self, rows, snapshot=snapshot)
+
+    monkeypatch.setattr(Settler, "_self_check", fail_first_build)
+    monkeypatch.setattr(Settler, "_rebuild", count_builds)
+    result = Settler(run, cfg=load_config(_replay_config(tmp_path)),
+        manuscript=src, error_dir="config/error_types",
+        options=SettleOptions(verify_delta=False, propagate=False)).run()
+    assert result.open == 0
+    assert snapshots == ["round1", "round1-restore", "round1-recovery1", "round1-recovery2"]
+    original, accepted = paragraph_views(run)
+    assert original[pid] == paragraphs[0]
+    assert accepted[pid] == paragraphs[0].replace("teh", "the").replace("flickerd", "flickered")
+    assert all(record.action in ("add", "absorb") for record in result.settlement.latest().values())
+
+
+def test_recovery_failure_restores_only_its_own_paragraph(tmp_path, monkeypatch):
+    """A persistent failed repair cannot undo a successful neighbor or certify it."""
+    from galley.settle import Settler, SettleOptions
+    src = _manuscript(tmp_path, [PARAGRAPHS[0], PARAGRAPHS[1],
+        "The courier walked along the path before sunrise.",
+        "The candle flickerd while the courier waited at the gate."])
+    ids, _ = _para_ids(src)
+    bad_pid, good_pid = ids[1], ids[3]
+    run = _build(tmp_path, src, [{"para_id": ids[0], "original_text": "teh",
+        "corrected_text": "the", "confidence": "high"}])
+    _walk(run, [{"para_id": bad_pid, "quote": "recieve", "suggestion": "receive",
+                 "problem": "misspelling", "severity": "high"},
+                {"para_id": good_pid, "quote": "flickerd", "suggestion": "flickered",
+                 "problem": "misspelling", "severity": "high"}])
+    check, rebuild = Settler._self_check, Settler._rebuild
+    snapshots = []
+
+    def fail_one_paragraph(self, *args):
+        bad = check(self, *args)
+        bad[bad_pid] = "composite_mismatch"
+        if snapshots == ["round1"]:
+            bad[good_pid] = "composite_mismatch"
+        return bad
+
+    def count_builds(self, rows, *, snapshot):
+        snapshots.append(snapshot)
+        return rebuild(self, rows, snapshot=snapshot)
+
+    monkeypatch.setattr(Settler, "_self_check", fail_one_paragraph)
+    monkeypatch.setattr(Settler, "_rebuild", count_builds)
+    settler = Settler(run, cfg=load_config(_replay_config(tmp_path)),
+        manuscript=src, error_dir="config/error_types",
+        options=SettleOptions(verify_delta=False, propagate=False))
+    result = settler.run()
+    assert result.open == 1
+    assert snapshots == ["round1", "round1-restore", "round1-recovery1", "round1-recovery1-restore"]
+    accepted = _accepted(run)
+    assert "recieve" in accepted[bad_pid]
+    assert "flickered" in accepted[good_pid]
+    assert "the desk" in accepted[ids[0]]
+    latest = result.settlement.latest()
+    bad_id = residual_id(bad_pid, "recieve")
+    assert latest[bad_id].action == "internal_repair"
+    assert latest[residual_id(good_pid, "flickerd")].action == "add"
+    assert settler._dirty == {bad_pid, good_pid}
+    progress = json.loads((run / "settle" / "recovery-progress.json").read_text())
+    assert progress["unresolved_ids"] == [bad_id]
+    findings = json.loads((run / "findings.json").read_text())["findings"]
+    assert not any(row.get("queried") for row in findings)
+
+
+def test_settle_without_row_changes_keeps_the_deliverable_bytes(tmp_path, monkeypatch):
+    """Recording a rejected flag or unanchorable repair needs no manuscript replay."""
+    from galley.settle import Settler
+    from galley.verify import deliverable_docx
+    src = _manuscript(tmp_path)
+    ids, _ = _para_ids(src)
+    run = _build(tmp_path, src, [{"para_id": ids[0], "original_text": "teh",
+        "corrected_text": "the", "confidence": "high"}])
+    _walk(run, [{"para_id": ids[1], "quote": "light", "suggestion": "light",
+                 "problem": "unnecessary change", "severity": "low"},
+                {"para_id": ids[2], "quote": "missing words", "suggestion": "different words",
+                 "problem": "cannot anchor", "severity": "low"}])
+    before = deliverable_docx(run).read_bytes()
+
+    def unexpected_rebuild(*args, **kwargs):
+        pytest.fail("unchanged finding rows must not trigger a full rebuild")
+
+    monkeypatch.setattr(Settler, "_rebuild", unexpected_rebuild)
+    assert _settle(tmp_path, run, src) == 1
+    assert deliverable_docx(run).read_bytes() == before
+    records, settlement = _records(run)
+    assert records[residual_id(ids[1], "light")].action == "drop"
+    assert records[residual_id(ids[2], "missing words")].action == "internal_repair"
+    assert len(settlement.open) == 1
+
+
+def test_recovery_rechecks_neighbor_before_deleting_the_last_repeated_passage(
+        tmp_path, monkeypatch):
+    """Two duplicate-removal proposals must not remove both neighboring copies."""
+    from galley.settle import Settler, SettleOptions
+    repeated = "The night watch rang the iron bell. "
+    endings = ["At dawn, Maria opened the gate.", "At dusk, David shut the gate."]
+    src = _manuscript(tmp_path, [PARAGRAPHS[0]] + [repeated + text for text in endings])
+    ids, _ = _para_ids(src)
+    run = _build(tmp_path, src, [{"para_id": ids[0], "original_text": "teh",
+        "corrected_text": "the", "confidence": "high"}])
+    _walk(run, [{"para_id": pid, "quote": repeated + text, "suggestion": text,
+                 "problem": "duplicated sentence", "severity": "high"}
+                for pid, text in zip(ids[1:], endings)])
+    check, rebuild = Settler._self_check, Settler._rebuild
+    snapshots = []
+
+    def fail_first_build(self, *args):
+        bad = check(self, *args)
+        if snapshots == ["round1"]:
+            bad.update({pid: "composite_mismatch" for pid in ids[1:]})
+        return bad
+
+    def count_builds(self, rows, *, snapshot):
+        snapshots.append(snapshot)
+        return rebuild(self, rows, snapshot=snapshot)
+
+    monkeypatch.setattr(Settler, "_self_check", fail_first_build)
+    monkeypatch.setattr(Settler, "_rebuild", count_builds)
+    result = Settler(run, cfg=load_config(_replay_config(tmp_path)),
+        manuscript=src, error_dir="config/error_types",
+        options=SettleOptions(verify_delta=False, propagate=False, mechanical_only=True)).run()
+
+    accepted = _accepted(run)
+    assert sum(repeated.strip() in accepted[pid] for pid in ids[1:]) == 1
+    assert accepted[ids[1]] == endings[0]
+    assert accepted[ids[2]] == repeated + endings[1]
+    assert result.open == 1      # Deleting the remaining copy needs judgment.
+    assert snapshots == ["round1", "round1-restore", "round1-recovery1"]
+    progress = json.loads((run / "settle" / "recovery-progress.json").read_text())
+    assert progress["batch"] == 2 and progress["attempted_count"] == 2
+    assert progress["unresolved_ids"] == [residual_id(ids[2], repeated + endings[1])]
 
 
 def test_certify_artifact_scan_fails_an_introduced_duplicate_fragment(tmp_path):

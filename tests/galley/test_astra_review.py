@@ -117,6 +117,89 @@ def test_single_high_astra_request_cached_and_retry_disabled(run):
     assert "UNTRUSTED EVIDENCE" in call["input"][0]["content"]
 
 
+def test_api_review_usage_reserved_once_and_cache_reuse_is_free(run, monkeypatch):
+    from docproof.resource_ledger import context_env, use_context, summarize
+    ledger = run.parent / "resources.jsonl"
+    class Metered(Fake):
+        def create(self, **kw):
+            response = super().create(**kw)
+            response.update(model="gpt-6-astra-version", usage={"input_tokens": 80,
+                "input_tokens_details": {"cached_tokens": 30}, "output_tokens": 12,
+                "output_tokens_details": {"reasoning_tokens": 7}})
+            return response
+    fake = Metered()
+    env = {**context_env(ledger, "source", "config"),
+           "DOCPROOF_RESOURCE_GROUP": "astra", "DOCPROOF_RESOURCE_MAX_CALLS": "1",
+           "DOCPROOF_RESOURCE_MAX_OUTPUT_TOKENS": "40000"}
+    with use_context(env):
+        result = ar.review_run(run, budget_usd=100, client=fake)
+        assert ar.review_run(run, budget_usd=100, client=fake) == result
+    summary = summarize(ledger)
+    assert len(fake.calls) == 1
+    assert summary["new_attempts"] == summary["reused_receipts"] == 1
+    assert summary["input_tokens"] == 50
+    assert summary["cache_read_input_tokens"] == 30
+    assert summary["output_tokens"] == 12 and summary["thinking_tokens"] == 7
+    assert summary["groups"]["astra"]["charged_output_tokens"] == 12
+    assert summary["by_model"]["gpt-6-astra-version"]["output_tokens"] == 12
+
+
+def test_api_timeout_retains_reservation_and_never_resubmits(run):
+    from docproof.resource_ledger import context_env, use_context, summarize
+    ledger = run.parent / "resources.jsonl"
+    fake = Fake(error=TimeoutError("could have been submitted"))
+    with use_context({**context_env(ledger, "source", "config"),
+                      "DOCPROOF_RESOURCE_GROUP": "astra"}):
+        for _ in range(2):
+            with pytest.raises(ar.AstraReviewError):
+                ar.review_run(run, budget_usd=100, client=fake)
+    summary = summarize(ledger)
+    assert len(fake.calls) == 1
+    assert summary["new_attempts"] == summary["unknown_usage"] == 1
+    assert summary["groups"]["astra"]["reserved_output_tokens"] == ar.DEFAULT_MAX_OUTPUT_TOKENS
+
+
+def test_api_recovery_updates_existing_receipt_without_new_budget_reservation(run, monkeypatch):
+    from docproof.resource_ledger import context_env, use_context, summarize
+    class Background(Fake):
+        gets = 0
+        def create(self, **kw):
+            self.completed = super().create(**kw)
+            self.completed["model"] = "gpt-6-astra-version"
+            return {"id": self.completed["id"], "status": "in_progress", "output": []}
+        def retrieve(self, response_id):
+            self.gets += 1
+            if self.gets == 1:
+                raise TimeoutError("poll failed")
+            return self.completed
+    fake = Background()
+    ledger = run.parent / "resources.jsonl"
+    monkeypatch.setattr(ar.time, "sleep", lambda _: None)
+    with use_context({**context_env(ledger, "source", "config"),
+                      "DOCPROOF_RESOURCE_MAX_CALLS": "1"}):
+        with pytest.raises(ar.AstraReviewError):
+            ar.review_run(run, budget_usd=100, client=fake)
+        ar.review_run(run, budget_usd=100, client=fake)
+    summary = summarize(ledger)
+    assert len(fake.calls) == 1 and fake.gets == 2
+    assert summary["new_attempts"] == 1
+    assert summary["output_tokens"] == 10
+    assert summary["groups"]["book"]["reserved_output_tokens"] == 0
+
+
+def test_accounting_failure_does_not_erase_completed_editorial_receipt(run, monkeypatch):
+    fake = Fake()
+    def broken_ledger(run, receipt, **kwargs):
+        if receipt.get("status") == "completed":
+            raise OSError("resource disk unavailable")
+    monkeypatch.setattr(ar, "_resource_receipt", broken_ledger)
+    with pytest.raises(ar.AstraReviewError):
+        ar.review_run(run, budget_usd=100, client=fake)
+    saved = json.loads((run / ar.RECEIPT_FILE).read_text())
+    assert saved["status"] == "completed" and saved["delivery_ready"]
+    assert len(fake.calls) == 1
+
+
 @pytest.mark.parametrize("mutate", [
     lambda r: r["coverage"].update(full_manuscript_read=False),
     lambda r: r["coverage"].update(revisions=0),

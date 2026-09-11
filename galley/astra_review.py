@@ -180,6 +180,16 @@ def build_packet(run_dir, *, docx_path=None, context_paths=(), require_artifacts
     if missing and require_artifacts:
         raise AstraReviewError("Missing required review artifacts: " + ", ".join(missing))
     artifacts = {name: _load(run / name) for name in REQUIRED_ARTIFACTS if name not in missing}
+    from galley.settlement_inputs import CANDIDATES, REGISTRY, refresh_candidate_dispositions
+    if (run / REGISTRY).is_file():
+        try:
+            intake = refresh_candidate_dispositions(run)
+        except (ValueError, OSError) as exc:
+            raise AstraReviewError(f"Invalid registered verification evidence: {exc}") from exc
+        artifacts[CANDIDATES] = {
+            "source_sha256": intake["source_sha256"],
+            "registered_candidates": len(intake["candidates"]),
+            "open_candidates": [row for row in intake["candidates"] if row["disposition"] == "open"]}
     findings_payload = artifacts.get("findings.json", {"findings": []})
     if not isinstance(findings_payload, dict) or not isinstance(findings_payload.get("findings"), list):
         raise AstraReviewError("findings.json must contain every finding as an array")
@@ -258,7 +268,8 @@ def build_packet(run_dir, *, docx_path=None, context_paths=(), require_artifacts
     findings = findings_payload["findings"]
     issue_map = {}
     for artifact, collection in (("change_verify.json", "problems"), ("finished_walk.json", "residuals"),
-                                 ("settlement.json", "open"), ("settlement.json", "residuals_seen")):
+                                 ("settlement.json", "open"), ("settlement.json", "residuals_seen"),
+                                 (CANDIDATES, "open_candidates")):
         payload = artifacts.get(artifact, {})
         rows = payload.get(collection, []) if isinstance(payload, dict) else []
         if not isinstance(rows, list):
@@ -266,13 +277,14 @@ def build_packet(run_dir, *, docx_path=None, context_paths=(), require_artifacts
         for i, row in enumerate(rows):
             if not isinstance(row, dict):
                 raise AstraReviewError(f"Malformed issue in {artifact}")
-            recorded_id = row.get("residual_id") or row.get("problem_id") or row.get("id")
+            recorded_id = row.get("candidate_id") or row.get("residual_id") or row.get("problem_id") or row.get("id")
+            evidence = row.get("evidence", {}) if artifact == CANDIDATES else row
             # A provider-local ID is not an issue identity. Only exact copied
             # evidence with a substantive location/content field can share a
             # decision; retain ambiguous or differently described rows apart.
-            identifying = row.get("para_id") and any(row.get(k) for k in
+            identifying = evidence.get("para_id") and any(evidence.get(k) for k in
                 ("quote", "problem", "original_text", "corrected_text", "detail", "owner_original", "owner_corrected"))
-            key = _hash(row) if identifying else (artifact, collection, i)
+            key = _hash(evidence) if identifying else (artifact, collection, i)
             if key not in issue_map:
                 issue_map[key] = {"id": f"issue-{len(issue_map) + 1:06d}",
                                   "recorded_id": recorded_id, "sources": []}
@@ -774,6 +786,24 @@ def _client(client, timeout_seconds):
         raise AstraReviewError("OpenAI review client is unavailable; no review was submitted") from exc
 
 
+def _resource_receipt(run, receipt, *, status=None, reused=False):
+    """Observe the existing submission receipt; never authorize another POST."""
+    from docproof.resource_ledger import append_usage
+    operation = receipt.get("resource_operation_id") or "astra-api:" + _hash({
+        "run": str(Path(run).resolve()), "packet": receipt.get("packet_sha256")})
+    saved_status = receipt.get("status")
+    status = status or ("completed" if saved_status == "completed" else
+                        "error" if saved_status == "operational_failure" else "pending")
+    append_usage(receipt_id=operation, operation_id=operation,
+        model=receipt.get("actual_model") or receipt.get("model") or MODEL,
+        transport="openai_api", usage=receipt.get("usage"), status=status,
+        reused=reused, effort=receipt.get("reasoning_effort", REASONING_EFFORT),
+        max_output_tokens=(receipt.get("estimate") or {}).get("max_output_tokens"),
+        provider_response_id=receipt.get("response_id"),
+        response_status=receipt.get("response_status"),
+        submitted=receipt.get("submitted"), failure_type=receipt.get("failure_type"))
+
+
 def _consume_response(run, packet, pending, response, client, timeout_seconds):
     raw = _dump(response)
     if not isinstance(raw.get("id"), str) or not raw["id"]:
@@ -781,8 +811,10 @@ def _consume_response(run, packet, pending, response, client, timeout_seconds):
     if pending.get("response_id") and pending["response_id"] != raw["id"]:
         raise AstraReviewError("Recovered response ID differs from the submitted request")
     pending.update(response_id=raw.get("id"), response_status=raw.get("status"),
-                   usage=raw.get("usage"), response_received_at=_now())
+                   usage=raw.get("usage"), response_received_at=_now(),
+                   actual_model=raw.get("model") or pending.get("actual_model") or MODEL)
     _atomic(run / RECEIPT_FILE, pending)
+    _resource_receipt(run, pending)
     deadline = time.monotonic() + timeout_seconds
     while raw.get("status") in {"queued", "in_progress"}:
         if not raw.get("id") or time.monotonic() >= deadline:
@@ -792,8 +824,10 @@ def _consume_response(run, packet, pending, response, client, timeout_seconds):
         raw = _dump(response)
         if raw.get("id") != pending["response_id"]:
             raise AstraReviewError("Polled response ID differs from the submitted request")
-    pending.update(response_status=raw.get("status"), usage=raw.get("usage"))
+    pending.update(response_status=raw.get("status"), usage=raw.get("usage"),
+                   actual_model=raw.get("model") or pending.get("actual_model") or MODEL)
     _atomic(run / RECEIPT_FILE, pending)
+    _resource_receipt(run, pending)
     _atomic(run / "astra-response.json", raw)
     if raw.get("status") != "completed":
         raise AstraReviewError("Astra response did not complete (including output truncation)")
@@ -813,14 +847,23 @@ def _consume_response(run, packet, pending, response, client, timeout_seconds):
     result = _receipt_result(review, packet, response_id=raw.get("id"), usage=raw.get("usage"),
                              actual_cost_usd=actual_cost(raw.get("usage")),
                              cost_basis="Actual tokens at uncached list rates; cached discount not assumed",
-                             estimate=pending.get("estimate"), completed_at=_now(), inputs=inputs)
+                             estimate=pending.get("estimate"), completed_at=_now(), inputs=inputs,
+                             resource_operation_id=pending.get("resource_operation_id"),
+                             actual_model=pending.get("actual_model"), submitted=True)
     _atomic(run / RECEIPT_FILE, result)
+    _resource_receipt(run, result)
     return result
 
 
 def _record_failure(run, pending, exc):
+    # A resource-report write can fail after the editorial receipt was saved.
+    # Preserve that authoritative decision; accounting failure is operational.
+    if (run / RECEIPT_FILE).exists() and _load(run / RECEIPT_FILE).get("status") == "completed":
+        return
     pending.update(status="operational_failure", failure_type=type(exc).__name__, failed_at=_now())
     _atomic(run / RECEIPT_FILE, pending)
+    if pending.get("submitted") is not False:
+        _resource_receipt(run, pending)
 
 
 def recover_review(run_dir, *, client=None, timeout_seconds=1800, docx_path=None, context_paths=()):
@@ -828,7 +871,11 @@ def recover_review(run_dir, *, client=None, timeout_seconds=1800, docx_path=None
     run = Path(run_dir).resolve()
     pending = _load(run / RECEIPT_FILE)
     if pending.get("status") == "completed":
-        return validate_receipt(run, docx_path=docx_path, context_paths=context_paths)
+        result = validate_receipt(run, docx_path=docx_path, context_paths=context_paths)
+        _resource_receipt(run, result, reused=True)
+        return result
+    if pending.get("submitted") is not False:
+        _resource_receipt(run, pending)
     if not pending.get("response_id"):
         raise AstraReviewError("Submission outcome is ambiguous with no response ID; operator reconciliation is required")
     inputs = pending.get("inputs", {})
@@ -857,7 +904,9 @@ def review_run(run_dir, *, budget_usd, max_output_tokens=DEFAULT_MAX_OUTPUT_TOKE
     if (run / RECEIPT_FILE).exists():
         prior = _load(run / RECEIPT_FILE)
         if prior.get("status") == "completed":
-            return validate_receipt(run, docx_path=docx_path, context_paths=context_paths)
+            result = validate_receipt(run, docx_path=docx_path, context_paths=context_paths)
+            _resource_receipt(run, result, reused=True)
+            return result
         return recover_review(run, client=client, timeout_seconds=timeout_seconds,
                               docx_path=docx_path, context_paths=context_paths)
     packet = build_packet(run, docx_path=docx_path, context_paths=context_paths)
@@ -876,8 +925,11 @@ def review_run(run_dir, *, budget_usd, max_output_tokens=DEFAULT_MAX_OUTPUT_TOKE
     pending = {"schema_version": 1, "status": "pending", "model": MODEL,
                "reasoning_effort": REASONING_EFFORT, "packet_sha256": packet["packet_sha256"],
                "started_at": _now(), "estimate": estimate, "response_id": None,
+               "submitted": False,
                "inputs": {"docx_path": str(Path(docx_path).resolve()) if docx_path else None,
                           "context_paths": [str(Path(p).resolve()) for p in context_paths]}}
+    pending["resource_operation_id"] = "astra-api:" + _hash({
+        "run": str(run), "packet": packet["packet_sha256"], "started_at": pending["started_at"]})
     # Exclusive creation is the submission lock, including across processes.
     try:
         with (run / RECEIPT_FILE).open("x", encoding="utf-8") as f:
@@ -892,6 +944,9 @@ def review_run(run_dir, *, budget_usd, max_output_tokens=DEFAULT_MAX_OUTPUT_TOKE
         saved_source = run / SOURCE_FILE
         saved_source.parent.mkdir(exist_ok=True)
         shutil.copyfile(source_docx, saved_source)
+        _resource_receipt(run, pending, status="started")
+        pending["submitted"] = True
+        _atomic(run / RECEIPT_FILE, pending)
         response = client.responses.create(**request_payload(packet, max_output_tokens))
         return _consume_response(run, packet, pending, response, client, timeout_seconds)
     except Exception as exc:

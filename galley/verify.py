@@ -1056,6 +1056,12 @@ def paragraph_fingerprints(accepted: Mapping[str, str]) -> dict[str, str]:
             for pid, text in accepted.items()}
 
 
+def source_fingerprint(original: Mapping[str, str]) -> str:
+    """Source binding shared by immutable verification intake snapshots."""
+    return hashlib.sha256(json.dumps(original, ensure_ascii=False,
+                                    sort_keys=True).encode()).hexdigest()
+
+
 def build_fingerprints(run_dir: str | Path) -> dict[str, Any]:
     """The build identity a verify artifact is bound to: the deliverable's
     file hash and its accepted-text fingerprint, plus the per-paragraph
@@ -1066,6 +1072,7 @@ def build_fingerprints(run_dir: str | Path) -> dict[str, Any]:
     from galley.manifest import sha256_file
     _orig, accepted = paragraph_views(run_dir)
     return {"build_sha256": sha256_file(path),
+            "source_sha256": source_fingerprint(_orig),
             "accepted_sha256": accepted_fingerprint(accepted),
             "paragraph_sha256": paragraph_fingerprints(accepted)}
 
@@ -1103,7 +1110,32 @@ def reusable_clean_verification(run_dir, provider, model, *, context="", engine=
     policy = _policy(pass_id, required_pass_ids, policy_id)
     if policy is None or policy["required_pass_ids"] != [policy["pass_id"]]:
         return False
+    if any(_load_artifact(Path(run_dir) / filename).get(key) != []
+           for filename, key in (("change_verify.json", "problems"),
+                                 ("finished_walk.json", "residuals"))):
+        return False
+    return validate_complete_pass(run_dir, run_dir, provider, model,
+        context=context, engine=engine, max_tokens=max_tokens, pass_id=pass_id,
+        required_pass_ids=required_pass_ids, policy_id=policy_id,
+        config_sha256=config_sha256)
+
+
+def validate_complete_pass(run_dir, output_dir, provider, model, *, context="", engine="",
+                           max_tokens=DEFAULT_MAX_TOKENS, pass_id=None,
+                           required_pass_ids=None, policy_id=None,
+                           config_sha256="") -> bool:
+    """Validate one completed full reader pass, including every saved response.
+
+    This read-only operation permits nonempty findings and separate output
+    directories. It reconstructs their exact rows from the source run's checked
+    request windows; a truthful coverage hash cannot hide altered result rows.
+    It never calls a model and does not imply another independent pass ran.
+    """
+    policy = _policy(pass_id, required_pass_ids, policy_id)
+    if policy is None:
+        return False
     run = Path(run_dir)
+    output = Path(output_dir)
     findings = _load_artifact(run / "findings.json")
     if not isinstance(findings.get("findings"), list):
         return False
@@ -1111,11 +1143,16 @@ def reusable_clean_verification(run_dir, provider, model, *, context="", engine=
     if not accepted:
         return False
     edits, fp = applied_edits(run), build_fingerprints(run)
+    pair_ids = []
     for gate, filename, rows_key, unread_key in (
             ("changes", "change_verify.json", "problems", "unread_batches"),
             ("walk", "finished_walk.json", "residuals", "unread_paragraphs")):
-        artifact = _load_artifact(run / filename)
-        if (artifact.get("ran") is not True or artifact.get(rows_key) != []
+        artifact = _load_artifact(output / filename)
+        pair_ids.append(artifact.get("verification_pair_id"))
+        count_key = "applied_edits" if gate == "changes" else "paragraphs"
+        count = len(edits) if gate == "changes" else sum(bool(text.strip()) for text in accepted.values())
+        if (artifact.get("ran") is not True or not isinstance(artifact.get(rows_key), list)
+                or type(artifact.get(count_key)) is not int or artifact[count_key] != count
                 or artifact.get(unread_key) != [] or artifact.get("unverified_paragraphs") != []
                 or artifact.get("reason") or artifact.get("paragraphs_verified") is not None
                 or artifact.get("engine") != engine or artifact.get("model") != model
@@ -1141,6 +1178,7 @@ def reusable_clean_verification(run_dir, provider, model, *, context="", engine=
         windows = (_chunks(edits, DEFAULT_CHANGE_BATCH) if gate == "changes"
                    else _walk_reads(accepted, DEFAULT_WALK_CHARS))
         expected = {}
+        result_rows = []
         for n, window in enumerate(windows, 1):
             user = (_change_user(window, accepted, original) if gate == "changes"
                     else _walk_user(window))
@@ -1150,18 +1188,44 @@ def reusable_clean_verification(run_dir, provider, model, *, context="", engine=
                                           else f"walk read {n}/{len(windows)}")))
             saved = _load_artifact(run / _CHECKPOINT_DIR / scope / invocation / (key + ".json"))
             body = saved.get("parsed")
-            if (not _valid_schema(body, schema) or body.get(name) != []
+            validate = _valid_change_window if gate == "changes" else _valid_walk_window
+            if (not _valid_schema(body, schema) or not validate(body, window)
                     or saved.get("identity_sha256") != _digest(identity)
                     or saved.get("request_sha256") != key
                     or saved.get("result_sha256") != _digest(body)):
                 return False
             expected[key] = saved["result_sha256"]
+            for row in body[name]:
+                if gate == "changes":
+                    edit = window[row["index"] - 1]
+                    verdict = row["verdict"] if row["verdict"] in _CHANGE_VERDICTS else "wrong_rule"
+                    result_rows.append(ChangeProblem(edit["para_id"], edit["original_text"],
+                        edit["corrected_text"], verdict, str(row.get("detail", "")),
+                        str(row.get("fix", ""))).to_json())
+                else:
+                    severity = row["severity"] if row["severity"] in _SEVERITIES else "medium"
+                    result_rows.append(ResidualFinding(row["para_id"], str(row.get("quote", "")),
+                        str(row.get("problem", "")), str(row.get("suggestion", "")), severity).to_json())
         if proof.get("expected_windows") != len(windows) or proof.get("windows") != expected:
             return False
-    return True
+        if result_rows != artifact[rows_key]:
+            return False
+        if len(result_rows) >= (MAX_PROBLEMS if gate == "changes" else MAX_RESIDUALS):
+            return False
+    return pair_ids[0] == pair_ids[1]
 
 
 def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
+                    walk: VerifyRunResult, **kwargs) -> tuple[Path, Path]:
+    """Serialize a gate pair and its immutable intake snapshot per output."""
+    run = Path(run_dir)
+    run.mkdir(parents=True, exist_ok=True)
+    with (run / ".verification-artifacts.lock").open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _write_artifacts(run, changes, walk, **kwargs)
+
+
+def _write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
                     walk: VerifyRunResult, *, model: str, engine: str,
                     usage_changes: Usage, usage_walk: Usage,
                     applied: int, paragraphs: int,
@@ -1255,6 +1319,8 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
           "cost": build_envelope(findings=(), usage=total_walk,
                                  fallback_model=model)["cost"]}
     fw.pop("settled", None)
+    # Readers must never combine one old gate file with one newly written gate.
+    cv["verification_pair_id"] = fw["verification_pair_id"] = uuid.uuid4().hex
 
     unread_changes = {str(pid) for batch in unread_batches
                       for pid in batch.get("para_ids", [])}
@@ -1265,6 +1331,8 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
         if not fp:
             payload["unverified_paragraphs"] = sorted(dirty)
             continue
+        if ran:
+            payload["source_sha256"] = fp["source_sha256"]
         current = fp["paragraph_sha256"]
         per = dict(old.get("paragraph_sha256") or {})
         # Legacy full-read artifacts had only a book hash. They cover the
@@ -1298,13 +1366,19 @@ def write_artifacts(run_dir: str | Path, changes: VerifyRunResult,
                 and not payload.get("unverified_paragraphs")
                 and not payload.get("unread_batches") and not payload.get("unread_paragraphs")):
             payload["verification_provenance"] = proof
-    cv_path.write_text(json.dumps(cv, indent=2, ensure_ascii=False),
-                       encoding="utf-8")
-    fw_path.write_text(json.dumps(fw, indent=2, ensure_ascii=False),
-                       encoding="utf-8")
-    if source_run_dir is not None and Path(source_run_dir).resolve() != run.resolve():
+    # Archive the previous independent read before either live artifact is
+    # replaced. These snapshots carry candidates only, never fresh coverage.
+    source_run = Path(source_run_dir) if source_run_dir is not None else run
+    same_source = all(_load_artifact(p).get("source_sha256") in (None, fp.get("source_sha256"))
+                      for p in (cv_path, fw_path))
+    if fp and same_source and cv_path.is_file() and fw_path.is_file():
         from galley.settlement_inputs import register_verification_source
-        register_verification_source(source_run_dir, run)
+        register_verification_source(source_run, run)
+    _save_json(cv_path, cv)
+    _save_json(fw_path, fw)
+    if fp:
+        from galley.settlement_inputs import register_verification_source
+        register_verification_source(source_run, run)
     return cv_path, fw_path
 
 
@@ -1337,4 +1411,5 @@ __all__ = [
     "walk_finished_text", "verify_run", "MAX_PROBLEMS", "MAX_RESIDUALS",
     "VERIFICATION_POLICY", "reusable_clean_verification",
     "verification_invocation",
+    "validate_complete_pass",
 ]

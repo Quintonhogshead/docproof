@@ -703,7 +703,10 @@ def _single_close_punct_hits(text: str) -> list[Hit]:
         if not open_count:
             continue                     # possessive or stray: not a closer
         open_count -= 1
-        if nxt not in ".,":
+        # At paragraph end nxt is empty, and Python considers "" in ".,"
+        # true. Require an actual mark or this emits an out-of-bounds no-op
+        # that survives every idempotence rescan and settlement rebuild.
+        if not nxt or nxt not in ".,":
             continue
         if not prev or prev.isdigit() or prev.isspace() or prev == ",":
             continue                     # a minutes mark, or malformed anyway

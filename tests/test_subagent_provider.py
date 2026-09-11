@@ -74,7 +74,7 @@ def test_complete_structured_runs_one_fenced_turn_and_parses_the_reply(
     seen = []
     sdk = _fake_sdk([_Assistant("thinking…"),
                      _Result('{"problems": [{"index": 1}]}', cost=0.0)], seen)
-    prov = subagent.SubagentProvider(model="opus", sdk=sdk, cwd=tmp_path)
+    prov = subagent.SubagentProvider(model="opus", sdk=sdk, cwd=tmp_path, effort="low")
     res = prov.complete_structured(
         model="claude-opus-5", system="SYS", user="USER",
         schema={"type": "object"}, schema_name="problems", max_tokens=100)
@@ -86,7 +86,9 @@ def test_complete_structured_runs_one_fenced_turn_and_parses_the_reply(
     # the fence: no tools, no settings, keys blanked, one turn, our cwd
     assert opts["tools"] == [] and opts["allowed_tools"] == []
     assert opts["setting_sources"] == [] and opts["max_turns"] == 1
-    assert opts["env"] == agent_lane.child_env()
+    assert opts["env"] == {**agent_lane.child_env(), "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "100",
+                           "CLAUDE_CODE_EFFORT_LEVEL": "low"}
+    assert opts["effort"] == "low"
     assert opts["cwd"] == str(tmp_path) and opts["model"] == "claude-opus-5"
     assert opts["system_prompt"] == "SYS"
 
@@ -364,3 +366,47 @@ def test_subscription_limit_is_not_an_empty_or_salvaged_reader_result(monkeypatc
     with pytest.raises(UsageLimitError, match="resets 3:10am"):
         provider.complete_structured(model="opus", system="s", user="u",
                                      schema={}, schema_name="x", max_tokens=1)
+
+
+def test_subagent_raw_usage_reaches_parent_ledger(monkeypatch, tmp_path):
+    from docproof.resource_ledger import context_env, summarize
+    ledger = tmp_path / "usage.jsonl"
+    for key, value in context_env(ledger, "source", "config", parent_operation_id="verify").items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    msg = _Result('{"problems": []}', usage={"input_tokens": 12, "output_tokens": 35,
+        "cache_creation_input_tokens": 40, "cache_read_input_tokens": 120,
+        "output_tokens_details": {"thinking_tokens": 17}})
+    sdk = _fake_sdk([msg], [])
+    subagent.SubagentProvider(sdk=sdk, effort="medium").complete_structured(
+        model="sonnet", system="s", user="u", schema={}, schema_name="verify", max_tokens=80)
+    summary = summarize(ledger)
+    assert summary["new_attempts"] == 1
+    assert summary["output_tokens"] == 35
+    assert summary["thinking_tokens"] == 17
+    assert summary["cache_read_input_tokens"] == 120
+    assert summary["complete"]
+
+
+def test_review_budget_blocks_settle_after_independent_reader_invocations(monkeypatch, tmp_path):
+    import pytest
+    from docproof.resource_ledger import context_env, use_context, summarize, ResourceBudgetExceeded
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    ledger = tmp_path / "resources.jsonl"
+    env = {**context_env(ledger, "source", "config"), "DOCPROOF_RESOURCE_GROUP": "review",
+           "DOCPROOF_RESOURCE_MAX_CALLS": "2", "DOCPROOF_RESOURCE_MAX_OUTPUT_TOKENS": "200"}
+    seen = []
+    for phase in ("primary", "secondary", "settle"):
+        sdk = _fake_sdk([_Result('{"problems": []}', usage={"input_tokens": 10,
+            "output_tokens": 20, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0})], seen)
+        with use_context({**env, "GALLEY_BRAIN_PHASE": phase}):
+            provider = subagent.SubagentProvider(sdk=sdk, effort="low")
+            args = dict(model="sonnet", system="s", user="u", schema={}, schema_name=phase, max_tokens=80)
+            if phase == "settle":
+                with pytest.raises(ResourceBudgetExceeded):
+                    provider.complete_structured(**args)
+            else:
+                provider.complete_structured(**args)
+    assert len(seen) == 2  # the rejected settlement never starts the SDK
+    group = summarize(ledger)["groups"]["review"]
+    assert group["calls"] == 2 and group["charged_output_tokens"] == 40

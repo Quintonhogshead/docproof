@@ -103,3 +103,39 @@ def test_prepare_reads_the_book_once_across_a_batch_submit_and_collect(
     assert "third person past" in first.story_sheet
     assert second.story_sheet == first.story_sheet
     assert len(prov.calls) == 1, "the second prepare re-read the whole book"
+    assert first.preparation_usage.api_calls == 1
+    assert second.preparation_usage.api_calls == 0
+
+
+def test_run_sync_carries_prepare_cost_once_and_checkpoint_replay_preserves_it(tmp_path):
+    from docproof.checkpoint import Checkpoint
+    from docproof.providers import NormalizedUsage
+    from docproof.pipeline import run_sync
+    from .test_ensemble import _prepared, _factory
+    cfg, prepared = _prepared(tmp_path, ["gpt-5.6-luna"], n=1)
+    prepared.preparation_usage.add(NormalizedUsage(input_tokens=700, output_tokens=40),
+                                   model="storysheet-model")
+    checkpoint = Checkpoint(tmp_path / "checkpoint.json", fingerprint={"test": "storysheet"})
+    checkpoint.load()
+    _, first = run_sync(cfg, prepared, provider_factory=_factory([]), checkpoint=checkpoint)
+    _, replay = run_sync(cfg, prepared, provider_factory=_factory([]), checkpoint=checkpoint)
+    assert first.by_model["storysheet-model"]["input_tokens"] == 700
+    assert first.api_calls == replay.api_calls + 1
+    assert "storysheet-model" not in replay.by_model
+
+
+def test_direct_replay_finish_keeps_preparation_usage_once(tmp_path, monkeypatch):
+    from docproof.pipeline import finish
+    from docproof.providers import NormalizedUsage
+    from .test_ensemble import _prepared
+    cfg, prepared = _prepared(tmp_path, ["gpt-5.6-luna"], n=1)
+    cfg.ensemble.enabled_override = False
+    monkeypatch.setattr("docproof.providers.build_provider", lambda *a, **k: FakeProvider())
+    prepared.preparation_usage.add(NormalizedUsage(input_tokens=700, output_tokens=40),
+                                   model="storysheet-model")
+    usage = Usage()
+    finish(prepared, [], usage, cfg, out_dir=tmp_path / "first", source_path=tmp_path / "m.docx")
+    assert usage.by_model["storysheet-model"]["input_tokens"] == 700
+    second = Usage()
+    finish(prepared, [], second, cfg, out_dir=tmp_path / "second", source_path=tmp_path / "m.docx")
+    assert "storysheet-model" not in second.by_model

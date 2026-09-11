@@ -102,6 +102,10 @@ class Prepared:
     # (narrator, tense, character pronouns), or "" when the pass is off. Built at
     # prepare time because it feeds the detector prompts. See docproof/storysheet.py.
     story_sheet: str = ""
+    # New model work during prepare (currently the story sheet). A disk cache
+    # hit contributes zero; consuming this meter prevents a repeated run_sync
+    # over the same Prepared from charging the original preparation twice.
+    preparation_usage: Usage = field(default_factory=Usage)
     # Whether this run covers the whole manuscript. The document-wide model work
     # (the glossary pass) only means something on a full run, the same way the
     # consistency scan does; a two-chapter review must not spend on it.
@@ -259,13 +263,11 @@ def _collapse_repeated_comments(validated: list, doc: DocumentModel,
     note, says how many siblings it speaks for, and points at the change log,
     which lists every one.
 
-    QUERIES collapse too, one comment per TYPE (Quinton, 2026-08-27): the
-    Purpura beta margins carried 56 per-site "this number was left unchanged"
-    notes and 27 per-family consistency questions — a barrage, not a
-    conversation. Past the same threshold, the first site of a query type
-    keeps one counted comment for the whole class and points at the report;
-    below it, a query is still its own question (two speaker-change questions
-    stay two questions). Returns how many comments were silenced."""
+    Shared deterministic house-rule questions may also collapse when their
+    actual explanation agrees. Other questions share a comment only when the
+    question and its exact passage agree: a category such as continuity does
+    not establish that two questions ask the author the same thing. Returns
+    how many comments were silenced."""
     import re
     if threshold <= 0:
         return 0
@@ -296,7 +298,14 @@ def _collapse_repeated_comments(validated: list, doc: DocumentModel,
             validated[i] = replace(validated[i], silent=True)
         silenced += len(idxs) - 1
 
-    qgroups: dict[str, list[int]] = {}
+    qgroups: dict[tuple, list[int]] = {}
+    query_suffix = (r"(?: This question applies at \d+ places in the manuscript; "
+                    r"the comment appears once here, and the report lists every site\.)+$")
+
+    def query_site(f):
+        return (f.para_id, f.original_text, f.occurrence,
+                (f.anchor.start, f.anchor.end) if f.anchor else None)
+
     for i, f in enumerate(validated):
         if f.status != "query" or f.silent or not f.explanation:
             continue
@@ -305,18 +314,27 @@ def _collapse_repeated_comments(validated: list, doc: DocumentModel,
         # (galley_settle) silenced 32 of 33 on the Redding trial.
         if f.error_type in _NEVER_COLLAPSE_QUERIES:
             continue
-        qgroups.setdefault(f.error_type, []).append(i)
-    for _etype, idxs in qgroups.items():
+        explanation = re.sub(query_suffix, "", f.explanation)
+        shared_rule = ((f.chunk_id == "residual" and f.error_type == "number_style")
+                       or (f.chunk_id == "consistency" and f.error_type in
+                           {"term_consistency", "name_consistency"}))
+        key = (f.error_type, explanation,
+               ("shared_rule", f.chunk_id) if shared_rule else
+               (query_site(f), f.corrected_text, f.withheld))
+        qgroups.setdefault(key, []).append(i)
+    for (_etype, explanation, _evidence), idxs in qgroups.items():
         if len(idxs) <= threshold:
             continue
         idxs.sort(key=lambda i: (
             order.get(validated[i].para_id, len(order)),
             validated[i].anchor.start if validated[i].anchor else 0))
         first = idxs[0]
-        validated[first] = replace(validated[first], explanation=(
-            f"{validated[first].explanation} This question applies at "
-            f"{len(idxs)} places in the manuscript; the comment appears once "
-            f"here, and the report lists every site."))
+        sites = len({query_site(validated[i]) for i in idxs})
+        if sites > 1:
+            explanation += (f" This question applies at {sites} places in the "
+                            "manuscript; the comment appears once here, and "
+                            "the report lists every site.")
+        validated[first] = replace(validated[first], explanation=explanation)
         for i in idxs[1:]:
             validated[i] = replace(validated[i], silent=True)
         silenced += len(idxs) - 1
@@ -744,17 +762,17 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
         # prepare time, not at collect: it feeds the detector system prompts,
         # which are built (and, for a batch, sent) now. One cacheable call.
         story_sheet = ""
+        preparation_usage = Usage()
         if cfg.storysheet.enabled and whole and not dry_run:
             from .providers import build_provider
             from .storysheet import build_storysheet, prompt_section
             scfg = cfg.model_copy(deep=True)
             scfg.api.model = cfg.storysheet.model
             scfg.api.effort = cfg.storysheet.effort
-            usage = Usage()
             sheet = build_storysheet(
                 doc.paragraphs, build_provider(scfg),
                 model=cfg.storysheet.model,
-                max_tokens=cfg.storysheet.max_output_tokens, usage=usage,
+                max_tokens=cfg.storysheet.max_output_tokens, usage=preparation_usage,
                 effort=cfg.storysheet.effort,
                 cache_dir=cache_dir_for(cfg.storysheet.cache_dir))
             story_sheet = prompt_section(sheet)
@@ -767,6 +785,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
         genre_findings = []
         adjudicate_candidates = []
         story_sheet = ""
+        preparation_usage = Usage()
         swept = []
 
     examination = None
@@ -805,6 +824,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                     genre_findings=genre_findings,
                     adjudicate_candidates=adjudicate_candidates,
                     story_sheet=story_sheet,
+                    preparation_usage=preparation_usage,
                     whole_document=whole,
                     # An ensemble switched off explicitly (`ensemble.enabled:
                     # false`) reads as one detector however many are listed.
@@ -1044,7 +1064,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             prepared.examination.expect_production_response(
                 key, analyzer.keys, chunk.paragraphs)
 
-    usage = Usage()
+    usage = getattr(prepared, "preparation_usage", Usage())
+    prepared.preparation_usage = Usage()
     if on_phase is not None:
         phase_callback = on_phase
 
@@ -2409,6 +2430,12 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     actually being assembled. Without it everything below used to hide under
     the caller's single "writing" stage, which on a big book meant many minutes
     of judge and whole-book passes with no sign of which was running."""
+    # Replay-only callers can go straight from prepare to finish. Consume any
+    # preparation meter here too; run_sync has already emptied it otherwise.
+    if prepared.preparation_usage is not usage:
+        from .fanout import fold_usage
+        fold_usage(usage, prepared.preparation_usage)
+    prepared.preparation_usage = Usage()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     # With the ensemble on, fold the detectors' findings into one list first,
@@ -2714,6 +2741,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                       "is unaffected")
     write_summary_md(out / "summary.md", doc=prepared.doc, findings=validated,
                      usage=usage, cfg=cfg, applied_ids=stats.applied,
+                     queried_ids=getattr(stats, "queried", None),
+                     unplaced_ids=getattr(stats, "unplaced", ()),
                      batch=batch, fmt=fmt, sweeps=prepared.sweep_reports,
                      spell=prepared.spell,
                      normalization=prepared.normalization, audit=audit_report,

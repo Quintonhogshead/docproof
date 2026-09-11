@@ -36,15 +36,19 @@ def test_plan_items_are_the_priced_numbered_lines_only():
 
 def test_the_ledger_records_and_audits(tmp_path):
     ledger = tmp_path / "runs" / pl.LEDGER_NAME
+    for name in ("sweep_windows", "ladder", "continuity", "final2"):
+        folder = tmp_path / "runs" / name
+        folder.mkdir(parents=True)
+        (folder / "findings.json").write_text("{}")
     pl.record(ledger, "0", "ran", evidence="runs/sweep_windows/")
     pl.record(ledger, "2", "ran", evidence="runs/ladder/findings.json")
     pl.record(ledger, "4c", "ran", evidence="runs/continuity/")
     with pytest.raises(ValueError):
         pl.record(ledger, "7", "maybe")
-    status, detail = pl.check(PLAN, pl.load_ledger(ledger), ledger_exists=True)
+    status, detail = pl.check(PLAN, pl.load_ledger(ledger), ledger_exists=True, workspace=tmp_path)
     assert status == "fail" and "line 7" in detail
     pl.record(ledger, "7", "ran", evidence="runs/final2/")
-    status, detail = pl.check(PLAN, pl.load_ledger(ledger), ledger_exists=True)
+    status, detail = pl.check(PLAN, pl.load_ledger(ledger), ledger_exists=True, workspace=tmp_path)
     assert status == "pass", detail
 
 
@@ -52,15 +56,17 @@ def test_a_promise_that_vanished_fails_and_is_named_for_the_letter(tmp_path):
     """Plan line 4c, 2026-09-07: deferred-to and never run."""
     plan = "1. ladder  $1.00\n4c. whole-book continuity (Opus)  $0\nTOTAL $1\n"
     ledger = tmp_path / pl.LEDGER_NAME
+    (tmp_path / "runs" / "ladder").mkdir(parents=True)
+    (tmp_path / "runs" / "ladder" / "findings.json").write_text("{}")
     pl.record(ledger, "1", "ran", evidence="runs/ladder/")
-    status, detail = pl.check(plan, pl.load_ledger(ledger), ledger_exists=True)
+    status, detail = pl.check(plan, pl.load_ledger(ledger), ledger_exists=True, workspace=tmp_path)
     assert status == "fail" and "4c" in detail and "no ledger entry" in detail
     pl.record(ledger, "4c", "skipped", reason="")
-    status, detail = pl.check(plan, pl.load_ledger(ledger), ledger_exists=True)
+    status, detail = pl.check(plan, pl.load_ledger(ledger), ledger_exists=True, workspace=tmp_path)
     assert status == "fail" and "without a reason" in detail
     pl.record(ledger, "4c", "skipped", reason="session ran out of turns")
-    assert pl.check(plan, pl.load_ledger(ledger), ledger_exists=True)[0] == "pass"
-    rows = pl.not_done(plan, pl.load_ledger(ledger))
+    assert pl.check(plan, pl.load_ledger(ledger), ledger_exists=True, workspace=tmp_path)[0] == "pass"
+    rows = pl.not_done(plan, pl.load_ledger(ledger), workspace=tmp_path)
     assert [(it.label, st) for it, st, _ in rows] == [("4c", "skipped")]
     assert rows[0][2] == "session ran out of turns"
 
@@ -80,6 +86,7 @@ def test_certify_reads_the_ledger_beside_the_run(tmp_path):
     c = _certify_plan_ledger(run)
     assert c.status == "fail" and "plan_ledger.json" in c.detail
     pl.record(ws / "runs" / pl.LEDGER_NAME, "1", "ran", evidence="runs/final")
+    (run / "findings.json").write_text("{}")
     assert _certify_plan_ledger(run).status == "pass"
 
 
@@ -175,6 +182,8 @@ def test_questions_and_notes_are_told_apart(tmp_path):
 def test_the_letter_names_plan_lines_that_did_not_run(tmp_path):
     from galley.letter import _section_plan_ledger
     ws = tmp_path / "ws"; (ws / "runs").mkdir(parents=True)
+    (ws / "runs" / "final").mkdir()
+    (ws / "runs" / "final" / "findings.json").write_text("{}")
     plan = "1. ladder $1\n4c. whole-book continuity (Opus)  $0\nTOTAL $1\n"
     pl.record(ws / "runs" / pl.LEDGER_NAME, "1", "ran", evidence="runs/final")
     pl.record(ws / "runs" / pl.LEDGER_NAME, "4c", "deferred",
@@ -213,12 +222,15 @@ def test_settlement_records_carry_a_build_stable_owner_key(monkeypatch):
     working = {"f-0210": {"para_id": "body-0007", "original_text": "slept on the windowsill hardly moving",
                           "occurrence": 1, "corrected_text": "slept on the windowsill, hardly moving",
                           "error_type": "galley_settle"}}
-    out, _, _ = settle.apply_decision(SimpleNamespace(), SimpleNamespace(owner_key="f-0210"),
+    residual = settle.Residual("r-1", "residual", "body-0007", "windowsill hardly",
+                               "Missing comma", "windowsill, hardly")
+    out, _, _ = settle.apply_decision(residual, SimpleNamespace(owner_key="f-0210"),
                                       working, {}, 1, verified_by="x")
     assert out.owner_row_key == ["body-0007", "slept on the windowsill hardly moving", 1,
                                  "slept on the windowsill, hardly moving", "galley_settle"]
     again = settle.SettlementRecord.from_json(out.to_json())
     assert again.owner_row_key == out.owner_row_key
+    assert again.input_evidence == residual.to_json()
 
 
 def test_the_journal_resolves_the_owner_against_the_build_it_renders():
@@ -310,6 +322,7 @@ def test_the_handoff_carries_the_author_letter(tmp_path):
 
 def test_every_phase_session_carries_its_phase_in_the_environment(tmp_path):
     from galley import driver as gd
+    (tmp_path / "b.docx").write_bytes(b"source bytes for resource identity")
     drv = gd.Driver(book=tmp_path / "b.docx", slug="s",
                     workspace_root=tmp_path / "ws")
     spec = drv._spec("deliver", {"PATH": "/usr/bin",

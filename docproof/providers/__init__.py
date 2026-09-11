@@ -23,6 +23,7 @@ def build_provider(cfg, *, api_key: str | None = None,
     model's vendor, not ``cfg.api.model``'s — sending gpt-5.6-luna to the
     Anthropic SDK is a guaranteed request-time error. The ``cfg.api.provider``
     pin applies only to ``cfg.api.model`` itself."""
+    from ..resource_ledger import metered
     if model is not None and model != cfg.api.model:
         name = provider_for(model, None)
     else:
@@ -45,18 +46,18 @@ def build_provider(cfg, *, api_key: str | None = None,
                     f"Refusing to fall back to the Anthropic API — that would "
                     f"bill API dollars this config forbids. Fix the lane, or "
                     f"set api.claude_lane: api to allow vendor billing.")
-            return SubagentProvider(model=model or cfg.api.model)
+            return SubagentProvider(model=model or cfg.api.model, effort=cfg.api.effort)
         from .anthropic_provider import AnthropicProvider
-        return AnthropicProvider(**kwargs)
+        return metered(AnthropicProvider(**kwargs), effort=cfg.api.effort)
     if name == "openai":
         from .openai_provider import OpenAIProvider
-        return OpenAIProvider(**kwargs)
+        return metered(OpenAIProvider(**kwargs), effort=cfg.api.effort)
     if name == "gemini":
         from .gemini_provider import GeminiProvider
-        return GeminiProvider(**kwargs)
+        return metered(GeminiProvider(**kwargs), effort=cfg.api.effort)
     if name == "deepinfra":
         from .deepinfra_provider import DeepInfraProvider
-        return DeepInfraProvider(**kwargs)
+        return metered(DeepInfraProvider(**kwargs), effort=cfg.api.effort)
     raise ProviderError(
         f"Unknown provider {name!r} for model {cfg.api.model!r}. "
         f"Set api.provider to 'anthropic', 'openai', 'gemini', or "

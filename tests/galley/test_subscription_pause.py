@@ -46,13 +46,13 @@ def test_success_subtype_with_error_flag_is_still_a_usage_failure():
     assert gd.session_limit({**result, "is_error": False}, LIMIT) is None
 
 
-def test_raw_result_only_keeps_the_reset_message(tmp_path, monkeypatch):
-    def run(argv, **kwargs):
-        kwargs["stdout"].write(json.dumps({"type": "result", "subtype": "success",
-            "is_error": True, "num_turns": 1, "result": LIMIT}) + "\n")
-        return types.SimpleNamespace(returncode=1)
-    monkeypatch.setattr(gd.subprocess, "run", run)
-    spec = gd.PhaseSpec("verify", "prompt", tmp_path, tmp_path / "verify.log", [], {})
+def test_raw_result_only_keeps_the_reset_message(tmp_path):
+    import sys
+
+    stream = json.dumps({"type": "result", "subtype": "success",
+        "is_error": True, "num_turns": 1, "result": LIMIT})
+    spec = gd.PhaseSpec("verify", "prompt", tmp_path, tmp_path / "verify.log",
+        [sys.executable, "-c", f"import sys; print({stream!r}); sys.exit(1)"], {})
     result = gd.spawn_claude(spec)
     assert result.limit == "usage" and result.tail == LIMIT
 

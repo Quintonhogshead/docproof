@@ -20,6 +20,24 @@ SCHEMA = {"type": "object", "properties": {
 RESULT = {"ready": True, "reason": "All assigned evidence was reviewed."}
 
 
+def test_codex_receipts_reach_book_ledger_without_charging_reuse(monkeypatch, tmp_path):
+    from docproof.resource_ledger import context_env, summarize
+    path = tmp_path / "book-resources.jsonl"
+    for key, value in context_env(path, "source", "config").items():
+        monkeypatch.setenv(key, value)
+    receipt = {"request_sha256": "request", "model": "gpt-6-astra", "attempt": 1,
+               "status": "running", "submitted": True}
+    cr._resource_receipt(receipt)
+    receipt.update(status="completed", usage={"input_tokens": 100,
+                    "cached_input_tokens": 60, "output_tokens": 20})
+    cr._resource_receipt(receipt)
+    cr._resource_receipt(receipt, reused=True)
+    summary = summarize(path)
+    assert summary["new_attempts"] == 1 and summary["reused_receipts"] == 1
+    assert summary["input_tokens"] == 40
+    assert summary["cache_read_input_tokens"] == 60
+
+
 class FakeProcess:
     def __init__(self, owner, argv, **kwargs):
         self.owner, self.argv, self.kwargs = owner, argv, kwargs

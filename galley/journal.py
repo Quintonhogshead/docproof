@@ -582,12 +582,19 @@ def _section_audit(doc: _Doc, src: JournalSources) -> None:
         for item in hypotheses:
             if isinstance(item, dict):
                 what = (item.get("hypothesis") or item.get("claim")
-                        or item.get("quote") or item.get("summary"))
+                        or item.get("quote") or item.get("summary")
+                        or item.get("error_class"))
                 why = (item.get("reason") or item.get("evidence")
-                       or item.get("explanation") or "")
-                where = item.get("chapter") or item.get("para_id") or ""
+                       or item.get("explanation") or item.get("why") or "")
+                where = item.get("chapter")
+                where = (f"Chapter {where}" if where is not None
+                         else item.get("para_id") or "")
                 doc.bullet(f"{f'{where}: ' if where else ''}{_clip(what, 240)}"
-                           + (f" — {_clip(why, 240)}" if why else ""))
+                           + (f" — {_clip(why, 240)}" if why else "")
+                           + (f" Near: {_clip(item['span_hint'], 240)}"
+                              if item.get("span_hint") else "")
+                           + (f" (confidence: {item['confidence']})"
+                              if item.get("confidence") is not None else ""))
             else:
                 doc.bullet(_clip(item, 240))
         doc.end_list()

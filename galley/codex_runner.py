@@ -347,6 +347,23 @@ def reset_failed_request(work_dir: Path, request_id: str, *, reason: str) -> dic
         return {"status": "retry_authorized", **authorization}
 
 
+def _resource_receipt(receipt, *, reused=False):
+    """Mirror frozen transport receipts into the parent book's usage ledger."""
+    from docproof.resource_ledger import append_usage
+    operation = "codex:" + receipt["request_sha256"]
+    status = receipt.get("status")
+    append_usage(receipt_id=operation + ":" + str(receipt.get("attempt", 1)),
+                 operation_id=operation, model=receipt.get("model", "unknown"),
+                 transport="codex_subscription", usage=receipt.get("usage"),
+                 status=("started" if status in ("preflight", "running") else
+                         "completed" if status == "completed" else "error"),
+                 reused=reused, effort=receipt.get("reasoning_effort"),
+                 submitted=receipt.get("submitted"),
+                 failure_category=receipt.get("failure_category"),
+                 started_at=receipt.get("started_at"),
+                 finished_at=receipt.get("finished_at"))
+
+
 def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str,
                    timeout_seconds: int = 1800, codex_bin: str | None = None,
                    model: str = MODEL, reasoning_effort: str = REASONING_EFFORT) -> dict:
@@ -398,7 +415,9 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
             if not isinstance(receipt, dict) or receipt.get("request_sha256") != request_sha256:
                 raise AstraReviewError("Saved Codex review receipt does not match its request.")
             if receipt.get("status") == "completed" or receipt.get("submitted") is not False:
-                return _cached_result(directory, receipt, request_sha256, schema)
+                result = _cached_result(directory, receipt, request_sha256, schema)
+                _resource_receipt(receipt, reused=True)
+                return result
             retry_fields = {key: receipt[key] for key in ("attempt", "retry_authorization") if key in receipt}
         schema_path, output_path = directory / "schema.json", directory / "final.json"
         _atomic(schema_path, schema)
@@ -410,6 +429,7 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
                    "reasoning_effort": reasoning_effort, "status": "preflight",
                    "submitted": False, "created_at": _now(), **retry_fields}
         _atomic(receipt_path, receipt)
+        _resource_receipt(receipt)
         binary = _binary(codex_bin)
         env = child_env(home)
         try:
@@ -417,6 +437,7 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
         except AstraReviewError:
             receipt.update(status="preflight_failed", failure_category="authentication")
             _atomic(receipt_path, receipt)
+            _resource_receipt(receipt)
             raise
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -446,6 +467,7 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
             argv[2:2] = overrides
         receipt.update(status="running", submitted=True, started_at=_now())
         _atomic(receipt_path, receipt)
+        _resource_receipt(receipt)
         try:
             # Model tools start beside the materialized evidence. The receipt
             # directory is private to the desktop account on Windows, where
@@ -454,10 +476,12 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
         except _StartError as exc:
             receipt.update(status="preflight_failed", submitted=False, failure_category="cli_start")
             _atomic(receipt_path, receipt)
+            _resource_receipt(receipt)
             raise AstraReviewError("The Codex CLI could not start; no model request was submitted.") from exc
         except OSError as exc:
             receipt.update(status="operational_failure", failure_category="cli_io")
             _atomic(receipt_path, receipt)
+            _resource_receipt(receipt)
             raise AstraReviewError("Codex review encountered a local I/O failure after starting. "
                                    "No automatic retry was submitted.") from exc
         receipt.update(finished_at=_now(), process_exited=type(executed["returncode"]) is int,
@@ -467,6 +491,7 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
                 executed["stdout_tail"] + "\n" + executed["stderr_tail"])
             receipt.update(status="operational_failure", failure_category=category)
             _atomic(receipt_path, receipt)
+            _resource_receipt(receipt)
             raise AstraReviewError(f"Codex subscription review stopped ({category}). "
                                    "No automatic retry or paid API fallback was submitted.")
         try:
@@ -475,10 +500,12 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
         except AstraReviewError:
             receipt.update(status="operational_failure", failure_category="invalid_output")
             _atomic(receipt_path, receipt)
+            _resource_receipt(receipt)
             raise AstraReviewError("Codex returned an incomplete or invalid structured review. "
                                    "No automatic retry was submitted.") from None
         _atomic(directory / "result.json", result)
         fcntl.private_path(output_path, 0o600)
         receipt.update(status="completed", result_sha256=_hash(result))
         _atomic(receipt_path, receipt)
+        _resource_receipt(receipt)
         return result

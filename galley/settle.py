@@ -11,6 +11,7 @@ import copy
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,9 @@ SETTLEMENT_NAME = "settlement.json"
 SETTLEMENT_SCHEMA_VERSION = 1
 SETTLE_TYPE = "galley_settle"
 DEFAULT_ROUNDS = 3
+# Recovery isolates conflicting edits and their neighboring paragraph context.
+# Bound each replay while letting unrelated paragraphs share its full build.
+RECOVERY_BATCH_PARAGRAPHS = 32
 # A composite may not grow the region it revises past this: the settlement
 # changes a word, not the sentence around it. Beyond it the model rewrote.
 MAX_GROWTH = 1.5
@@ -149,12 +153,16 @@ class SettlementRecord:
     # edit once the deliverable is rebuilt (2026-09-07). The journal resolves
     # this key against the build it renders.
     owner_row_key: list[Any] | None = None
+    # The exact candidate this decision ruled on. The stable residual ID groups
+    # readers at one quote, but is not proof that different proposed fixes agree.
+    input_evidence: dict[str, Any] | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {"residual_id": self.residual_id, "round": self.round,
                 "action": self.action,
                 "owner_finding_id": self.owner_finding_id,
                 "owner_row_key": self.owner_row_key,
+                "input_evidence": self.input_evidence,
                 "before_replacement": self.before_replacement,
                 "after_replacement": self.after_replacement,
                 "reason": self.reason, "verified_by": self.verified_by,
@@ -167,6 +175,8 @@ class SettlementRecord:
                    round=int(d.get("round", 0) or 0),
                    action=str(d.get("action", "")),
                    owner_finding_id=d.get("owner_finding_id"),
+                   input_evidence=(dict(d["input_evidence"])
+                                   if isinstance(d.get("input_evidence"), dict) else None),
                    before_replacement=str(d.get("before_replacement", "")),
                    after_replacement=str(d.get("after_replacement", "")),
                    reason=str(d.get("reason", "")),
@@ -253,6 +263,8 @@ class Settlement:
         p = Path(run_dir) / SETTLEMENT_NAME
         p.write_text(json.dumps(self.to_json(), indent=1, ensure_ascii=False),
                      encoding="utf-8")
+        from galley.settlement_inputs import refresh_candidate_dispositions
+        refresh_candidate_dispositions(run_dir, self)
         return p
 
     @classmethod
@@ -353,7 +365,18 @@ def open_items(run_dir: str | Path) -> list[Residual]:
     out: list[Residual] = []
     seen: set[str] = set()
     from galley.settlement_inputs import verification_dirs
-    inputs = [(directory / name, kind) for directory in verification_dirs(run)
+    directories = verification_dirs(run)
+    for directory in directories:
+        pair = []
+        for filename in ("finished_walk.json", "change_verify.json"):
+            try:
+                payload = json.loads((directory / filename).read_text("utf-8"))
+            except (OSError, ValueError):
+                payload = {}
+            pair.append(payload.get("verification_pair_id") if isinstance(payload, dict) else None)
+        if len(set(pair)) != 1:
+            raise ValueError(f"Incomplete verification artifact pair: {directory}")
+    inputs = [(directory / name, kind) for directory in directories
               for name, kind in (("finished_walk.json", "residual"),
                                  ("change_verify.json", "edit_damage"))]
     for path, kind in inputs:
@@ -1356,11 +1379,14 @@ def second_look(problem: Residual, paragraph: str, provider, model: str,
             f"Is the edit objectively correct under the house rules? "
             f"Answer keep or revert.")
     schema, name = _second_look_schema()
+    from docproof.resource_ledger import ResourceBudgetExceeded
     try:
         result = provider.complete_structured(model=model, system=system,
                                               user=user, schema=schema,
                                               schema_name=name,
                                               max_tokens=max_tokens)
+    except ResourceBudgetExceeded:
+        raise
     except Exception as e:                                   # noqa: BLE001
         log.warning("settle: second look failed (%s: %s); the verifier's "
                     "flag stands", type(e).__name__, e)
@@ -1459,6 +1485,7 @@ def apply_decision(res: Residual, dec: Decision,
     rec, new_rows, removed = _apply_decision(res, dec, working, source,
                                              round_no, verified_by=verified_by)
     rec.owner_row_key = key
+    rec.input_evidence = res.to_json()
     return rec, new_rows, removed
 
 
@@ -1767,6 +1794,8 @@ class Settler:
 
     def _rebuild(self, rows: list[dict[str, Any]], *, snapshot: str) -> Any:
         from docproof.replay import rebuild_from_rows
+        started = time.monotonic()
+        log.info("settle: rebuilding %s (%d finding rows)", snapshot, len(rows))
         cfg = copy.deepcopy(self.cfg)
         cfg.output_dir = str(self.run_dir)
         if self.opt.keep_snapshots:
@@ -1781,6 +1810,7 @@ class Settler:
                                    error_dir=self.error_dir,
                                    remap_unchanneled=False, id_prefix="settle",
                                    settle_locked_queries=True)
+        log.info("settle: rebuilt %s in %.1fs", snapshot, time.monotonic() - started)
         return result
 
     def _load_state(self) -> tuple[dict[str, dict[str, Any]], emap.EditMap,
@@ -1940,7 +1970,8 @@ class Settler:
             failed[rid] = "missing_settlement_row"
         return failed
 
-    def round(self, round_no: int, items: list[Residual], *, _recovering: bool = False) -> list[Residual]:
+    def round(self, round_no: int, items: list[Residual], *, _recovering: bool = False,
+              _recovery_batch: int = 0) -> list[Residual]:
         """Settle `items`; return the NEW open items the delta verify raised
         (empty when the engine cannot verify or nothing new surfaced)."""
         working, em, accepted = self._load_state()
@@ -1976,10 +2007,13 @@ class Settler:
                     dec = Decision("internal_repair", dec.reason)
                 else:
                     judged += 1
+                    from docproof.resource_ledger import ResourceBudgetExceeded
                     try:
                         jd = prefetched.get(res.id) or judge(
                             res, em, source, working, self.provider,
                             self.opt.model, self.usage, context=self.opt.context)
+                    except ResourceBudgetExceeded:
+                        raise
                     except Exception as exc:
                         log.warning("settle: internal judge unavailable: %s", exc)
                         jd = Decision("internal_repair", "judge_unavailable")
@@ -2026,7 +2060,12 @@ class Settler:
                 plans.setdefault(pid, []).append((lo, hi, text, rid))
 
         rows = list(working.values()) + new_rows
-        result = self._rebuild(rows, snapshot=f"round{round_no}")
+        snapshot = (f"round{round_no}-recovery{_recovery_batch}" if _recovering
+                    else f"round{round_no}")
+        if rows == list(baseline.values()):
+            log.info("settle: %s leaves finding rows unchanged; no rebuild needed", snapshot)
+        else:
+            self._rebuild(rows, snapshot=snapshot)
         env = load_envelope(self.run_dir)
         failed = self._settled_ok(env.get("findings") or [],
                                   {r.residual_id for r in records
@@ -2045,7 +2084,7 @@ class Settler:
             for key, row in baseline.items():
                 if row.get("para_id") in bad_paras:
                     current[f"baseline-{key}"] = row
-            self._rebuild(list(current.values()), snapshot=f"round{round_no}-restore")
+            self._rebuild(list(current.values()), snapshot=snapshot + "-restore")
             for res in items:
                 if res.para_id in bad_paras:
                     reverted[res.id] = bad_paras[res.para_id]
@@ -2065,31 +2104,7 @@ class Settler:
         if _recovering:
             self._recovery_removed.update(removed_by)
             return []
-        # Retry from fresh coordinates, one correction per rebuild. Recovery
-        # is bounded independently of the editorial reread round budget.
-        from galley.mechanics import rebase_correction
-        for res in items:
-            if res.id in reverted:
-                retry = copy.deepcopy(res)
-                if res.kind == "residual":
-                    _, _, now = self._load_state()
-                    current = now.get(res.para_id, "")
-                    fix = rebase_correction(accepted.get(res.para_id, ""), current,
-                                            res.quote, res.suggestion)
-                    if fix is not None:
-                        retry.quote, retry.suggestion = current, fix
-                self.round(round_no, [retry], _recovering=True)
-            elif res.kind == "residual" and res.para_id in self.touched:
-                prior = self.settlement.latest().get(res.id)
-                if prior and prior.action == "internal_repair" and prior.reason == "unanchorable":
-                    current_rows, current_map, current_text = self._load_state()
-                    retry = copy.deepcopy(res)
-                    if (current_text.get(res.para_id) != accepted.get(res.para_id)
-                            and resolve(retry, current_map, current_text, current_rows) is None):
-                        # A source-restoring edit can make another flag's exact
-                        # quote available again. Judge it once on this build,
-                        # instead of carrying an already-repaired anchor forever.
-                        self.round(round_no, [retry], _recovering=True)
+        self._recover(round_no, items, reverted, accepted)
         removed_by.update(self._recovery_removed)
         records = [self.settlement.latest().get(rec.residual_id, rec) for rec in records]
 
@@ -2197,18 +2212,108 @@ class Settler:
         self.touched = set()
         return fresh
 
+    def _recover(self, round_no: int, items: list[Residual],
+                 reverted: Mapping[str, str], accepted: Mapping[str, str]) -> None:
+        """Retry each failed correction once, sharing builds across paragraphs.
+
+        A batch contains at most one correction per paragraph, with neighboring
+        paragraphs in separate batches so repeat-deletion evidence stays current.
+        Later corrections rebase onto the preceding batch's actual output, and
+        the normal recovery guard restores only paragraphs that failed. Recovery
+        never starts another editorial read or recursively retries a failure.
+        """
+        from galley.mechanics import rebase_correction
+        latest = self.settlement.latest()
+        pending = [res for res in items if res.id in reverted or (
+            res.kind == "residual" and res.para_id in self.touched
+            and res.id in latest and latest[res.id].action == "internal_repair"
+            and latest[res.id].reason == "unanchorable")]
+        if not pending:
+            return
+        total, batch_no = len(pending), 0
+        attempted: list[str] = []
+        directory = self.run_dir / "settle"
+        directory.mkdir(exist_ok=True)
+
+        def progress(status: str, batch: Sequence[Residual] = ()) -> None:
+            # Advisory progress only: this is not a verification receipt or a
+            # crash-resume checkpoint. Settlement authority is finalized later.
+            latest = self.settlement.latest()
+            value = {"round": round_no, "status": status, "batch": batch_no,
+                     "candidate_count": total, "attempted_count": len(attempted),
+                     "current_ids": [res.id for res in batch],
+                     "remaining_ids": [res.id for res in pending],
+                     "unresolved_ids": [rid for rid in attempted
+                         if latest[rid].action == "internal_repair"],
+                     "updated_at": _now()}
+            path = directory / "recovery-progress.json"
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(value, indent=1), encoding="utf-8")
+            temporary.replace(path)
+
+        progress("pending")
+        while pending:
+            current_rows, current_map, current_text = self._load_state()
+            ordered = sorted(current_text)    # Same neighborhood as _para_neighbours.
+            positions = {pid: i for i, pid in enumerate(ordered)}
+            batch: list[Residual] = []
+            remaining: list[Residual] = []
+            paragraphs: set[str] = set()
+            blocked: set[str] = set()
+            for res in pending:
+                if (res.para_id in blocked
+                        or len(batch) >= RECOVERY_BATCH_PARAGRAPHS):
+                    remaining.append(res)
+                    continue
+                retry = copy.deepcopy(res)
+                current = current_text.get(res.para_id, "")
+                if res.id in reverted:
+                    if res.kind == "residual":
+                        fix = rebase_correction(accepted.get(res.para_id, ""), current,
+                                                res.quote, res.suggestion)
+                        if fix is not None:
+                            retry.quote, retry.suggestion = current, fix
+                elif (current == accepted.get(res.para_id)
+                      or resolve(retry, current_map, current_text, current_rows) is not None):
+                    # Source restoration may make an earlier flag anchor again.
+                    # Retry it only when this build actually supplies that anchor.
+                    continue
+                batch.append(retry)
+                paragraphs.add(res.para_id)
+                blocked.add(res.para_id)
+                if res.para_id in positions:
+                    pos = positions[res.para_id]
+                    blocked.update(ordered[max(0, pos - 1):pos + 2])
+            pending = remaining
+            if not batch:
+                break
+            batch_no += 1
+            log.info("settle: recovery batch %d: %d corrections in %d paragraphs; "
+                     "%d candidates remain", batch_no, len(batch), len(paragraphs), len(pending))
+            progress("rebuilding", batch)
+            self.round(round_no, batch, _recovering=True, _recovery_batch=batch_no)
+            attempted.extend(res.id for res in batch)
+            progress("pending" if pending else "completed")
+            log.info("settle: recovery batch %d complete; %d/%d candidates attempted",
+                     batch_no, len(attempted), total)
+        progress("completed")
+        self.settlement.notes.append(
+            f"round {round_no}: recovery attempted {len(attempted)}/{total} "
+            f"candidate(s) in {batch_no} batch(es)")
+
     def _merge_coverage(self, vr, para_ids) -> None:
         """Fold a delta read into the run's verify artifacts: rows for the
         re-read paragraphs replaced, coverage merged, the build binding
         advanced only when nothing is left unread or dirty."""
-        from galley.verify import UNREAD, applied_edits, write_artifacts
+        from galley.verify import UNREAD, accepted_text, applied_edits, write_artifacts
         ids = {str(p) for p in para_ids}
         self._dirty -= (ids - set(UNREAD)) if vr.ran_walk else set()
         write_artifacts(self.run_dir, vr, vr, model=self.opt.model,
                         engine=self.opt.engine, usage_changes=Usage(),
                         usage_walk=Usage(),
                         applied=len(applied_edits(self.run_dir)),
-                        paragraphs=len(self._source), para_ids=sorted(ids),
+                        paragraphs=sum(bool(text.strip()) for text in accepted_text(self.run_dir).values()),
+                        para_ids=sorted(ids),
                         merge=True)
 
     def _prefetch_judgments(self, items, em, accepted, source, working,
@@ -2570,8 +2675,6 @@ class Settler:
                 stopped = "clean"
                 break
             stopped = "rounds"
-            if not self.opt.until_clean:
-                continue
             if self.usage.api_calls >= self.opt.max_turns:
                 stopped = "turn_budget"
                 note = (f"round {round_no}: turn budget reached "
@@ -2580,6 +2683,8 @@ class Settler:
                 log.warning("settle: %s", note)
                 self.settlement.notes.append(note)
                 break
+            if not self.opt.until_clean:
+                continue
             if self._quiet(len(items)):
                 stopped = "quiet"
                 note = (f"round {round_no}: quiet — {len(items)} new item(s) "
@@ -2745,10 +2850,15 @@ def rewrite_verify_artifacts(run_dir: str | Path, settlement: Settlement, *,
         merged = dict(prior)
         for rid, row in rows.items():
             merged[rid] = {**prior.get(rid, {}), **row}
+        original_rows = payload.get(key)
         payload[key] = list(merged.values())
         have = set(payload.get("unverified_paragraphs") or [])
         payload["unverified_paragraphs"] = sorted(
             have | {str(p) for p in unverified if p})
+        if payload[key] != original_rows or payload["unverified_paragraphs"]:
+            # The immutable intake snapshot retains the reader's original
+            # proof. A settlement projection is not that reader response.
+            payload.pop("verification_provenance", None)
         payload["unsettled"] = [
             r.get("residual_id") or r.get("problem_id")
             for r in payload[key]

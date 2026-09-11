@@ -118,17 +118,28 @@ def test_practitioner_query_requires_current_exact_evidence(tmp_path, invalid):
         rec = _records(run)[0][residual_id(pid, quote)]
         assert rec.action == "query"
         assert rec.reason.startswith("author_knowledge:")
+        from galley.manifest import _certify_settlement
+        from docproof.utils.xml_helpers import DocxPackage
+        assert _certify_settlement(run).status == "pass"
+        package = DocxPackage(deliverable_docx(run))
+        package.tree("word/comments.xml").clear()
+        package.mark_modified("word/comments.xml")
+        package.save(deliverable_docx(run))
+        assert _certify_settlement(run).status == "fail"
 
 
 def test_missing_registered_pass_stays_a_blocker(tmp_path):
-    from galley.settlement_inputs import register_verification_source
+    from galley.settlement_inputs import register_verification_source, verification_dirs
     src = _manuscript(tmp_path)
     run = _build(tmp_path, src, [])
     second = tmp_path / "second"
     second.mkdir()
     _walk(second, [])
     register_verification_source(run, second)
+    # The durable snapshot survives deletion or reuse of the convenience output.
     (second / "finished_walk.json").unlink()
+    assert open_items(run) == []
+    (verification_dirs(run)[1] / "finished_walk.json").unlink()
     with pytest.raises(ValueError, match="missing"):
         open_items(run)
 
