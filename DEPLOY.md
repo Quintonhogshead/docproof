@@ -200,8 +200,10 @@ Two ways, both equivalent:
 ### Pushing an update
 
 **Automatic (set up in this repo).** `.github/workflows/deploy.yml` deploys the
-site on every push to `main` — so **merging a PR updates the live site**,
-usually within a couple of minutes. It needs one one-time secret:
+web `app` process on every push to `main` — so **merging a PR updates the live
+site**, usually within a couple of minutes. It leaves Galley workers running
+their current image and command so a long book is not interrupted by a merge.
+It needs one one-time secret:
 
 1. Create a Fly deploy token:
    ```bash
@@ -210,21 +212,25 @@ usually within a couple of minutes. It needs one one-time secret:
 2. In GitHub: **Settings → Secrets and variables → Actions → New repository
    secret**, name it `FLY_API_TOKEN`, and paste the token.
 
-After that, nothing to do — merge and it ships. Watch a run under the repo's
-**Actions** tab.
+After that, merge and the web app ships. Watch a run under the repo's
+**Actions** tab. To release Galley workers too, run **Deploy to Fly.io** manually
+with **Also release Galley workers** enabled, after the workers are idle or
+checkpoint recovery has been arranged. Deployments are serialized; a later
+push does not cancel an in-progress release.
 
 **By hand** (any time, no token needed on the server — you deploy from your
 Mac):
 
 ```bash
 git checkout main && git pull
-fly deploy
+fly deploy --process-groups app
 ```
 
 Everyone is on the new version at their next page load — nobody installs
-anything. **A deploy is safe to run mid-review:** jobs are files on disk,
-overnight (batch) jobs resume on their own, and at worst one review that was
-actively running needs a one-click retry.
+anything. Web jobs are files on disk; overnight jobs resume, and a web review
+that was actively running may need a retry. This process filter leaves the
+separate Galley worker running. An unfiltered `fly deploy` releases both groups
+and can interrupt a Galley phase.
 
 ### Examination-graph emergency rollback
 
@@ -354,8 +360,9 @@ One-time setup:
    through the brain's `docproof` wrapper (`galley/practitioner/galley-bin/
    docproof`), never the brain itself.
 
-3. **Deploy.** The next push to `main` (or `fly deploy`) builds the image with
-   Claude Code in it and creates the agent machine. `fly.toml` sizes it at
+3. **Deploy the worker explicitly.** Use `fly deploy --process-groups agent`
+   or manually run the deployment workflow with **Also release Galley workers**
+   enabled. Pushes to `main` release only the web app. `fly.toml` sizes the worker at
    `shared-cpu-4x` / 8 GB; raise it there if `fly logs` for the `agent`
    process shows OOM kills.
 
@@ -451,16 +458,19 @@ from the author's folder first, or DocWatch moves the book on at its next pass.
   click **Release** on the book's row under "Out with the practitioner", then
   `fly machine start`. Putting the HubSpot status back at the ready value
   queues the book again.
-- `fly logs -a atmosphere-docproof --process agent` is the live log; the
-  same lines are in `/data/galley-workspaces/agent.log` on the agent machine,
-  and the per-phase transcripts under `/data/galley-workspaces/<slug>/runs/
-  driver/` (`fly ssh console --process agent`).
+- `fly logs -a atmosphere-docproof --process agent` is the live container log.
+  The entrypoint does not create an `agent.log` file; use an explicit log sink
+  when preserving an isolated run's stdout. Per-phase transcripts are under
+  `/data/galley-workspaces/<slug>/runs/driver/` (`fly ssh console --process agent`).
 
-Every deploy restarts the agent machine, which kills a phase session in
-flight; the run resumes from its last completed phase on the next poll, so at
-worst one phase is repeated (the boot email says when that happened). The Max
-token is a personal seat: books proofread here share its quota with whatever
-the same account is doing in Claude Code.
+An explicit deployment that includes the `agent` group restarts its machines
+and restores the normal `galley-agent` polling command. Stop or quiesce the
+worker first and arrange recovery for any interrupted operation; do not use it
+to update a running isolated pilot. Checkpoint and budget receipts survive,
+but an interrupted operation may need reconciliation before it can resume.
+Automatic web-only releases leave the worker image and command intact. The
+Max token is a personal seat: books proofread here share its quota with
+whatever the same account is doing in Claude Code.
 
 ## 5. Backups and restore
 

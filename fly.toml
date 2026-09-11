@@ -17,8 +17,8 @@ primary_region = "iad"        # pick one near your users: fly platform regions
 #          DocWatch marks awaiting, runs the driver (Claude Code sessions on the
 #          Max subscription + the docproof sifters, LanguageTool included) and
 #          uploads the Book 2 set. Its secrets: see galley/practitioner/fly/
-#          galley-agent and DEPLOY.md. Every deploy restarts it; a run in
-#          flight resumes from its last completed phase on the next poll.
+#          galley-agent and DEPLOY.md. Automatic releases target only app;
+#          an explicit agent release restarts the worker and restores polling.
 [processes]
   app = "docproof-serve"
   agent = "galley-agent"
