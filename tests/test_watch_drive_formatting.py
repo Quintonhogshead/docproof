@@ -173,3 +173,18 @@ def test_new_book_one_can_enter_existing_proofing_workflow(tmp_path):
     assert report.uploaded == ['Johnson - Book One.docx']
     assert [name for name, _ in report.awaiting_proof] == ['Johnson - Book One.docx']
     assert not any('hubapi' in req.full_url and req.get_method() == 'PATCH' for req in opener.calls)
+
+
+def test_preserves_native_google_doc_support(tmp_path):
+    from app.watch.drive import GOOGLE_DOC_MIME
+    report, opener = run(tmp_path, {'src': entry('Smith - Book Original.docx', mime=GOOGLE_DOC_MIME)})
+    assert report.ok and report.uploaded == ['Smith - Book One.docx']
+    assert opener.files['src']['name'] == 'Smith - Book Original_done.docx'
+
+
+def test_old_internal_exports_and_configured_archive_are_never_intake(tmp_path):
+    files = {'old': entry('book_Smith - Book Original.docx'),
+             'archive': entry('Archive', mime=FOLDER_MIME),
+             'backup': entry('source - Smith - Book Original.docx', 'archive')}
+    report, opener = run(tmp_path, files, settings(archive_folder_id='archive'))
+    assert report.ok and not report.uploaded and not report.new

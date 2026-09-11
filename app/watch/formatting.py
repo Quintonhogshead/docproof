@@ -1,7 +1,9 @@
 """Drive-only Book Original intake using the existing manuscript exporter. No author-name/CRM matching."""
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import fields, replace
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -10,7 +12,8 @@ from app.jobs import JobRunner, JobStore
 from app.settings import Paths, get_api_key
 from . import drive
 from .settings import GOOGLE_KEY
-from .stages import AT_PROP, FAILED, FORMATTED, JOB_PROP, OUTPUT_PROP, SOURCE_PROP, STATE_PROP
+from .stages import (AT_PROP, FAILED, FORMATTED, JOB_PROP, OUTPUT_PROP,
+                     SOURCE_PROP, STATE_PROP, _looks_like_output)
 from .state import WatchState, note_tick
 
 # Match the label wherever it occurs, without needing a surname or separator.
@@ -22,8 +25,9 @@ DELIVERED = re.compile(
 
 def source(file):
     return (not file.is_folder and not file.app_properties.get(OUTPUT_PROP)
+            and not _looks_like_output(file.name)
             and not DONE.search(file.name) and bool(ORIGINAL.search(file.name))
-            and (Path(file.name).suffix.lower() == ".docx"
+            and (file.is_google_doc or Path(file.name).suffix.lower() == ".docx"
                  or (not Path(file.name).suffix and file.mime_type == drive.DOCX_MIME)))
 
 
@@ -33,24 +37,35 @@ def done_name(name):
 
 def output_name(name):
     stem = Path(name).stem if Path(name).suffix else name
+    # Exporting a native Doc with a .docx title can add a second extension.
+    if Path(stem).suffix.lower() == ".docx":
+        stem = Path(stem).stem
     return ORIGINAL.sub("Book One", stem, count=1) + ".docx"
 
 
-def _folders(token, parent, opener, report):
-    pending = [parent]
-    visited = set()
-    while pending:
-        folder = pending.pop()
-        if folder in visited:
-            continue
-        visited.add(folder)
-        try:
-            listing = drive.list_folder(token, folder, opener=opener)
-        except Exception as exc:
-            report.failed.append((folder, f"Could not scan folder: {exc}"))
-            continue
-        pending.extend(f.id for f in listing if f.is_folder)
-        yield folder, listing
+def _folders(token, parent, opener, report, *, exclude=""):
+    pending = deque([parent])
+    visited = {exclude} if exclude else set()
+    # Read-only listings may overlap; all preparation and writes stay serial.
+    # Four requests at a time keep large author trees practical to scan.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        while pending:
+            batch = []
+            while pending and len(batch) < 4:
+                folder = pending.popleft()
+                if folder not in visited:
+                    visited.add(folder)
+                    batch.append(folder)
+            futures = [(folder, pool.submit(drive.list_folder, token, folder,
+                                             opener=opener)) for folder in batch]
+            for folder, future in futures:
+                try:
+                    listing = future.result()
+                except Exception as exc:
+                    report.failed.append((folder, f"Could not scan folder: {exc}"))
+                    continue
+                pending.extend(f.id for f in listing if f.is_folder)
+                yield folder, listing
 
 
 def _evidence(file, listing, rec):
@@ -120,7 +135,8 @@ def tick(home, ws, *, dry_run=False, mock=False, opener=None, get_key=None):
         runner = (JobRunner(store, ws.app_settings(root), config_path=config_path(),
                             notify_home=root) if store else None)
         prepared = 0
-        for folder, listing in _folders(token, ws.folder_id, opener, report):
+        for folder, listing in _folders(token, ws.folder_id, opener, report,
+                                        exclude=ws.archive_folder_id):
             report.listed += len(listing)
             candidates = [f for f in listing if source(f)]
             for file in sorted(candidates, key=lambda f: (f.modified_time, f.name, f.id)):

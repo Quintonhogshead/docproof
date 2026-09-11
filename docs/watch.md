@@ -9,7 +9,7 @@ That second step is the one this removes.
 > DocWatch screen and shares this Google sign-in. See [archive.md](archive.md).
 
 `docproof-watch` scans the configured Drive folder and all descendant folders
-for Word files containing **Book Original**, without consulting HubSpot or
+for Word files and native Google Docs containing **Book Original**, without consulting HubSpot or
 matching author names. Formatting uses the existing manuscript exporter unchanged: Times New Roman,
 12-point body text and 14-point chapter headings, with the same verification
 and layout rules as before.
@@ -20,6 +20,7 @@ Grest - Book One.docx             ← formatted copy, in the same folder
 ```
 
 Folders and Drive file IDs distinguish authors, including identical surnames.
+DocProof’s configured archive and internal export copies are excluded from intake.
 The original's contents are never overwritten. The output upload completes
 before the original is atomically renamed and marked formatted.
 
