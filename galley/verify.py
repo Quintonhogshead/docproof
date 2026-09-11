@@ -1320,6 +1320,134 @@ def build_fingerprints(run_dir: str | Path) -> dict[str, Any]:
             "paragraph_sha256": paragraph_fingerprints(accepted)}
 
 
+_READING_TRANSITIONS = "reading-input-transitions.json"
+_READING_FIELDS = ("source_sha256", "accepted_sha256", "edits_sha256")
+
+
+def reading_input_snapshot(run_dir) -> dict[str, str]:
+    """Capture the exact inputs read by verification, apart from packaging."""
+    original, accepted = paragraph_views(run_dir)
+    path = deliverable_docx(run_dir)
+    if path is None or not accepted:
+        raise ValueError("Reading-input transition requires a readable deliverable")
+    return {"document_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "source_sha256": _digest(list(original.items())),
+            "accepted_sha256": _digest(list(accepted.items())),
+            "edits_sha256": _digest(applied_edits(run_dir))}
+
+
+def _valid_reading_snapshot(value):
+    return (isinstance(value, dict)
+            and set(value) == {"document_sha256", *_READING_FIELDS}
+            and all(isinstance(v, str) and len(v) == 64
+                    and all(c in "0123456789abcdef" for c in v)
+                    for v in value.values()))
+
+
+def record_reading_input_transition(run_dir, before, *, reason):
+    """Record an explicit package change without rewriting any reader proof.
+
+    The caller captures ``before`` before its audited writer transaction. A
+    reconstruction may instead supply the original immutable reading intake.
+    Current inputs are always measured here; source, accepted text and the
+    entire applied-edit payload must remain exact, including ordering and IDs.
+    """
+    after = reading_input_snapshot(run_dir)
+    if (not _valid_reading_snapshot(before) or not isinstance(reason, str)
+            or not reason.strip() or any(before[k] != after[k] for k in _READING_FIELDS)):
+        raise ValueError("Reading-input transition changed source, accepted text or applied edits")
+    if before == after:
+        return None
+    row = {"before": dict(before), "after": after, "reason": reason.strip()}
+    row["transition_sha256"] = _digest(row)
+    path = Path(run_dir) / _READING_TRANSITIONS
+    with path.with_suffix(".lock").open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        data = _load_artifact(path) if path.exists() else {"schema_version": 1, "transitions": []}
+        if data.get("schema_version") != 1 or not isinstance(data.get("transitions"), list):
+            raise ValueError("Invalid reading-input transition ledger")
+        if row not in data["transitions"]:
+            if len(data["transitions"]) >= 128:
+                raise ValueError("Reading-input transition history is full")
+            data["transitions"].append(row)
+            _save_json(path, data)
+    return row
+
+
+def _equivalent_reading_identity(run_dir, saved, current):
+    if not isinstance(saved, dict) or not isinstance(current, dict):
+        return False
+    if saved == current:
+        return True
+    if ({k: v for k, v in saved.items() if k != "document_sha256"}
+            != {k: v for k, v in current.items() if k != "document_sha256"}):
+        return False
+    data = _load_artifact(Path(run_dir) / _READING_TRANSITIONS)
+    if data.get("schema_version") != 1 or not isinstance(data.get("transitions"), list):
+        return False
+    edges = {}
+    for row in data["transitions"]:
+        if not isinstance(row, dict):
+            return False
+        before, after = row.get("before"), row.get("after")
+        if (not _valid_reading_snapshot(before) or not _valid_reading_snapshot(after)
+                or not isinstance(row.get("reason"), str) or not row["reason"].strip()
+                or row.get("transition_sha256") != _digest({k: v for k, v in row.items()
+                                                            if k != "transition_sha256"})):
+            return False
+        if all(before[k] == after[k] == current.get(k) for k in _READING_FIELDS):
+            edges.setdefault(before["document_sha256"], set()).add(after["document_sha256"])
+    frontier = {saved.get("document_sha256")}
+    seen = set(frontier)
+    for _ in range(32):
+        frontier = {target for source in frontier for target in edges.get(source, ())} - seen
+        if current.get("document_sha256") in frontier:
+            return True
+        if not frontier:
+            break
+        seen.update(frontier)
+    return False
+
+
+def verification_artifact_matches_build(run_dir, artifact, fingerprints):
+    """Check a build binding, allowing only an explicit identical-input edge."""
+    if not fingerprints or any(artifact.get(k) != v for k, v in fingerprints.items()
+                               if k != "build_sha256"):
+        return False
+    if artifact.get("build_sha256") == fingerprints.get("build_sha256"):
+        return True
+    proof = artifact.get("verification_provenance") or {}
+    saved = proof.get("identity")
+    if (not isinstance(saved, dict) or proof.get("complete") is not True
+            or artifact.get("build_sha256") != saved.get("document_sha256")
+            or proof.get("identity_sha256") != _digest(saved)
+            or proof.get("proof_sha256") != _digest({k: v for k, v in proof.items()
+                                                      if k != "proof_sha256"})):
+        return False
+    try:
+        current = {**saved, **reading_input_snapshot(run_dir)}
+    except (OSError, ValueError):
+        return False
+    return _equivalent_reading_identity(run_dir, saved, current)
+
+
+def has_reading_input_transition(run_dir, before_document_sha256, after_document_sha256):
+    """Prove a recorded package transition against today's actual inputs.
+
+    This checks only the package edge. Callers reusing a reading operation
+    must also validate its complete original reader identity and responses.
+    """
+    try:
+        current = reading_input_snapshot(run_dir)
+    except (OSError, ValueError):
+        return False
+    if (current["document_sha256"] != after_document_sha256
+            or before_document_sha256 == after_document_sha256):
+        return False
+    saved = {**current, "document_sha256": before_document_sha256}
+    return _equivalent_reading_identity(run_dir, saved, current)
+
+
 def _load_artifact(path: Path) -> dict[str, Any]:
     def invalid_constant(value):
         raise ValueError("Non-finite JSON number")
@@ -1399,7 +1527,7 @@ def validate_complete_pass(run_dir, output_dir, provider, model, *, context="", 
                 or artifact.get(unread_key) != [] or artifact.get("unverified_paragraphs") != []
                 or artifact.get("reason") or artifact.get("paragraphs_verified") is not None
                 or artifact.get("engine") != engine or artifact.get("model") != model
-                or not fp or any(artifact.get(k) != v for k, v in fp.items())):
+                or not verification_artifact_matches_build(run, artifact, fp)):
             return False
         proof = artifact.get("verification_provenance")
         if not isinstance(proof, dict) or proof.get("complete") is not True:
@@ -1407,7 +1535,9 @@ def validate_complete_pass(run_dir, output_dir, provider, model, *, context="", 
         identity = _verification_identity(run, original, accepted, edits, provider, model,
                                           context, max_tokens, engine, policy,
                                           config_sha256, gate)
-        if (proof.get("identity") != identity or proof.get("identity_sha256") != _digest(identity)
+        saved_identity = proof.get("identity")
+        if (not _equivalent_reading_identity(run, saved_identity, identity)
+                or proof.get("identity_sha256") != _digest(saved_identity)
                 or proof.get("proof_sha256") != _digest({k: v for k, v in proof.items() if k != "proof_sha256"})):
             return False
         scope, invocation = proof.get("scope"), proof.get("invocation_id")
@@ -1433,7 +1563,7 @@ def validate_complete_pass(run_dir, output_dir, provider, model, *, context="", 
             body = saved.get("parsed")
             validate = _valid_change_window if gate == "changes" else _valid_walk_window
             if (not _valid_schema(body, schema) or not validate(body, window)
-                    or saved.get("identity_sha256") != _digest(identity)
+                    or saved.get("identity_sha256") != _digest(saved_identity)
                     or saved.get("request_sha256") != key
                     or saved.get("result_sha256") != _digest(body)):
                 return False
@@ -1655,4 +1785,7 @@ __all__ = [
     "VERIFICATION_POLICY", "reusable_clean_verification",
     "verification_invocation",
     "validate_complete_pass",
+    "reading_input_snapshot", "record_reading_input_transition",
+    "verification_artifact_matches_build",
+    "has_reading_input_transition",
 ]

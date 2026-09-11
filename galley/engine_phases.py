@@ -117,9 +117,24 @@ class EnginePhases:
             if saved.get("status") == "running":
                 raise EnginePhaseError(f"{name}: interrupted operation needs receipt reconciliation")
             if saved.get("status") == "completed":
-                if (saved.get("output_build") == build and
-                    all(p.is_file() and saved["outputs"].get(str(p)) == sha256_file(p)
-                        for p in outputs) and (validate is None or validate())):
+                same_outputs = all(p.is_file() and saved["outputs"].get(str(p)) == sha256_file(p)
+                                   for p in outputs)
+                same_build = saved.get("output_build") == build
+                if (not same_build and same_outputs and run and phase == "verify"
+                        and name.startswith("verify-") and arguments[:1] == ["verify"]
+                        and len(outputs) == 2 and {p.name for p in outputs}
+                        == {"change_verify.json", "finished_walk.json"} and validate is not None):
+                    # Only a completed reader may follow an explicit packaging
+                    # transition. Its output files and all other build fields
+                    # stay exact; validate() must still recheck the full proof.
+                    from galley.verify import has_reading_input_transition
+                    prior = saved.get("output_build") or {}
+                    same_build = (
+                        {k: v for k, v in prior.items() if k != "build_sha256"}
+                        == {k: v for k, v in build.items() if k != "build_sha256"}
+                        and has_reading_input_transition(run, prior.get("build_sha256"),
+                                                         build.get("build_sha256")))
+                if same_build and same_outputs and (validate is None or validate()):
                     return
                 # Later valid phases may supersede these files. The phase
                 # caller must choose a new operation name for a fresh read.
@@ -214,7 +229,8 @@ class EnginePhases:
         self._advance("audited")
 
     def _coverage(self, run, *, require_full_passes=False, only_pass=None):
-        from galley.verify import build_fingerprints, applied_edits, accepted_text
+        from galley.verify import (build_fingerprints, applied_edits, accepted_text,
+                                   verification_artifact_matches_build)
         fp = build_fingerprints(run)
         if not fp:
             return False
@@ -246,15 +262,13 @@ class EnginePhases:
                 payload = _json(path)
                 if (payload.get("ran") is not True or payload.get(count_key) != count
                         or any(payload.get(k) for k in ("unread_batches", "unread_paragraphs", "unverified_paragraphs"))
-                        or any(payload.get(k) != fp[k] for k in
-                               ("build_sha256", "accepted_sha256", "paragraph_sha256", "source_sha256"))):
+                        or not verification_artifact_matches_build(run, payload, fp)):
                     return False
                 if require_full_passes:
                     proof = payload.get("verification_provenance") or {}
                     identity = proof.get("identity") or {}
                     policy = identity.get("policy") or {}
                     if (proof.get("complete") is not True or identity.get("gate") != gate
-                            or identity.get("document_sha256") != fp["build_sha256"]
                             or policy != {"id": POLICY_ID, "pass_id": pass_id,
                                           "required_pass_ids": list(PASS_IDS)}):
                         return False

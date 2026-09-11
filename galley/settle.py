@@ -1765,6 +1765,8 @@ class Settler:
                  error_dir: str | Path, provider=None,
                  options: SettleOptions | None = None):
         self.run_dir = Path(run_dir)
+        from galley.comment_reconcile import recover_comment_transactions
+        recover_comment_transactions(self.run_dir)
         self.cfg = cfg
         self.manuscript = Path(manuscript)
         self.error_dir = Path(error_dir)
@@ -1829,15 +1831,15 @@ class Settler:
         return working, em, accepted
 
     def _reconcile_comments(self) -> None:
-        from galley.comment_reconcile import reconciliation, actual_comments
+        from galley.comment_reconcile import reconciliation, actual_comments, remove_queries
         from galley.verify import deliverable_docx, paragraph_views
         from hashlib import sha256
         working, _, accepted = self._load_state()
         env = load_envelope(self.run_dir)
         removed = reconciliation(env.get("findings") or [], accepted,
                                  self.settlement.residuals_seen, source=self._source)
-        # Only generated finding-owned queries are removed. Original author
-        # comments survive every rebuild from the source document.
+        # Only generated finding-owned queries are removed. Native removal
+        # preserves the author's comments and every existing tracked change.
         for key, row in working.items():
             if terminal_state(row)[0] != "query":
                 continue
@@ -1849,21 +1851,17 @@ class Settler:
             if protected:
                 removed[key] = protected
         if removed:
-            rows = []
             for key, row in working.items():
                 reason = removed.get(key, removed.get(emap.row_key(row)))
                 if reason is None:
-                    rows.append(row)
                     continue
                 rid = settle_residual_of(row)
                 if rid:
                     self.settlement.records.append(SettlementRecord(
                         rid, self.settlement.rounds, "drop", None, "", "",
                         reason, self.verified_by, para_id=str(row.get("para_id", ""))))
-            self._rebuild(rows, snapshot="comments-reconciled")
-            _, final = paragraph_views(self.run_dir)
-            if final != accepted:
-                raise RuntimeError("Comment reconciliation changed the manuscript text")
+            remove_queries(self.run_dir, self.manuscript, removed,
+                           reason="comment reconciliation")
         path = deliverable_docx(self.run_dir)
         if path:
             final_rows = load_envelope(self.run_dir).get("findings") or []
@@ -1881,9 +1879,25 @@ class Settler:
         from galley.verify import residual_id
         self._reconcile_comments()
         working, _, accepted = self._load_state()
+        # The question can disappear from Word before a round is saved. Its
+        # exact intake travels with the transactional finding update, so an
+        # interruption after commit cannot silently lose required repair work.
+        from galley.settlement_inputs import _evidence_key
+        latest = self.settlement.latest()
         residuals = []
+        for row in load_envelope(self.run_dir).get('findings', []):
+            pending = row.get('settle_pending_intake')
+            if not isinstance(pending, dict):
+                continue
+            res = Residual.from_walk(pending)
+            rec = latest.get(res.id)
+            if (rec and rec.action != 'internal_repair' and rec.input_evidence is not None
+                    and _evidence_key(rec.input_evidence, rec.kind) == _evidence_key(pending, res.kind)):
+                continue
+            residuals.append(res)
         seen = {r["residual_id"]: r for r in self.settlement.residuals_seen}
         remove = []
+        intake = {}
         for key, row in working.items():
             if not (row.get("force_query") or row.get("queried")):
                 continue
@@ -1915,8 +1929,12 @@ class Settler:
                            problem=str(row.get("explanation") or ""))
             residuals.append(res)
             remove.append(key)
+            intake[key] = res.to_json()
         if remove:
-            self._rebuild([r for k, r in working.items() if k not in remove], snapshot="query-intake")
+            from galley.comment_reconcile import remove_queries
+            remove_queries(self.run_dir, self.manuscript,
+                           {key: "correction_query_intake" for key in remove},
+                           reason="correction query intake", intake=intake)
             working, _, accepted = self._load_state()
         # An applied edit that spells out a numeral Chicago keeps ("book 1" ->
         # "book one") goes in as flagged edit damage whose fix is the author's
