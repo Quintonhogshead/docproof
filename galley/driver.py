@@ -21,6 +21,7 @@ from typing import Any, Callable, Iterable, Sequence
 
 from app.watch.naming import CLEAN_SUFFIX, PROOF_STAGE as HANDOFF_STAGE
 from docproof import agent_lane
+from docproof.subscription_limits import UsageLimitError, is_usage_limited
 from galley.journal import JOURNAL_NAME as DECISION_LOG_NAME
 from galley.phases import ALL_PHASES, COPYEDIT_PHASES, MECHANICAL_PHASES
 
@@ -744,7 +745,7 @@ class PhaseResult:
     log_path: Path | None = None
     tail: str = ""
     #: What ended this session early, if anything: "timeout" | "max_turns"
-    #: | "credentials" (never signed in — the token, not the book).
+    #: | "credentials" (never signed in) | "usage" (shared subscription limit).
     limit: str | None = None
     # Structured CLI result, including subtype and turn count.
     subtype: str = ""
@@ -804,16 +805,18 @@ def parse_session_result(text: str) -> dict[str, Any] | None:
 
 
 def session_limit(result: dict[str, Any] | None, tail: str) -> str | None:
-    """Detect max_turns from the structured result, falling back to the
-    transcript when no result exists.
-    """
+    """Classify auth, subscription exhaustion, or the session's turn ceiling."""
     if result is not None and result.get("is_error"):
         blob = " ".join(str(result.get(k) or "")
                         for k in ("result", "error", "message", "subtype"))
         if detect_credential_failure(blob):
             return "credentials"
+        if is_usage_limited(blob) or is_usage_limited(tail):
+            return "usage"
     if detect_credential_failure(tail):
         return "credentials"
+    if result is None and is_usage_limited(tail):
+        return "usage"
     if result is not None:
         subtype = str(result.get("subtype") or "")
         if subtype == RESULT_SUBTYPE_MAX_TURNS:
@@ -888,6 +891,10 @@ def spawn_claude(spec: PhaseSpec) -> PhaseResult:
                                                         errors="replace"))
     tail = transcript_tail(tail_of(spec.log_path))
     limit = session_limit(result, tail)
+    if limit == "usage" and result:
+        detail = str(result.get("result") or result.get("error") or "")
+        if detail and is_usage_limited(detail):
+            tail = detail
     return PhaseResult(spec.phase, proc.returncode, spec.log_path, tail,
                        limit=limit,
                        subtype=str((result or {}).get("subtype") or ""),
@@ -1990,6 +1997,8 @@ class Driver:
 
     def _phase_problem(self, phase: str, spec: PhaseSpec, outcome: PhaseResult,
                        review_snapshot: bool) -> str:
+        if outcome.limit == "usage":
+            raise UsageLimitError(f"Claude subscription usage limit at {phase}: {outcome.tail}")
         if outcome.limit == "credentials":
             raise CredentialsError(
                 f"phase {phase} could not sign in to Claude Code — the "
@@ -2088,6 +2097,11 @@ class Driver:
                                and self._review_snapshot_available())
             try:
                 problem = self._phase_problem(phase, spec, outcome, review_snapshot)
+            except UsageLimitError as exc:
+                # A saved build never makes a failed reader/settler successful.
+                # The agent pauses the shared subscription before more phases.
+                self._block(result, phase, str(exc))
+                raise
             except CredentialsError:
                 self._write_ledger(result)
                 self._progress("credentials", phase=phase, tail=outcome.tail[-600:])

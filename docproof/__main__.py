@@ -1801,6 +1801,9 @@ def _galley_drive(args) -> int:
 
     try:
         result = drv.run()
+    except gd.UsageLimitError as e:
+        print(f"paused: {e}", file=sys.stderr)
+        return 8
     except gd.DriverError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
