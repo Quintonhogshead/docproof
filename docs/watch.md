@@ -32,6 +32,23 @@ formatting run. Multiple unmarked Book Originals in one folder are flagged for
 review, not guessed at. Failed originals remain flagged until explicitly reset.
 A dry run lists new work without changing files or state.
 
+Formatting builds a persistent metadata inventory on its first scheduled run.
+Subsequent runs and previews use Google Drive's change log: inactive folders
+are not listed again. Uploads, renames, moves, and removals update the inventory
+by file ID; a newly added or moved-in folder gets its own subtree inventoried.
+Unfinished books stay queued even without further changes. No manual active
+author list is needed, and an old folder can become active again automatically.
+Before processing a candidate, its current folder location and contents are
+checked again to catch new deliveries, moves, or ambiguous originals.
+
+The inventory and change checkpoint live together in
+`formatting-drive-index.json` inside the watch home. They are saved atomically
+only after a successful sync. A missing/corrupt inventory, changed Google
+connection/root/archive, or a rejected checkpoint triggers a new full scan;
+temporary API failures retain the previous checkpoint and stop formatting for
+that pass. Preview never changes the saved inventory or checkpoint, so a
+preview before the initial inventory exists still scans the whole tree.
+
 This is the default for existing and new installations
 (`formatting_drive_only: true` in `watch.json`). HubSpot settings still govern
 proofreading and the other optional workflows; failures there do not prevent

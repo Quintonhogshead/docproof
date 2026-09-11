@@ -1,16 +1,14 @@
 """Drive-only Book Original intake using the existing manuscript exporter. No author-name/CRM matching."""
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import fields, replace
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 import re
 
 from app.jobs import JobRunner, JobStore
 from app.settings import Paths, get_api_key
-from . import drive
+from . import drive, drive_index
 from .settings import GOOGLE_KEY
 from .stages import (AT_PROP, FAILED, FORMATTED, JOB_PROP, OUTPUT_PROP,
                      SOURCE_PROP, STATE_PROP, _looks_like_output)
@@ -24,7 +22,7 @@ DELIVERED = re.compile(
 
 
 def source(file):
-    return (not file.is_folder and not file.app_properties.get(OUTPUT_PROP)
+    return (not file.is_folder and not file.trashed and not file.app_properties.get(OUTPUT_PROP)
             and not _looks_like_output(file.name)
             and not DONE.search(file.name) and bool(ORIGINAL.search(file.name))
             and (file.is_google_doc or Path(file.name).suffix.lower() == ".docx"
@@ -41,31 +39,6 @@ def output_name(name):
     if Path(stem).suffix.lower() == ".docx":
         stem = Path(stem).stem
     return ORIGINAL.sub("Book One", stem, count=1) + ".docx"
-
-
-def _folders(token, parent, opener, report, *, exclude=""):
-    pending = deque([parent])
-    visited = {exclude} if exclude else set()
-    # Read-only listings may overlap; all preparation and writes stay serial.
-    # Four requests at a time keep large author trees practical to scan.
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        while pending:
-            batch = []
-            while pending and len(batch) < 4:
-                folder = pending.popleft()
-                if folder not in visited:
-                    visited.add(folder)
-                    batch.append(folder)
-            futures = [(folder, pool.submit(drive.list_folder, token, folder,
-                                             opener=opener)) for folder in batch]
-            for folder, future in futures:
-                try:
-                    listing = future.result()
-                except Exception as exc:
-                    report.failed.append((folder, f"Could not scan folder: {exc}"))
-                    continue
-                pending.extend(f.id for f in listing if f.is_folder)
-                yield folder, listing
 
 
 def _evidence(file, listing, rec):
@@ -101,11 +74,21 @@ def _mark(token, file, rec, state, opener):
 def _one(token, file, folder, listing, root, ws, state, store, runner,
          opener, report, *, mock=False):
     from .tick import _one as prepare_one
+    if not drive_index.folder_is_current(token, folder, ws, opener=opener):
+        return
+    # Revalidate cached candidates and old deliveries immediately before work.
+    current = drive.list_folder(token, folder, opener=opener)
+    file = next((f for f in current if f.id == file.id and source(f)), None)
+    if file is None:
+        return
+    if sum(source(f) for f in current) > 1:
+        report.needs_human.append((file.name, "Multiple Book Originals in this folder; choose the current original."))
+        return
+    if file.app_properties.get(STATE_PROP) == FAILED:
+        report.needs_human.append((file.name, "Previously failed; fix the file and clear its marker."))
+        return
     rec = state.get(file.id)
     rec.name, rec.subfolder_id = file.name, folder
-    # Re-list before starting: old delivered books and uploads surviving a
-    # lost local checkpoint must never buy another preparation run.
-    current = drive.list_folder(token, folder, opener=opener)
     if _evidence(file, current, rec):
         _mark(token, file, rec, state, opener)
         return
@@ -135,8 +118,15 @@ def tick(home, ws, *, dry_run=False, mock=False, opener=None, get_key=None):
         runner = (JobRunner(store, ws.app_settings(root), config_path=config_path(),
                             notify_home=root) if store else None)
         prepared = 0
-        for folder, listing in _folders(token, ws.folder_id, opener, report,
-                                        exclude=ws.archive_folder_id):
+        try:
+            inventory = drive_index.sync(root, ws, token, refresh, opener=opener,
+                                         persist=not dry_run)
+            listings = inventory.folders()
+        except Exception as exc:
+            # Never format from stale metadata after a failed synchronization.
+            report.failed.append(("Folder inventory", str(exc)))
+            listings = []
+        for folder, listing in listings:
             report.listed += len(listing)
             candidates = [f for f in listing if source(f)]
             for file in sorted(candidates, key=lambda f: (f.modified_time, f.name, f.id)):

@@ -209,9 +209,10 @@ class WatchRunner:
     def preview(self) -> ticklib.TickReport:
         """What a pass would do. Synchronous, and claims nothing.
 
-        A dry run reads the folder and stops — one token refresh and one
-        listing, a second or two — so it needs no thread and no lock, and can
-        answer even while a real pass is running."""
+        Formatting reads the saved inventory and checks Drive changes in
+        memory. It never saves a checkpoint or claims work, so it needs no
+        lock and can answer even while a real pass is running. Without an
+        inventory, the first preview must scan the tree."""
         return self._tick(self.home, WatchSettings.load(self.home),
                           dry_run=True)
 

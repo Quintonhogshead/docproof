@@ -47,6 +47,10 @@ class AuthExpired(DriveError):
     """The saved sign-in no longer works. Needs a person, not a retry."""
 
 
+class InvalidChangeToken(DriveError):
+    """The saved inventory needs a fresh baseline."""
+
+
 @dataclass(frozen=True)
 class DriveFile:
     """One entry in the watched folder.
@@ -63,6 +67,9 @@ class DriveFile:
     modified_time: str = ""
     size: int = 0                    # 0 for a native Doc: Drive omits it
     md5_checksum: str = ''
+    parents: tuple[str, ...] = ()
+    drive_id: str = ""
+    trashed: bool = False
 
     @property
     def is_folder(self) -> bool:
@@ -82,6 +89,9 @@ class DriveFile:
             modified_time=str(raw.get("modifiedTime", "")),
             size=int(raw.get("size") or 0),
             md5_checksum=str(raw.get('md5Checksum') or ''),
+            parents=tuple(raw.get("parents") or ()),
+            drive_id=str(raw.get("driveId") or ""),
+            trashed=bool(raw.get("trashed", False)),
         )
 
 
@@ -220,7 +230,53 @@ def refresh_access_token(client_id: str, client_secret: str,
 
 
 
-FILE_FIELDS = "id,name,mimeType,appProperties,modifiedTime,size,md5Checksum"
+FILE_FIELDS = "id,name,mimeType,appProperties,modifiedTime,size,md5Checksum,parents,driveId,trashed"
+
+
+def start_change_token(token: str, *, drive_id="", opener=_open_url) -> str:
+    params = {**SHARED_DRIVE}
+    if drive_id:
+        params["driveId"] = drive_id
+    answer = _json_call(_request(_url(f"{API}/changes/startPageToken", params), token),
+                        opener=opener, what="start the folder inventory")
+    cursor = answer.get("startPageToken")
+    if not isinstance(cursor, str) or not cursor:
+        raise DriveError("Google Drive did not return an inventory starting point.")
+    return cursor
+
+
+def list_changes(token: str, cursor: str, *, drive_id="", opener=_open_url):
+    """Read every page before returning the next durable checkpoint."""
+    changes = []
+    seen = set()
+    while cursor not in seen:
+        seen.add(cursor)
+        params = {**SHARED_DRIVE_LIST, "pageToken": cursor, "pageSize": "1000",
+                  "spaces": "drive", "includeRemoved": "true",
+                  "includeCorpusRemovals": "true",
+                  "fields": ("nextPageToken,newStartPageToken,changes("
+                             f"fileId,removed,changeType,driveId,file({FILE_FIELDS}))")}
+        if drive_id:
+            params["driveId"] = drive_id
+        try:
+            answer = _json_call(_request(_url(f"{API}/changes", params), token),
+                                opener=opener, what="check for changed files")
+        except DriveError as exc:
+            if (isinstance(exc.__cause__, urllib.error.HTTPError)
+                    and exc.__cause__.code in (400, 410)):
+                raise InvalidChangeToken("The Drive inventory needs to be rebuilt.") from exc
+            raise
+        rows = answer.get("changes", [])
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            raise DriveError("Google Drive returned an incomplete list of changes.")
+        changes.extend(rows)
+        cursor = answer.get("nextPageToken")
+        if not cursor:
+            checkpoint = answer.get("newStartPageToken")
+            if not isinstance(checkpoint, str) or not checkpoint:
+                raise DriveError("Google Drive did not finish checking changes. The next run will retry.")
+            return changes, checkpoint
+    raise DriveError("Google Drive repeated a page of changes. The next run will retry.")
 
 
 def list_folder(token: str, folder_id: str, *, opener=_open_url,

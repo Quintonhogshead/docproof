@@ -5,6 +5,7 @@ the synchronous and the batch path, and the folder the watcher watches."""
 from __future__ import annotations
 
 import io
+import copy
 import itertools
 import json
 import re
@@ -12,7 +13,7 @@ import urllib.error
 import urllib.parse
 from typing import Any, Sequence
 
-from app.watch.drive import DOCX_MIME, GOOGLE_DOC_MIME
+from app.watch.drive import DOCX_MIME, GOOGLE_DOC_MIME, FOLDER_MIME
 from docproof.providers import (BatchRequest, BatchStatus, NormalizedUsage,
                                 ProviderResult)
 
@@ -149,6 +150,8 @@ def _matches_q(entry: dict, q: str) -> str | bool:
     (case-insensitive), `mimeType = '...'`. An entry with no `parents` key
     matches any parent clause, so a flat-folder fixture that never set one keeps
     returning everything, exactly as before this filter existed."""
+    if entry.get("trashed") and "trashed = false" in q:
+        return False
     def _unescape(s: str) -> str:
         return s.replace("\\'", "'").replace("\\\\", "\\")
 
@@ -202,6 +205,14 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
     content: dict[str, bytes] = {}
     uploads = itertools.count(1)
     failures = dict(fail or {})
+    checkpoints = {}
+    change_pages = {}
+    checkpoint_ids = itertools.count(1)
+
+    def checkpoint():
+        cursor = f"checkpoint-{next(checkpoint_ids)}"
+        checkpoints[cursor] = copy.deepcopy(store)
+        return cursor
 
     # Keyed by a stable, predictable id so a test can name the record it expects
     # to be patched. `_key` is what a filename must resolve to to find it.
@@ -301,6 +312,38 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
             return Response(json.dumps({"access_token": access_token,
                                         "expires_in": 3599}).encode())
 
+        if path.endswith("/changes/startPageToken"):
+            _maybe_fail("start_changes")
+            return Response(json.dumps({"startPageToken": checkpoint()}).encode())
+
+        if path.endswith("/changes"):
+            _maybe_fail("changes")
+            cursor = query["pageToken"][0]
+            if cursor not in change_pages:
+                if cursor not in checkpoints:
+                    raise http_error(410)
+                before = checkpoints[cursor]
+                rows = []
+                for fid in sorted(set(before) | set(store)):
+                    if before.get(fid) == store.get(fid):
+                        continue
+                    row = {"fileId": fid, "changeType": "file", "removed": fid not in store}
+                    if fid in store:
+                        row["file"] = copy.deepcopy(store[fid])
+                    rows.append(row)
+                after = checkpoint()
+                size = page_size or max(len(rows), 1)
+                chunks = [rows[i:i + size] for i in range(0, len(rows), size)] or [[]]
+                for i, chunk in enumerate(chunks):
+                    key = cursor if i == 0 else f"{cursor}-page-{i}"
+                    answer = {"changes": chunk}
+                    if i < len(chunks) - 1:
+                        answer["nextPageToken"] = f"{cursor}-page-{i + 1}"
+                    else:
+                        answer["newStartPageToken"] = after
+                    change_pages[key] = answer
+            return Response(json.dumps(change_pages[cursor]).encode())
+
         if "/upload/drive/v3/files" in path:
             _maybe_fail("upload")
             # A media update (PATCH ?uploadType=media) replaces one file's bytes
@@ -367,14 +410,17 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
         file_id = path.rsplit("/", 1)[-1]
         if request.get_method() == "GET" and file_id in store:
             _maybe_fail("get")
-            entry = {k: v for k, v in store[file_id].items() if k != "parents"}
-            return Response(json.dumps(entry).encode())
+            return Response(json.dumps(store[file_id]).encode())
+        if request.get_method() == "GET" and "/drive/v3/files/" in path:
+            if file_id == "rootfolder":
+                return Response(json.dumps({"id": file_id, "name": "Watched folder",
+                                            "mimeType": FOLDER_MIME}).encode())
+            raise http_error(404)
 
         _maybe_fail("list")
         kept = [e for e in store.values()
                 if _matches_q(e, query.get("q", [""])[0])]
-        items = [{k: v for k, v in entry.items() if k != "parents"}
-                 for entry in kept]
+        items = list(kept)
         start = int(query.get("pageToken", ["0"])[0])
         size = page_size or max(len(items), 1)
         answer: dict = {"files": items[start:start + size]}
