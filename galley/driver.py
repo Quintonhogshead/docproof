@@ -2146,13 +2146,15 @@ class Driver:
             if outcome.limit == "timeout":
                 elapsed = max(elapsed, seconds)
             budget.finish(key, turns=0, seconds=elapsed, status="completed")
+            if outcome.limit == "usage" or is_usage_limited(outcome.tail):
+                # Let the engine commit the known terminal command receipt
+                # before propagating the quota pause to the agent.
+                outcome = replace(outcome, limit="usage")
             result.phases.append(outcome)
             self._progress("phase_end", phase=spec.phase,
                            ok=not outcome.limit and outcome.returncode in (
                                (0, 1) if spec.phase in {"verify", "settle"} else (0,)),
                            returncode=outcome.returncode, limit=outcome.limit)
-            if outcome.limit == "usage" or is_usage_limited(outcome.tail):
-                raise UsageLimitError(outcome.tail)
             return outcome
         try:
             EnginePhases(self, execute).run(phase)

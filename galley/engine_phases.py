@@ -137,7 +137,12 @@ class EnginePhases:
         if result.returncode not in acceptable or result.limit:
             write_atomic(receipt, json.dumps({"fingerprint": fingerprint,
                 "status": "failed", "arguments": arguments, "input_build": build,
-                "log": str(getattr(result, "log_path", log_path))}, indent=2))
+                "log": str(getattr(result, "log_path", log_path)),
+                "returncode": result.returncode, "limit": result.limit,
+                "reason": result.tail}, indent=2))
+            if result.limit == "usage":
+                from docproof.subscription_limits import UsageLimitError
+                raise UsageLimitError(result.tail)
             raise EnginePhaseError(f"{name}: {result.limit or result.returncode}: {result.tail}")
         if not all(p.is_file() for p in outputs) or (validate is not None and not validate()):
             write_atomic(receipt, json.dumps({"fingerprint": fingerprint,

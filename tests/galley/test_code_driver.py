@@ -129,3 +129,71 @@ def test_approval_and_audit_use_direct_commands_with_one_configured_audit_read(c
     assert [spec.argv[2] for spec in commands] == ["approve", "audit"]
     assert len(audit_reader.calls) == 1
     assert (driver.workspace / "runs/audit.json").is_file()
+
+
+@pytest.mark.parametrize("reported_limit", ["usage", ""])
+def test_terminal_quota_exit_finalizes_receipt_and_preserves_resume_budgets(code_job, reported_limit):
+    from docproof.subscription_limits import UsageLimitError
+    driver, commands, readers, run = code_job
+    normal_command = driver.command_spawn
+    now, attempted = [0.0], []
+    driver.clock = lambda: now[0]
+    driver.timeout_by_phase = {"verify": 60}
+    paused = [False]
+
+    def quota_once(spec):
+        attempted.append(spec)
+        now[0] += 7
+        if "type-compare" in spec.argv and not paused[0]:
+            paused[0] = True
+            tail = "You've hit your session limit · resets 2:10pm (America/New_York)"
+            spec.log_path.write_text(tail)
+            return PhaseResult(spec.phase, 2, spec.log_path, tail=tail, limit=reported_limit)
+        return normal_command(spec)
+
+    driver.command_spawn = quota_once
+    with pytest.raises(UsageLimitError):
+        driver.run()
+    engine = driver.workspace / "runs/driver/engine"
+    primary = engine / "verify-0-primary.json"
+    primary_before = primary.read_bytes()
+    receipt = json.loads((engine / "verify-0-type-compare.json").read_text())
+    assert receipt["status"] == "failed" and receipt["limit"] == "usage"
+    assert receipt["returncode"] == 2 and "resets 2:10pm" in receipt["reason"]
+    assert receipt["log"] == str(attempted[-1].log_path)
+    budget = driver._execution_budget()
+    assert budget.remaining("code-verify", 0, 60) == (0, 46)
+    reserved = json.loads(budget.path.read_text())
+    assert all(row["status"] == "completed" for row in reserved["attempts"])
+    assert [row["seconds"] for row in reserved["attempts"]] == [7, 7]
+    resumed = driver.run()
+    assert resumed.outcome != "blocked", resumed.reason
+    assert primary.read_bytes() == primary_before
+    assert json.loads((engine / "verify-0-type-compare.json").read_text())["status"] == "completed"
+    verify_specs = [spec for spec in attempted if spec.phase == "verify"]
+    assert [spec.timeout_s for spec in verify_specs] == [60, 53, 46]
+    assert budget.remaining("code-verify", 0, 60) == (0, 39)
+    assert sum(len(reader.calls) for reader in readers) == 2
+    assert all(spec.env["DOCPROOF_RESOURCE_MAX_CALLS"] == "400"
+               and spec.env["DOCPROOF_RESOURCE_MAX_OUTPUT_TOKENS"] == "2000000"
+               for spec in verify_specs)
+
+
+def test_unknown_command_interruption_keeps_running_receipt_and_reservation(code_job):
+    driver, commands, readers, _ = code_job
+    driver.timeout_by_phase = {"verify": 60}
+
+    def interrupted(_spec):
+        raise RuntimeError("Process status is unknown")
+
+    driver.command_spawn = interrupted
+    result = driver.run()
+    assert result.outcome == "blocked" and "Process status is unknown" in result.reason
+    receipt = json.loads((driver.workspace / "runs/driver/engine/verify-0-primary.json").read_text())
+    assert receipt["status"] == "running"
+    budget = driver._execution_budget()
+    assert budget.remaining("code-verify", 0, 60) == (0, 0)
+    assert json.loads(budget.path.read_text())["attempts"][0]["status"] == "running"
+    result = driver.run()
+    assert result.outcome == "blocked" and "receipt reconciliation" in result.reason
+    assert not commands and not readers
