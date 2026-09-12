@@ -272,7 +272,16 @@ _PROMPTS: dict[str, str] = {
         "the approved cases and route remaining candidates through the "
         "existing mechanical judgment/verification lanes; record the decision "
         "and preserve required coverage without asking for permission. Do NOT read "
-        "sweeps.py or the manuscript whole."),
+        "sweeps.py or the manuscript whole. Treat each proposed repair as independent: "
+        "after two unsuccessful supported attempts on the same repair, leave its "
+        "wording unchanged, record the exact anchor, attempted operation, failure "
+        "evidence and remaining work in DECISION_LOG.md, and continue other repairs. "
+        "Do not spend this phase discovering unsupported paragraph-join or sweep "
+        "formats. Record affected plan lines as deferred with evidence, never ran. "
+        "Pass unresolved candidates to the remaining mechanical readers; do not "
+        "claim they were fixed or exempt them from review. Technical limitations "
+        "are production flags, not author questions. Reserve time to write the "
+        "handoff even when individual repairs remain unresolved."),
     "ladder": (
         "Phase: mechanical ladder. The six-window chapter sweep is wave 1 "
         "line 1 — `chapter_sweep` on Luna in the run config (the "

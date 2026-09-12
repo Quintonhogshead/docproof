@@ -42,3 +42,19 @@ Dialogue tags followed by an opening quote do not acquire a period.
 `sweep_decade_apostrophe` applies to the/early/late/mid decade leads, never ages
 or temperatures. Skip headings structurally (short line, no terminal punctuation,
 or reviewable=false), not by Word style or a book-specific regex.
+
+## An unresolved repair does not stop independent work
+
+Allow at most two unsuccessful supported attempts per repair. Then preserve the
+wording and record its exact anchor, proposed correction, failure evidence, and
+remaining work in DECISION_LOG.md as a production flag. Continue other repairs.
+Record the affected plan line as deferred with evidence, never as completed.
+Carry unresolved candidates into the remaining mechanical review; a deferred
+repair is not a waiver of manuscript reading or a claim of a clean result.
+Do not invent an author question for an engine limitation. Do not debug unknown
+sweep schemas or unsupported paragraph-join operations throughout this phase.
+Reserve time to record the disposition of every planned repair and hand off.
+
+A source/config mismatch, unverifiable tracked changes, corrupt output, or an
+unfinished required reading still needs a truthful operational hold. A local
+repair failure must not be promoted into one merely because it remains open.
