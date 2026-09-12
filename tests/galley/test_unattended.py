@@ -291,3 +291,204 @@ def test_aragon_closing_its_old_engine_question_cannot_hold_the_book(
     assert not result.asked and not result.recovery_exhausted
     assert "ladder" in spawn.phases
     assert [s.max_turns for s in spawn.calls if s.phase == "sweeps"] == [120, 45]
+
+
+# --- continuation after a cap ------------------------------------------------
+
+class CappedThenDone(MeteredSpawner):
+    """The first session hits its turn cap after writing evidence; the next
+    completes. Records the Claude Code session id like the real spawner."""
+
+    def __init__(self, workspace, *, caps=1, progress=True, limit="max_turns"):
+        super().__init__(workspace)
+        self.caps, self.progress, self.limit = caps, progress, limit
+
+    def __call__(self, spec):
+        if len(self.calls) < self.caps:
+            self.calls.append(spec)
+            spec.log_path.parent.mkdir(parents=True, exist_ok=True)
+            spec.log_path.write_text("cut off\n", encoding="utf-8")
+            if self.progress:
+                out = spec.workspace / "runs" / "final" / "run.log"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(f"read {len(self.calls)}\n", encoding="utf-8")
+            return gd.PhaseResult(spec.phase, 1, spec.log_path, "cut off",
+                                  limit=self.limit, num_turns=spec.max_turns,
+                                  session_id=f"sess-{len(self.calls)}")
+        return super().__call__(spec)
+
+
+def test_a_capped_session_that_advanced_the_book_gets_one_bounded_continuation(
+        book, tmp_path, workspace, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    spawn = CappedThenDone(workspace)
+    result = _driver(book, tmp_path, spawn=spawn, only_phases=["ladder"],
+                     max_turns=80, timeout_s=3600, clock=lambda: 0.0).run()
+    assert result.outcome == "done", result.reason
+    assert spawn.phases == ["ladder", "ladder"]
+    first, second = spawn.calls
+    assert first.max_turns == 80
+    # Half the base cap, granted on top of the exhausted original; the wall
+    # clock the first session never used carries over plus its own half.
+    assert second.max_turns == 40
+    assert second.timeout_s == 3600 + 1800
+    assert second.argv[second.argv.index("--max-turns") + 1] == "40"
+    assert "--resume" not in second.argv          # no transcript on disk
+    assert second.prompt.startswith(first.prompt)  # fresh session, full prompt
+    assert result.recovery[0]["resumed_session"] == ""
+    budget = json.loads((workspace / "runs" / "driver" / "execution-budget.json").read_text())
+    assert [g["turns"] for g in budget["grants"]] == [40]
+
+
+def test_a_continuation_resumes_the_conversation_when_its_transcript_exists(
+        book, tmp_path, workspace, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    encoded = gd.re.sub(r"[^A-Za-z0-9]", "-", str(workspace.resolve()))
+    path = home / ".claude" / "projects" / encoded / "sess-1.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text("{}\n")
+    assert gd.session_transcript(workspace, "sess-1", str(home)) == path
+    spawn = CappedThenDone(workspace)
+    result = _driver(book, tmp_path, spawn=spawn, only_phases=["ladder"],
+                     max_turns=80, timeout_s=3600).run()
+    assert result.outcome == "done", result.reason
+    second = spawn.calls[1]
+    assert second.argv[second.argv.index("--resume") + 1] == "sess-1"
+    assert second.argv.index("--resume") == second.argv.index("-p") + 2
+    assert not second.prompt.startswith(spawn.calls[0].prompt)
+    assert "continue the same phase" in second.prompt
+    assert result.recovery[0]["resumed_session"] == "sess-1"
+
+
+@pytest.mark.parametrize("limit", ["max_turns", "timeout"])
+def test_a_capped_session_that_changed_nothing_earns_no_continuation(
+        book, tmp_path, workspace, limit):
+    spawn = CappedThenDone(workspace, caps=3, progress=False, limit=limit)
+    result = _driver(book, tmp_path, spawn=spawn, only_phases=["ladder"],
+                     astra_review=True, max_turns=80, timeout_s=3600).run()
+    assert result.outcome == "blocked"
+    assert result.recovery_exhausted
+    assert spawn.phases == ["ladder"]
+    assert "grants" not in json.loads(
+        (workspace / "runs" / "driver" / "execution-budget.json").read_text())
+
+
+def test_continuations_are_bounded_and_durable_across_resumes(
+        book, tmp_path, workspace):
+    spawn = CappedThenDone(workspace, caps=10)
+    result = _driver(book, tmp_path, spawn=spawn, only_phases=["ladder"],
+                     astra_review=True, max_turns=80, timeout_s=3600).run()
+    assert result.outcome == "blocked"
+    assert result.recovery_exhausted
+    assert spawn.phases == ["ladder"] * (1 + gd.RECOVERY_MAX_GRANTS)
+    # A later poll resumes the same source revision: the grants are spent.
+    again = CappedThenDone(workspace, caps=10)
+    resumed = _driver(book, tmp_path, spawn=again, only_phases=["ladder"],
+                      astra_review=True, max_turns=80, timeout_s=3600).run()
+    assert resumed.outcome == "blocked" and resumed.recovery_exhausted
+    assert again.phases == []
+    assert "exhausted" in resumed.reason
+
+
+def test_a_recovery_below_the_floor_stops_with_evidence_instead_of_launching(
+        book, tmp_path, workspace):
+    class Recover(MeteredSpawner):
+        def __call__(self, spec):
+            if not self.calls:
+                self.calls.append(spec)
+                return gd.PhaseResult(spec.phase, 3, spec.log_path,
+                                      "bad command", num_turns=195)
+            return super().__call__(spec)
+    spawn = Recover(workspace)
+    result = _driver(book, tmp_path, spawn=spawn, only_phases=["ladder"],
+                     astra_review=True, max_turns=200, timeout_s=3600).run()
+    assert result.outcome == "blocked"
+    assert result.recovery_exhausted
+    assert spawn.phases == ["ladder"]
+    assert "below the recovery floor" in result.reason
+
+
+def test_sessions_carry_the_phase_wall_clock_as_their_bash_ceiling(
+        book, tmp_path, workspace):
+    spawn = MeteredSpawner(workspace)
+    _driver(book, tmp_path, spawn=spawn, only_phases=["ladder"],
+            timeout_s=5400).run()
+    env = spawn.calls[0].env
+    assert env["BASH_MAX_TIMEOUT_MS"] == env["BASH_DEFAULT_TIMEOUT_MS"] == str(5400 * 1000)
+
+
+# --- the edit guard -----------------------------------------------------------
+
+def test_verify_and_settle_sessions_install_the_edit_guard_hook(
+        book, tmp_path, workspace):
+    spawn = MeteredSpawner(workspace)
+    _driver(book, tmp_path, spawn=spawn, only_phases=["ladder", "verify", "settle"]).run()
+    by_phase = {c.phase: c.argv for c in spawn.calls}
+    assert "--settings" not in by_phase["ladder"]
+    for phase in gd.EDIT_GUARDED_PHASES:
+        argv = by_phase[phase]
+        settings = json.loads(argv[argv.index("--settings") + 1])
+        hook = settings["hooks"]["PreToolUse"][0]
+        assert hook["matcher"] == "Edit|Write|MultiEdit|NotebookEdit"
+        assert hook["hooks"][0]["command"].endswith("-m galley.edit_guard")
+    off = MeteredSpawner(workspace)
+    _driver(book, tmp_path, spawn=off, only_phases=["settle"], edit_guard=False).run()
+    assert "--settings" not in off.calls[0].argv
+
+
+@pytest.mark.parametrize("tool,path,blocked", [
+    ("Edit", "/ws/runs/curated/findings.json", True),
+    ("Write", "/ws/runs/final/settlement.json", True),
+    ("Edit", "/ws/runs/final/Ford - Book 1 - proofread.docx", True),
+    ("Write", "/ws/state.json", True),
+    ("Write", "/ws/runs/SETTLE.md", False),
+    ("Write", "/ws/QUESTIONS.md", False),
+    ("Write", "/home/.claude/projects/x/memory/MEMORY.md", False),
+    ("Bash", "/ws/runs/curated/findings.json", False),
+    ("Read", "/ws/runs/curated/findings.json", False),
+])
+def test_edit_guard_refuses_engine_evidence_and_manuscripts_only(tool, path, blocked):
+    from galley import edit_guard
+    code, message = edit_guard.decide({"tool_name": tool, "tool_input": {"file_path": path}})
+    assert (code == edit_guard.BLOCK_EXIT) is blocked
+    assert bool(message) is blocked
+    if blocked:
+        assert "docproof galley" in message
+
+
+def test_edit_guard_main_reads_the_hook_payload_from_stdin(monkeypatch, capsys):
+    import io
+    from galley import edit_guard
+    payload = json.dumps({"tool_name": "Edit", "tool_input": {
+        "file_path": "/ws/runs/curated/findings.json"}})
+    monkeypatch.setattr("sys.stdin", io.StringIO(payload))
+    assert edit_guard.main() == edit_guard.BLOCK_EXIT
+    assert "findings.json" in capsys.readouterr().err
+    monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
+    assert edit_guard.main() == 0
+
+
+# --- settle scales with what verify left open ---------------------------------
+
+def test_settle_caps_scale_with_open_items_not_only_words(book, tmp_path, workspace):
+    driver = _driver(book, tmp_path, only_phases=["settle"])
+    assert driver.open_items() is None
+    assert driver.turns_for("settle") == gd.PHASE_MAX_TURNS["settle"]
+    run = workspace / "runs" / "final"
+    run.mkdir(parents=True, exist_ok=True)
+    (run / "findings.json").write_text("{}")
+    (run / "change_verify.json").write_text(json.dumps(
+        {"problems": [{"i": n} for n in range(60)]}))
+    (run / "finished_walk.json").write_text(json.dumps(
+        {"residuals": [{"i": n} for n in range(60)]}))
+    assert driver.open_items() == 120
+    assert driver.scale_for("settle") == 3.0
+    assert driver.turns_for("settle") == gd.PHASE_MAX_TURNS["settle"] * 3
+    assert driver.timeout_for("settle") == gd.PHASE_TIMEOUT_S["settle"] * 3
+    # Verify does not scale with settle's items, and the ceiling still holds.
+    assert driver.scale_for("verify") == 1.0
+    assert gd.items_factor(10_000) == gd.LENGTH_SCALE_MAX
+    assert gd.items_factor(None) == 1.0
+    # An explicit override is still taken exactly.
+    assert _driver(book, tmp_path, max_turns=50).turns_for("settle") == 50
