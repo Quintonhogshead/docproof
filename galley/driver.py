@@ -118,6 +118,34 @@ PHASE_TIMEOUT_S: dict[str, float] = {
 LENGTH_SCALED_PHASES = ("ladder", "verify", "settle")
 LENGTH_BASELINE_WORDS = 50_000
 LENGTH_SCALE_MAX = 4.0
+# Settle's work tracks the residual count, not the word count: a dense short
+# book (the seeded 3.6k-word test spent 108 turns) gets no relief from length
+# scaling. The verify outputs the final run holds — change_verify.json's
+# problems plus finished_walk.json's residuals — are known before settle
+# starts, so its caps stretch with them too, under the same ceiling.
+ITEM_SCALED_PHASES = ("settle",)
+SETTLE_ITEMS_BASELINE = 40
+
+# A session that hits its turn cap or wall clock while measurably advancing
+# the book is unfinished work, not a failure. Until 2026-09-12 a capped
+# session was charged its whole cap, the durable execution budget then had
+# nothing left, so the "recovery" attempt never ran for exactly the two
+# limits it names — and every later agent poll re-blocked the book on
+# "execution budget exhausted" until a new deploy. Now the driver grants a
+# bounded continuation (a share of the phase's base cap, at most
+# RECOVERY_MAX_GRANTS times, durably recorded) when the session left new
+# evidence behind, and resumes the same Claude Code conversation when its
+# transcript is still on disk. A session that changed nothing earns nothing.
+RECOVERY_GRANT_SHARE = 0.5
+RECOVERY_MAX_GRANTS = 2
+# A recovery launched with a handful of turns cannot finish anything; it
+# only re-reads the references and hits the cap again. Below the floor
+# (absolute, or a quarter of the phase's cap when that is smaller) the driver
+# stops with evidence instead.
+RECOVERY_FLOOR_TURNS = 40
+RECOVERY_FLOOR_S = 15 * 60.0
+#: Phases whose sessions run under the edit-guard hook (galley/edit_guard.py).
+EDIT_GUARDED_PHASES = ("verify", "settle")
 
 
 def length_factor(words: int | float | None) -> float:
@@ -130,6 +158,40 @@ def length_factor(words: int | float | None) -> float:
     if w <= LENGTH_BASELINE_WORDS:
         return 1.0
     return min(LENGTH_SCALE_MAX, w / LENGTH_BASELINE_WORDS)
+
+
+def items_factor(items: int | float | None) -> float:
+    """How much to stretch an item-scaled phase's caps for this many open
+    items: 1.0 at or under the baseline, proportional above it, capped."""
+    try:
+        n = float(items or 0)
+    except (TypeError, ValueError):
+        return 1.0
+    if n <= SETTLE_ITEMS_BASELINE:
+        return 1.0
+    return min(LENGTH_SCALE_MAX, n / SETTLE_ITEMS_BASELINE)
+
+
+def edit_guard_settings() -> dict[str, Any]:
+    """The `claude --settings` payload that installs the edit-guard hook."""
+    import shlex
+    import sys
+    command = f"{shlex.quote(sys.executable)} -m galley.edit_guard"
+    return {"hooks": {"PreToolUse": [{
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [{"type": "command", "command": command, "timeout": 10}]}]}}
+
+
+def session_transcript(workspace: Path, session_id: str,
+                       home: str | None = None) -> Path | None:
+    """Where Claude Code keeps the conversation a phase session ran in, if
+    it is still on disk — the precondition for `claude --resume`."""
+    if not session_id:
+        return None
+    base = home or os.environ.get("HOME") or str(Path.home())
+    encoded = re.sub(r"[^A-Za-z0-9]", "-", str(Path(workspace).resolve()))
+    path = Path(base) / ".claude" / "projects" / encoded / f"{session_id}.jsonl"
+    return path if path.is_file() else None
 
 
 # Fallback turn-cap detection for sessions without a structured result.
@@ -760,6 +822,8 @@ class PhaseResult:
     # Structured CLI result, including subtype and turn count.
     subtype: str = ""
     num_turns: int | None = None
+    #: The Claude Code conversation id, for a continuation with --resume.
+    session_id: str = ""
 
     @property
     def ok(self) -> bool:
@@ -935,7 +999,8 @@ def spawn_claude(spec: PhaseSpec) -> PhaseResult:
     return PhaseResult(spec.phase, proc.returncode, spec.log_path, tail,
                        limit=limit,
                        subtype=str((result or {}).get("subtype") or ""),
-                       num_turns=(result or {}).get("num_turns"))
+                       num_turns=(result or {}).get("num_turns"),
+                       session_id=str((result or {}).get("session_id") or ""))
 
 
 def _render_stream(stream_path: Path, fh) -> None:
@@ -1262,6 +1327,8 @@ class Driver:
     poll_interval_s: float = 30.0
     state_gate: bool = True
     question_gate: bool = True
+    #: Install the edit-guard hook on EDIT_GUARDED_PHASES sessions.
+    edit_guard: bool = True
     # Per-phase caps take precedence over global overrides. Either override
     # is taken exactly as given; only the table defaults scale with length.
     max_turns: int | None = None
@@ -1363,13 +1430,41 @@ class Driver:
             return 1.0
         return length_factor(self.book_words())
 
+    def open_items(self) -> int | None:
+        """What verify left for settle in the final run: change problems plus
+        walk residuals. None until verify has written either file."""
+        run = self._final_run()
+        if run is None:
+            return None
+        total, seen = 0, False
+        for name, key in (("change_verify.json", "problems"),
+                          ("finished_walk.json", "residuals")):
+            try:
+                data = json.loads((run / name).read_text("utf-8"))
+            except (OSError, ValueError):
+                continue
+            rows = data.get(key) if isinstance(data, dict) else None
+            if isinstance(rows, list):
+                total += len(rows)
+                seen = True
+        return total if seen else None
+
+    def items_factor_for(self, phase: str) -> float:
+        if phase not in ITEM_SCALED_PHASES:
+            return 1.0
+        return items_factor(self.open_items())
+
+    def scale_for(self, phase: str) -> float:
+        """The larger of the length and open-item stretches, never below 1."""
+        return max(self.length_factor_for(phase), self.items_factor_for(phase))
+
     def turns_for(self, phase: str) -> int:
         if phase in self.max_turns_by_phase:
             return int(self.max_turns_by_phase[phase])
         if self.max_turns is not None:
             return int(self.max_turns)
         base = PHASE_MAX_TURNS.get(phase, DEFAULT_MAX_TURNS)
-        return int(round(base * self.length_factor_for(phase)))
+        return int(round(base * self.scale_for(phase)))
 
     def model_for(self, phase: str) -> str:
         if self.execution_mode == "code" and phase in {"approve", "audit", "verify", "settle"}:
@@ -1413,7 +1508,7 @@ class Driver:
         if self.timeout_s is not None:
             return float(self.timeout_s)
         base = PHASE_TIMEOUT_S.get(phase, DEFAULT_PHASE_TIMEOUT_S)
-        return base * self.length_factor_for(phase)
+        return base * self.scale_for(phase)
 
     def _resource_env(self, phase: str, env: dict[str, str]) -> dict[str, str]:
         import hashlib
@@ -1453,6 +1548,8 @@ class Driver:
         effort = self.effort_for(phase)
         if effort:
             argv += ["--effort", effort]
+        if self.edit_guard and phase in EDIT_GUARDED_PHASES:
+            argv += ["--settings", json.dumps(edit_guard_settings())]
         argv += [
                 # Preserve the structured completion beside the readable
                 # log.
@@ -1463,10 +1560,74 @@ class Driver:
         # "human" (the first Fly delivery's outcome.json, decision log and
         # HubSpot value all claimed a person overruled settle; nobody had).
         from galley.unattended import UNATTENDED_ENV, WORKSPACE_ENV
-        return PhaseSpec(phase=phase, prompt=prompt, workspace=self.workspace,
+        spec = PhaseSpec(phase=phase, prompt=prompt, workspace=self.workspace,
                          log_path=self._driver_dir() / f"{phase}.log",
                          argv=argv, env=self._resource_env(phase, env),
                          max_turns=turns, timeout_s=self.timeout_for(phase))
+        return self._apply_caps(spec, turns, self.timeout_for(phase))
+
+    @staticmethod
+    def _apply_caps(spec: PhaseSpec, turns: int, seconds: float) -> PhaseSpec:
+        """Bound one session by turns and wall clock everywhere it matters.
+
+        The Bash tool inside the session is capped at ten minutes by default
+        (BASH_MAX_TIMEOUT_MS), while verify and settle on a novel run for an
+        hour or more. The manual tells the brain to run them in the FOREGROUND;
+        without these variables it cannot, so it backgrounds the command and
+        polls — one turn per poll — or the tool kills it and the brain starts
+        the read again. The session's Bash ceiling is the phase's own.
+        """
+        argv = list(spec.argv)
+        argv[argv.index("--max-turns") + 1] = str(turns)
+        millis = str(max(1, int(seconds * 1000)))
+        env = {**spec.env, "BASH_DEFAULT_TIMEOUT_MS": millis,
+               "BASH_MAX_TIMEOUT_MS": millis}
+        return replace(spec, argv=argv, env=env, max_turns=turns,
+                       timeout_s=seconds)
+
+    def _progress_marker(self) -> tuple[str, int, int]:
+        """A cheap fingerprint of the workspace's evidence: the run state
+        plus the count and newest mtime of every file outside the driver's
+        own directory. A session that changes it did work; one that leaves
+        it alone did not — and only the first earns a continuation."""
+        newest, count = 0, 0
+        skip = (self.workspace / "runs" / DRIVER_DIR).resolve()
+        for root, dirs, files in os.walk(self.workspace):
+            if Path(root).resolve() == skip:
+                dirs[:] = []
+                continue
+            for name in files:
+                try:
+                    st = os.stat(os.path.join(root, name))
+                except OSError:
+                    continue
+                count += 1
+                newest = max(newest, st.st_mtime_ns)
+        return (self._current_state(), count, newest)
+
+    def _below_floor(self, phase: str, turns: int, seconds: float) -> bool:
+        floor_turns = min(RECOVERY_FLOOR_TURNS, max(1, self.turns_for(phase) // 4))
+        floor_s = min(RECOVERY_FLOOR_S, self.timeout_for(phase) / 4)
+        return turns < floor_turns or seconds < floor_s
+
+    def _grant_continuation(self, phase: str, execution, reason: str) -> int:
+        """Extend a capped-but-progressing phase; 0 when no grant is left."""
+        from galley.execution_budget import ExecutionBudgetError
+        turns = max(1, int(round(self.turns_for(phase) * RECOVERY_GRANT_SHARE)))
+        seconds = self.timeout_for(phase) * RECOVERY_GRANT_SHARE
+        try:
+            number = execution.extend(phase, turns, seconds, reason=reason,
+                                      max_grants=RECOVERY_MAX_GRANTS)
+        except ExecutionBudgetError as exc:
+            self.log(f"phase {phase}: no continuation — {exc}")
+            return 0
+        self.log(f"--- phase {phase}: continuation {number} of "
+                 f"{RECOVERY_MAX_GRANTS} granted (+{turns} turns, "
+                 f"+{seconds / 60:.0f} min) — the session was cut off while "
+                 f"advancing the book ---")
+        self._progress("continuation", phase=phase, grant=number,
+                       turns=turns, timeout_s=seconds)
+        return number
 
     def _questions_text(self) -> str:
         from galley.unattended import NOTES_NAME
@@ -2177,15 +2338,20 @@ class Driver:
     def _run_session_phase(self, phase: str, env: dict[str, str],
                            result: DriveResult, *, guidance: str = ""
                            ) -> DriveResult | None:
-        """One session plus at most one continuation within the original caps.
+        """One session, at most one recovery within the original caps, and at
+        most RECOVERY_MAX_GRANTS continuations for a session the caps cut off
+        while it was measurably advancing the book.
 
         A local question is evidence for autonomous triage, never a hold. Only
         an actual failed operation or missing required state can block the run.
         """
         from galley.unattended import RECOVERY_GUIDANCE
+        from galley.execution_budget import ExecutionBudgetError
+        from docproof.resource_ledger import append_usage, record_claude_result, use_context
         unattended = self.approve == "auto"
-        attempts = 2 if unattended and not guidance else 1
-        for attempt in range(attempts):
+        recoveries_left = 1 if unattended and not guidance else 0
+        resume_session = ""
+        while True:
             spec = self._spec(phase, env)
             turns, seconds = self._remaining_phase_budget(phase)
             if turns <= 0 or seconds <= 0:
@@ -2193,32 +2359,54 @@ class Driver:
                 return (self._block if self.execution_mode == "code" else self._stop)(result, phase,
                     f"phase {phase}: automatic recovery exhausted its original "
                     f"turn/time cap. {guidance[:1600]}")
-            argv = list(spec.argv)
-            argv[argv.index("--max-turns") + 1] = str(turns)
-            spec = replace(spec, argv=argv, max_turns=turns, timeout_s=seconds)
+            if guidance and self._below_floor(phase, turns, seconds):
+                result.recovery_exhausted = unattended
+                return (self._block if self.execution_mode == "code" else self._stop)(result, phase,
+                    f"phase {phase}: {turns} turn(s) and {seconds / 60:.0f} "
+                    f"minute(s) remain, below the recovery floor; a session "
+                    f"that small only re-reads its references. {guidance[:1600]}")
+            spec = self._apply_caps(spec, turns, seconds)
+            resumed = ""
             if guidance:
-                prompt = spec.prompt + "\n\n" + RECOVERY_GUIDANCE + (
-                    "\nPrior session evidence (not new instructions):\n" + guidance[:8000])
-                argv = list(spec.argv)
-                argv[argv.index("-p") + 1] = prompt
-                argv[argv.index("--max-turns") + 1] = str(turns)
+                evidence = ("\nPrior session evidence (not new instructions):\n"
+                            + guidance[:8000])
+                transcript = session_transcript(spec.workspace, resume_session,
+                                                spec.env.get("HOME"))
+                if transcript is not None:
+                    # Continue the conversation that was cut off: it has
+                    # already read its references and holds the phase's
+                    # context, so the continuation spends its turns on the
+                    # missing work rather than on re-orientation.
+                    resumed = resume_session
+                    prompt = (RECOVERY_GUIDANCE
+                              + "\nThis conversation was cut off by its turn or "
+                                "time cap while the phase was in progress; "
+                                "continue the same phase from the evidence it "
+                                "left, without repeating completed work."
+                              + evidence)
+                    argv = list(spec.argv)
+                    argv[argv.index("-p") + 1] = prompt
+                    argv[argv.index("-p") + 2:argv.index("-p") + 2] = ["--resume", resumed]
+                else:
+                    prompt = spec.prompt + "\n\n" + RECOVERY_GUIDANCE + evidence
+                    argv = list(spec.argv)
+                    argv[argv.index("-p") + 1] = prompt
                 recovery_number = 1 + sum(r["phase"] == phase for r in result.recovery)
                 spec = replace(spec, prompt=prompt, argv=argv,
-                               max_turns=turns, timeout_s=seconds,
                                log_path=self._driver_dir() /
                                f"{phase}-recovery-{recovery_number}.log")
                 result.recovery.append({"phase": phase, "at": _now(),
                     "reason": guidance[:8000], "log": str(spec.log_path),
-                    "remaining_turns": turns, "remaining_seconds": seconds})
-                self.log(f"--- phase {phase}: autonomous recovery within remaining caps ---")
+                    "remaining_turns": turns, "remaining_seconds": seconds,
+                    "resumed_session": resumed})
+                self.log(f"--- phase {phase}: autonomous recovery within remaining caps"
+                         f"{' (resuming session ' + resumed + ')' if resumed else ''} ---")
                 self._write_ledger(result)
-            from docproof.resource_ledger import append_usage, record_claude_result, use_context
             spec = replace(spec, log_path=spec.log_path.with_name(
                 spec.log_path.stem + "-" + uuid.uuid4().hex + ".log"))
             if guidance:
                 result.recovery[-1]["log"] = str(spec.log_path)
             execution = self._execution_budget()
-            from galley.execution_budget import ExecutionBudgetError
             try:
                 key, turns, seconds = execution.reserve(phase, self.turns_for(phase),
                     self.timeout_for(phase), log_path=spec.log_path)
@@ -2233,11 +2421,14 @@ class Driver:
             self._progress("phase_start", phase=phase,
                            model=self.model_for(phase), effort=self.effort_for(phase),
                            max_turns=spec.max_turns, timeout_s=spec.timeout_s,
-                           log_path=str(spec.log_path))
+                           log_path=str(spec.log_path), resumed_session=resumed)
             before = self._questions_text()
+            marker = self._progress_marker()
             started = self.clock()
             outcome = self._spawner()(spec)
             elapsed = max(0.0, self.clock() - started)
+            progressed = self._progress_marker() != marker
+            resume_session = outcome.session_id or ""
             used_turns, used_seconds = self._phase_usage.get(phase, (0, 0.0))
             # Missing usage is not permission to grant another full session.
             measured = outcome.num_turns
@@ -2256,7 +2447,7 @@ class Driver:
             result.phases.append(outcome)
             self._progress("phase_end", phase=phase, ok=outcome.ok,
                            returncode=outcome.returncode, limit=outcome.limit,
-                           num_turns=outcome.num_turns)
+                           num_turns=outcome.num_turns, progressed=progressed)
             review_snapshot = (self.astra_review and phase in ("verify", "settle")
                                and self._review_snapshot_available())
             try:
@@ -2283,8 +2474,16 @@ class Driver:
             # completed recovery that leaves final notes does not ask again.
             triage = bool(notes and self.question_gate and not guidance)
             if problem or triage:
+                capped = outcome.limit in ("max_turns", "timeout")
+                if problem and capped and progressed and \
+                        self._grant_continuation(phase, execution, problem):
+                    guidance = problem
+                    if notes:
+                        guidance += "\nLocal notes:\n" + notes
+                    continue
                 remaining_turns, remaining_seconds = self._remaining_phase_budget(phase)
-                if attempt + 1 < attempts and remaining_turns > 0 and remaining_seconds > 0:
+                if recoveries_left > 0 and remaining_turns > 0 and remaining_seconds > 0:
+                    recoveries_left -= 1
                     guidance = problem or "Resolve the local notes and complete this phase."
                     if notes:
                         guidance += "\nLocal notes:\n" + notes
@@ -2294,7 +2493,6 @@ class Driver:
                 return (self._block if self.execution_mode == "code" else self._stop)(result, phase,
                     f"Automatic recovery could not complete the required work: {problem}")
             return None
-        return None
 
     def run(self) -> DriveResult:
         # Invalid setup raises without writing an outcome for the
@@ -2889,6 +3087,10 @@ def _default_upload(files: list[Path], folder_id: str) -> list[str]:
 __all__ = [
     "ALL_PHASES", "COPYEDIT_PHASES", "DECISION_LOG_NAME", "DEFAULT_BUDGET_USD",
     "DEFAULT_EFFORT", "DEFAULT_MAX_TURNS", "DEFAULT_MODEL", "DIAGNOSTICS_SUFFIX",
+    "EDIT_GUARDED_PHASES", "ITEM_SCALED_PHASES", "RECOVERY_FLOOR_S",
+    "RECOVERY_FLOOR_TURNS", "RECOVERY_GRANT_SHARE", "RECOVERY_MAX_GRANTS",
+    "SETTLE_ITEMS_BASELINE", "edit_guard_settings", "items_factor",
+    "session_transcript",
     "DEFAULT_PERMISSION_MODE", "EFFORT_LEVELS", "MECHANICAL_MODEL",
     "DEFAULT_PHASE_TIMEOUT_S", "DEFAULT_WORKSPACE_ROOT", "DEFAULT_WRAPBIN",
     "HANDOFF_STAGE", "MECHANICAL_PHASES", "PHASE_EFFORT", "PHASE_MAX_TURNS",

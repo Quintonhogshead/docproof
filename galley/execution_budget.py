@@ -52,17 +52,51 @@ class ExecutionBudget:
         return (sum(r["turns"] for r in rows), sum(r["seconds"] for r in rows))
 
     @staticmethod
-    def _limits(data, phase, turns, seconds):
+    def _grants(data, phase):
+        return [g for g in data.get("grants", []) if g["phase"] == phase]
+
+    @classmethod
+    def _limits(cls, data, phase, turns, seconds):
+        """The phase's effective ceiling: the original cap (never enlarged by
+        a later, more generous request) plus every continuation grant."""
         if (type(turns) is not int or turns < 0 or not math.isfinite(seconds)
                 or seconds <= 0):
             raise ExecutionBudgetError("Invalid execution budget")
         old = data["limits"].get(phase, {"turns": turns, "seconds": seconds})
         if bool(turns) != bool(old["turns"]):
             raise ExecutionBudgetError("Cannot change the turn-budget mode on resume")
-        limits = {"turns": min(turns, old["turns"]),
-                  "seconds": min(seconds, old["seconds"])}
-        data["limits"][phase] = limits
-        return limits
+        base = {"turns": min(turns, old["turns"]),
+                "seconds": min(seconds, old["seconds"])}
+        data["limits"][phase] = base
+        grants = cls._grants(data, phase)
+        return {"turns": base["turns"] + sum(g["turns"] for g in grants),
+                "seconds": base["seconds"] + sum(g["seconds"] for g in grants)}
+
+    def grants(self, phase: str) -> int:
+        """How many continuation grants the phase has already received."""
+        with self._locked() as data:
+            return len(self._grants(data, phase))
+
+    def extend(self, phase: str, turns: int, seconds: float, *, reason: str,
+               max_grants: int) -> int:
+        """Grant a bounded continuation on top of the phase's ceiling.
+
+        A session that ran out of turns or time while measurably advancing
+        the book is not a failure; it is unfinished work. The grant is
+        durable, so a resumed run cannot be granted again at every poll:
+        after ``max_grants`` the phase is exhausted for good."""
+        if (type(turns) is not int or turns < 0 or not math.isfinite(seconds)
+                or seconds < 0 or (turns <= 0 and seconds <= 0)):
+            raise ExecutionBudgetError("Invalid continuation grant")
+        with self._locked() as data:
+            grants = self._grants(data, phase)
+            if len(grants) >= max_grants:
+                raise ExecutionBudgetError(
+                    f"{phase}: continuation grants exhausted ({len(grants)} of {max_grants})")
+            data.setdefault("grants", []).append({
+                "phase": phase, "turns": turns, "seconds": seconds,
+                "reason": reason[:400], "granted_at_ns": time.time_ns()})
+            return len(grants) + 1
 
     def remaining(self, phase: str, turns: int, seconds: float):
         with self._locked() as data:
