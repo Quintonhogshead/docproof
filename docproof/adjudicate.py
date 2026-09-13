@@ -98,7 +98,7 @@ def _best_neighbour(word: str, dic, *, min_len: int) -> tuple[str | None, float]
     """The most common real-word neighbour one edit away, and its frequency."""
     best, best_z = None, -1.0
     wl = word.lower()
-    for n in edits1(word):
+    for n in sorted(edits1(word)):
         if len(n) < min_len or n == wl:
             continue
         nz = zipf(n)

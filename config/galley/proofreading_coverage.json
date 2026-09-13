@@ -1,0 +1,2376 @@
+{
+  "schema": "galley-press-prompt-coverage/1",
+  "source_file": "proofreading_source.json",
+  "source_sha256": "86a54177081749125c99d6cadc0160a7e6cf429e7f7937728ae502dd1ea41706",
+  "indexed_rule_count": 120,
+  "source_unit_count": 149,
+  "coverage": [
+    {
+      "source_id": "preamble/paragraph-1",
+      "source_text_sha256": "905bd225893a53be5ded15fb80a078277598e186ec268b9a9e90ad40eaf17e0e",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "style-basis/paragraph-1",
+      "source_text_sha256": "fb7806165fe15397e8625f6f30372ab942dc9faf14ea55000c68bc40984aa34c",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "authority"
+      ],
+      "owners": [
+        "story_sheet",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "Story Sheet records variant evidence/uncertainty; final readers preserve established conventions. No automatic operator-confirmation comment or wholesale inferred-dialect conversion; current local US settings are candidate evidence only."
+    },
+    {
+      "source_id": "style-basis/u-s-manuscripts",
+      "source_text_sha256": "a1ad3b785ab0f8984df0ec093d3e8e7083b3bf4a1b2e4efb66a08f0ff25ff15f",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "authority"
+      ],
+      "owners": [
+        "story_sheet",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "Story Sheet records variant evidence/uncertainty; final readers preserve established conventions. No automatic operator-confirmation comment or wholesale inferred-dialect conversion; current local US settings are candidate evidence only."
+    },
+    {
+      "source_id": "style-basis/u-k-manuscripts",
+      "source_text_sha256": "a7d8be7874e25c2be84456f3cf62ef081cb9cbb82bad8ac395f9a7c31cdce02a",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "authority"
+      ],
+      "owners": [
+        "story_sheet",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "Story Sheet records variant evidence/uncertainty; final readers preserve established conventions. No automatic operator-confirmation comment or wholesale inferred-dialect conversion; current local US settings are candidate evidence only."
+    },
+    {
+      "source_id": "style-basis/canadian-manuscripts",
+      "source_text_sha256": "50716c37ba7ccc60f9f0f3ac1ee30442da955f15afecd447fdf1f2a98606c2c5",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "authority"
+      ],
+      "owners": [
+        "story_sheet",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "Story Sheet records variant evidence/uncertainty; final readers preserve established conventions. No automatic operator-confirmation comment or wholesale inferred-dialect conversion; current local US settings are candidate evidence only."
+    },
+    {
+      "source_id": "style-basis/australian-manuscripts",
+      "source_text_sha256": "507629079e768afefebeba3ab3a2d96288e8cc013376d7fc2f2a79e8afd32ab6",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "authority"
+      ],
+      "owners": [
+        "story_sheet",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "Story Sheet records variant evidence/uncertainty; final readers preserve established conventions. No automatic operator-confirmation comment or wholesale inferred-dialect conversion; current local US settings are candidate evidence only."
+    },
+    {
+      "source_id": "style-basis/house-supplement-applies-to-all-variants",
+      "source_text_sha256": "ca8c6f71e2c10a0d87c5ed7a06f86b5f644ca702b6f1598f7d9a22c4077c12ec",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "authority"
+      ],
+      "owners": [
+        "story_sheet",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "Story Sheet records variant evidence/uncertainty; final readers preserve established conventions. No automatic operator-confirmation comment or wholesale inferred-dialect conversion; current local US settings are candidate evidence only."
+    },
+    {
+      "source_id": "operating-principles/author-voice-always-wins",
+      "source_text_sha256": "8adbfd51dd3025fa189a7fe3a8794490a2530fa6b63a0815f07f9b3634fdc526",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Preserve author voice and paragraph boundaries. The source blanket when-in-doubt comment instruction is narrowed to a real specific author-knowledge question; ambiguity alone is left untouched."
+    },
+    {
+      "source_id": "operating-principles/two-channels-never-blurred",
+      "source_text_sha256": "e20cf097528e194670e60fd4c7fa977958667c3e023675eabee681404bb84e29",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "operating-principles/tracked-changes",
+      "source_text_sha256": "f2d46cbe931be6a44a2017f0658fbce03ad3f1f4947c8f9ad3faf9cb81750571",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "operating-principles/comments-queries",
+      "source_text_sha256": "9d6163913c97717179b3215f5e281a0a54f2b94ebe1207e2c030652c08993b44",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "operating-principles/silent-exceptions-neither-channel",
+      "source_text_sha256": "25cf3a889d59d43bfcc7a75c1eef786fa823cab9ff41bd9fd64a796367cc52ce",
+      "disposition": "explicit_override",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Retain the normalization rules as reviewed, tracked proposals. Galley rejects all changes back to the exact original; the source silent-edit audit exceptions do not apply."
+    },
+    {
+      "source_id": "operating-principles/do-not-change-formatting-spacing-indentation",
+      "source_text_sha256": "141f80c7071bc86f171615d06ec485b656a06829a9cb17bd76d45c7865e30783",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "operating-principles/set-the-tracked-change-author-name-to",
+      "source_text_sha256": "27a57d932687a70a3c55b1e25c5841847f09b234e8f1f18aff85de69d71c0ebe",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "operating-principles/final-audit-mandatory",
+      "source_text_sha256": "048da2f3dfbd9b17626409b3696baf90ba628f46c8c171a4c1ae07adf74a6d2a",
+      "disposition": "explicit_override",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Retain the normalization rules as reviewed, tracked proposals. Galley rejects all changes back to the exact original; the source silent-edit audit exceptions do not apply."
+    },
+    {
+      "source_id": "operating-principles/three-full-reads-mandatory-for-full-passes",
+      "source_text_sha256": "94db1e6ba64a425cbadd00e2e5a851581e2bf99cdc4f9815b171f435ea8c6578",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "operating-principles/pattern-rules-are-executed-not-read-for",
+      "source_text_sha256": "399c39f7eace40f7e993220b28e0e6b6938883c008039994e91df9b87d7edc1e",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/paragraph-1",
+      "source_text_sha256": "ea035a2b73dca27928a6c9d9290cd4374cb3a447640e81bdac04532cc99aaa6f",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/serial-comma-always",
+      "source_text_sha256": "54c6368e6af1c026e3213343ee765d2dad91521075e0f1575eb722c6e6becd8e",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/comma-after-introductory-phrases",
+      "source_text_sha256": "b98801a11c4993c076b7f25be07f043ce27f76556c26532104172e8a9cfb8499",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/comma-in-direct-address",
+      "source_text_sha256": "d60c266ecc40817958706821a171a00db44f4e24635abf908738df23372d315b",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/comma-before-tag-questions",
+      "source_text_sha256": "ac11f76a0e737225080561b9f0c70a5bc5999de9b6febf26e8187a6fce48e050",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/semicolons-in-complex-lists",
+      "source_text_sha256": "f6bcc309c5be17f85c95f28b3c7906ab6b6c6cb290bb26bdb720b1656729e95f",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/em-dash-unspaced",
+      "source_text_sha256": "ed60b638b2f170ea7cd2ac32991b21843d6cb1197bb1a9b1798f9762f936d054",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/en-dash",
+      "source_text_sha256": "c0a4e18f8ff97f6237d0615383e1287915fadff9f504c36fe0ca80f688265598",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/hyphen",
+      "source_text_sha256": "2bc99eafefedf0238b3c05e456169f7af0a692d7e324794962ddff022441b20a",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/ellipsis",
+      "source_text_sha256": "ca7f0bcf9568b6a0257371a654fb0be24d3f703895be45dd46140583842ace3e",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/no-stacked-punctuation-zero-tolerance-always-a",
+      "source_text_sha256": "1fbc5a68181bc7de6396ea870f7703cedd8c0158a41d1fc4f20521b788521556",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/numbers",
+      "source_text_sha256": "723b5c27a0c16b4eed3ee70e70a15a01c3af9b7ba82d231f4560a893bce40eb3",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/centuries",
+      "source_text_sha256": "69efdfba40fdbdebe43424f12ca8e5acc5e076aabfebf85366006f4d201b9dc3",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/smart-quotes-throughout",
+      "source_text_sha256": "b19cf6cf060b3159b7f2f23b7ea12e823fa6efd6f5ab124e0f403db2f552f776",
+      "disposition": "explicit_override",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Retain the normalization rules as reviewed, tracked proposals. Galley rejects all changes back to the exact original; the source silent-edit audit exceptions do not apply."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/currency",
+      "source_text_sha256": "e2184c0e02d537d85e05fde332b4129a85c83fc6c391626b7042f519216e5cf4",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/compound-modifiers-with-ly-adverbs",
+      "source_text_sha256": "34c4abf84e8f8a994bc97a5976e5650c44e7ca7496e7311091e7ad66dde37c72",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/suspensive-hyphenation",
+      "source_text_sha256": "a3d3c8bfbe857f9744d4205b5b7bed0294d7912e0957466bb2e905255c33fe70",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/long-work-titles-in-italics",
+      "source_text_sha256": "22f45fb3fcd248a73b8b613c47834d1b332cfa411acfd5563ae5543019a332e4",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/units-and-measurements",
+      "source_text_sha256": "853c5245bd4eb801e7a9938e60b0e622c01d7a04e50faf024b43218f5096b363",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "universal-house-style-rules-apply-to-every-variant/percent-symbol",
+      "source_text_sha256": "b7ed42eeab7b2fcb386d217da95671ba466f5dbecf6b28a378bc1d077bc95fc4",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation",
+        "numbers_compounds",
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "house-style-guide/proper-nouns-and-official-names-always",
+      "source_text_sha256": "548b65a55e6390e08acd6a93479a32e4607a40961429c3009553917e0545d560",
+      "disposition": "editorial",
+      "policy_sections": [
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "house-style-guide/family-terms-capitalized-only-when-used-as-a",
+      "source_text_sha256": "0f4b30cba2b8bb28f3f8e195902c65b9646991248159294e38d68dce29e694fd",
+      "disposition": "editorial",
+      "policy_sections": [
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "house-style-guide/job-titles-capitalized-before-a-name-lowercase",
+      "source_text_sha256": "39f662422b30cddd9e44a40157b1daaa3d9ea432286cdaea9d53306fa75dbcf2",
+      "disposition": "editorial",
+      "policy_sections": [
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "house-style-guide/official-names-capitalized-generic-references",
+      "source_text_sha256": "25f64de75dc0a4ca018235d2d42f169e779c58649c5fba7929f524b18ddea433",
+      "disposition": "editorial",
+      "policy_sections": [
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "house-style-guide/compass-directions-lowercase-when-generic",
+      "source_text_sha256": "1d21fc4794448bdf17ad4ae87c0b58f1de5dc15258e31d27e8c8e3c6e12086d0",
+      "disposition": "editorial",
+      "policy_sections": [
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "house-style-guide/days-months-holidays-nationalities-and",
+      "source_text_sha256": "49c4a63bdcb1f48222b5fc2724f344574307d425448a6f7e1ede1398d31a8b68",
+      "disposition": "editorial",
+      "policy_sections": [
+        "capitalization_titles"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "variant-specific-rules/paragraph-1",
+      "source_text_sha256": "ad4528a87f07b33706be4f0a9a9711a24c31ef05b6787e227d5d361a428a76e5",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "authority"
+      ],
+      "owners": [
+        "story_sheet",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "Story Sheet records variant evidence/uncertainty; final readers preserve established conventions. No automatic operator-confirmation comment or wholesale inferred-dialect conversion; current local US settings are candidate evidence only."
+    },
+    {
+      "source_id": "u-s-cmos-and-canadian-cmos-punctuation/quotation-marks",
+      "source_text_sha256": "469190378c6b4a08abc9cfc43c2d6fc2b2802b1ea4107fce8ae3139d69488306",
+      "disposition": "editorial",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "u-s-cmos-and-canadian-cmos-punctuation/short-work-titles",
+      "source_text_sha256": "7268f1aa819f18796f9f272d0abd3cfb0f472841662fe215344d39ef1c6abb7b",
+      "disposition": "editorial",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "u-s-cmos-and-canadian-cmos-punctuation/times",
+      "source_text_sha256": "0638cc39343438bae8b37eb0504f5bbb0adb150411fd27a1d363fdc6d3f52857",
+      "disposition": "explicit_override",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Existing Galley house policy wins: digits, minutes, capital AM/PM without periods; never infer a missing meridiem. Source lowercase a.m./am examples are not imported."
+    },
+    {
+      "source_id": "u-s-cmos-and-canadian-cmos-punctuation/dates",
+      "source_text_sha256": "26cd38f8091d86426c47eddff0b010d697810691ec603b96b2ccb5e20faabbf8",
+      "disposition": "editorial",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "u-s-cmos-and-canadian-cmos-punctuation/decades",
+      "source_text_sha256": "6f285265fa7e324caa5c21b8c88611c189561b12d6e709afce26b152b2b2920f",
+      "disposition": "editorial",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "u-s-cmos-and-canadian-cmos-punctuation/that-which",
+      "source_text_sha256": "746871146c0b8b91e872c9702d7aafd99ddd51d8db9366d3258f1ec88e43163a",
+      "disposition": "editorial",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "u-s-cmos-and-canadian-cmos-punctuation/percent",
+      "source_text_sha256": "93a20e887fc3d6adf81ae555fbaea74c688ac27569737bce744fd7dadc9bcc57",
+      "disposition": "editorial",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "u-s-cmos-and-canadian-cmos-punctuation/punctuation-with-quotes",
+      "source_text_sha256": "16f240462b44d1357543ff553d520f3b41862b94901ce20420e5ffcd1dc2d801",
+      "disposition": "editorial",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "u-s-cmos-and-canadian-cmos-punctuation/spelling",
+      "source_text_sha256": "a206293e1ec44a9aa88d44dc9e4a24b43956b900edbfc21b7fe4e43d046c01cd",
+      "disposition": "editorial",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "u-k-oxford-and-australian-oxford-macquarie/quotation-marks",
+      "source_text_sha256": "d506d0011a9a3ad69f40817e085f6e984397407c1b7145d3c6a16521e5741ce9",
+      "disposition": "editorial",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "u-k-oxford-and-australian-oxford-macquarie/short-work-titles",
+      "source_text_sha256": "a0e67d7dba34cd47a869a7937c495bacf016c7c4ce799b562bccb178a002ddb1",
+      "disposition": "editorial",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "u-k-oxford-and-australian-oxford-macquarie/times",
+      "source_text_sha256": "7f22706c09f3de8ac7026ab23df384754595e5646e5c313f7eba79646c12fb9a",
+      "disposition": "explicit_override",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Existing Galley house policy wins: digits, minutes, capital AM/PM without periods; never infer a missing meridiem. Source lowercase a.m./am examples are not imported."
+    },
+    {
+      "source_id": "u-k-oxford-and-australian-oxford-macquarie/dates",
+      "source_text_sha256": "748d3fd69161bd0f3b4f94a7c49b04b6ada7b10c218278d1a6fcc1c8263e0ae8",
+      "disposition": "editorial",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "u-k-oxford-and-australian-oxford-macquarie/decades",
+      "source_text_sha256": "45ecbc1a1942387fac87e3e3931ba883ad4b88db3bce16c7ca4727339ccd999f",
+      "disposition": "editorial",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "u-k-oxford-and-australian-oxford-macquarie/that-which",
+      "source_text_sha256": "7c5232478abd6e838e428423ac13c5b7b25a92f7593821efe822f007b091a606",
+      "disposition": "editorial",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "u-k-oxford-and-australian-oxford-macquarie/percent",
+      "source_text_sha256": "5b906eb021ee26533b42ccf90547dcd42ced49653d0bb2594528de7506b43048",
+      "disposition": "editorial",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "u-k-oxford-and-australian-oxford-macquarie/punctuation-with-quotes",
+      "source_text_sha256": "ae3cb6555c27bbed251149e5740386057ad574db672f43ed39efc610c5fa7c2e",
+      "disposition": "editorial",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "u-k-oxford-and-australian-oxford-macquarie/spelling",
+      "source_text_sha256": "ab75610dd6d7e00bc70ef5b1573b1a2c9cbe1dd0b47d7ea5b9da8c67455484a4",
+      "disposition": "editorial",
+      "policy_sections": [
+        "authority",
+        "numbers_compounds"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "canada-and-australia/paragraph-1",
+      "source_text_sha256": "65c16b1d7739da934f2ffa0c8549e9d8a8868c9b4973ac9781e4a24f6da1eb6a",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "authority"
+      ],
+      "owners": [
+        "story_sheet",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "Story Sheet records variant evidence/uncertainty; final readers preserve established conventions. No automatic operator-confirmation comment or wholesale inferred-dialect conversion; current local US settings are candidate evidence only."
+    },
+    {
+      "source_id": "dialogue-mechanics/paragraph-1",
+      "source_text_sha256": "e649d2520101bb7ea12a51b7574798ffcbdf83f0390d7203c8a606612fdab8f3",
+      "disposition": "editorial",
+      "policy_sections": [
+        "dialogue"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Existing local rules and dedicated typed categories are reinforced by exact acknowledged focused-site IDs, including valid sites left alone. Raw matches are not automatically errors or author queries; final counts remain honest."
+    },
+    {
+      "source_id": "dialogue-mechanics/paragraph-2",
+      "source_text_sha256": "cdaea9e142cff3fca789c8b42d50afecf8e71356d0aa949017bd03e327b0c739",
+      "disposition": "editorial",
+      "policy_sections": [
+        "dialogue"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Existing local rules and dedicated typed categories are reinforced by exact acknowledged focused-site IDs, including valid sites left alone. Raw matches are not automatically errors or author queries; final counts remain honest."
+    },
+    {
+      "source_id": "dialogue-mechanics/one-speaker-per-paragraph",
+      "source_text_sha256": "9466597cdcbe7b9a4795afa973850c7147585450a77c6888d42d6c2bbf21c92f",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "dialogue"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Preserve author voice and paragraph boundaries. The source blanket when-in-doubt comment instruction is narrowed to a real specific author-knowledge question; ambiguity alone is left untouched."
+    },
+    {
+      "source_id": "dialogue-mechanics/multi-paragraph-speech-by-one-character",
+      "source_text_sha256": "5b21108c2215cc4fdda160f8f745df4bbff0f39e7a52d04fc0e63e83d6656288",
+      "disposition": "editorial",
+      "policy_sections": [
+        "dialogue"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Existing local rules and dedicated typed categories are reinforced by exact acknowledged focused-site IDs, including valid sites left alone. Raw matches are not automatically errors or author queries; final counts remain honest."
+    },
+    {
+      "source_id": "dialogue-mechanics/punctuation-around-quotes",
+      "source_text_sha256": "7e5e16307e7fb44480c9906b9a8977ff38e2305901829a4bab772aaa368f16fd",
+      "disposition": "editorial",
+      "policy_sections": [
+        "dialogue"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Existing local rules and dedicated typed categories are reinforced by exact acknowledged focused-site IDs, including valid sites left alone. Raw matches are not automatically errors or author queries; final counts remain honest."
+    },
+    {
+      "source_id": "dialogue-mechanics/stutters-and-interruptions",
+      "source_text_sha256": "351375875472fc8dd03d695f1ba51fffd80e6695bf090a0307bc54e5c602d222",
+      "disposition": "editorial",
+      "policy_sections": [
+        "dialogue"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Existing local rules and dedicated typed categories are reinforced by exact acknowledged focused-site IDs, including valid sites left alone. Raw matches are not automatically errors or author queries; final counts remain honest."
+    },
+    {
+      "source_id": "dialogue-mechanics/watch-carefully-for",
+      "source_text_sha256": "9d05c414bfa3cfb201d8e4d2babf6840f2a260a489e685f4d7ce9907c2568444",
+      "disposition": "editorial",
+      "policy_sections": [
+        "dialogue"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Existing local rules and dedicated typed categories are reinforced by exact acknowledged focused-site IDs, including valid sites left alone. Raw matches are not automatically errors or author queries; final counts remain honest."
+    },
+    {
+      "source_id": "dialogue-mechanics/table-1/row-1",
+      "source_text_sha256": "c3397cebe10b44cf6ef45cd826aca8ced87f3710977e18a72ae68e7641411087",
+      "disposition": "editorial",
+      "policy_sections": [
+        "dialogue"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Existing local rules and dedicated typed categories are reinforced by exact acknowledged focused-site IDs, including valid sites left alone. Raw matches are not automatically errors or author queries; final counts remain honest."
+    },
+    {
+      "source_id": "dialogue-mechanics/table-1/row-2",
+      "source_text_sha256": "8b29092a0ee1d1f5da80324a4e6ab8c085584603741ce48d156e8a55dabe2db9",
+      "disposition": "editorial",
+      "policy_sections": [
+        "dialogue"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Existing local rules and dedicated typed categories are reinforced by exact acknowledged focused-site IDs, including valid sites left alone. Raw matches are not automatically errors or author queries; final counts remain honest."
+    },
+    {
+      "source_id": "dialogue-mechanics/table-1/row-3",
+      "source_text_sha256": "82e036921959b03088f2e6eaf542f1b9da5250bef861182bc24e27c5b8a77abb",
+      "disposition": "editorial",
+      "policy_sections": [
+        "dialogue"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Existing local rules and dedicated typed categories are reinforced by exact acknowledged focused-site IDs, including valid sites left alone. Raw matches are not automatically errors or author queries; final counts remain honest."
+    },
+    {
+      "source_id": "dialogue-mechanics/table-1/row-4",
+      "source_text_sha256": "9146f827d2daea910d4990e8d9e4a896f8e26a8235207257193a89e4393f6980",
+      "disposition": "editorial",
+      "policy_sections": [
+        "dialogue"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Existing local rules and dedicated typed categories are reinforced by exact acknowledged focused-site IDs, including valid sites left alone. Raw matches are not automatically errors or author queries; final counts remain honest."
+    },
+    {
+      "source_id": "dialogue-mechanics/table-1/row-5",
+      "source_text_sha256": "d03c996f1b931ab496aa9e8b3c4092943ab43fd60ed166e331743c2fac4bdf40",
+      "disposition": "editorial",
+      "policy_sections": [
+        "dialogue"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Existing local rules and dedicated typed categories are reinforced by exact acknowledged focused-site IDs, including valid sites left alone. Raw matches are not automatically errors or author queries; final counts remain honest."
+    },
+    {
+      "source_id": "common-error-patterns-to-actively-hunt/possessive-vs-contraction",
+      "source_text_sha256": "f347593d5e60439b827ac09f21855d8ef596f7f359f41946cba02b0a2b8c9ef7",
+      "disposition": "editorial",
+      "policy_sections": [
+        "word_errors",
+        "consistency"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "common-error-patterns-to-actively-hunt/subject-verb-agreement",
+      "source_text_sha256": "10ab843b4f0dba1d409e4fd8a79421f0127ef7baccaa25923b60078a893dfef0",
+      "disposition": "editorial",
+      "policy_sections": [
+        "word_errors",
+        "consistency"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "common-error-patterns-to-actively-hunt/doubled-small-words-and-missing-small-words",
+      "source_text_sha256": "fc6e87c880f45d617428170d16d302278ddd401299f9a6f96e1b48358a2a9f64",
+      "disposition": "editorial",
+      "policy_sections": [
+        "word_errors",
+        "consistency"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "common-error-patterns-to-actively-hunt/wrong-prepositions",
+      "source_text_sha256": "27beb607b24ac1539cc031618bbedaddb0187b4ea52d1aa84fce0a1a2c442804",
+      "disposition": "editorial",
+      "policy_sections": [
+        "word_errors",
+        "consistency"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "common-error-patterns-to-actively-hunt/missing-word-break",
+      "source_text_sha256": "b933e3e6d9e87f9e754478319b6d7b32a74747e7f749110a168af2620adb1ae2",
+      "disposition": "editorial",
+      "policy_sections": [
+        "word_errors",
+        "consistency"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "common-error-patterns-to-actively-hunt/compound-word-consistency",
+      "source_text_sha256": "e3c515ab30d733351153808dd3ca1926147489ee9b89478039e9452831fd7535",
+      "disposition": "editorial",
+      "policy_sections": [
+        "word_errors",
+        "consistency"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "common-error-patterns-to-actively-hunt/one-word-vs-two-word-constructions",
+      "source_text_sha256": "015194161fdd191b0def990b122b9bb0350a5b2cdd05385d451b6d40fd573384",
+      "disposition": "editorial",
+      "policy_sections": [
+        "word_errors",
+        "consistency"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "common-error-patterns-to-actively-hunt/coined-vocabulary-consistency",
+      "source_text_sha256": "bab9d6897099a4a7c3b9745279218626bdfe1e273a0c234779c81261833cef92",
+      "disposition": "editorial",
+      "policy_sections": [
+        "word_errors",
+        "consistency"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "footnotes-and-endnotes/paragraph-1",
+      "source_text_sha256": "540dd6d96fbb326788fe02c8bcbbc7e91bcac97d3400295dc0c212e109c1df3e",
+      "disposition": "editorial",
+      "policy_sections": [
+        "citations_notes"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "footnotes-and-endnotes/paragraph-2",
+      "source_text_sha256": "48ffe8047ffb3483e86f704554694cb1e7d3d6247f7f118431754f0bc4f1ef94",
+      "disposition": "editorial",
+      "policy_sections": [
+        "citations_notes"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "dashes/paragraph-1",
+      "source_text_sha256": "42edab3459e540a36da44bba72632cf6c1c62c9559823c36d3647fd423b13e6f",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "serial-comma/paragraph-1",
+      "source_text_sha256": "887a233c0166dbfa130ce75119b8f0b2bf619823012c0f8234f9974c944a5e81",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Existing local rules and dedicated typed categories are reinforced by exact acknowledged focused-site IDs, including valid sites left alone. Raw matches are not automatically errors or author queries; final counts remain honest."
+    },
+    {
+      "source_id": "serial-comma/paragraph-2",
+      "source_text_sha256": "018176bc8b18c9abfc6ebdaad3694c12cbb55f1f4d32e447305c7264c7a93364",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Existing local rules and dedicated typed categories are reinforced by exact acknowledged focused-site IDs, including valid sites left alone. Raw matches are not automatically errors or author queries; final counts remain honest."
+    },
+    {
+      "source_id": "serial-comma/surface-every-candidate-site",
+      "source_text_sha256": "fec1d07b91f838e6149c1eb23339d1192622d1be2e20581bc1296b5af5356b91",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Existing local rules and dedicated typed categories are reinforced by exact acknowledged focused-site IDs, including valid sites left alone. Raw matches are not automatically errors or author queries; final counts remain honest."
+    },
+    {
+      "source_id": "serial-comma/judge-each-one",
+      "source_text_sha256": "e7345490cfed0fb00e66ab0f038266c74af3f7a6f900e6b6a466f01eaacb57db",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Existing local rules and dedicated typed categories are reinforced by exact acknowledged focused-site IDs, including valid sites left alone. Raw matches are not automatically errors or author queries; final counts remain honest."
+    },
+    {
+      "source_id": "serial-comma/report-the-count-in-the-change-log",
+      "source_text_sha256": "521bd7d5272f17eeca381d0549b327bc2878d9c4b468fa43e632e7754ff2a0d7",
+      "disposition": "editorial",
+      "policy_sections": [
+        "punctuation"
+      ],
+      "owners": [
+        "local_checks",
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Existing local rules and dedicated typed categories are reinforced by exact acknowledged focused-site IDs, including valid sites left alone. Raw matches are not automatically errors or author queries; final counts remain honest."
+    },
+    {
+      "source_id": "narrative-tense/paragraph-1",
+      "source_text_sha256": "71e5e26d79cce08704ef45604683dc759e28d1f15767f61ef45b6f26ebab58a3",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "tense"
+      ],
+      "owners": [
+        "story_sheet",
+        "focused_checks",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "The full-document dialogue-stripped tense profile/runs are supplied to the existing final readers. No majority-tense mandate, catch quota, or conversion of intentional historical present; only supported accidental departures may change."
+    },
+    {
+      "source_id": "narrative-tense/paragraph-2",
+      "source_text_sha256": "fc5e37a1857423656be6f7afb116ef882c53aff0e98ad979e696b14d3890ecef",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "tense"
+      ],
+      "owners": [
+        "story_sheet",
+        "focused_checks",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "The full-document dialogue-stripped tense profile/runs are supplied to the existing final readers. No majority-tense mandate, catch quota, or conversion of intentional historical present; only supported accidental departures may change."
+    },
+    {
+      "source_id": "narrative-tense/paragraph-3",
+      "source_text_sha256": "0582d9ba46792b98a77a35cfa5465acd71c25abd827e0ba09e077c988cd2368a",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "tense"
+      ],
+      "owners": [
+        "story_sheet",
+        "focused_checks",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "The full-document dialogue-stripped tense profile/runs are supplied to the existing final readers. No majority-tense mandate, catch quota, or conversion of intentional historical present; only supported accidental departures may change."
+    },
+    {
+      "source_id": "narrative-tense/establish-the-baseline-before-you-read-a-word",
+      "source_text_sha256": "3e90253243cfde8e78bccc30fcd736e80b2e716b17a7449b9a241f34cd960810",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "tense"
+      ],
+      "owners": [
+        "story_sheet",
+        "focused_checks",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "The full-document dialogue-stripped tense profile/runs are supplied to the existing final readers. No majority-tense mandate, catch quota, or conversion of intentional historical present; only supported accidental departures may change."
+    },
+    {
+      "source_id": "narrative-tense/surface-every-candidate-site",
+      "source_text_sha256": "d5b7273ad09d06fcd250ceaff2c9b6accaabdf27ecb4b75b8897d85f60b00731",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "tense"
+      ],
+      "owners": [
+        "story_sheet",
+        "focused_checks",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "The full-document dialogue-stripped tense profile/runs are supplied to the existing final readers. No majority-tense mandate, catch quota, or conversion of intentional historical present; only supported accidental departures may change."
+    },
+    {
+      "source_id": "narrative-tense/working-by-eye-instead-do-not-read-forward",
+      "source_text_sha256": "d8af44b4c42f7ad238d609fc7f8d37139efe3b4885a7bf0e0d8dc2135172fb2e",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "tense"
+      ],
+      "owners": [
+        "story_sheet",
+        "focused_checks",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "The full-document dialogue-stripped tense profile/runs are supplied to the existing final readers. No majority-tense mandate, catch quota, or conversion of intentional historical present; only supported accidental departures may change."
+    },
+    {
+      "source_id": "narrative-tense/judge-each-one-against-the-baseline-not-against",
+      "source_text_sha256": "765c1cbe993150310a628491c5aab06028df629e1bb12c0c364a370d3345f9dd",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "tense"
+      ],
+      "owners": [
+        "story_sheet",
+        "focused_checks",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "The full-document dialogue-stripped tense profile/runs are supplied to the existing final readers. No majority-tense mandate, catch quota, or conversion of intentional historical present; only supported accidental departures may change."
+    },
+    {
+      "source_id": "narrative-tense/protect-what-is-legitimately-present",
+      "source_text_sha256": "2b08103926e62a6ca6dfb9efd3474957bcd9a0d93b0d4dce5dddd0fcbd0a1c41",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "tense"
+      ],
+      "owners": [
+        "story_sheet",
+        "focused_checks",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "The full-document dialogue-stripped tense profile/runs are supplied to the existing final readers. No majority-tense mandate, catch quota, or conversion of intentional historical present; only supported accidental departures may change."
+    },
+    {
+      "source_id": "narrative-tense/report-the-count-in-the-change-log",
+      "source_text_sha256": "2e3202a3891dd97c43971b960e5b193192b32dcd230086b598ef88621a1e65bd",
+      "disposition": "adapted_precision",
+      "policy_sections": [
+        "tense"
+      ],
+      "owners": [
+        "story_sheet",
+        "focused_checks",
+        "fable",
+        "astra",
+        "luna_checks"
+      ],
+      "handling": "The full-document dialogue-stripped tense profile/runs are supplied to the existing final readers. No majority-tense mandate, catch quota, or conversion of intentional historical present; only supported accidental departures may change."
+    },
+    {
+      "source_id": "additional-dedicated-and-focused-passes/paragraph-1",
+      "source_text_sha256": "7494ae549474b85a483611111ae710fa9a2ea086843d28dfa3bd021f53be93e8",
+      "disposition": "editorial",
+      "policy_sections": [
+        "consistency",
+        "word_errors",
+        "dialogue",
+        "tense",
+        "citations_notes"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "additional-dedicated-and-focused-passes/paragraph-2",
+      "source_text_sha256": "f4397202a7dd1ab3bee8be75aacdc02073b22517935a3179d32462cf761a6ad0",
+      "disposition": "editorial",
+      "policy_sections": [
+        "consistency",
+        "word_errors",
+        "dialogue",
+        "tense",
+        "citations_notes"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "additional-dedicated-and-focused-passes/paragraph-3",
+      "source_text_sha256": "0aa104d5efd6aad5504801b5ec2d769d3bd7dea367e4eb3a2babbf64e8a86648",
+      "disposition": "editorial",
+      "policy_sections": [
+        "consistency",
+        "word_errors",
+        "dialogue",
+        "tense",
+        "citations_notes"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "additional-dedicated-and-focused-passes/paragraph-4",
+      "source_text_sha256": "32706f5d0e1f55d2e5a3c6e76102c298c0c59c628062586608d7a34255f4f511",
+      "disposition": "editorial",
+      "policy_sections": [
+        "consistency",
+        "word_errors",
+        "dialogue",
+        "tense",
+        "citations_notes"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "additional-dedicated-and-focused-passes/paragraph-5",
+      "source_text_sha256": "85d34e18325511739e41911ea07c149bbec2f2d9972329a78636016b2c88e8e5",
+      "disposition": "editorial",
+      "policy_sections": [
+        "consistency",
+        "word_errors",
+        "dialogue",
+        "tense",
+        "citations_notes"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "additional-dedicated-and-focused-passes/paragraph-6",
+      "source_text_sha256": "1cc1593d8c08b3bd1c9bdf5641cb765564390159100fa97f0f01d3bfe8e0ef69",
+      "disposition": "editorial",
+      "policy_sections": [
+        "consistency",
+        "word_errors",
+        "dialogue",
+        "tense",
+        "citations_notes"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "additional-dedicated-and-focused-passes/paragraph-7",
+      "source_text_sha256": "19aa4a228d78a0de811d3440eb7ea6ff5c5936a6600804c93624aa2499a334cd",
+      "disposition": "editorial",
+      "policy_sections": [
+        "consistency",
+        "word_errors",
+        "dialogue",
+        "tense",
+        "citations_notes"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "additional-dedicated-and-focused-passes/paragraph-8",
+      "source_text_sha256": "3a334ce9ddd541aa3da2cda0cb7971dd3c29df92ce8b57ef124adbb449bc049d",
+      "disposition": "editorial",
+      "policy_sections": [
+        "consistency",
+        "word_errors",
+        "dialogue",
+        "tense",
+        "citations_notes"
+      ],
+      "owners": [
+        "fable",
+        "astra",
+        "opus_adjudication",
+        "luna_checks"
+      ],
+      "handling": "Explicit in the extracted editorial policy; proposals remain subject to the clear-error and author-voice gates."
+    },
+    {
+      "source_id": "process/read-the-whole-manuscript-before-editing",
+      "source_text_sha256": "2c31e6f4a9b688f51ce2294e189fe2ae2e956f76e906e31c1bcac29d984b3f50",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/mechanical-sweep-across-the-full-document",
+      "source_text_sha256": "95c7b3b70a198cdcc688ca203dcb8df453cc7998c2ab8c26b3febaae3253b8a0",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "punctuation"
+      ],
+      "owners": [
+        "local_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/stacked-punctuation-sweep",
+      "source_text_sha256": "cfe4c633ed07ebc8a6f45fe46da6fcd901aeb44de6bf67de9f0b36c7e90897f6",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "punctuation"
+      ],
+      "owners": [
+        "local_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/numbers-sweep",
+      "source_text_sha256": "689cdb341eb7f5d36fb40ee33e1098a0b1edb82638b81f73a6d6325b1990a79b",
+      "disposition": "existing_number_policy",
+      "policy_sections": [
+        "numbers_compounds"
+      ],
+      "owners": [
+        "number_sweep",
+        "fable",
+        "astra"
+      ],
+      "handling": "The bespoke number inventory and existing number/currency policy own these cases; final readers retain every contextual exception."
+    },
+    {
+      "source_id": "process/centuries-sweep",
+      "source_text_sha256": "444aae782d70b713121c74c2cd0ea5e5fb0093a562bd0483122acc6b6a706e53",
+      "disposition": "existing_number_policy",
+      "policy_sections": [
+        "numbers_compounds"
+      ],
+      "owners": [
+        "number_sweep",
+        "fable",
+        "astra"
+      ],
+      "handling": "The bespoke number inventory and existing number/currency policy own these cases; final readers retain every contextual exception."
+    },
+    {
+      "source_id": "process/title-italics-sweep",
+      "source_text_sha256": "4132d80c85c97d8f9d7b5727b934c70aa3eeebe2fb6733f27b31fa0694c76ba4",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "capitalization_titles"
+      ],
+      "owners": [
+        "typed_detectors",
+        "fable",
+        "astra",
+        "fixed_documents"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/ellipsis-sweep",
+      "source_text_sha256": "dc21f69379b75c328f601b572a426526b7a161727ec9cdd59795bac4125410e8",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "punctuation"
+      ],
+      "owners": [
+        "local_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/double-space-sweep",
+      "source_text_sha256": "3fc8f4c1de9d5666eb526fac26d856136d136de27f00df9d38ead440a4c4860c",
+      "disposition": "explicit_override",
+      "policy_sections": [
+        "punctuation"
+      ],
+      "owners": [
+        "local_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Retain the normalization rules as reviewed, tracked proposals. Galley rejects all changes back to the exact original; the source silent-edit audit exceptions do not apply."
+    },
+    {
+      "source_id": "process/must-include-the-dialogue-tag-exhaustive-check",
+      "source_text_sha256": "f5090d9cdfbcaf955385d63cfa4853f165f5c4aff797be8483be0f4342570724",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "dialogue",
+        "tense"
+      ],
+      "owners": [
+        "local_checks",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/first-careful-read-chapter-by-chapter",
+      "source_text_sha256": "b1ff8c461defcae883dd3b069dfcfc814ca13c6ab542199e44d82ecb7773b797",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/consistency-style-sheet-pass",
+      "source_text_sha256": "acf797fd4b3727d45052f9b7cdac384371333cc92889fbd615d08542546aee4b",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "consistency"
+      ],
+      "owners": [
+        "story_sheet",
+        "local_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/confusables-pass",
+      "source_text_sha256": "573a406376b36cfe5db5f34c17fc8486beb64a710ac8e0861659a4023dcc7d23",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "word_errors"
+      ],
+      "owners": [
+        "typed_detectors",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/agreement-pass",
+      "source_text_sha256": "84d7e940bf97ba74df7f49195ba5b3169e9e79ff3e417b863ecf731b2d878288",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "word_errors"
+      ],
+      "owners": [
+        "typed_detectors",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/narrative-tense-dedicated-pass",
+      "source_text_sha256": "3145b163c3cccbc4c42bc7de3648c7e4da7c655964f317d79246d402707a6670",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "tense"
+      ],
+      "owners": [
+        "story_sheet",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/serial-comma-dedicated-pass",
+      "source_text_sha256": "1ea532fef5f05c2f970e3f38da3f9c982c3d198f6f5f751df5ddb89acd163403",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "punctuation"
+      ],
+      "owners": [
+        "typed_detectors",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/quotation-integrity-pass",
+      "source_text_sha256": "8ae352608eaa05d6ebe16490147ddab4f0fdd3dfa1efe9cddf01e5bce54fb623",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "dialogue",
+        "tense"
+      ],
+      "owners": [
+        "local_checks",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/citation-cross-reference-pass",
+      "source_text_sha256": "3bd2a76aca0a4c73516b24d8043f59912b6f0977e8482ea28cab81666705b419",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "citations_notes"
+      ],
+      "owners": [
+        "story_sheet",
+        "focused_checks",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/mandatory-second-full-read",
+      "source_text_sha256": "b4db77a89ba6e700e91d882ca17c8246a8805e84f600bad15b706e5bd458c33a",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/mandatory-third-full-read",
+      "source_text_sha256": "b230c90c281e310732ebc227ac5a6d0527154484c5d3deedfabf135426b1990c",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/independent-verification-pass",
+      "source_text_sha256": "b28bcfb4a014f8871b7f2887eac26f33496e0eff3636cb4f720d64f64f5d6a6b",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/edit-integrity-pass",
+      "source_text_sha256": "70ad881a070a877da7afb71453850850c69459752c02577371fca4f579077df8",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "process/final-audit",
+      "source_text_sha256": "6305905119f8b52967066f4a6bc659573a7dfbb149ff2a2575fea7ce372cc17f",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "time-expectation/paragraph-1",
+      "source_text_sha256": "1fd4745cf2a4a2783f010099d97065cbec23dac6bf0919bf77871d3001231c77",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Human-chat timing and previous-book correction counts are background, not quotas or measured Galley performance. Full reads remain required; no artificial waiting or shortcuts."
+    },
+    {
+      "source_id": "deliverables-two-files/the-manuscript-docx",
+      "source_text_sha256": "8803c9a290dabcc331411b24fe38c2dec9d2e0120574a68d959456c3bb2b2f91",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Output assembly remains native Galley, with its existing tracked/clean Word files, Markdown report and certified evidence rather than the pasted-chat filenames and separate Word-log contract. Report source coverage, reviewed checks, corrections, notes, assumptions and limits from actual receipts; models never claim file creation or audits."
+    },
+    {
+      "source_id": "deliverables-two-files/a-separate-change-log-docx",
+      "source_text_sha256": "6a95a9bb4f92f0d5d8ea5ea6ee54923ba493e38ef98d01fe117d07d65daa3db4",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Output assembly remains native Galley, with its existing tracked/clean Word files, Markdown report and certified evidence rather than the pasted-chat filenames and separate Word-log contract. Report source coverage, reviewed checks, corrections, notes, assumptions and limits from actual receipts; models never claim file creation or audits."
+    },
+    {
+      "source_id": "deliverables-two-files/style-basis-and-english-variant-assumption",
+      "source_text_sha256": "83193867c2692f13aa29926a68c7b063332e9f352638bb20c369ac9f786819c5",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Output assembly remains native Galley, with its existing tracked/clean Word files, Markdown report and certified evidence rather than the pasted-chat filenames and separate Word-log contract. Report source coverage, reviewed checks, corrections, notes, assumptions and limits from actual receipts; models never claim file creation or audits."
+    },
+    {
+      "source_id": "deliverables-two-files/a-table-of-every-correction-location-original",
+      "source_text_sha256": "f8592ed3f0c1acabe4c7bc161f21195949acc3406d4ccf97abf26994e55719a3",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Output assembly remains native Galley, with its existing tracked/clean Word files, Markdown report and certified evidence rather than the pasted-chat filenames and separate Word-log contract. Report source coverage, reviewed checks, corrections, notes, assumptions and limits from actual receipts; models never claim file creation or audits."
+    },
+    {
+      "source_id": "deliverables-two-files/a-scripted-check-report",
+      "source_text_sha256": "414e878789cc0107e2d519eb71178a94087c55602ba40e32e0199713ff5d2ba0",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Output assembly remains native Galley, with its existing tracked/clean Word files, Markdown report and certified evidence rather than the pasted-chat filenames and separate Word-log contract. Report source coverage, reviewed checks, corrections, notes, assumptions and limits from actual receipts; models never claim file creation or audits."
+    },
+    {
+      "source_id": "deliverables-two-files/a-list-of-comment-queries",
+      "source_text_sha256": "ea4f1fb2634481881ea9932e0f9c6a1140211dd2cd5fe2164962945f2c8dc65e",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Output assembly remains native Galley, with its existing tracked/clean Word files, Markdown report and certified evidence rather than the pasted-chat filenames and separate Word-log contract. Report source coverage, reviewed checks, corrections, notes, assumptions and limits from actual receipts; models never claim file creation or audits."
+    },
+    {
+      "source_id": "deliverables-two-files/a-deliberately-left-unchanged-section-anything",
+      "source_text_sha256": "d15704b8261e697b845648f684bfb4450a702df27923670eadc020813f7c8784",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Output assembly remains native Galley, with its existing tracked/clean Word files, Markdown report and certified evidence rather than the pasted-chat filenames and separate Word-log contract. Report source coverage, reviewed checks, corrections, notes, assumptions and limits from actual receipts; models never claim file creation or audits."
+    },
+    {
+      "source_id": "deliverables-two-files/a-pass-log",
+      "source_text_sha256": "406f2609fa36dcdb6ef8e1efa7c3d6c1b190fc8994d39a4b69e90e0665513f2d",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Output assembly remains native Galley, with its existing tracked/clean Word files, Markdown report and certified evidence rather than the pasted-chat filenames and separate Word-log contract. Report source coverage, reviewed checks, corrections, notes, assumptions and limits from actual receipts; models never claim file creation or audits."
+    },
+    {
+      "source_id": "deliverables-two-files/a-notes-coverage-statement",
+      "source_text_sha256": "635c150183bdf74edfa4944295aa981b7a683d41ce3dafbd9a02169d964fbf11",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Output assembly remains native Galley, with its existing tracked/clean Word files, Markdown report and certified evidence rather than the pasted-chat filenames and separate Word-log contract. Report source coverage, reviewed checks, corrections, notes, assumptions and limits from actual receipts; models never claim file creation or audits."
+    },
+    {
+      "source_id": "deliverables-two-files/an-honest-limits-of-this-pass-note-what-was",
+      "source_text_sha256": "356c1f9fb1019c9a025dff9af9be1224eb2e7545ef4fb233027b19d6bf370e27",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Output assembly remains native Galley, with its existing tracked/clean Word files, Markdown report and certified evidence rather than the pasted-chat filenames and separate Word-log contract. Report source coverage, reviewed checks, corrections, notes, assumptions and limits from actual receipts; models never claim file creation or audits."
+    },
+    {
+      "source_id": "deliverables-two-files/confirmation-that-the-final-audit-passed-body",
+      "source_text_sha256": "ac4b3ee63f23342bce270ffd374d3d58bf38151f9539144527ef0156e5f9b936",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Output assembly remains native Galley, with its existing tracked/clean Word files, Markdown report and certified evidence rather than the pasted-chat filenames and separate Word-log contract. Report source coverage, reviewed checks, corrections, notes, assumptions and limits from actual receipts; models never claim file creation or audits."
+    },
+    {
+      "source_id": "deliverables-two-files/filename",
+      "source_text_sha256": "8bb4592de6572c8527e2978c74592c83934412ad105f2742803452032ec8dcae",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Output assembly remains native Galley, with its existing tracked/clean Word files, Markdown report and certified evidence rather than the pasted-chat filenames and separate Word-log contract. Report source coverage, reviewed checks, corrections, notes, assumptions and limits from actual receipts; models never claim file creation or audits."
+    },
+    {
+      "source_id": "honesty-constraints/never-overstate-the-depth-of-the-pass",
+      "source_text_sha256": "0012b5fdb1e8c9989e61a002075f47a56ad23446f71317a4c133bb1c0423a3f1",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "honesty-constraints/if-a-manuscript-is-too-long-to-read-every-word",
+      "source_text_sha256": "be6d6437c2caf632c9256966ca9b09265a5f68a97f36960ebbb37b27ccb1f211",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "honesty-constraints/the-goal-is-to-do-a-thorough-job-every-time",
+      "source_text_sha256": "09d0316755346b30976ad923e392374d9f55ba0ba4c7e00432a7bbeb664ae7ec",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "honesty-constraints/where-a-suspected-error-has-a-clear-best-fix",
+      "source_text_sha256": "2339d40918593ad3ec5a88133accc61e2932e1868d0ba7de9ac636dc3983cb82",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "honesty-constraints/if-you-encounter-something-you-genuinely-cannot",
+      "source_text_sha256": "87c699d5217fd1ff354df0fbc421cb8a33f96524c7709948b477e46474f91df4",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    },
+    {
+      "source_id": "honesty-constraints/if-you-discover-mid-pass-that-an-earlier",
+      "source_text_sha256": "7ee6967b08d4f77aab63a617f7e8c962064a874a1b3a40a4fedcc6e6fd72d583",
+      "disposition": "adapted_workflow",
+      "policy_sections": [
+        "scope"
+      ],
+      "owners": [
+        "fixed_workflow",
+        "fixed_documents",
+        "fable",
+        "astra"
+      ],
+      "handling": "Galley owns the fixed model sequence, complete paragraph coverage, native tracked output, existing filenames/report formats, correction checks and exact source audit. This source item cannot create extra agents, loops, silent edits, quick-pass shortcuts, invented elapsed-time claims or output files inside a reader prompt."
+    }
+  ],
+  "wrapper_metadata": {
+    "usage": {
+      "source": "Paste this prompt into a new chat and attach the manuscript. The team member running it can append “quick pass” or “full pass” at the end to specify scope; if neither is stated, do a full pass.",
+      "handling": "Pasted-chat usage is adapted to the authorized fixed full workflow. No quick-pass shortcut, new chat, extra agent, or added read is scheduled by this text."
+    },
+    "note": {
+      "source": "This version runs three complete reads of the manuscript plus dedicated focused and verification passes (see Operating Principle 6 and the Process section).",
+      "handling": "Pasted-chat usage is adapted to the authorized fixed full workflow. No quick-pass shortcut, new chat, extra agent, or added read is scheduled by this text."
+    },
+    "default_trigger": {
+      "source": "Full pass.",
+      "handling": "Pasted-chat usage is adapted to the authorized fixed full workflow. No quick-pass shortcut, new chat, extra agent, or added read is scheduled by this text."
+    }
+  }
+}

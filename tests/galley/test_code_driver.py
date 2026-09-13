@@ -109,10 +109,10 @@ def test_resuming_versioned_build_keeps_saved_code_mode(code_job):
     assert driver.resolve_execution_mode() == "code"
 
 
-def test_new_book_defaults_to_code_orchestration(tmp_path):
+def test_new_book_defaults_to_fixed_orchestration(tmp_path):
     driver = Driver(tmp_path / "source.docx", "new", workspace_root=tmp_path,
                     execution_mode=None)
-    assert driver.resolve_execution_mode() == "code"
+    assert driver.resolve_execution_mode() == "fixed"
 
 
 def test_approval_and_audit_use_direct_commands_with_one_configured_audit_read(code_job, monkeypatch):

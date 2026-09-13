@@ -32,6 +32,13 @@ MAX_OUTPUT_BYTES = 16 * 1024 * 1024
 _TAIL_BYTES = 64 * 1024
 _EVENT_TYPES = {"thread.started", "turn.started", "turn.completed", "turn.failed",
                 "item.started", "item.updated", "item.completed", "error"}
+# `codex exec --help` documents --disable; these capabilities are listed by
+# `codex features list`. Fixed readers need one structured answer, not tools.
+_FIXED_READER_DISABLED_FEATURES = (
+    "shell_tool", "unified_exec", "multi_agent", "multi_agent_v2", "apps",
+    "plugins", "browser_use", "computer_use", "image_generation", "view_image",
+    "goals", "sleep_tool", "skill_search", "code_mode", "code_mode_host",
+)
 _ENV_KEYS = {"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR", "TMP",
              "TEMP", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "SYSTEMROOT",
              "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA", "PATHEXT", "COMSPEC", "WINDIR"}
@@ -204,6 +211,11 @@ def _safe_events(stream) -> dict:
             continue
         kind = event["type"]
         counts[kind] = counts.get(kind, 0) + 1
+        if kind.startswith("item.") and isinstance(event.get("item"), dict):
+            item_type = event["item"].get("type")
+            if isinstance(item_type, str) and item_type not in {"agent_message", "reasoning"}:
+                items = metadata.setdefault("non_response_item_types", {})
+                items[item_type] = items.get(item_type, 0) + 1
         if kind == "thread.started" and isinstance(event.get("thread_id"), str) and re.fullmatch(
                 r"[A-Za-z0-9_-]{1,100}", event["thread_id"]):
             metadata["thread_id"] = event["thread_id"]
@@ -266,11 +278,19 @@ def _cached_result(directory: Path, receipt: dict, request_sha256: str, schema: 
         raise AstraReviewError("Saved Codex request differs from the requested manuscript evidence.")
     if receipt.get("status") != "completed":
         raise AstraReviewError("A previous Codex review request did not complete. No automatic retry was submitted.")
+    if receipt.get("no_tools") and not _fixed_response_complete(receipt):
+        raise AstraReviewError("Saved fixed-reader receipt includes tools or an incomplete turn.")
     result = _load(directory / "result.json")
     if receipt.get("result_sha256") != _hash(result):
         raise AstraReviewError("Saved Codex review result has changed; it cannot be reused.")
     _schema_check(result, schema, "Codex review")
     return result
+
+
+def _fixed_response_complete(receipt: dict) -> bool:
+    counts = receipt.get("event_counts") or {}
+    return (not receipt.get("non_response_item_types") and
+            counts.get("turn.completed") == 1 and not counts.get("turn.failed"))
 
 
 def _retry_allowed(receipt: dict) -> bool:
@@ -318,6 +338,8 @@ def _archive_automatic_retry(directory: Path, receipt: dict) -> dict:
                    "attempt": receipt["attempt"] + 1,
                    "execution_budget": dict(receipt["execution_budget"]),
                    "retry_authorization": authorization, "created_at": _now()}
+    if receipt.get("no_tools"):
+        replacement["no_tools"] = True
     _atomic(directory / "receipt.json", replacement)
     return replacement
 
@@ -327,6 +349,8 @@ def _adopt_completed_output(directory: Path, receipt: dict, schema: dict) -> dic
     if (receipt.get("status") != "running" or receipt.get("process_exited") is not True
             or type(receipt.get("exit_code")) is not int or receipt["exit_code"] != 0
             or not (receipt.get("event_counts") or {}).get("turn.completed")):
+        return None
+    if receipt.get("no_tools") and not _fixed_response_complete(receipt):
         return None
     result_path, output_path = directory / "result.json", directory / "final.json"
     try:
@@ -427,11 +451,14 @@ def reset_failed_request(work_dir: Path, request_id: str, *, reason: str) -> dic
         # Do not make the request runnable until every prior output is archived.
         for filename in ("final.json", "result.json"):
             (directory / filename).unlink(missing_ok=True)
-        _atomic(directory / "receipt.json", {
+        replacement = {
             "protocol_version": PROTOCOL_VERSION, "request_sha256": old["request_sha256"],
             "transport": "codex_subscription", "model": request["model"], "reasoning_effort": request["reasoning_effort"],
             "status": "preflight", "submitted": False, "attempt": attempt + 1,
-            "retry_authorization": authorization, "created_at": _now()})
+            "retry_authorization": authorization, "created_at": _now()}
+        if request.get("no_tools"):
+            replacement["no_tools"] = True
+        _atomic(directory / "receipt.json", replacement)
         return {"status": "retry_authorized", **authorization}
 
 
@@ -454,7 +481,8 @@ def _resource_receipt(receipt, *, reused=False):
 
 def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str,
                    timeout_seconds: int = 1800, codex_bin: str | None = None,
-                   model: str = MODEL, reasoning_effort: str = REASONING_EFFORT) -> dict:
+                   model: str = MODEL, reasoning_effort: str = REASONING_EFFORT,
+                   no_tools: bool = False) -> dict:
     """Return a structured answer using the worker's ChatGPT login.
 
     All calls sharing GALLEY_CODEX_HOME serialize, including authentication.
@@ -472,7 +500,8 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
     if type(timeout_seconds) is not int or timeout_seconds < 1:
         raise AstraReviewError("The Codex review timeout must be a positive number of seconds.")
     allowed = {MODEL: {'low', 'medium', 'high', 'xhigh', 'max'},
-               'gpt-5.6-luna': {'low', 'medium', 'high', 'xhigh', 'max'}}
+               'gpt-5.6-luna': {'low', 'medium', 'high', 'xhigh', 'max'},
+               'gpt-5.6-sol': {'low', 'medium', 'high', 'xhigh', 'max'}}
     if model not in allowed or reasoning_effort not in allowed[model]:
         raise AstraReviewError("Unsupported subscription model or reasoning effort.")
     _check_schema(schema)
@@ -481,8 +510,14 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
     request = {"protocol_version": PROTOCOL_VERSION, "request_id": request_id,
                "transport": "codex_subscription", "model": model,
                "reasoning_effort": reasoning_effort, "prompt": prompt, "schema": schema}
+    if type(no_tools) is not bool:
+        raise AstraReviewError("The fixed-reader no_tools option must be boolean.")
+    if no_tools:
+        request["no_tools"] = True
     evidence_path = Path(work_dir).resolve() / 'astra-evidence.json'
     evidence = _load(evidence_path) if evidence_path.exists() else None
+    if no_tools and evidence is not None:
+        raise AstraReviewError("A fixed response reader cannot attach model-accessible evidence tools.")
     if evidence is not None:
         request['evidence'] = evidence
     request_sha256 = _hash(request)
@@ -507,6 +542,8 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
             receipt = _load(receipt_path)
             if not isinstance(receipt, dict) or receipt.get("request_sha256") != request_sha256:
                 raise AstraReviewError("Saved Codex review receipt does not match its request.")
+            if no_tools and receipt.get("no_tools") is not True:
+                raise AstraReviewError("Saved fixed-reader receipt does not preserve its no-tools contract.")
             if receipt.get("status") == "completed":
                 result = _cached_result(directory, receipt, request_sha256, schema)
                 # A crash may have written the transport completion before its
@@ -556,6 +593,8 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
                    "reasoning_effort": reasoning_effort, "status": "preflight",
                    "submitted": False, "created_at": _now(),
                    "execution_budget": budget, **retry_fields}
+        if no_tools:
+            receipt["no_tools"] = True
 
         def record_elapsed(*, exhausted=False):
             budget["elapsed_seconds"] = (budget["timeout_seconds"] if exhausted else
@@ -581,6 +620,15 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
                 "--skip-git-repo-check", "--ephemeral", "-c", 'approval_policy="never"',
                 "--output-schema", str(schema_path), "--output-last-message", str(output_path),
                 "--json", "-"]
+        if no_tools:
+            # Official config reference: web_search="disabled" removes the
+            # search tool; an empty MCP table prevents inherited server tools.
+            # https://learn.chatgpt.com/docs/config-file/config-reference
+            overrides = ["-c", 'web_search="disabled"', "-c", "mcp_servers={}",
+                         "-c", "apps._default.enabled=false"]
+            for feature in _FIXED_READER_DISABLED_FEATURES:
+                overrides.extend(["--disable", feature])
+            argv[2:2] = overrides
         if evidence is not None:
             # Only this request's frozen JSON/image registry is exposed. The
             # server has no command execution, writes, credentials or network tools.
@@ -641,6 +689,11 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
                         + ("The same request can resume within its original saved allowance."
                            if error is CodexRetryableError else
                            "No automatic retry or paid API fallback was submitted."))
+        if no_tools and not _fixed_response_complete(receipt):
+            receipt.update(status="operational_failure", failure_category="fixed_reader_contract")
+            _atomic(receipt_path, receipt)
+            _resource_receipt(receipt)
+            raise AstraReviewError("The fixed reader used tools or did not complete exactly one turn.")
         try:
             result = _load(output_path)
             _schema_check(result, schema, "Codex review")

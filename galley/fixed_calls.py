@@ -1,0 +1,679 @@
+"""Durable, bounded calls for Galley's fixed proofreading recipe.
+
+There is no coordinator model: Python supplies each frozen prompt and schema.
+An interrupted submission is never silently repeated. Atomic response receipts
+close the response-to-consumer crash window; confirmed failures alone may retry
+within the originally saved allowance. Unknown usage retains its reservation.
+"""
+from __future__ import annotations
+
+from contextlib import contextmanager
+from dataclasses import asdict, replace
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import re
+import tempfile
+import threading
+from typing import Any
+
+from docproof import platform_io
+from docproof.config import Config
+from docproof.providers import (NormalizedUsage, ProviderError, ProviderResult,
+                                build_provider, cost_of_usage, estimate_cost)
+from docproof.resource_ledger import (CONFIG_ENV, GROUP_ENV, LEDGER_ENV,
+    MAX_CALLS_ENV, MAX_OUTPUT_ENV, PARENT_ENV, RESERVATION_ENV, SOURCE_ENV,
+    TOKEN_FIELDS, append_usage, normalize_usage, summarize, use_context)
+
+PROTOCOL_VERSION = 1
+_LOCKS: dict[str, threading.RLock] = {}
+_LOCKS_GUARD = threading.Lock()
+_MAX_FILE_BYTES = 32 * 1024 * 1024
+_SUBSCRIPTION_MODELS = {"gpt-5.6-sol", "gpt-6-astra"}
+
+
+class FixedCallError(RuntimeError):
+    """A required read has no validated, complete answer."""
+
+
+class FixedCallInterrupted(FixedCallError):
+    """Submission outcome is unknown; operator reconciliation is required."""
+
+
+class FixedCallBudgetExceeded(FixedCallError):
+    """The persisted allowance cannot fund the next required read."""
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":"), allow_nan=False)
+
+
+def _hash(value: Any) -> str:
+    return hashlib.sha256(_json(value).encode("utf-8")).hexdigest()
+
+
+def _atomic(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, filename = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    temporary = Path(filename)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(_json(value))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        platform_io.sync_directory(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _load(path: Path) -> dict:
+    try:
+        if path.stat().st_size > _MAX_FILE_BYTES:
+            raise ValueError("oversized receipt")
+        value = json.loads(path.read_text("utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("receipt is not an object")
+        return value
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise FixedCallError(f"Cannot read fixed-call receipt {path.name}; reconcile it before resuming.") from exc
+
+
+@contextmanager
+def _locked(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _LOCKS_GUARD:
+        lock = _LOCKS.setdefault(str(path.resolve()), threading.RLock())
+    with lock, path.open("a+b") as stream:
+        platform_io.flock(stream, platform_io.LOCK_EX)
+        try:
+            yield
+        finally:
+            platform_io.flock(stream, platform_io.LOCK_UN)
+
+
+def _schema(value: Any, schema: dict, root: dict | None = None, where="$", depth=0) -> None:
+    """Validate the structured-output schema vocabulary used by our providers."""
+    root = schema if root is None else root
+    if depth > 100 or not isinstance(schema, dict):
+        raise FixedCallError("Invalid or excessively recursive response schema")
+    if "$ref" in schema:
+        ref = schema["$ref"]
+        if not isinstance(ref, str) or not ref.startswith("#/"):
+            raise FixedCallError("Only local response schema references are supported")
+        child = root
+        try:
+            for part in ref[2:].split("/"):
+                child = child[part.replace("~1", "/").replace("~0", "~")]
+        except (KeyError, TypeError) as exc:
+            raise FixedCallError("Unresolved response schema reference") from exc
+        _schema(value, child, root, where, depth + 1)
+    for kind in ("anyOf", "oneOf", "allOf"):
+        if kind in schema:
+            matches = 0
+            for child in schema[kind]:
+                try:
+                    _schema(value, child, root, where, depth + 1)
+                    matches += 1
+                except FixedCallError:
+                    pass
+            if (kind == "allOf" and matches != len(schema[kind]) or
+                    kind == "anyOf" and matches == 0 or kind == "oneOf" and matches != 1):
+                raise FixedCallError(f"Malformed response at {where}")
+    types = {"object": isinstance(value, dict), "array": isinstance(value, list),
+             "string": isinstance(value, str), "boolean": type(value) is bool,
+             "integer": type(value) is int,
+             "number": type(value) in (int, float) and math.isfinite(value),
+             "null": value is None}
+    kind = schema.get("type")
+    kinds = kind if isinstance(kind, list) else [kind]
+    if kind is not None and not any(types.get(k, False) for k in kinds):
+        raise FixedCallError(f"Malformed response at {where}")
+    if "enum" in schema and not any(type(value) is type(item) and value == item for item in schema["enum"]):
+        raise FixedCallError(f"Unknown response choice at {where}")
+    if "const" in schema and (type(value) is not type(schema["const"]) or value != schema["const"]):
+        raise FixedCallError(f"Unexpected response value at {where}")
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        if set(schema.get("required", ())) - set(value):
+            raise FixedCallError(f"Incomplete response at {where}")
+        if schema.get("additionalProperties") is False and set(value) - set(properties):
+            raise FixedCallError(f"Unknown response fields at {where}")
+        for key, item in value.items():
+            child = properties.get(key, schema.get("additionalProperties"))
+            if isinstance(child, dict):
+                _schema(item, child, root, where + "." + key, depth + 1)
+    if isinstance(value, list):
+        if len(value) < schema.get("minItems", 0) or len(value) > schema.get("maxItems", math.inf):
+            raise FixedCallError(f"Invalid response array length at {where}")
+        if schema.get("uniqueItems") and len({_json(item) for item in value}) != len(value):
+            raise FixedCallError(f"Duplicate response array item at {where}")
+        if "items" in schema:
+            for item in value:
+                _schema(item, schema["items"], root, where + "[]", depth + 1)
+    if isinstance(value, str):
+        if len(value) < schema.get("minLength", 0) or len(value) > schema.get("maxLength", math.inf):
+            raise FixedCallError(f"Invalid response string length at {where}")
+        if "pattern" in schema and not re.search(schema["pattern"], value):
+            raise FixedCallError(f"Invalid response string at {where}")
+    if type(value) in (int, float):
+        if (value < schema.get("minimum", -math.inf) or value > schema.get("maximum", math.inf)
+                or value <= schema.get("exclusiveMinimum", -math.inf)
+                or value >= schema.get("exclusiveMaximum", math.inf)):
+            raise FixedCallError(f"Response number outside permitted bounds at {where}")
+
+
+def _check_schema_definition(schema):
+    allowed = {"type", "$ref", "$defs", "$schema", "properties", "required", "additionalProperties",
+               "items", "enum", "const", "anyOf", "oneOf", "allOf", "title", "description",
+               "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "minLength",
+               "maxLength", "pattern", "minItems", "maxItems", "uniqueItems"}
+    if not isinstance(schema, dict) or set(schema) - allowed:
+        raise FixedCallError("Unsupported fixed-call response schema constraint")
+    for key in ("properties", "$defs"):
+        for child in schema.get(key, {}).values():
+            _check_schema_definition(child)
+    for key in ("items", "additionalProperties"):
+        if isinstance(schema.get(key), dict):
+            _check_schema_definition(schema[key])
+    for key in ("anyOf", "oneOf", "allOf"):
+        for child in schema.get(key, []):
+            _check_schema_definition(child)
+
+
+def _transport(model: str, requested: str | None) -> str:
+    expected = ("codex_subscription" if model in _SUBSCRIPTION_MODELS else
+                "claude_subscription" if model.startswith("claude-") else
+                "api" if model == "gpt-5.6-luna" else None)
+    aliases = {"codex": "codex_subscription", "subscription": expected,
+               "subagent": "claude_subscription", "openai": "api"}
+    requested = aliases.get(requested, requested)
+    if expected is None or requested is not None and requested != expected:
+        raise FixedCallError(f"Unsupported fixed-call transport for {model}; no fallback was submitted.")
+    return expected
+
+
+def _default_provider(cfg: Config, *, model: str):
+    if not model.startswith("claude-"):
+        return build_provider(cfg, model=model)
+    from docproof.providers.subagent import SubagentProvider, availability
+    ok, why = availability()
+    if not ok:
+        raise ProviderError("Claude subscription unavailable; no API fallback: " + str(why))
+
+    class CheckedSubagentProvider(SubagentProvider):
+        async def _turn(self, *args, evidence, **kwargs):
+            result = await super()._turn(*args, evidence=evidence, **kwargs)
+            message = evidence.get("result")
+            if message is None:
+                return replace(result, stop_reason="incomplete", error="Claude supplied no terminal result")
+            stop_reason = getattr(message, "stop_reason", None)
+            if stop_reason not in (None, "end_turn", "stop_sequence"):
+                return replace(result, stop_reason="max_tokens" if stop_reason == "max_tokens" else "refusal"
+                    if stop_reason == "refusal" else "error", error="Claude returned a nonterminal stop reason",
+                    resource_usage=getattr(message, "usage", None))
+            if getattr(message, "is_error", False) or getattr(message, "subtype", None) != "success":
+                return replace(result, stop_reason="error", error="Claude turn did not complete successfully",
+                               resource_usage=getattr(message, "usage", None))
+            return replace(result, resource_usage=getattr(message, "usage", None), actual_model=model)
+
+    return CheckedSubagentProvider(model=model, effort=cfg.api.effort)
+
+
+def _queue_pause(exc, category=None):
+    """Preserve the worker queue's quota/authentication control exceptions."""
+    from docproof.agent_lane import AgentLaneUnavailable, CredentialsError as LaneCredentialsError
+    from docproof.subscription_limits import UsageLimitError
+    from galley.driver import CredentialsError, detect_credential_failure
+    if isinstance(exc, (UsageLimitError, CredentialsError)):
+        return exc
+    if category == "subscription_limit":
+        return UsageLimitError(str(exc))
+    if (category == "authentication" or isinstance(exc, LaneCredentialsError) or
+            isinstance(exc, (AgentLaneUnavailable, ProviderError)) and detect_credential_failure(str(exc))):
+        return CredentialsError(str(exc))
+    return None
+
+
+class FixedCalls:
+    def __init__(self, directory: Path, identity: dict, cfg: Config, *,
+                 provider_factory=None, codex_runner=None, max_calls=10_000,
+                 max_output_tokens=20_000_000, max_api_usd=10.0, max_attempts=3,
+                 progress=None):
+        for name, value in (("max_calls", max_calls), ("max_output_tokens", max_output_tokens),
+                            ("max_attempts", max_attempts)):
+            if type(value) is not int or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        if max_attempts > 3:
+            raise ValueError("At most three fixed-call attempts are supported")
+        if type(max_api_usd) not in (int, float) or not math.isfinite(max_api_usd) or max_api_usd < 0:
+            raise ValueError("max_api_usd must be a finite nonnegative number")
+        self.directory = Path(directory).resolve()
+        self.identity = json.loads(_json(identity))
+        self.cfg = cfg.model_copy(deep=True)
+        self.provider_factory = provider_factory or _default_provider
+        self.codex_runner = codex_runner
+        self.progress = progress
+        self.max_attempts = max_attempts
+        self.directory.mkdir(parents=True, exist_ok=True)
+        platform_io.private_path(self.directory, 0o700)
+        limits = dict(max_calls=max_calls, max_output_tokens=max_output_tokens,
+                      max_api_usd=float(max_api_usd))
+        with _locked(self.directory / "budget.lock"):
+            path = self.directory / "budget.json"
+            budget = _load(path) if path.exists() else {"limits": limits, "entries": {}}
+            self._check_budget(budget)
+            # Tightening is allowed; restarting never silently raises ceilings.
+            budget["limits"] = {key: min(value, budget["limits"][key]) for key, value in limits.items()}
+            _atomic(path, budget)
+
+    @staticmethod
+    def _check_budget(budget):
+        if (not isinstance(budget.get("entries"), dict) or not isinstance(budget.get("limits"), dict)
+                or set(budget["limits"]) != {"max_calls", "max_output_tokens", "max_api_usd"}):
+            raise FixedCallError("Fixed-call budget receipt is malformed")
+        for key, value in budget["limits"].items():
+            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                raise FixedCallError("Fixed-call budget limits are malformed")
+
+    @staticmethod
+    def _summary(budget):
+        FixedCalls._check_budget(budget)
+        entries = list(budget["entries"].values())
+        known = {key: sum((row.get("usage") or {}).get(key) or 0 for row in entries) for key in TOKEN_FIELDS}
+        return {**known, "calls": len(entries), "limits": dict(budget["limits"]),
+            "charged_output_tokens": sum(max(row["reserved_output_tokens"], (row.get("usage") or {}).get("output_tokens") or 0)
+                if (row.get("usage") or {}).get("output_tokens") is None else row["usage"]["output_tokens"] for row in entries),
+            "charged_api_usd": sum(row["reserved_api_usd"] if row.get("api_usd") is None else row["api_usd"] for row in entries),
+            "known_api_usd": sum(row.get("api_usd") or 0 for row in entries),
+            "unknown_output_attempts": sum((row.get("usage") or {}).get("output_tokens") is None for row in entries),
+            "unknown_api_attempts": sum(row.get("api_usd") is None and row["transport"] == "api" for row in entries),
+            "missing_fields": {key: sum((row.get("usage") or {}).get(key) is None for row in entries) for key in TOKEN_FIELDS},
+            "incomplete_attempts": sum(row["status"] in {"started", "unknown"} for row in entries),
+            "note": "Known token totals only; unknown attempts retain their maximum reservations."}
+
+    def usage_summary(self) -> dict:
+        with _locked(self.directory / "budget.lock"):
+            return self._summary(_load(self.directory / "budget.json"))
+
+    def assert_complete(self) -> None:
+        validate_fixed_call_evidence(self.directory, identity=self.identity)
+
+    def _reserve(self, request, sha, attempt):
+        reservation = 0.0
+        if request["transport"] == "api":
+            # UTF-8 bytes are a deliberately conservative token upper estimate,
+            # including output schema and a framing allowance. No cache discount.
+            input_maximum = len((request["system"] + request["user"] + _json(request["schema"])).encode("utf-8")) + 1024
+            reservation = estimate_cost(request["model"], input_tokens=input_maximum,
+                                        output_tokens=request["max_tokens"])
+            if reservation is None:
+                raise FixedCallBudgetExceeded("The API model has no local budget price")
+        key = f"{sha}:{attempt}"
+        with _locked(self.directory / "budget.lock"):
+            path = self.directory / "budget.json"
+            budget = _load(path)
+            summary = self._summary(budget)
+            if key in budget["entries"]:
+                raise FixedCallInterrupted("A saved reservation has no reconciled response; no duplicate call was submitted.")
+            limits = budget["limits"]
+            if (summary["calls"] + 1 > limits["max_calls"] or
+                    summary["charged_output_tokens"] + request["max_tokens"] > limits["max_output_tokens"] or
+                    summary["charged_api_usd"] + reservation > limits["max_api_usd"] + 1e-12):
+                raise FixedCallBudgetExceeded("The fixed workflow cannot reserve its next required read within the saved budget.")
+            budget["entries"][key] = {"request_sha256": sha, "attempt": attempt, "status": "started",
+                "model": request["model"], "transport": request["transport"],
+                "reserved_output_tokens": request["max_tokens"], "reserved_api_usd": reservation,
+                "usage": None, "api_usd": 0.0 if request["transport"] != "api" else None}
+            _atomic(path, budget)
+        return key
+
+    def _account(self, key, status, usage=None):
+        with _locked(self.directory / "budget.lock"):
+            path = self.directory / "budget.json"
+            budget = _load(path)
+            row = budget["entries"][key]
+            row.update(status=status, usage=normalize_usage(usage))
+            required = TOKEN_FIELDS[:4]
+            if row["transport"] == "api" and usage and all(usage.get(k) is not None for k in required):
+                row["api_usd"] = cost_of_usage(usage, fallback_model=row["model"])
+            _atomic(path, budget)
+
+    def _record(self, receipt, *, reused=False):
+        append_usage(receipt_id="fixed:" + receipt["request_sha256"] + ":" + str(receipt["attempt"]),
+            operation_id="fixed:" + receipt["request_sha256"], model=receipt["model"],
+            transport=receipt["transport"], usage=receipt.get("usage"),
+            status="completed" if receipt["status"] == "completed" else "error",
+            reused=reused, effort=receipt["effort"], stage=receipt["stage"])
+
+    def _provider_config(self, model, effort):
+        cfg = self.cfg.model_copy(deep=True)
+        cfg.api.model = model
+        cfg.api.provider = "anthropic" if model.startswith("claude-") else "openai"
+        cfg.api.claude_lane = "subagent"
+        cfg.api.effort = effort
+        # Every retry must have its own persisted reservation and receipt.
+        cfg.api.max_retries = 0
+        return cfg
+
+    @staticmethod
+    def _usage(result, transport_ledger):
+        if result.resource_usage:
+            return normalize_usage(result.resource_usage)
+        if transport_ledger.exists():
+            summary = summarize(transport_ledger)
+            return {key: None if summary["missing_fields"][key] else summary[key] for key in TOKEN_FIELDS}
+        # Legacy provider defaults cannot prove a measured zero.
+        counts = asdict(result.usage)
+        observed = {key: counts[key] for key in TOKEN_FIELDS if counts.get(key)}
+        return normalize_usage(observed)
+
+    def _transport_context(self, request, directory, attempt):
+        ledger = directory / "attempts" / str(attempt) / "transport-usage.jsonl"
+        context = {LEDGER_ENV: str(ledger), SOURCE_ENV: _hash(self.identity), CONFIG_ENV: _hash(request),
+                   GROUP_ENV: "fixed-transport", PARENT_ENV: None, MAX_CALLS_ENV: None,
+                   MAX_OUTPUT_ENV: None, RESERVATION_ENV: None}
+        return ledger, context
+
+    def _invoke(self, request, directory, attempt, provider=None):
+        from galley import codex_runner as codex
+        ledger, context = self._transport_context(request, directory, attempt)
+        with use_context(context):
+            if request["transport"] == "codex_subscription":
+                runner = self.codex_runner or codex.run_structured
+                work = directory / "reader"
+                work.mkdir(parents=True, exist_ok=True)
+                parsed = runner(request["system"] + "\n\n" + request["user"], request["schema"], work,
+                    request_id=_hash(request), model=request["model"], reasoning_effort=request["effort"], no_tools=True)
+                result = ProviderResult(parsed=parsed, usage=NormalizedUsage(billed=False), actual_model=request["model"])
+            else:
+                result = provider.complete_structured(**{key: request[key] for key in
+                    ("model", "system", "user", "schema", "schema_name", "max_tokens")})
+        if not isinstance(result, ProviderResult):
+            raise FixedCallError("Fixed-call provider returned no ProviderResult")
+        usage = self._usage(result, ledger)
+        normalized = asdict(result.usage)
+        for key in ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
+            if (usage or {}).get(key) is not None:
+                normalized[key] = usage[key]
+        normalized["billed"] = request["transport"] == "api"
+        return replace(result, usage=NormalizedUsage(**normalized), resource_usage=usage), usage
+
+    def _saved_codex(self, request, directory):
+        """Adopt a completed transport receipt locally, never submit to recover."""
+        from galley import codex_runner as codex
+        path = codex.request_directory(directory / "reader", _hash(request))
+        if not (path / "receipt.json").exists():
+            return None
+        receipt = _load(path / "receipt.json")
+        saved = _load(path / "request.json")
+        if (saved.get("request_id") != _hash(request) or saved.get("model") != request["model"] or
+                saved.get("prompt") != request["system"] + "\n\n" + request["user"] or
+                saved.get("schema") != request["schema"] or saved.get("no_tools") is not True):
+            raise FixedCallError("Subscription receipt does not match the fixed reader request")
+        if not codex._fixed_response_complete(receipt):
+            return None
+        if receipt.get("status") != "completed":
+            adopted = codex._adopt_completed_output(path, receipt, request["schema"])
+            if adopted is None:
+                return None
+        parsed = codex._cached_result(path, receipt, codex._hash(saved), request["schema"])
+        return ProviderResult(parsed=parsed, usage=NormalizedUsage(billed=False),
+            resource_usage=normalize_usage(receipt.get("usage")), actual_model=request["model"])
+
+    def _finish(self, request, directory, receipt, envelope):
+        if envelope.get("request_sha256") != receipt["request_sha256"] or envelope.get("attempt") != receipt["attempt"]:
+            raise FixedCallError("Saved response belongs to a different fixed request")
+        result = ProviderResult(**{**envelope["result"], "usage": NormalizedUsage(**envelope["result"]["usage"])})
+        usage = result.resource_usage
+        valid = result.stop_reason == "ok" and not result.error and isinstance(result.parsed, dict)
+        reason = result.stop_reason
+        if valid:
+            try:
+                _schema(result.parsed, request["schema"])
+            except FixedCallError:
+                valid, reason = False, "invalid_schema"
+        elif result.stop_reason == "ok":
+            reason = "invalid_output"
+        confirmed = (result.stop_reason in {"ok", "refusal", "max_tokens"} or
+                     bool(result.provider_response_id) or bool(usage and any(v is not None for v in usage.values())) or
+                     bool(re.match(r"^[45]\d\d:", result.error or "")))
+        status = "completed" if valid else "failed" if confirmed else "unknown"
+        receipt.update(status=status, response_sha256=_hash(envelope), usage=usage,
+                       failure_category=None if valid else reason,
+                       retryable=confirmed and reason not in {"refusal", "max_tokens"},
+                       actual_model=result.actual_model)
+        _atomic(directory / "receipt.json", receipt)
+        self._account(f"{receipt['request_sha256']}:{receipt['attempt']}", status, usage)
+        self._record(receipt)
+        return result if valid else None
+
+    def result(self, stage: str, *, model: str, system: str, user: str, schema: dict,
+               schema_name: str, max_tokens=8192, effort="low", transport=None) -> ProviderResult:
+        if not all(isinstance(value, str) and value.strip() for value in (stage, model, system, user, schema_name)):
+            raise ValueError("Fixed calls require nonempty stage, model, prompts and schema name")
+        if type(max_tokens) is not int or max_tokens < 1:
+            raise ValueError("max_tokens must be a positive integer")
+        if effort not in {"low", "medium", "high", "xhigh", "max"}:
+            raise FixedCallError("Unsupported fixed-call reasoning effort")
+        if not isinstance(schema, dict) or schema.get("type") != "object":
+            raise FixedCallError("Fixed calls require an object response schema")
+        _check_schema_definition(schema)
+        request = json.loads(_json({"protocol_version": PROTOCOL_VERSION, "identity": self.identity,
+            "stage": stage, "model": model, "system": system, "user": user, "schema": schema,
+            "schema_name": schema_name, "max_tokens": max_tokens, "effort": effort,
+            "transport": _transport(model, transport)}))
+        sha = _hash(request)
+        directory = self.directory / "calls" / sha
+        with _locked(directory / "request.lock"):
+            request_path, receipt_path = directory / "request.json", directory / "receipt.json"
+            if request_path.exists() and _hash(_load(request_path)) != sha:
+                raise FixedCallError("Saved fixed request has changed")
+            _atomic(request_path, request)
+            receipt = _load(receipt_path) if receipt_path.exists() else {
+                "request_sha256": sha, "stage": stage, "model": model, "effort": effort,
+                "transport": request["transport"], "status": "preflight", "attempt": 0,
+                "max_attempts": self.max_attempts}
+            if receipt.get("request_sha256") != sha:
+                raise FixedCallError("Saved fixed receipt has changed")
+            if (type(receipt.get("attempt")) is not int or receipt["attempt"] < 0 or
+                    type(receipt.get("max_attempts")) is not int or not 1 <= receipt["max_attempts"] <= 3 or
+                    receipt["attempt"] > receipt["max_attempts"]):
+                raise FixedCallError("Saved fixed-call retry allowance is malformed")
+            receipt["max_attempts"] = min(receipt["max_attempts"], self.max_attempts)
+            while True:
+                response_path = directory / "attempts" / str(receipt["attempt"]) / "response.json"
+                if receipt["status"] in {"started", "completed", "unknown"} and response_path.exists():
+                    envelope = _load(response_path)
+                    if receipt.get("response_sha256") and receipt["response_sha256"] != _hash(envelope):
+                        raise FixedCallError("Saved fixed response has changed")
+                    completed = receipt["status"] == "completed"
+                    if completed:
+                        if envelope.get("request_sha256") != sha or envelope.get("attempt") != receipt["attempt"]:
+                            raise FixedCallError("Saved fixed response belongs to another request")
+                        saved_result = envelope.get("result") or {}
+                        if saved_result.get("stop_reason") != "ok" or saved_result.get("error"):
+                            raise FixedCallError("Saved fixed response did not complete successfully")
+                        _schema(saved_result.get("parsed"), request["schema"])
+                        with _locked(self.directory / "budget.lock"):
+                            accounted = _load(self.directory / "budget.json")["entries"].get(f"{sha}:{receipt['attempt']}", {})
+                        if accounted.get("status") == "completed":
+                            if accounted.get("usage") != saved_result.get("resource_usage"):
+                                raise FixedCallError("Saved fixed response differs from its usage evidence")
+                            self._record(receipt, reused=True)
+                            return ProviderResult(**{**saved_result, "usage": NormalizedUsage(billed=False),
+                                                    "resource_usage": None})
+                    result = self._finish(request, directory, receipt, envelope)
+                    if result is not None:
+                        if completed:
+                            self._record(receipt, reused=True)
+                            return replace(result, usage=NormalizedUsage(billed=False), resource_usage=None)
+                        return result
+                if receipt["status"] in {"started", "unknown"} and request["transport"] == "codex_subscription":
+                    saved = self._saved_codex(request, directory)
+                    if saved is not None:
+                        envelope = {"request_sha256": sha, "attempt": receipt["attempt"], "result": asdict(saved)}
+                        _atomic(response_path, envelope)
+                        result = self._finish(request, directory, receipt, envelope)
+                        if result is not None:
+                            return result
+                if receipt["status"] in {"started", "unknown", "completed"}:
+                    raise FixedCallInterrupted(f"{stage}: prior submission has no safely reusable response; reconcile its receipt before retrying.")
+                if receipt["status"] == "failed" and (not receipt.get("retryable") or receipt["attempt"] >= receipt["max_attempts"]):
+                    raise FixedCallError(f"{stage}: required read failed ({receipt.get('failure_category')}); saved retry allowance is unavailable or exhausted.")
+                attempt = receipt["attempt"] + 1
+                provider = None
+                if request["transport"] != "codex_subscription":
+                    _, context = self._transport_context(request, directory, attempt)
+                    try:
+                        with use_context(context):
+                            provider = self.provider_factory(self._provider_config(model, effort), model=model)
+                    except Exception as exc:
+                        receipt.update(status="preflight_failed", failure_category=type(exc).__name__)
+                        _atomic(receipt_path, receipt)
+                        pause = _queue_pause(exc)
+                        if pause is not None:
+                            raise pause
+                        raise FixedCallError(f"{stage}: provider is unavailable before submission; no API fallback was submitted.") from exc
+                try:
+                    self._reserve(request, sha, attempt)
+                except FixedCallError:
+                    if not receipt_path.exists():
+                        _atomic(receipt_path, receipt)
+                    raise
+                receipt.update(status="started", attempt=attempt)
+                _atomic(receipt_path, receipt)
+                if self.progress:
+                    self.progress(f"{stage}: reading with {model}")
+                try:
+                    result, usage = self._invoke(request, directory, attempt, provider)
+                except BaseException as exc:
+                    # Without a terminal result, a timeout/network/process error
+                    # cannot prove that generation did not already consume work.
+                    receipt.update(status="unknown", failure_category=type(exc).__name__)
+                    transport_ledger, _ = self._transport_context(request, directory, attempt)
+                    usage = self._usage(ProviderResult(), transport_ledger)
+                    if request["transport"] == "codex_subscription":
+                        from galley import codex_runner as codex
+                        transport_receipt = codex.request_directory(directory / "reader", sha) / "receipt.json"
+                        if transport_receipt.exists():
+                            transport_state = _load(transport_receipt)
+                            usage = normalize_usage(transport_state.get("usage"))
+                            if (transport_state.get("submitted") is False or
+                                    transport_state.get("status") == "operational_failure" and
+                                    transport_state.get("process_exited") is True):
+                                receipt.update(status="failed", retryable=bool(
+                                    transport_state.get("submitted") is False or codex._retry_allowed(transport_state)),
+                                    failure_category=transport_state.get("failure_category", type(exc).__name__))
+                            if transport_state.get("submitted") is False:
+                                usage = {key: 0 for key in TOKEN_FIELDS}
+                    receipt["usage"] = usage
+                    pause = _queue_pause(exc, receipt.get("failure_category"))
+                    if pause is not None:
+                        receipt.update(status="failed", retryable=True,
+                            failure_category="subscription_limit" if type(pause).__name__ == "UsageLimitError" else "authentication")
+                    _atomic(receipt_path, receipt)
+                    self._account(f"{sha}:{attempt}", receipt["status"], usage)
+                    self._record(receipt)
+                    if not isinstance(exc, Exception):
+                        raise
+                    if pause is not None:
+                        raise pause
+                    if receipt["status"] == "failed":
+                        continue
+                    raise FixedCallInterrupted(f"{stage}: submission did not return a terminal response; no automatic retry or API fallback was submitted.") from exc
+                envelope = {"request_sha256": sha, "attempt": attempt, "result": asdict(result)}
+                response_path = directory / "attempts" / str(attempt) / "response.json"
+                _atomic(response_path, envelope)
+                completed = self._finish(request, directory, receipt, envelope)
+                if completed is not None:
+                    return completed
+
+    def ask(self, stage: str, **kwargs) -> dict:
+        return self.result(stage, **kwargs).parsed
+
+    def provider(self, stage: str, cfg: Config | None = None):
+        calls = self
+        config = (cfg or self.cfg).model_copy(deep=True)
+
+        class FixedProvider:
+            name = "anthropic" if config.api.model.startswith("claude-") else "openai"
+
+            def complete_structured(self, **kwargs):
+                return calls.result(stage, effort=config.api.effort or "low", **kwargs)
+
+            def submit_batch(self, **kwargs):
+                raise FixedCallError("The fixed recipe requires individually receipted reads; batch mode is disabled")
+
+        return FixedProvider()
+
+
+def validate_fixed_call_evidence(directory: Path, *, identity: dict | None = None) -> list[dict[str, str]]:
+    """Read-only delivery gate and immutable certificate inputs; never calls a model.
+
+    The persisted budget is the call inventory, so deleting a receipt directory
+    cannot make unread work disappear from this check. The certificate freezes
+    every JSON evidence file, including failed attempts and transport receipts.
+    """
+    directory = Path(directory).resolve()
+    budget_path = directory / "budget.json"
+    budget = _load(budget_path)
+    FixedCalls._check_budget(budget)
+    entries = budget["entries"]
+    by_request: dict[str, dict[int, dict]] = {}
+    for key, entry in entries.items():
+        sha, _, attempt_text = key.rpartition(":")
+        if (not re.fullmatch(r"[0-9a-f]{64}", sha) or not attempt_text.isdecimal() or
+                not isinstance(entry, dict) or entry.get("request_sha256") != sha or
+                entry.get("attempt") != int(attempt_text) or not 1 <= int(attempt_text) <= 3):
+            raise FixedCallError("Fixed-call budget inventory is malformed")
+        if entry.get("status") in {"started", "unknown"}:
+            raise FixedCallInterrupted("A fixed-call submission is unresolved; reconcile it before delivery.")
+        if entry.get("status") not in {"completed", "failed"}:
+            raise FixedCallError("Fixed-call budget contains a nonterminal attempt")
+        by_request.setdefault(sha, {})[int(attempt_text)] = entry
+    folders = {path.name: path for path in (directory / "calls").iterdir() if path.is_dir()} if (directory / "calls").exists() else {}
+    # Check preflight failures explicitly before comparing the charged inventory.
+    for sha, folder in folders.items():
+        receipt = _load(folder / "receipt.json")
+        if receipt.get("status") != "completed":
+            raise FixedCallError(f"Required fixed read {receipt.get('stage', sha)} is {receipt.get('status', 'incomplete')}; delivery is blocked.")
+    if set(folders) != set(by_request):
+        raise FixedCallError("Fixed-call receipt inventory differs from its saved budget; delivery is blocked.")
+    evidence = [budget_path]
+    for sha, folder in sorted(folders.items()):
+        request, receipt = _load(folder / "request.json"), _load(folder / "receipt.json")
+        if _hash(request) != sha or receipt.get("request_sha256") != sha:
+            raise FixedCallError("Fixed-call request identity or receipt has changed")
+        if identity is not None and request.get("identity") != identity:
+            raise FixedCallError("Fixed-call evidence belongs to a different source or recipe")
+        attempt = receipt.get("attempt")
+        if type(attempt) is not int or not 1 <= attempt <= 3 or set(by_request[sha]) != set(range(1, attempt + 1)):
+            raise FixedCallError("Fixed-call attempt history is incomplete")
+        final = by_request[sha][attempt]
+        if final["status"] != "completed" or any(row["status"] != "failed" for n, row in by_request[sha].items() if n < attempt):
+            raise FixedCallError("Fixed-call attempt history does not end in exactly one completed response")
+        envelope = _load(folder / "attempts" / str(attempt) / "response.json")
+        if (receipt.get("response_sha256") != _hash(envelope) or envelope.get("request_sha256") != sha or
+                envelope.get("attempt") != attempt):
+            raise FixedCallError("Saved fixed response has changed or is incomplete")
+        result = envelope.get("result") or {}
+        if result.get("stop_reason") != "ok" or result.get("error") or not isinstance(result.get("parsed"), dict):
+            raise FixedCallError("Saved fixed response is not a complete successful read")
+        _check_schema_definition(request["schema"])
+        _schema(result["parsed"], request["schema"])
+        if normalize_usage(result.get("resource_usage")) != final.get("usage") or final.get("usage") != receipt.get("usage"):
+            raise FixedCallError("Fixed-call usage evidence does not match its completed response")
+        for entry in by_request[sha].values():
+            if entry.get("model") != request.get("model") or entry.get("transport") != request.get("transport"):
+                raise FixedCallError("Fixed-call resource inventory has changed model or transport")
+        evidence.extend(sorted(path for path in folder.rglob("*") if path.suffix in {".json", ".jsonl"}))
+    return [{"path": str(path.resolve()), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for path in evidence]
+
+
+def fixed_usage_summary(directory: Path) -> dict:
+    """Read persisted consumption after a pause/failure without creating calls."""
+    return FixedCalls._summary(_load(Path(directory).resolve() / "budget.json"))

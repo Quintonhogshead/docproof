@@ -48,9 +48,9 @@ desktop = [
     "pywebview>=5.0",
 ]
 languagetool = [
-    # Requires Java and downloads a cached jar on first use. The 3.x line uses
-    # LTP_PATH for its cache (see fly.toml).
-    "language_tool_python>=3.4,<4",
+    # Fixed Galley verifies the separately installed LanguageTool 6.8 build.
+    # Pin the wrapper too; runtime never downloads a checker (see Dockerfile).
+    "language_tool_python==3.4.0",
 ]
 canvas = [
     # Canvas chat and cover generation use the local Claude Code login.
@@ -106,6 +106,7 @@ app = ["static/*", "static/art/*", "static/canvas/*", "static/canvas/vendor/*"]
 # workspace from them, and the Fly agent runs off the installed wheel.
 "galley.practitioner" = ["*.md", "*.sh", "skills/*/*", "galley-bin/*", "fly/*", "references/*.md", "references/history/*.md"]
 config = ["*.yaml"]
+"config.galley" = ["*.json"]
 # Stage and genre presets: `galley routes`/`--stage`/`--genre` resolve these
 # under resource_root(), so a wheel without them fails the plan gate on Fly
 # with "Unknown stage preset 'mechanical-wave'" and no book can run.

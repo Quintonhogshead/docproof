@@ -4,13 +4,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# The optional LanguageTool mechanical-floor pass runs as a local Java server, so
-# the image carries a headless JRE and installs the [languagetool] extra. This
-# only makes the image CAPABLE of running the pass — it stays off by default
-# (languagetool.enabled: false). The ~260 MB LanguageTool jar is NOT baked in; it
-# downloads on first use to LTP_PATH, which fly.toml points at the mounted
-# /data volume so it downloads once and survives redeploys. Before enabling the
-# pass, bump the machine memory (see fly.toml) — the JVM needs its own heap.
+# Fixed Galley's compulsory local grammar check needs Java 17 or newer. The
+# pinned LanguageTool distribution is installed and tested below at image build
+# time, so processing a manuscript never downloads executable checker code.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends default-jre-headless \
        ca-certificates curl git \
@@ -45,6 +41,20 @@ COPY . .
 # The dependency warm-up can leave generated modules in build/lib. Rebuild
 # them from this source snapshot rather than reusing timestamp-based output.
 RUN rm -rf build && pip install --no-cache-dir ".[app,languagetool,galley]"
+
+# Fixed Galley validates every distribution file against the pinned archive's
+# inventory. The legacy wrapper uses the same installed build; its download
+# suppression variable and search path must both be set (see fly.toml).
+ENV GALLEY_LANGUAGETOOL_HOME=/opt/languagetool/LanguageTool-6.8
+ENV LTP_PATH=/opt/languagetool
+ENV LTP_JAR_DIR_PATH=/opt/languagetool/LanguageTool-6.8
+RUN curl -fL --retry 3 --connect-timeout 20 --max-time 300 \
+      https://github.com/jxmorris12/language_tool_python/releases/download/LanguageTool-6.8/LanguageTool-6.8.zip \
+      -o /tmp/LanguageTool-6.8.zip \
+    && python -m galley.local_runtime install --archive /tmp/LanguageTool-6.8.zip \
+    && rm /tmp/LanguageTool-6.8.zip \
+    && python -m galley.local_runtime smoke \
+    && chmod -R a-w /opt/languagetool
 
 # The Galley agent's entrypoint and the brain's sifter wrapper (first on the
 # brain's PATH; re-injects the keys the driver strips from the brain's env).

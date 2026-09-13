@@ -1035,11 +1035,9 @@ def _galley_parser(sub) -> None:
 
     gdr = gsub.add_parser(
         "drive",
-        help="the UNATTENDED driver: seed the per-book workspace and run the "
-             "practitioner phases in order, each as its own headless session, "
-             "decide the plan gate under --approve, recover within the phase "
-             "limits without waiting for human replies, and hand the deliverable "
-             "off to DocWatch. Mechanical proofreading only by default.")
+        help="the UNATTENDED driver: run the fixed proofreading recipe, "
+             "resume completed work from checkpoints, and hand the deliverable "
+             "off to DocWatch. Existing jobs retain their saved workflow.")
     gdr.add_argument("--book", required=True,
                      help="the manuscript to proofread (.docx)")
     gdr.add_argument("--slug", required=True,
@@ -1047,14 +1045,15 @@ def _galley_parser(sub) -> None:
     gdr.add_argument("--workspace-root", default=None,
                      help="where per-book workspaces live "
                           "(default: ~/galley-workspaces)")
-    gdr.add_argument("--execution-mode", choices=["code", "session"], default=None,
-                     help="code-owned mechanical orchestration (default); session preserves the legacy driver")
+    gdr.add_argument("--execution-mode", choices=["fixed", "code", "session"], default=None,
+                     help="fixed recipe without a supervising Brain (default for new mechanical jobs); "
+                          "code/session retain the earlier workflows; resumes preserve the saved mode")
     gdr.add_argument("--review-rounds", type=int, default=2,
-                     help="bounded repair cycles before final Astra judgment: 1 or 2 (default 2)")
+                     help="legacy modes only: bounded repair cycles before final Astra judgment: 1 or 2 (default 2)")
     gdr.add_argument("--review-calls", type=int, default=400,
-                     help="shared verify/settle model-call ceiling, preserved on restart")
+                     help="legacy modes only: shared verify/settle model-call ceiling, preserved on restart")
     gdr.add_argument("--review-output-tokens", type=int, default=2_000_000,
-                     help="shared review output-token engineering ceiling; not a subscription allowance")
+                     help="legacy modes only: shared review output-token engineering ceiling; not a subscription allowance")
     gdr.add_argument("--budget", type=float, default=None, metavar="USD",
                      help="the API ceiling in USD for the whole book "
                           "(default: $10). Frozen into approval.json as "
@@ -1077,10 +1076,10 @@ def _galley_parser(sub) -> None:
                           "it through `galley ask` and polls QUESTIONS.md for "
                           "a reply; `manual` stops at the gate as today")
     gdr.add_argument("--from", dest="from_phase", metavar="PHASE",
-                     help="restart the sequence at this phase (the workspace's "
-                          "state.json is the ledger)")
+                     help="restart a legacy workflow at this phase; fixed jobs "
+                          "resume the whole recipe using saved checkpoints")
     gdr.add_argument("--phases", nargs="+", metavar="PHASE",
-                     help="run only these phases, in order")
+                     help="run only these legacy phases, in order; unavailable in fixed mode")
     gdr.add_argument("--handoff", metavar="DIR",
                      help="where the DocWatch hand-off files are written "
                           "(default: <workspace>/handoff/)")
@@ -1093,23 +1092,23 @@ def _galley_parser(sub) -> None:
                           "by default: go-live Galley is mechanical "
                           "proofreading only (owner, 2026-09-03)")
     gdr.add_argument("--model", default=None,
-                     help="the brain model for EVERY phase session, overriding "
+                     help="legacy modes only: the brain model for EVERY phase session, overriding "
                           "the per-phase table (default: Fable 5.1 for the "
                           "judgment phases — approve, ladder, audit, settle — "
                           "and Opus 5 for profile, sweeps, verify, certify, "
                           "deliver)")
     gdr.add_argument("--phase-model", action="append", default=[],
                      metavar="PHASE=MODEL",
-                     help="the brain model for ONE phase (repeatable); wins "
+                     help="legacy modes only: the brain model for ONE phase (repeatable); wins "
                           "over --model")
     gdr.add_argument("--effort", default=None,
                      choices=["low", "medium", "high", "xhigh", "max"],
-                     help="the session effort for EVERY phase (default: high "
+                     help="legacy modes only: the session effort for EVERY phase (default: high "
                           "on the Fable phases, Claude Code's own default on "
                           "the Opus phases)")
     gdr.add_argument("--phase-effort", action="append", default=[],
                      metavar="PHASE=LEVEL",
-                     help="the session effort for ONE phase (repeatable); wins "
+                     help="legacy modes only: the session effort for ONE phase (repeatable); wins "
                           "over --effort")
     gdr.add_argument("--permission-mode", default=None,
                      help="the headless session's permission mode "
@@ -1163,8 +1162,8 @@ def _galley_parser(sub) -> None:
                      help="print that phase's prompt and exit — what the thin "
                           "shell wrapper uses; nothing is spawned")
     gdr.add_argument("--dry-run", action="store_true",
-                     help="seed the workspace and print the phase sequence; "
-                          "spawn no session")
+                     help="seed the workspace and print the actual stages and models; "
+                          "make no model calls")
     gdr.add_argument("--json", action="store_true",
                      help="print the driver's result envelope to stdout")
 
