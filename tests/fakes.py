@@ -362,17 +362,23 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
             return Response(content.get(path.rsplit("/", 1)[-1], docx))
 
         # `files.get` — one file's details by id, no media.
+        # `parents` rides along only when the caller's `fields` asks for it,
+        # as the real API does — a scoped listing never sees it.
+        want_parents = "parents" in query.get("fields", [""])[0]
+
+        def _view(entry: dict) -> dict:
+            return {k: v for k, v in entry.items()
+                    if k != "parents" or want_parents}
+
         file_id = path.rsplit("/", 1)[-1]
         if request.get_method() == "GET" and file_id in store:
             _maybe_fail("get")
-            entry = {k: v for k, v in store[file_id].items() if k != "parents"}
-            return Response(json.dumps(entry).encode())
+            return Response(json.dumps(_view(store[file_id])).encode())
 
         _maybe_fail("list")
         kept = [e for e in store.values()
                 if _matches_q(e, query.get("q", [""])[0])]
-        items = [{k: v for k, v in entry.items() if k != "parents"}
-                 for entry in kept]
+        items = [_view(entry) for entry in kept]
         start = int(query.get("pageToken", ["0"])[0])
         size = page_size or max(len(items), 1)
         answer: dict = {"files": items[start:start + size]}

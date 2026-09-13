@@ -52,6 +52,7 @@ def test_completion_for_job_speaks_each_pipeline():
     _, prep, _ = notify.completion_for_job(
         _job(kind="prep", tagged=1200, flags=3, verified=True))
     assert "Format" in prep and "Paragraphs styled: 1,200" in prep
+    assert "Formatting:" in prep
 
     _, review, _ = notify.completion_for_job(_job(kind="review", applied=42))
     assert "Proofread" in review and "Changes applied: 42" in review
@@ -63,6 +64,21 @@ def test_completion_for_job_speaks_each_pipeline():
     assert "Refused for a human: 7" in corr and "Clean: yes" in corr
     # No model dials — the engine is deterministic — so the settings group says so.
     assert "deterministic — no model, no cost" in corr
+
+
+def test_a_format_job_reads_its_prep_json_for_what_it_accepted(tmp_path):
+    """An app-dropped format has no Drive routing, but it has the same prep.json
+    — so the email says what a watched one says: revisions accepted before
+    formatting, and the tables and images left in place."""
+    import json
+    (tmp_path / "prep.json").write_text(json.dumps(
+        {"counts": {"accepted_revisions": 5, "table_paragraphs": 3}}),
+        encoding="utf-8")
+    _, prep, _ = notify.completion_for_job(
+        _job(kind="prep", tagged=1200, flags=0, verified=True,
+             results_dir=str(tmp_path)))
+    assert "Tracked changes accepted first: 5" in prep
+    assert "Left in place: 3 table paragraphs" in prep
 
 
 def test_a_corrections_email_from_a_proof_reconciles_in_comments():

@@ -119,6 +119,8 @@ def test_the_summary_names_the_needs_human_and_the_failed():
     assert "2" in subject
     assert "Smith.docx" in body and "two Projects are ready" in body
     assert "Jones.docx" in body and "gave up after 3 tries" in body
+    # a manuscript that could not be formatted says how to try it again
+    assert "could not format" in body and "docproof-watch clear" in body
 
 
 def test_the_summary_names_a_ready_author_missing_its_book_original():
@@ -312,6 +314,68 @@ def test_completion_renders_every_group(tmp_path):
     # the HTML mirror carries a table and a live link
     assert "<table" in html
     assert 'href="https://drive.google.com/file/d/up-1/view"' in html
+
+
+def test_completion_says_what_formatting_did_to_the_file(tmp_path):
+    """Formatting now accepts a manuscript's tracked changes before styling it,
+    leaves tables and images where they were, and hands back a plain Times New
+    Roman reading copy as `<surname> - book 0.docx`. The log says all three, and
+    names each output by what it is — so nobody goes looking for revisions the
+    deliverable no longer shows, or wonders whether a table was seen."""
+    prep = dict(PREP, counts=dict(PREP["counts"], accepted_revisions=37,
+                                  table_paragraphs=12, image_lines=1,
+                                  equation_paragraphs=0))
+    (tmp_path / "prep.json").write_text(_json.dumps(prep), encoding="utf-8")
+    rec = _rec(uploaded={"Johnson - book 0.docx": "up-1",
+                         "Johnson - book 0 - indesign.idml": "up-2",
+                         "Johnson - book 0 - tracked changes.docx": "up-3"})
+    _, text, _ = notify.completion(_ws(), _job(tmp_path), _file(), rec,
+                                   ["Johnson - book 0.docx"], "sf-1")
+
+    assert "DocProof formatted Quinton Johnson" in text
+    assert "Formatting:" in text and "Manuscript:" not in text
+    assert "Tracked changes accepted first: 37" in text
+    assert "formatted from the accepted view" in text
+    assert "Left in place: 12 table paragraphs, 1 image line" in text
+    assert "0 equation" not in text                # a zero is left off the row
+    assert ("Formatted manuscript (plain Times New Roman 12): "
+            "Johnson - book 0.docx") in text
+    assert "InDesign-ready IDML: Johnson - book 0 - indesign.idml" in text
+    assert ("Same decisions as tracked changes: "
+            "Johnson - book 0 - tracked changes.docx") in text
+    assert "accepted revisions: 37" in text        # and in the raw detail
+
+
+def test_completion_says_how_the_book_was_found(tmp_path):
+    """By-name intake: the book was formatted because of its name, and the
+    CRM may not have been moved. Both are said outright — a dash where the
+    record should be reads as a failed write-back, which this is not."""
+    job = _job(_with_prep(tmp_path))
+    ws = _ws(format_intake="folder", hubspot_enabled=True,
+             hubspot_format_ready_value="Ready for Formatting")
+    _, text, _ = notify.completion(ws, job, _file(), _rec(hubspot_id=""),
+                                   [], "sf-1")
+    assert "Found by: its name in the author folder" in text
+    assert ("HubSpot record: none at 'Ready for Formatting' for this surname "
+            "— no status was moved") in text
+
+    _, text, _ = notify.completion(ws, job, _file(), _rec(), [], "sf-1")
+    assert "HubSpot record: 0-970 / hs-Johnson" in text
+
+    _, text, _ = notify.completion(
+        _ws(hubspot_format_ready_value="Ready for Formatting"), job, _file(),
+        _rec(), [], "sf-1")
+    assert "Found by: HubSpot 'Ready for Formatting' flag" in text
+
+
+def test_a_plain_manuscript_reads_as_one(tmp_path):
+    """No revisions, nothing preserved: neither row appears, rather than a row
+    of noughts."""
+    _, text, _ = notify.completion(_ws(), _job(_with_prep(tmp_path)), _file(),
+                                   _rec(), [], "sf-1")
+    assert "Tracked changes accepted" not in text
+    assert "Left in place" not in text
+    assert "Paragraphs styled: 1,200" in text
 
 
 def test_a_missing_prep_json_still_makes_an_email(tmp_path):

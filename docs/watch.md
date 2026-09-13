@@ -496,6 +496,37 @@ with how many books are ready, not with how many authors exist.
 Turn it back off with `docproof-watch init --disable-subfolders`; the folder is
 read flat again.
 
+### Formatting without the HubSpot flag (optional)
+
+By default a book is formatted only after an editor flips its record to "Ready
+for Formatting". If the press would rather formatting simply happened — a
+`<surname> - Book Original` lands in the author's folder and the next pass does
+it — switch the intake to **folder**:
+
+```bash
+docproof-watch init --format-intake folder
+```
+
+Now each pass runs one Drive search for every `- Book Original` that carries no
+DocProof marker, checks that each one sits in a folder directly under the Author
+Folder (or one level down, for a multi-book author), and formats it in place.
+The Author Folder itself is still never listed, so the work scales with
+unformatted books, not with authors. HubSpot is not asked first — but it is
+still moved on afterwards: if exactly one record for that surname sits at
+"Ready for Formatting", it is set to "Formatting Complete" as before; with none
+or several, the CRM is left alone and the completion email says so. Proofing,
+promo, the plan and corrections keep their own HubSpot gates.
+
+Two refusals carry over from the flagged path, for the same reasons: a folder
+holding two new labelled manuscripts is reported for a person rather than
+guessed, and a folder that already holds a later stage of the series — a
+`book 0` somebody made by hand, a `Book 1`, a `Book 2` — is passed over,
+because that book was formatted before DocProof looked and doing it again would
+only put a second `book 0` beside the first. The first pass after switching
+looks at every unformatted Book Original in the press's history, so
+`max_files_per_tick` (5 by default) paces it. Switch back with
+`--format-intake hubspot`.
+
 ## Prepare only the "Book Original" (optional)
 
 By default a pass prepares any new manuscript it is cleared to touch, whatever
@@ -577,10 +608,21 @@ docproof-watch init --notify-email you@example.com --notify-on-complete
 
 Besides being a receipt, it is a drift tripwire: in subfolder mode the routing
 block shows exactly where the outputs landed, so a book put in the wrong author's
-folder is obvious the same morning rather than found weeks later.
+folder is obvious the same morning rather than found weeks later. The routing
+block also says how the pass came to the book — an editor's flag, or its name in
+the folder — and, for by-name intake, whether a HubSpot record was moved on or
+none matched.
 
 Every finished job gets the same log, whichever pipeline ran it, with one group
-that differs by what the job produced. For a **proofread** that group reports
+that differs by what the job produced. For a **format** that group says what
+was done to the manuscript: the words and paragraphs styled, how many tracked
+changes were accepted before formatting (a file that arrives with revisions
+showing is formatted from its accepted view, so the deliverable no longer shows
+them), what was left in place untouched (tables, images on their own line,
+equations), the flags raised for a person, and whether the author's words were
+verified intact. Each output is named by what it is — the plain Times New Roman
+reading copy (`<surname> - book 0.docx`), the InDesign-ready IDML, the same
+decisions as tracked changes — with a Drive link. For a **proofread** that group reports
 both halves of the deliverable: the corrections made as tracked changes, the
 queries left for the author as margin comments, and — as a share of those
 queries, not a number to add to them — how many are corrections a judge gate

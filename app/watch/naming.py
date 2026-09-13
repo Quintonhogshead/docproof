@@ -283,6 +283,16 @@ def has_source_label(name: str) -> bool:
     return _stage_surname(name, SOURCE_STAGE) is not None
 
 
+def source_surname(name: str) -> str:
+    """The author part of a "<surname> - Book Original" filename as it was
+    typed — "Johnson", or "Lichtenstein (and Dolores DelBello)" — or "" when
+    the name is not an intake file at all. For the by-name intake, where the
+    surname comes from the file rather than from a HubSpot record."""
+    if not has_source_label(name):
+        return ""
+    return _split_stage(Path(name).stem)[0].strip()
+
+
 def has_proof_source_label(name: str) -> bool:
     """The proofing twin: whether a filename carries the "- Book 1" token — the
     developmental-edited manuscript, which is what a proofread reads.
@@ -447,5 +457,6 @@ __all__ = ["CHECKS_SUFFIX", "CLEAN_SUFFIX", "CORRECTIONS_SHEET_SUFFIX",
            "VERIFICATION_SUFFIX",
            "spellings_of",
            "format_base", "has_proof_source_label", "has_source_label",
+           "source_surname",
            "is_output_name", "is_proof_outcome_name", "is_proof_source_name",
            "is_source_name", "proof_base", "proof_outcome_name", "stage_base"]
