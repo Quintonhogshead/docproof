@@ -94,6 +94,10 @@ def _request(prepared, texts, identity, cfg, poetry_ids, stage, **extra):
 
 
 def _packet(directory, request, build):
+    # Prepared Finding dataclasses add tuples after _request's initial JSON
+    # normalization. Compare and persist the same JSON representation on both
+    # the first scan and resume, including provenance and anchor metadata.
+    request = json.loads(_json(request))
     directory = Path(directory).resolve()
     directory.mkdir(parents=True, exist_ok=True)
     sha = _hash(request)

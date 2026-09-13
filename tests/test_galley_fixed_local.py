@@ -110,6 +110,19 @@ def test_cache_reuse_skips_every_local_generator_and_java_start(tmp_path, monkey
     assert local.validate_local_evidence(evidence, tmp_path / "local", IDENTITY)["status"] == "completed"
 
 
+def test_prepared_finding_tuples_roundtrip_without_repeating_local_scan(tmp_path, monkeypatch):
+    p = para("p1", "The room was quiet.")
+    source = prepared(p)
+    source.sweep_findings = [Finding("prepared-1", "sweep", p.para_id, "punctuation",
+        p.text, 1, p.text, "Review this site.", "high", provenance=(1, 2), force_query=True)]
+    first, evidence = collect(tmp_path, source)
+    saved = packet(evidence)
+    assert saved["request"]["prepared_findings"]["sweep_findings"][0]["provenance"] == [1, 2]
+    monkeypatch.setattr(local, "_language_tool", lambda *a, **k: pytest.fail("Java restarted"))
+    assert collect(tmp_path, source) == (first, evidence)
+    local.validate_local_evidence(evidence, tmp_path / "local", IDENTITY)
+
+
 @pytest.mark.parametrize("change", ["source", "config", "version"])
 def test_changed_input_or_config_or_version_requires_new_run(tmp_path, monkeypatch, change):
     source = prepared(para("p1", "The room was quiet."))
