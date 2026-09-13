@@ -38,6 +38,10 @@ class FixedCallError(RuntimeError):
     """A required read has no validated, complete answer."""
 
 
+class FixedReadUnavailable(FixedCallError):
+    """A model could not supply a usable answer within its bounded allowance."""
+
+
 class FixedCallCoverageError(FixedCallError):
     """A terminal model answer did not cover its complete assigned inventory."""
 
@@ -371,7 +375,7 @@ class FixedCalls:
     def __init__(self, directory: Path, identity: dict, cfg: Config, *,
                  provider_factory=None, codex_runner=None, max_calls=10_000,
                  max_output_tokens=20_000_000, max_api_usd=10.0, max_attempts=3,
-                 progress=None):
+                 progress=None, continue_on_model_failure=False):
         for name, value in (("max_calls", max_calls), ("max_output_tokens", max_output_tokens),
                             ("max_attempts", max_attempts)):
             if type(value) is not int or value < 1:
@@ -386,6 +390,7 @@ class FixedCalls:
         self.provider_factory = provider_factory or _default_provider
         self.codex_runner = codex_runner
         self.progress = progress
+        self.continue_on_model_failure = continue_on_model_failure
         self.max_attempts = max_attempts
         self.directory.mkdir(parents=True, exist_ok=True)
         platform_io.private_path(self.directory, 0o700)
@@ -607,12 +612,33 @@ class FixedCalls:
             "stage": stage, "model": model, "system": system, "user": user, "schema": schema,
             "schema_name": schema_name, "max_tokens": max_tokens, "effort": effort,
             "transport": _transport(model, transport)}))
+        try:
+            return self._request_result(request, coverage)
+        except Exception as exc:
+            if (not self.continue_on_model_failure or
+                    not (isinstance(exc, (FixedReadUnavailable, FixedCallBudgetExceeded, FixedCallInterrupted))
+                         or _queue_pause(exc) is not None)):
+                raise
+            from galley.fixed_skips import freeze_skip, skipped_result
+            freeze_skip(self, request, str(exc))
+            return skipped_result(self.directory / "calls" / _hash(request), request)
+
+    def _request_result(self, request, coverage):
+        stage, model, effort = (request[k] for k in ("stage", "model", "effort"))
         sha = _hash(request)
         directory = self.directory / "calls" / sha
         with _locked(directory / "request.lock"):
             request_path, receipt_path = directory / "request.json", directory / "receipt.json"
             if request_path.exists() and _hash(_load(request_path)) != sha:
                 raise FixedCallError("Saved fixed request has changed")
+            if (directory / "skipped.json").exists():
+                from galley.fixed_skips import skipped_result
+                if coverage is not None:
+                    supplied = {"version": 1, "request_sha256": sha, "coverage":
+                        json.loads(_json(_coverage_contract(coverage, request["schema"])))}
+                    if not (directory / "coverage.json").exists() or _load(directory / "coverage.json") != supplied:
+                        raise FixedCallContractError("Coverage inventory changed for a skipped request")
+                return skipped_result(directory, request)
             _atomic(request_path, request)
             receipt = _load(receipt_path) if receipt_path.exists() else {
                 "request_sha256": sha, "stage": stage, "model": model, "effort": effort,
@@ -673,7 +699,7 @@ class FixedCalls:
                 if receipt["status"] in {"started", "unknown", "completed"}:
                     raise FixedCallInterrupted(f"{stage}: prior submission has no safely reusable response; reconcile its receipt before retrying.")
                 if receipt["status"] == "failed" and (not receipt.get("retryable") or receipt["attempt"] >= receipt["max_attempts"]):
-                    raise FixedCallError(f"{stage}: required read failed ({receipt.get('failure_category')}); saved retry allowance is unavailable or exhausted.")
+                    raise FixedReadUnavailable(f"{stage}: required read failed ({receipt.get('failure_category')}); saved retry allowance is unavailable or exhausted.")
                 attempt = receipt["attempt"] + 1
                 provider = None
                 if request["transport"] != "codex_subscription":
@@ -687,7 +713,7 @@ class FixedCalls:
                         pause = _queue_pause(exc)
                         if pause is not None:
                             raise pause
-                        raise FixedCallError(f"{stage}: provider is unavailable before submission; no API fallback was submitted.") from exc
+                        raise FixedReadUnavailable(f"{stage}: provider is unavailable before submission; no API fallback was submitted.") from exc
                 try:
                     self._reserve(request, sha, attempt)
                 except FixedCallError:
@@ -790,18 +816,21 @@ def validate_fixed_call_evidence(directory: Path, *, identity: dict | None = Non
                 not isinstance(entry, dict) or entry.get("request_sha256") != sha or
                 entry.get("attempt") != int(attempt_text) or not 1 <= int(attempt_text) <= 3):
             raise FixedCallError("Fixed-call budget inventory is malformed")
-        if entry.get("status") in {"started", "unknown"}:
+        skipped = (directory / "calls" / sha / "skipped.json").exists()
+        if entry.get("status") in {"started", "unknown"} and not skipped:
             raise FixedCallInterrupted("A fixed-call submission is unresolved; reconcile it before delivery.")
-        if entry.get("status") not in {"completed", "failed"}:
+        if entry.get("status") not in ({"completed", "failed", "started", "unknown"} if skipped else {"completed", "failed"}):
             raise FixedCallError("Fixed-call budget contains a nonterminal attempt")
         by_request.setdefault(sha, {})[int(attempt_text)] = entry
     folders = {path.name: path for path in (directory / "calls").iterdir() if path.is_dir()} if (directory / "calls").exists() else {}
     # Check preflight failures explicitly before comparing the charged inventory.
     for sha, folder in folders.items():
         receipt = _load(folder / "receipt.json")
-        if receipt.get("status") != "completed":
+        if receipt.get("status") != "completed" and not (folder / "skipped.json").exists():
             raise FixedCallError(f"Required fixed read {receipt.get('stage', sha)} is {receipt.get('status', 'incomplete')}; delivery is blocked.")
-    if set(folders) != set(by_request):
+    zero_attempt_skips = {sha for sha, folder in folders.items() if (folder / "skipped.json").exists()
+                          and _load(folder / "receipt.json").get("attempt") == 0}
+    if set(folders) != set(by_request) | zero_attempt_skips:
         raise FixedCallError("Fixed-call receipt inventory differs from its saved budget; delivery is blocked.")
     evidence = [budget_path]
     for sha, folder in sorted(folders.items()):
@@ -810,6 +839,12 @@ def validate_fixed_call_evidence(directory: Path, *, identity: dict | None = Non
             raise FixedCallError("Fixed-call request identity or receipt has changed")
         if identity is not None and request.get("identity") != identity:
             raise FixedCallError("Fixed-call evidence belongs to a different source or recipe")
+        if (folder / "skipped.json").exists():
+            from galley.fixed_skips import validate_skip
+            skipped_read = validate_skip(folder, request=request)
+            evidence.extend(folder / name for name in skipped_read["files"])
+            evidence.append(folder / "skipped.json")
+            continue
         attempt = receipt.get("attempt")
         if type(attempt) is not int or not 1 <= attempt <= 3 or set(by_request[sha]) != set(range(1, attempt + 1)):
             raise FixedCallError("Fixed-call attempt history is incomplete")
