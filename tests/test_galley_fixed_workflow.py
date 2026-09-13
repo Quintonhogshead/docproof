@@ -450,8 +450,10 @@ def test_read_rejects_missing_paragraphs_and_broken_repair_scope(make_book, tmp_
         return {"reviewed_ids": ["p"], "findings": [finding("p", "waited", "paused", "spelling")],
                 "comment_decisions": [], "editorial_verdict": "ready"}
     flow = _flow(make_book, tmp_path, Readers(handler=handler))
-    with pytest.raises(FixedWorkflowError, match="Broken-sentence repair exceeded"):
-        flow._read("broken_repair", OPUS, ids=["p"])
+    proposals, comments, coverage = flow._read("broken_repair", OPUS, ids=["p"])
+    assert proposals == comments == []
+    assert coverage[0]["paragraph_ids"] == ["p"]
+    assert "scope" in flow.history[-1]["rejected_proposal"]["reason"]
     assert "ONLY genuinely broken sentences" in flow.calls.events[0]["system"]
     flow.calls.handler = lambda *args: {"reviewed_ids": [], "findings": [], "comment_decisions": [], "editorial_verdict": "ready"}
     with pytest.raises(FixedWorkflowError, match="paragraph coverage"):
@@ -523,8 +525,9 @@ def test_late_correction_elsewhere_refreshes_retained_comment(make_book, tmp_pat
 def test_final_comment_cannot_silently_anchor_to_wrong_repeated_word(make_book, tmp_path):
     flow = _flow(make_book, tmp_path, text="He saw her, and her visitor left.")
     flow._question("p", flow.current["p"], "Who does the latter her mean?", "The intended identity", "An unclear reference.", "fable")
-    with pytest.raises(FixedWorkflowError, match="unambiguous contextual quote"):
-        flow._comments([comment_decision(flow.questions[0], quote="her")], "astra")
+    flow._comments([comment_decision(flow.questions[0], quote="her")], "astra", model=ASTRA)
+    assert flow.questions == []
+    assert "unambiguous contextual quote" in flow.history[-1]["rejected_proposal"]["reason"]
 
 
 def test_failed_typed_stage_cancels_queued_reads(make_book, tmp_path, monkeypatch):
@@ -899,3 +902,97 @@ def test_rejected_proposal_stage_evidence_is_stable_across_reader_completion_ord
     flow.history.reverse()
     flow._record("ensemble_sweep", readings=[])
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("defect", ["scope", "control", "format_text", "format_unknown", "format_italic"])
+def test_invalid_model_proposal_drops_only_bad_suggestion(make_book, tmp_path, defect):
+    flow = _flow(make_book, tmp_path)
+    bad = finding("p", "someone", "someone", "format")
+    options = {"format_types": {"format": "italic"},
+               "formatting": {"p": [{"start": 0, "end": len(flow.current["p"]), "italic": False}]}}
+    if defect == "scope":
+        options["allowed_categories"] = {"broken_sentence"}
+    elif defect == "control":
+        bad["replacement"] = "some\x00one"
+    elif defect == "format_text":
+        bad["replacement"] = "Mary"
+    elif defect == "format_unknown":
+        options["formatting"]["p"][0]["italic"] = None
+    else:
+        options["formatting"]["p"][0]["italic"] = True
+    assert flow._reader_candidate("fable", bad, flow.current, FABLE, **options) is None
+    good = flow._reader_candidate("fable", finding("p", "waited", "waits"), flow.current, FABLE)
+    flow._apply("fable", [good])
+    assert flow.current["p"] == "He waits for someone."
+    assert flow.formats == flow.questions == []
+    assert flow.history[0]["rejected_proposal"]["finding"] == bad
+
+
+@pytest.mark.parametrize("defect", ["blank_question", "blank_knowledge", "control", "missing_quote"])
+def test_invalid_comment_drops_while_valid_comment_survives(make_book, tmp_path, defect):
+    flow = _flow(make_book, tmp_path)
+    for missing in ("Identity", "Location"):
+        flow._question("p", flow.current["p"], "What is the " + missing + "?", missing, "Unresolved.", "typed")
+    decisions = [comment_decision(q) for q in flow.questions]
+    bad = decisions[0]
+    bad[{"blank_question": "question", "blank_knowledge": "missing_knowledge",
+         "control": "question", "missing_quote": "quote"}[defect]] = {
+             "blank_question": " ", "blank_knowledge": " ", "control": "Who\x00?", "missing_quote": "Invented quote."}[defect]
+    flow._comments(decisions, "astra", model=ASTRA)
+    assert len(flow.questions) == 1
+    assert flow.questions[0]["missing_knowledge"] == "Location"
+    assert flow.history[-2]["rejected_proposal"]["model"] == ASTRA
+
+
+@pytest.mark.parametrize("action", ["apply", "query"])
+def test_invalid_opus_disposition_drops_site_without_losing_good_edit(make_book, tmp_path, action):
+    def handler(stage, model, payload, kwargs):
+        return {"decisions": [ruling(site, action, "bad\x00text") if site["before"] == "someone"
+                              else ruling(site, "apply", site["proposals"][0]["replacement"]) for site in payload["sites"]]}
+    flow = _flow(make_book, tmp_path, Readers(handler=handler))
+    rows = [_candidate(finding("p", before, after), flow.current, SONNET)
+            for before, after in (("waited", "waits"), ("someone", "Mary"))]
+    flow._apply("typed", flow._adjudicate("typed", rows, force=True))
+    assert flow.current["p"] == "He waits for someone."
+    assert flow.questions == []
+    assert len([h for h in flow.history if h.get("rejected_proposal")]) == 1
+
+
+def test_invalid_check_adjudication_restores_text_and_removes_disputed_format(make_book, tmp_path):
+    def handler(stage, model, payload, kwargs):
+        if stage == "check_meaning":
+            return {"decisions": [{"id": "p", "verdict": "reject", "reason": "Unsafe edit."}]}
+        if stage == "check_meaning_disputes":
+            return {"decisions": [ruling({"id": "p"}, "apply", "Bad\x00paragraph.")]}
+    flow = _flow(make_book, tmp_path, Readers(handler=handler))
+    before = flow._apply("fable", [_candidate(finding("p", "waited", "waits"), flow.current, FABLE),
+                                  _candidate(finding("p", "someone", "someone", "format"), flow.current, FABLE,
+                                             format_types={"format": "italic"})])
+    flow._checks("check", before)
+    assert flow.current == before
+    assert flow.formats == flow.questions == []
+    assert len([h for h in flow.history if h.get("rejected_proposal")]) == 1
+
+
+def test_number_scope_noise_does_not_prevent_valid_number_correction(make_book, tmp_path):
+    def handler(stage, model, payload, kwargs):
+        if stage == "numbers":
+            return {"reviewed_ids": [s["id"] for s in payload["sites"]],
+                    "findings": [finding("p", "birds", "bees", "grammar"),
+                                 finding("p", "20", "twenty", "number_style")],
+                    "comment_decisions": [], "editorial_verdict": "ready"}
+    flow = _flow(make_book, tmp_path, Readers(handler=handler), text="There were 20 birds.")
+    flow._numbers()
+    assert flow.current["p"] == "There were twenty birds."
+    assert len([h for h in flow.history if h.get("rejected_proposal")]) == 2
+
+
+def test_comment_resolution_cannot_depend_on_discarded_reader_proposal(make_book, tmp_path):
+    flow = _flow(make_book, tmp_path)
+    flow._question("p", flow.current["p"], "Who is the visitor?", "Identity", "Unresolved.", "typed")
+    before = dict(flow.current)
+    assert flow._reader_candidate("fable", finding("p", "someone", "Mary\x00"), flow.current, FABLE) is None
+    flow._comments([comment_decision(flow.questions[0], "drop")], "fable", before=before, model=FABLE)
+    assert len(flow.questions) == 1
+    assert flow.calls.events[-1]["stage"] == "fable_comment_review"
+    assert flow.current == before

@@ -271,10 +271,10 @@ def _report(result, details):
     lines += [f"- {labels[q['para_id']]}: {q['question']}" for q in result["questions"]] or ["None."]
     lines += ["", "## Completed reading stages", ""]
     lines += [f"- {stage_labels[s['stage']]}" for s in result["stages"]]
-    unanchored = [h for h in result["history"] if h.get("rejected_proposal")]
-    if unanchored:
-        lines += ["", f"{len(unanchored)} model suggestions were rejected because they could not be anchored "
-                  "exactly in their assigned text. They produced no edits or author comments; "
+    rejected = [h for h in result["history"] if h.get("rejected_proposal")]
+    if rejected:
+        lines += ["", f"{len(rejected)} model suggestions were rejected because they failed proposal validation. "
+                  "They produced no edits or author comments; "
                   "their original suggestions and reasons remain in the review evidence."]
     if result["identity"].get("intake"):
         lines += ["", "Incoming tracked changes were accepted in a separate working baseline using Galley's intake policy. "
