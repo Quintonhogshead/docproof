@@ -234,6 +234,13 @@ def _verify_result(result, directory):
                     or (initial and reviewed != original_prose)
                     or (not initial and request.get("original") != result["original"])):
                 raise FixedDocumentError("Deterministic proofreading evidence does not cover its assigned stage and source")
+        if result["identity"].get("press_prompt_sha256") and stage["stage"] == "astra":
+            audit = payload.get("evidence", {}).get("press_audit", {})
+            expected_prose = set(result["original"]) - protected_poetry
+            if (audit.get("accepted_sha256") != _hash(result["accepted"])
+                    or set(audit.get("paragraph_ids", [])) != expected_prose
+                    or not isinstance(audit.get("raw_signal_counts"), dict)):
+                raise FixedDocumentError("The press-method final scan lacks current-text coverage")
     last_stage = json.loads(Path(stages[-1]["path"]).read_text())
     if last_stage.get("accepted_sha256") != _hash(result["accepted"]):
         raise FixedDocumentError("The last reviewed manuscript differs from the final accepted text")
@@ -260,6 +267,45 @@ def _report(result, details):
     lines += [f"- {labels[q['para_id']]}: {q['question']}" for q in result["questions"]] or ["None."]
     lines += ["", "## Completed reading stages", ""]
     lines += [f"- {stage_labels[s['stage']]}" for s in result["stages"]]
+    if result["identity"].get("press_prompt_sha256"):
+        from collections import Counter
+        stages = {s["stage"]: json.loads(Path(s["path"]).read_text())["evidence"] for s in result["stages"]}
+        sheet = stages.get("story_sheet", {}).get("sheet", {})
+        lines += ["", "## Story Sheet and style assumptions", "",
+                  sheet.get("narration", "Poetry: prose style and tense passes do not apply.")]
+        lines += ["- " + note for note in sheet.get("notes", [])]
+        if sheet and not sheet.get("notes"):
+            lines.append("No additional variant or register assumptions were recorded; no independent authority lookup is claimed.")
+        lines += ["", "## Reading and verification counts", ""]
+        applied = Counter(h["stage"] for h in result["history"] if h.get("applied"))
+        for name, label in stage_labels.items():
+            if name in stages:
+                lines.append(f"- {label}: {applied[name]} accepted proposals at that stage (later reviews may revise them).")
+        for name in ("fable", "astra"):
+            counts = Counter()
+            for window in stages.get(name, {}).get("coverage", []):
+                counts.update(window.get("focused_counts", {}))
+            if counts:
+                lines.append(f"- {name.title()} acknowledged focused sites: " + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) + ".")
+        audit = stages.get("astra", {}).get("press_audit", {})
+        if audit:
+            lines += ["", "## Final scripted signals", "", audit["interpretation"]]
+            lines += [f"- {key}: {value}" for key, value in sorted(audit["raw_signal_counts"].items())]
+            lines += [f"- {key} candidates: {value}" for key, value in sorted(audit["focused_counts"].items())]
+            profile = audit["tense_profile"]
+            lines.append(f"- Observed narration profile: {profile['baseline']}, {profile['person']}; present-dominant share {profile['present_share']:.1%}. This is heuristic evidence, not intended tense.")
+        lines += ["", "## Notes coverage and limits", ""]
+        from docproof.utils.xml_helpers import DocxPackage, walk_package
+        note_parts = Counter(p.part for p in walk_package(DocxPackage(result["source"]))
+                             if p.part in {"word/footnotes.xml", "word/endnotes.xml"})
+        lines.append("Real note paragraphs included in reading and accept/reject audits: " +
+                     (", ".join(f"{part}: {count}" for part, count in sorted(note_parts.items())) if note_parts else "none present") + ".")
+        lines += ["All required paragraph reads completed. Poetry classification uses distributed samples with a whole-document fallback for mixed/uncertain books. Structure and citation indexes are partial reading aids; no external fact-check or exhaustive dictionary lookup is claimed.",
+                  "Focused checks and local patterns are not a guarantee of finding every error. The final signal scan does not repeat LanguageTool or start another model pass.",
+                  "Reject-all audit passed: original text restored exactly, including real notes. Accept-all and clean-copy text agree. Smart quotes and internal-space changes remain tracked."]
+        dropped = [h for h in result["history"] if h.get("decision", {}).get("action") == "drop"]
+        lines += ["", "## Deliberately left unchanged", "",
+                  f"{len(dropped)} adjudicated proposals were dropped. Full anchored proposals and reasons are retained in the certified review evidence; dropped model or tool concerns are not author comments."]
     return "\n".join(lines) + "\n"
 
 

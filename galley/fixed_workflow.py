@@ -76,6 +76,7 @@ COMMENT_DECISION = _object(id=S, action=_enum("drop", "retain", "replace"),
 READ_SCHEMA = _object(reviewed_ids=_array(S), findings=_array(FINDING),
                       comment_decisions=_array(COMMENT_DECISION),
                       editorial_verdict=_enum("ready", "needs_human"))
+FRONTIER_SCHEMA = _object(**READ_SCHEMA["properties"], reviewed_check_ids=_array(S))
 DECISION = _object(id=S, action=_enum("apply", "drop", "query"), replacement=S,
                    reason=S, missing_knowledge=S, question=S)
 DECISIONS = _object(decisions=_array(DECISION))
@@ -181,6 +182,7 @@ def _groups(candidates):
 class FixedWorkflow:
     def __init__(self, source, directory, *, calls=None, progress=None, max_api_usd=10):
         from galley.fixed_policy import configuration, NUMBER_POLICY, PROOFREADING_POLICY
+        from galley.press_prompt import EDITORIAL_RULES, editorial_policy, policy_identity
         from galley.manifest import sha256_file
         self.source = Path(source).resolve()
         self.directory = Path(directory).resolve()
@@ -189,10 +191,16 @@ class FixedWorkflow:
         self.cfg = configuration()
         self.base_policy = PROOFREADING_POLICY
         # NUMBER_POLICY already includes the shared proofreading contract.
-        self.policy = NUMBER_POLICY
+        self.policy = NUMBER_POLICY + "\n\n" + editorial_policy()
+        # Typed readers already receive their own detailed category prompts.
+        # Share only the cross-cutting guards here, not the whole final-read or
+        # bespoke number instructions on every narrow detector request.
+        self.typed_policy = PROOFREADING_POLICY + "\n\n" + "\n\n".join(
+            EDITORIAL_RULES[key] for key in ("scope", "authority", "punctuation"))
         self.identity = {"version": VERSION, "source_sha256": sha256_file(self.source),
                          "policy_sha256": _hash(self.policy), "recipe": workflow_plan(),
                          "configuration": self.cfg.model_dump(mode="json")}
+        self.identity["press_prompt_sha256"] = policy_identity()
         self.manifest = self.directory / "workflow.json"
         if self.manifest.exists():
             saved = json.loads(self.manifest.read_text())
@@ -216,6 +224,7 @@ class FixedWorkflow:
         self.needs_human = False
         self.local_seen = set()
         self.prose_prepared = None
+        self.source_marks = {}
 
     @staticmethod
     def _save(path, value):
@@ -270,9 +279,10 @@ class FixedWorkflow:
         self._record("poetry", classification=result, samples=samples, poetry_ids=sorted(self.poetry_ids))
 
     def _story(self):
-        from docproof.storysheet import StorySheet, _SYSTEM, prompt_section
+        from docproof.storysheet import StorySheet, prompt_section
         from docproof.providers.base import strict_json_schema
-        body = self._ask("story_sheet", LUNA, _SYSTEM,
+        from galley.press_prompt import STORY_TASK
+        body = self._ask("story_sheet", LUNA, STORY_TASK,
                          {"manuscript": [{"id": pid, "text": text} for pid, text in self.original.items()]},
                          strict_json_schema(StorySheet))
         sheet = StorySheet.model_validate(body)
@@ -295,7 +305,7 @@ class FixedWorkflow:
             local.api.model, local.api.effort = model, effort
             analyzers = build_analyzers(local, prepared.pass_types, self.calls.provider("spelling" if poetry else "typed", local),
                                        ids, prepared.vocabulary, prepared.conventions,
-                                       (self.base_policy if poetry else self.policy) + "\n" + self.context)
+                                       (self.base_policy if poetry else self.typed_policy) + "\n" + self.context)
             for analyzer in analyzers:
                 analyzer.output_model = build_output_model(analyzer.keys,
                     explanations=cfg.report_explanations, explicit_verdicts=True)
@@ -532,6 +542,17 @@ class FixedWorkflow:
         keys = list(snapshot) if ids is None else list(ids)
         proposals, decisions, coverage = [], [], []
         structure, structure_ids = self._structure_context(snapshot) if stage in {"fable", "astra"} else (None, set())
+        frontier = stage in {"fable", "astra"}
+        focused, citations, formatting, parts = None, None, {}, {}
+        if frontier:
+            from galley.press_prompt import FRONTIER_TASK
+            from galley.press_checks import focused_checks, citation_context, current_formatting
+            from galley.fixed_local import _paragraphs
+            paragraphs = _paragraphs(self.prose_prepared, snapshot, self.poetry_ids)
+            focused = focused_checks(paragraphs)
+            citations = citation_context(paragraphs)
+            formatting = current_formatting(self.original, snapshot, self.source_marks, self.formats)
+            parts = {p.para_id: {"part": p.part, "location": p.location} for p in paragraphs}
         for window in _windows([{"id": k, "text": snapshot[k]} for k in keys]):
             owned = {x["id"]: x["text"] for x in window}
             questions = [q for q in self.questions if q["para_id"] in owned] if comments else []
@@ -547,6 +568,22 @@ class FixedWorkflow:
             payload = {"story_sheet": self.context, "paragraphs": window,
                        "context": {k: snapshot[k] for k in order if k in context_ids},
                        "poetry_ids": sorted(self.poetry_ids & set(owned)), "comments": questions}
+            assigned = []
+            if frontier:
+                scope += FRONTIER_TASK
+                assigned = [s for s in focused["sites"] if s["para_id"] in owned]
+                profile = focused["tense_profile"]
+                payload["focused_sites"] = assigned
+                payload["narrative_profile"] = {
+                    **{k: v for k, v in profile.items() if k not in {"paragraphs", "runs"}},
+                    "paragraphs": [p for p in profile["paragraphs"] if p["para_id"] in owned],
+                    "runs": [r for r in profile["runs"] if set(r["para_ids"]) & set(owned)],
+                    "status": "heuristic_evidence_only"}
+                if any(p["id"] in owned and (p["reference_section"] or p["citation_or_pointer"])
+                       for p in citations["paragraphs"]):
+                    payload["citation_context"] = citations
+                payload["paragraph_metadata"] = {pid: {**parts.get(pid, {}),
+                    "formatting": formatting[pid]} for pid in owned}
             if structure is not None and structure_ids.intersection(owned):
                 payload["structure_context"] = structure
                 scope += ("The read-only structure_context is a bounded excerpt of the CURRENT book, not a complete inventory. "
@@ -556,18 +593,30 @@ class FixedWorkflow:
             result = self._ask(stage, model,
                 scope + "Context paragraphs are read-only. Preserve poetry except demonstrable misspellings. Return reviewed_ids for all owned paragraphs. For EVERY assigned comment explicitly drop, retain, or replace it: answer from the book where possible, remove false/stale/duplicate/style concerns, and retain only specific questions requiring author knowledge. Retained comments must use an exact contextual quote that occurs only once in its paragraph. To resolve with an edit return the edit plus a drop decision. Do not invent or omit comment IDs. New questions require missing_knowledge. needs_human means substantive unresolved damage/meaning beyond a proofread, never an operational failure. Findings must quote their exact current paragraph. Never retype clean paragraphs.",
                 payload,
-                READ_SCHEMA, effort="high", max_tokens=16000)
+                FRONTIER_SCHEMA if frontier else READ_SCHEMA, effort="high", max_tokens=16000)
             _exact_ids(result["reviewed_ids"], owned, stage + " paragraph coverage")
             _exact_ids([x["id"] for x in result["comment_decisions"]], [x["id"] for x in questions], stage + " comment coverage")
+            if frontier:
+                _exact_ids(result.get("reviewed_check_ids", []), [s["id"] for s in assigned], stage + " focused-check coverage")
             for row in result["findings"]:
                 if stage == "broken_repair" and row["category"] not in {"broken_sentence", "author_question"}:
                     raise FixedWorkflowError("Broken-sentence repair exceeded its assigned scope")
-                candidate = _candidate(row, owned, model)
+                candidate = _candidate(row, owned, model, format_types={"format": "italic"} if frontier else None)
+                if candidate and candidate.get("format"):
+                    lo, hi, pid = candidate["start"], candidate["end"], candidate["para_id"]
+                    roman = [r for r in formatting[pid] if r["start"] < hi and r["end"] > lo]
+                    if (row["replacement"] != row["quote"] or not roman
+                            or any(r["italic"] is not False for r in roman)):
+                        raise FixedWorkflowError("A title-format proposal lacks exact confirmed roman-text evidence")
                 if candidate:
                     proposals.append(candidate)
             decisions.extend(result["comment_decisions"])
             coverage.append({"paragraph_ids": list(owned), "comment_ids": [x["id"] for x in questions],
                              "verdict": result["editorial_verdict"]})
+            if frontier:
+                coverage[-1]["focused_check_ids"] = [s["id"] for s in assigned]
+                coverage[-1]["focused_counts"] = {key: sum(s["check"] == key for s in assigned)
+                                                  for key in focused["counts"]}
         return proposals, decisions, coverage
 
     def _comments(self, decisions, stage, *, before=None, model=None):
@@ -681,6 +730,8 @@ class FixedWorkflow:
         if fmt.suffix != ".docx":
             raise FixedWorkflowError("The fixed workflow currently requires a Word manuscript")
         pkg = fmt.preflight(self.source, "abort")
+        from galley.press_checks import source_formatting
+        self.source_marks = source_formatting(pkg)
         self.original = {p.para_id: paragraph_text(p.element) for p in walk_package(pkg)}
         self.current = dict(self.original)
         if not any(x.strip() for x in self.original.values()):
@@ -748,7 +799,14 @@ class FixedWorkflow:
                 self._comments(comments, stage, before=snapshot, model=model)
                 if stage == "astra":
                     self.needs_human = any(x["verdict"] == "needs_human" for x in read_coverage)
-                self._record(stage, coverage=read_coverage)
+                    from galley.press_checks import final_audit
+                    from galley.fixed_local import _paragraphs
+                    audit = final_audit(prose_prepared,
+                        _paragraphs(prose_prepared, self.current, self.poetry_ids), self.cfg)
+                    audit["accepted_sha256"] = _hash(self.current)
+                    self._record(stage, coverage=read_coverage, press_audit=audit)
+                else:
+                    self._record(stage, coverage=read_coverage)
         self.calls.assert_complete()
         if sha256_file(self.source) != self.identity["source_sha256"]:
             raise FixedWorkflowError("The source changed during the fixed proofread")

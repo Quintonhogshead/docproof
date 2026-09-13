@@ -44,6 +44,8 @@ class Readers:
         if self.handler:
             result = self.handler(stage, kwargs["model"], payload, kwargs)
             if result is not None:
+                if "reviewed_check_ids" in kwargs["schema"]["properties"]:
+                    result.setdefault("reviewed_check_ids", [s["id"] for s in payload["focused_sites"]])
                 return result
         if stage == "poetry":
             return {"classification": "poetry" if self.poetry else "prose", "reason": "Fixed samples."}
@@ -54,6 +56,8 @@ class Readers:
             owned = payload.get("sites", payload.get("paragraphs", []))
             return {"reviewed_ids": [row["id"] for row in owned], "findings": [],
                     "comment_decisions": [comment_decision(q) for q in payload.get("comments", [])],
+                    **({"reviewed_check_ids": [s["id"] for s in payload["focused_sites"]]}
+                       if "reviewed_check_ids" in properties else {}),
                     "editorial_verdict": "ready"}
         if "changes" in payload:
             return {"decisions": [{"id": x["id"], "verdict": "approve", "reason": "Correct."}
@@ -220,6 +224,129 @@ def test_frontier_structure_context_uses_each_readers_current_book(make_book, tm
     assert "Do not infer missing entries" in astra["system"]
 
 
+def test_press_prompts_and_focused_evidence_reach_both_final_readers(make_book, tmp_path):
+    from galley.press_prompt import EDITORIAL_RULES
+    book = make_book('“Wait.” He said. Red, white and blue.',
+                     'He walks and waits and watches.')
+    readers = Readers()
+    result = FixedWorkflow(book, tmp_path / "run", calls=readers).run()
+    final = [r for r in readers.events if r["stage"] in {"fable", "astra"}]
+    assert len(final) == 2 and final[0]["system"] == final[1]["system"]
+    for request in final:
+        assert all(text in request["system"] for text in EDITORIAL_RULES.values())
+        assert {s["check"] for s in request["payload"]["focused_sites"]} >= {
+            "dialogue_matrix", "serial_comma", "narrative_tense"}
+        assert request["payload"]["paragraph_metadata"]
+        assert "reviewed_check_ids" in request["schema"]["required"]
+    story = next(r for r in readers.events if r["stage"] == "story_sheet")
+    assert "first/last\nparagraph IDs" in story["system"]
+    assert "Canadian" in story["system"]
+    stage = json.loads(Path(result["stages"][-1]["path"]).read_text())
+    assert stage["evidence"]["press_audit"]["accepted_sha256"]
+    assert stage["evidence"]["press_audit"]["raw_signal_counts"]["sweep_dialogue_tag"] == 1
+
+
+@pytest.mark.parametrize("stage", ["fable", "astra"])
+def test_final_reader_cannot_skip_focused_sites(make_book, tmp_path, stage):
+    def handler(name, model, payload, kwargs):
+        if name == stage:
+            return {"reviewed_ids": [p["id"] for p in payload["paragraphs"]],
+                    "reviewed_check_ids": [], "findings": [], "comment_decisions": [],
+                    "editorial_verdict": "ready"}
+    with pytest.raises(FixedWorkflowError, match="focused-check coverage"):
+        FixedWorkflow(make_book('Red, white and blue.'), tmp_path / "run",
+                      calls=Readers(handler=handler)).run()
+    assert not (tmp_path / "run/result.json").exists()
+
+
+def test_final_reader_can_propose_tracked_title_italics_and_astra_sees_it(make_book, tmp_path):
+    from galley.fixed_documents import write_manuscripts, paragraph_views
+    from docproof.utils.xml_helpers import DocxPackage, qn
+    book = make_book("She read The Great Gatsby yesterday.")
+    def handler(stage, model, payload, kwargs):
+        if stage == "fable":
+            p = payload["paragraphs"][0]
+            return {"reviewed_ids": [p["id"]],
+                    "findings": [finding(p["id"], "The Great Gatsby", "The Great Gatsby", "format")],
+                    "comment_decisions": [], "editorial_verdict": "ready"}
+    readers = Readers(handler=handler)
+    result = FixedWorkflow(book, tmp_path / "run", calls=readers).run()
+    assert len(result["formats"]) == 1
+    astra = next(r for r in readers.events if r["stage"] == "astra")
+    meta = next(iter(astra["payload"]["paragraph_metadata"].values()))
+    assert any(r["italic"] is True for r in meta["formatting"])
+    check = next(r for r in readers.events if r["stage"] == "fable_checks_correction")
+    assert check["payload"]["changes"][0]["format_proposals"]
+    assert "Long-work titles" in check["system"]
+    tracked, clean, _ = write_manuscripts(book, tmp_path / "out", result["accepted"], formats=result["formats"])
+    assert paragraph_views(tracked, "reject") == result["original"]
+    assert paragraph_views(clean) == result["accepted"]
+    assert DocxPackage(tracked).tree("word/document.xml").find('.//' + qn('w:rPrChange')) is not None
+
+
+def test_astra_profiles_fables_checked_text_not_the_source(make_book, tmp_path):
+    book = make_book("He walks and waits and watches.")
+    def handler(stage, model, payload, kwargs):
+        if stage == "fable":
+            p = payload["paragraphs"][0]
+            return {"reviewed_ids": [p["id"]], "findings": [finding(p["id"], p["text"],
+                    "He walked and waited and watched.")], "comment_decisions": [], "editorial_verdict": "ready"}
+    readers = Readers(handler=handler)
+    FixedWorkflow(book, tmp_path / "run", calls=readers).run()
+    values = {r["stage"]: r["payload"]["narrative_profile"]["paragraphs"][0]
+              for r in readers.events if r["stage"] in {"fable", "astra"}}
+    assert values["fable"]["present"] == 3 and values["astra"]["present"] == 0
+    assert values["astra"]["past"] == 3
+
+
+def test_real_footnote_and_endnote_parts_reach_final_readers_and_reject_audit(make_book, tmp_path):
+    from lxml import etree
+    from docproof.utils.xml_helpers import DocxPackage, qn
+    from galley.fixed_documents import write_manuscripts, paragraph_views, _report
+    book = make_book("Body text with notes.")
+    pkg = DocxPackage(book)
+    body = pkg.tree("word/document.xml").find(qn("w:body")).find(qn("w:p"))
+    for kind in ("footnote", "endnote"):
+        part = f"word/{kind}s.xml"
+        notes = etree.Element(qn(f"w:{kind}s"), nsmap={"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"})
+        note = etree.SubElement(notes, qn(f"w:{kind}"), {qn("w:id"): "1"})
+        p = etree.SubElement(note, qn("w:p"))
+        marker = etree.SubElement(p, qn("w:r"))
+        etree.SubElement(marker, qn(f"w:{kind}Ref"))
+        run = etree.SubElement(p, qn("w:r"))
+        etree.SubElement(run, qn("w:t")).text = f"The {kind} has teh error."
+        pkg.add_part(part, notes)
+        reference = etree.SubElement(body, qn("w:r"))
+        etree.SubElement(reference, qn(f"w:{kind}Reference"), {qn("w:id"): "1"})
+        rels = pkg.tree("word/_rels/document.xml.rels")
+        etree.SubElement(rels, "{http://schemas.openxmlformats.org/package/2006/relationships}Relationship",
+                         Id=f"rIdTest{kind}", Type=f"http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}s", Target=f"{kind}s.xml")
+        types = pkg.tree("[Content_Types].xml")
+        etree.SubElement(types, "{http://schemas.openxmlformats.org/package/2006/content-types}Override",
+                         PartName="/" + part, ContentType=f"application/vnd.openxmlformats-officedocument.wordprocessingml.{kind}s+xml")
+    for name in ("word/document.xml", "word/_rels/document.xml.rels", "[Content_Types].xml"):
+        pkg.mark_modified(name)
+    pkg.save(book)
+    before = book.read_bytes()
+    def handler(stage, model, payload, kwargs):
+        if stage == "fable":
+            return {"reviewed_ids": [p["id"] for p in payload["paragraphs"]],
+                    "findings": [finding(p["id"], "teh", "the", "spelling") for p in payload["paragraphs"] if "teh" in p["text"]],
+                    "comment_decisions": [], "editorial_verdict": "ready"}
+    readers = Readers(handler=handler)
+    result = FixedWorkflow(book, tmp_path / "run", calls=readers).run()
+    assert book.read_bytes() == before
+    for request in (r for r in readers.events if r["stage"] in {"fable", "astra"}):
+        assert {m["part"] for m in request["payload"]["paragraph_metadata"].values()} >= {
+            "word/footnotes.xml", "word/endnotes.xml"}
+    tracked, clean, details = write_manuscripts(book, tmp_path / "out", result["accepted"])
+    assert paragraph_views(tracked, "reject") == result["original"]
+    assert paragraph_views(clean) == result["accepted"]
+    assert len([v for v in result["accepted"].values() if "has the error" in v]) == 2
+    report = _report(result, details)
+    assert "word/footnotes.xml: 1" in report and "word/endnotes.xml: 1" in report
+
+
 def test_poetry_runs_only_classification_and_sonnet_spelling(make_book, tmp_path):
     source = "teh Moon\n  waits, 20 times\n—quiet"
     book = make_book(source)
@@ -266,9 +393,12 @@ def test_embedded_poetry_spelling_never_enters_luna_or_opus_change_checks(make_b
 
 
 def _flow(make_book, tmp_path, readers=None, text="He waited for someone."):
+    from types import SimpleNamespace
+    from docproof.models import DocumentModel
     flow = FixedWorkflow(make_book(text), tmp_path / "unit", calls=readers or Readers())
     flow.original = {"p": text}
     flow.current = dict(flow.original)
+    flow.prose_prepared = SimpleNamespace(doc=DocumentModel(str(flow.source), ()))
     return flow
 
 

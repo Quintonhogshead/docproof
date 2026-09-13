@@ -69,7 +69,9 @@ class ScriptedReaders:
         if "reviewed_ids" in fields:
             owned = payload.get("paragraphs", [])
             ids = ([x["id"] for x in payload["sites"]] if "sites" in payload else [x["id"] for x in owned])
-            return {"reviewed_ids": ids, "findings": [], "comment_decisions": [], "editorial_verdict": "ready"}
+            return {"reviewed_ids": ids, "findings": [], "comment_decisions": [], "editorial_verdict": "ready",
+                    **({"reviewed_check_ids": [s["id"] for s in payload["focused_sites"]]}
+                       if "reviewed_check_ids" in fields else {})}
         if "decisions" in fields:
             if "changes" in payload:
                 return {"decisions": [{"id": x["id"], "verdict": "approve", "reason": "The spelling correction preserves meaning."}
@@ -300,4 +302,14 @@ def test_self_consistent_local_packet_must_match_the_reviewed_source(
     assert validate_local_evidence(evidence, directory / "local", result["identity"]) == packet
     _rehash_stage_and_result(directory, result, stage_name, stage)
     with pytest.raises(FixedDocumentError, match="(?i)(local|deterministic|paragraph|original)"):
+        _verify_result(result, directory)
+
+
+def test_press_method_final_scan_cannot_be_omitted_from_delivery(completed_prose_review):
+    from galley.fixed_documents import FixedDocumentError, _verify_result
+    directory, result = completed_prose_review
+    stage = json.loads((directory / "stages/astra.json").read_text())
+    del stage["evidence"]["press_audit"]
+    _rehash_stage_and_result(directory, result, "astra", stage)
+    with pytest.raises(FixedDocumentError, match="press-method final scan"):
         _verify_result(result, directory)

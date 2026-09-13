@@ -44,6 +44,25 @@ be divided into multiple requests. The workflow checkpoints completed work and
 reuses saved responses on resume. A fresh run can still yield different model
 judgments; fixed orchestration does not promise identical AI output.
 
+The supplied Atmosphere pasted-chat method is preserved with an
+[item-level coverage review](galley-press-prompt-coverage.md). Its 120 indexed
+rules plus prose and table instructions become 149 accounted-for source items.
+Fable and Astra share the extracted editorial brief; Opus adjudication and Luna
+checks use the same rules. Narrow typed readers retain their category prompts
+plus the shared scope, variant and punctuation guards. The original chat prompt
+cannot schedule additional agents, change the existing number policy, make
+silent edits, or broaden proofreading into stylistic rewrites.
+
+The Story Sheet records variant/genre evidence, vocabulary choices and intended
+tense/person with explicit section exceptions. Fable and Astra receive current
+dialogue-matrix, serial-comma, quotation and narrative-tense sites and must
+acknowledge every assigned site ID. The local tense profiler is a heuristic,
+not authority to rewrite a deliberately present-tense chapter. Applicable
+citation passages, real note locations and conservative formatting evidence
+support the final reads. Confirmed roman long-work titles can be proposed as
+tracked italics and pass through the correction gate. The final report records
+actual final pattern counts, coverage and limitations, not assumed zeroes.
+
 Local checks cover spelling and near-miss words, all house punctuation sweeps,
 heading capitalization and vocabulary, quotation balance, name and spelling
 consistency, abbreviations and accents, explicit date/weekday mismatches,

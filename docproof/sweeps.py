@@ -418,7 +418,7 @@ def _sweep_compound_number(text: str, variant=None) -> list[Hit]:
 _DIALOGUE_TAG_TEMPLATE = (
     r"(?P<inner>[.,!?…])?"
     r"(?P<quote>[{quotes}])"
-    r"(?P<outer>[.,!?])?"
+    r"(?P<outer>[.,!?…])?"
     r"(?P<gap>[ \t\u00a0]+)"
     r"(?P<subject>[A-Za-z][\w'’]*)"
     r"[ \t\u00a0]+"
