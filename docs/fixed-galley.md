@@ -231,8 +231,10 @@ Total time, usage, comment counts, and proofreading quality still need a
 same-manuscript comparison before claiming a measured efficiency gain.
 
 Grouped dispute responses may be adapted from a complete inventory of nested
-proposal decisions. This requires every exact proposal ID once, no unknown or
-mixed IDs, and verified source coordinates for every group and proposal. Exact
+proposal decisions. This requires every exact assigned proposal ID once, no
+mixed group/proposal assignments, and verified source coordinates for every
+group and proposal. Unassigned decision rows are discarded and audited; they
+never count toward coverage. Exact
 approved proposal replacements are composed into the group span; ambiguous,
 novel or conflicting proposal-ID decisions discard that group rather than
 inventing a correction or author comment. Proper group-ID decisions retain the
@@ -242,3 +244,12 @@ unchanged. Saved validation failures are rechecked before considering another
 attempt, so an already-complete alternative representation can recover even
 at its saved retry limit without another submission or additional allowance.
 Missing actual decisions still block when the original allowance is exhausted.
+
+Extra unassigned decisions are discarded consistently for disputes, meaning and
+correction checks, number-reader comment outputs, and final comment reviews.
+This is allowed only when every real assigned decision is present exactly once.
+An unknown row cannot fill an omission or resolve duplicate assigned decisions.
+Empty comment inventories remain empty even when a reader invents a comment
+resolution. Request-bound audits retain the discarded rows and the normalized
+result hash, while raw responses stay unchanged. This does not relax paragraph,
+focused-check, poetry-section, source, or final document-integrity validation.

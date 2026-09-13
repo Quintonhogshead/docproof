@@ -743,3 +743,53 @@ def test_dispute_normalization_audit_cannot_be_changed_on_replay(tmp_path):
     with pytest.raises(fc.FixedCallContractError, match="normalization changed"):
         caller.ask("typed_disputes", **kwargs)
     assert len(provider.requests) == 1
+
+
+@pytest.mark.parametrize("action", ["apply", "drop", "query"])
+def test_unassigned_nested_decision_is_discarded_only_with_complete_real_inventory(tmp_path, action):
+    _, decisions, kwargs = dispute_fixture()
+    extra = {**decisions[0], "id": "invented", "action": action, "replacement": "Invented edit.",
+             "question": "Invented question?", "missing_knowledge": "Invented fact."}
+    decisions.append(extra)
+    provider = FakeProvider([replace(GOOD, parsed={"decisions": decisions})])
+    caller = calls(tmp_path, provider)
+    result = caller.ask("typed_disputes", **kwargs)
+    assert len(result["decisions"]) == 1
+    assert result["decisions"][0]["replacement"] == "familiar"
+    assert result["decisions"][0]["question"] == ""
+    receipt = json.loads(next(caller.directory.glob("calls/*/receipt.json")).read_text())
+    assert receipt["decision_normalization"]["rejected_unassigned_decisions"] == [extra]
+    assert caller.ask("typed_disputes", **kwargs) == result
+    caller.assert_complete()
+    assert len(provider.requests) == 1
+
+
+@pytest.mark.parametrize("field", ["decisions", "comment_decisions"])
+@pytest.mark.parametrize("inventory", ["complete", "missing", "duplicate", "empty"])
+def test_unassigned_flat_decisions_never_fill_missing_or_duplicate_assignments(tmp_path, field, inventory):
+    from galley.fixed_workflow import DECISION, COMMENT_DECISION
+    item = COMMENT_DECISION if field == "comment_decisions" else DECISION
+    schema = {"type": "object", "properties": {field: {"type": "array", "items": item}},
+              "required": [field], "additionalProperties": False}
+    def row(id):
+        return {"id": id, "action": "drop", "question": "", "missing_knowledge": "", "reason": "False positive.",
+                **({"quote": "Text."} if field == "comment_decisions" else {"replacement": ""})}
+    assigned = [] if inventory in {"missing", "empty"} else [row("real")]
+    if inventory == "duplicate":
+        assigned *= 2
+    extra = row("invented")
+    provider = FakeProvider([replace(GOOD, parsed={field: assigned + [extra]})])
+    caller = calls(tmp_path, provider, max_attempts=1)
+    kwargs = dict(model="claude-opus-5", system="Review assigned items.", user="Frozen evidence.",
+                  schema=schema, schema_name="review", coverage={field: {
+                      "ids": [] if inventory == "empty" else ["real"], "id_key": "id", "context_ids": []}})
+    if inventory in {"missing", "duplicate"}:
+        for runner in (caller, calls(tmp_path, provider)):
+            with pytest.raises(fc.FixedCallError, match="invalid_coverage.*exhausted"):
+                runner.ask("review", **kwargs)
+    else:
+        assert caller.ask("review", **kwargs) == {field: assigned}
+        receipt = json.loads(next(caller.directory.glob("calls/*/receipt.json")).read_text())
+        assert receipt["discarded_decisions"]["rejected_unassigned_decisions"] == {field: [extra]}
+        caller.assert_complete()
+    assert len(provider.requests) == 1

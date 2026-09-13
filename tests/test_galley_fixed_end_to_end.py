@@ -526,7 +526,8 @@ def test_invalid_suggestions_across_all_reader_stages_preserve_valid_edits_and_r
 
 
 @pytest.mark.parametrize("recover_exhausted", [False, True])
-def test_nested_dispute_ids_reach_certified_book_and_resume_without_new_calls(tmp_path, monkeypatch, recover_exhausted):
+@pytest.mark.parametrize("unassigned_extra", [False, True])
+def test_nested_dispute_ids_reach_certified_book_and_resume_without_new_calls(tmp_path, monkeypatch, recover_exhausted, unassigned_extra):
     source = tmp_path / "Writer.docx"
     doc = Document()
     doc.add_paragraph("She recieved two letters.")
@@ -542,10 +543,13 @@ def test_nested_dispute_ids_reach_certified_book_and_resume_without_new_calls(tm
             payload = json.loads(user)
             sites = payload.get("sites", [])
             if sites and all(s.get("proposals") for s in sites):
-                return {"decisions": [{"id": p["id"], "action": "apply" if p["category"] == "spelling" else "drop",
+                result = {"decisions": [{"id": p["id"], "action": "apply" if p["category"] == "spelling" else "drop",
                     "replacement": p["replacement"] if p["category"] == "spelling" else "",
                     "reason": "Clear spelling correction." if p["category"] == "spelling" else "No clear error.",
                     "missing_knowledge": "", "question": ""} for s in sites for p in s["proposals"]]}
+                if unassigned_extra:
+                    result["decisions"].append({"id": "invented-proposal", "action": "apply", "replacement": "Invented text.",
+                                               "reason": "Unassigned.", "missing_knowledge": "", "question": ""})
         return result
     readers.answer = nested
     monkeypatch.setattr(fc, "_default_provider", lambda *a, **k: readers)
