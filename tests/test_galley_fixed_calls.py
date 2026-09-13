@@ -793,3 +793,39 @@ def test_unassigned_flat_decisions_never_fill_missing_or_duplicate_assignments(t
         assert receipt["discarded_decisions"]["rejected_unassigned_decisions"] == {field: [extra]}
         caller.assert_complete()
     assert len(provider.requests) == 1
+
+
+@pytest.mark.parametrize("failure", ["schema", "unknown", "budget", "preflight"])
+def test_unattended_skips_are_durable_honest_and_do_not_resubmit(tmp_path, failure):
+    provider = FakeProvider([replace(GOOD, parsed={})] if failure == "schema" else
+                            [TimeoutError("No terminal response")] if failure == "unknown" else None)
+    caller = calls(tmp_path, provider, continue_on_model_failure=True,
+                   **({"max_api_usd": 0} if failure == "budget" else {}))
+    if failure == "preflight":
+        def unavailable(*a, **k):
+            raise RuntimeError("Provider unavailable")
+        caller.provider_factory = unavailable
+    result = ask(caller)
+    assert result["_skipped_read"]["status"] == "skipped"
+    count = len(provider.requests)
+    assert count == {"schema": 3, "unknown": 1, "budget": 0, "preflight": 0}[failure]
+    evidence = fc.validate_fixed_call_evidence(caller.directory, identity=caller.identity)
+    assert any(row["path"].endswith("skipped.json") for row in evidence)
+    budget = (caller.directory / "budget.json").read_bytes()
+    restarted = calls(tmp_path, provider, continue_on_model_failure=True,
+                      **({"max_api_usd": 0} if failure == "budget" else {}))
+    assert ask(restarted) == result
+    assert len(provider.requests) == count
+    assert (caller.directory / "budget.json").read_bytes() == budget
+    folder = next((caller.directory / "calls").iterdir())
+    receipt = json.loads((folder / "receipt.json").read_text())
+    assert receipt["status"] != "completed"
+    if failure == "unknown":
+        assert receipt["status"] == "unknown"
+        assert caller.usage_summary()["charged_output_tokens"] == 100
+    receipt["status"] = "completed"
+    fc._atomic(folder / "receipt.json", receipt)
+    with pytest.raises(fc.FixedCallError):
+        ask(restarted)
+    with pytest.raises(fc.FixedCallError):
+        fc.validate_fixed_call_evidence(caller.directory)

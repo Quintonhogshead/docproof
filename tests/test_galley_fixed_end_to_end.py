@@ -557,12 +557,19 @@ def test_nested_dispute_ids_reach_certified_book_and_resume_without_new_calls(tm
     worker = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode="fixed")
     if recover_exhausted:
         import galley.fixed_decisions as adapter
+        # Reproduce a checkpoint made by the old strict workflow.
+        real_init = fc.FixedCalls.__init__
+        def strict_init(self, *args, **kwargs):
+            kwargs["continue_on_model_failure"] = False
+            real_init(self, *args, **kwargs)
+        monkeypatch.setattr(fc.FixedCalls, "__init__", strict_init)
         real = adapter.grouped_decisions
         monkeypatch.setattr(adapter, "grouped_decisions", lambda *a: None)
         stopped = worker.run()
         assert stopped.outcome == "blocked" and "invalid_coverage" in stopped.reason
         count_before = len(readers.requests)
         monkeypatch.setattr(adapter, "grouped_decisions", real)
+        monkeypatch.setattr(fc.FixedCalls, "__init__", real_init)
     result = worker.run()
     assert result.outcome == "done", result.reason
     if recover_exhausted:
@@ -583,3 +590,51 @@ def test_nested_dispute_ids_reach_certified_book_and_resume_without_new_calls(tm
     raw = {p: p.read_bytes() for p in (worker.workspace / "runs/fixed/calls/calls").glob("*/attempts/*/response.json")}
     assert worker.run().outcome == "done"
     assert len(readers.requests) == count and all(p.read_bytes() == data for p, data in raw.items())
+
+
+@pytest.mark.parametrize("failure", ["poetry", "story", "typed", "numbers", "dispute", "check", "opus", "sol", "fable", "astra"])
+def test_unattended_default_finishes_and_resumes_after_exhausted_reads(tmp_path, monkeypatch, failure):
+    source = tmp_path / "Writer.docx"
+    doc = Document()
+    doc.add_paragraph("She recieved two letters.")
+    doc.save(source)
+    original = source.read_bytes()
+    readers = ScriptedReaders(False)
+    answer = readers.answer
+    def failing(model, user, schema):
+        body = answer(model, user, schema)
+        fields = schema["properties"]
+        payload = {} if "reviewed_paragraph_ids" in fields else json.loads(user)
+        if failure == "dispute" and "reviewed_paragraph_ids" in fields and model == LUNA:
+            body["findings"] = []
+        fail = (failure == "poetry" and "classification" in fields or
+                failure == "story" and "narration" in fields or
+                failure == "typed" and "reviewed_paragraph_ids" in fields or
+                failure == "numbers" and "reviewed_ids" in fields and "sites" in payload or
+                failure == "dispute" and "decisions" in fields and "sites" in payload or
+                failure == "check" and "changes" in payload or
+                failure == "opus" and model == OPUS and "reviewed_ids" in fields or
+                failure == "sol" and model == SOL or failure == "fable" and model == FABLE or
+                failure == "astra" and model == ASTRA)
+        return {} if fail else body
+    readers.answer = failing
+    monkeypatch.setattr(fc, "_default_provider", lambda *a, **k: readers)
+    monkeypatch.setattr(codex_runner, "run_structured", readers.subscription)
+    worker = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode="fixed")
+    result = worker.run()
+    assert result.outcome == "done", result.reason
+    packet = json.loads((worker.workspace / "runs/fixed/result.json").read_text())
+    assert packet["review_complete"] is False and packet["skipped_reads"]
+    assert packet["questions"] == [] and source.read_bytes() == original
+    if failure in {"check", "typed", "dispute"}:
+        assert packet["accepted"] == packet["original"]
+    if failure != "poetry":
+        assert any(model == ASTRA for model, _ in readers.requests)
+    package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
+    assert validate_delivery_package(package)["delivery_ready"] is True
+    report = next((worker.workspace / "runs/final").glob("*Proofreading report.md")).read_text()
+    assert "All required paragraph reads completed" not in report
+    assert "incomplete" in report
+    count = len(readers.requests)
+    assert worker.run().outcome == "done"
+    assert len(readers.requests) == count

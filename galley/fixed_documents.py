@@ -184,6 +184,14 @@ def _verify_result(result, directory):
         raise FixedDocumentError("The fixed workflow has not completed")
     if _hash({k: v for k, v in result.items() if k not in {"usage", "result_sha256"}}) != result.get("result_sha256"):
         raise FixedDocumentError("The fixed result's content no longer matches its receipt")
+    from galley.fixed_skips import validate_skip
+    skipped = []
+    for marker in sorted((Path(directory) / "calls" / "calls").glob("*/skipped.json")):
+        audit = validate_skip(marker.parent)
+        skipped.append({k: audit[k] for k in ("status", "request_sha256", "stage", "model", "reason")})
+    if (sorted(skipped, key=_json) != sorted(result.get("skipped_reads", []), key=_json)
+            or skipped and result.get("review_complete") is not False):
+        raise FixedDocumentError("The result misstates skipped model reviews or reading completeness")
     source = Path(result["source"])
     if "intake" in result["identity"]:
         from galley.fixed_intake import validate_intake
@@ -269,7 +277,10 @@ def _report(result, details):
         lines += [f"- {labels[x['para_id']]}: {json.dumps(x['original_text'], ensure_ascii=False)} → {change}"]
     lines += ["", "## Author questions", ""]
     lines += [f"- {labels[q['para_id']]}: {q['question']}" for q in result["questions"]] or ["None."]
-    lines += ["", "## Completed reading stages", ""]
+    skipped = result.get("skipped_reads", [])
+    lines += ["", "## Processing stages" if skipped else "## Completed reading stages", ""]
+    if skipped:
+        lines += [f"{len(skipped)} model reviews were unavailable and skipped. Unverified suggestions were discarded; review coverage is incomplete.", ""]
     lines += [f"- {stage_labels[s['stage']]}" for s in result["stages"]]
     rejected = [h for h in result["history"] if h.get("rejected_proposal")]
     if rejected:
@@ -285,7 +296,7 @@ def _report(result, details):
         stages = {s["stage"]: json.loads(Path(s["path"]).read_text())["evidence"] for s in result["stages"]}
         sheet = stages.get("story_sheet", {}).get("sheet", {})
         lines += ["", "## Story Sheet and style assumptions", "",
-                  sheet.get("narration", "Poetry: prose style and tense passes do not apply.")]
+                  sheet.get("narration", "Story Sheet unavailable." if skipped else "Poetry: prose style and tense passes do not apply.")]
         lines += ["- " + note for note in sheet.get("notes", [])]
         if sheet and not sheet.get("notes"):
             lines.append("No additional variant or register assumptions were recorded; no independent authority lookup is claimed.")
@@ -313,7 +324,7 @@ def _report(result, details):
                              if p.part in {"word/footnotes.xml", "word/endnotes.xml"})
         lines.append("Real note paragraphs included in reading and accept/reject audits: " +
                      (", ".join(f"{part}: {count}" for part, count in sorted(note_parts.items())) if note_parts else "none present") + ".")
-        lines += ["All required paragraph reads completed. Poetry classification uses distributed samples with a whole-document fallback for mixed/uncertain books. Structure and citation indexes are partial reading aids; no external fact-check or exhaustive dictionary lookup is claimed.",
+        lines += [("Some required reads were skipped; incomplete coverage is recorded in the review evidence. " if skipped else "All required paragraph reads completed. ") + "Poetry classification uses distributed samples with a whole-document fallback for mixed/uncertain books. Structure and citation indexes are partial reading aids; no external fact-check or exhaustive dictionary lookup is claimed.",
                   "Focused checks and local patterns are not a guarantee of finding every error. The final signal scan does not repeat LanguageTool or start another model pass.",
                   "Reject-all audit passed: original text restored exactly, including real notes. Accept-all and clean-copy text agree. Smart quotes and internal-space changes remain tracked."]
         dropped = [h for h in result["history"] if h.get("decision", {}).get("action") == "drop"]
@@ -352,7 +363,8 @@ def package_result(driver, result):
     _save(evidence, result)
     outcome = run / f"{source.stem} - outcome.json"
     outcome_value = "needs_human" if result["editorial_verdict"] == "needs_human" else "done"
-    reason = "Fixed proofreading complete; every required reading and output check passed."
+    reason = ("Fixed proofreading finished with skipped model reviews; unverified suggestions were discarded and output checks passed."
+              if result.get("skipped_reads") else "Fixed proofreading complete; every required reading and output check passed.")
     _save(outcome, {"schema_version": 1, "outcome": outcome_value,
                     "reason": reason,
                     "set_by": "Galley fixed proofreading", "execution_mode": "fixed",
