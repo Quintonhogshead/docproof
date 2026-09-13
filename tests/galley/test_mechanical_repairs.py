@@ -36,6 +36,62 @@ def test_actual_number_change_still_needs_judgment():
     assert _fact('From 2 to 3.', 'From 3 to 2.')
 
 
+@pytest.mark.parametrize('protected', [False, True])
+def test_run2_participle_is_corrected_without_query_unless_dialect_is_protected(
+        tmp_path, protected):
+    text = 'People have went looking for the Wanderer for a hundred years.'
+    src = _manuscript(tmp_path, [text])
+    ids, _ = _para_ids(src)
+    run = _build(tmp_path, src, [])
+    _walk(run, [dict(para_id=ids[0], quote='People have went looking',
+                    suggestion='People have gone looking',
+                    problem='Nonstandard past participle after have')])
+    options = {}
+    if protected:
+        zones = tmp_path / 'dialect.json'
+        zones.write_text(json.dumps({'zones': [dict(label='declared dialect',
+            category='dialect', permission='locked', terms=['have went'])]}))
+        options['intent_zones_file'] = str(zones)
+    provider = _Provider()
+    result = Settler(run, cfg=load_config(_replay_config(tmp_path, **options)),
+                     manuscript=src, error_dir='config/error_types', provider=provider,
+                     options=SettleOptions(mechanical_only=True, verify_delta=False)).run()
+    assert not result.open
+    assert not provider.calls
+    assert _accepted(run)[ids[0]] == (text if protected else text.replace('went', 'gone'))
+    assert not actual_comments(deliverable_docx(run))
+
+
+@pytest.mark.parametrize('corrected,expected', [
+    ('People have went looking!', 'People have went looking!'),
+    ('People has went looking.', 'People have went looking.'),
+])
+def test_verifier_revision_cannot_overwrite_protected_dialect(
+        tmp_path, corrected, expected):
+    original = 'People have went looking.'
+    src = _manuscript(tmp_path, [original])
+    ids, _ = _para_ids(src)
+    run = _build(tmp_path, src, [dict(para_id=ids[0], original_text=original,
+        corrected_text=corrected, error_type='sweep_stacked_punctuation')])
+    assert _accepted(run)[ids[0]] == corrected
+    _walk(run, [], [dict(para_id=ids[0], original_text=original,
+        corrected_text=corrected, verdict='breaks_grammar',
+        detail='Use the standard past participle',
+        fix='People have gone looking!')])
+    zones = tmp_path / 'dialect.json'
+    zones.write_text(json.dumps({'zones': [dict(label='declared dialect',
+        category='dialect', permission='locked', terms=['have went'])]}))
+    provider = _Provider()
+    result = Settler(run, cfg=load_config(_replay_config(tmp_path,
+                         intent_zones_file=str(zones))), manuscript=src,
+                     error_dir='config/error_types', provider=provider,
+                     options=SettleOptions(mechanical_only=True, verify_delta=False)).run()
+    assert not result.open
+    assert not provider.calls
+    assert _accepted(run)[ids[0]] == expected
+    assert not actual_comments(deliverable_docx(run))
+
+
 def test_bradshaw_fixes_land_and_repeated_run_is_idempotent(tmp_path):
     paras = ['He joined the U.S Army and met U.S agents.', 'My stomach sunk.',
              'He returned on day 2.', 'The file is CONFIDENTAL.']

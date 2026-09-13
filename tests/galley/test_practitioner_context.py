@@ -65,7 +65,8 @@ def test_all_current_reference_paths_resolve_from_seeded_workspace(book, tmp_pat
 @pytest.mark.parametrize("phase, required", [
     ("profile", "intake.md"), ("approve", "config.md"),
     ("sweeps", "sweeps.md"), ("ladder", "lanes.md"),
-    ("audit", "house-rules.md"), ("verify", "verification.md"),
+    ("audit", "house-rules.md"), ("adjudicate", "findings.md"),
+    ("verify", "verification.md"),
     ("settle", "comment-reconciliation.md"), ("certify", "delivery.md"),
     ("deliver", "delivery.md"),
 ])

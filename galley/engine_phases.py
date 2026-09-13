@@ -8,9 +8,12 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import shutil
+import uuid
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Callable
+from types import SimpleNamespace
 
 from docproof.utils.files import write_atomic
 
@@ -25,7 +28,10 @@ def _json(path):
 
 
 class EnginePhaseError(ValueError):
-    pass
+    def __init__(self, message, *, retryable=False, kind="integrity"):
+        super().__init__(message)
+        self.retryable = retryable
+        self.kind = kind
 
 
 def _profile_comment_budget(value) -> int:
@@ -90,59 +96,144 @@ class EnginePhases:
         machine = RunStateMachine.load(path)
         approval = _json(self.ws / "approval.json")
         if not machine.reached(state):
+            results_run = self.driver._final_run() if state == "settled" else None
             machine.advance(state, by="galley code execution",
                             source_sha256=sha256_file(self.driver.book),
-                            config_sha256=approval["config_sha256"])
+                            config_sha256=approval["config_sha256"],
+                            results_run=str(results_run.relative_to(self.ws)) if results_run else "")
             machine.save(path)
 
-    def _command(self, phase, name, arguments, outputs, *, acceptable=(0,), validate=None):
-        from galley.driver import PhaseSpec
+    def _available(self, phase):
+        import time
+        factory = getattr(self.driver, "_execution_budget", None)
+        if factory is None:
+            return
+        budget = factory()
+        if hasattr(budget, "wait_available"):
+            progress = getattr(self.driver, "_progress", lambda *a, **k: None)
+            budget.wait_available("code-" + phase,
+                sleep=getattr(self.driver, "sleep", time.sleep),
+                on_wait=lambda error: progress("recovery", phase=phase,
+                    reason="Waiting for the existing operation to finish within its original deadline"))
+        else:
+            budget.assert_available("code-" + phase)
+
+    def _build(self):
         from galley.manifest import sha256_file
-        context = Path(arguments[arguments.index("--context") + 1]) if "--context" in arguments else None
-        run = self.driver._final_run()
-        identity = {"source": sha256_file(self.driver.book),
-                    "config": sha256_file(self._config()), "arguments": arguments,
-                    "context": sha256_file(context) if context else None}
-        fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         from galley.verify import build_fingerprints
         run = self.driver._final_run()
         build = build_fingerprints(run) if run else {}
         if run and (run / "findings.json").is_file():
             build["findings_sha256"] = sha256_file(run / "findings.json")
+        return build
+
+    @staticmethod
+    def _valid(validate):
+        try:
+            return validate is None or bool(validate())
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return False
+
+    def _restore_outputs(self, saved, outputs, *, validate=None):
+        """Restore a completed command's exact files, never invent a receipt."""
+        from galley.manifest import sha256_file
+        if saved.get("status") != "completed" or saved.get("output_build") != self._build():
+            return False
+        copies, hashes = saved.get("output_copies"), saved.get("outputs")
+        if not isinstance(copies, Mapping) or not isinstance(hashes, Mapping):
+            return False
+        restored = []
+        for target in outputs:
+            target = Path(target)
+            digest = hashes.get(str(target))
+            if not isinstance(digest, str):
+                return False
+            if target.is_file() and sha256_file(target) == digest:
+                continue
+            relative = copies.get(str(target))
+            if not isinstance(relative, str):
+                return False
+            copy = (self.directory / relative).resolve()
+            if (not copy.is_relative_to((self.directory / "artifacts").resolve())
+                    or not copy.is_file() or sha256_file(copy) != digest):
+                return False
+            restored.append((target, copy))
+        # Validate archives before replacing surviving evidence. For operations
+        # with a semantic verifier, restore only missing files here; a changed
+        # file may belong to a later valid delta and is handled by the caller.
+        if validate is not None and any(target.exists() for target, _ in restored):
+            return False
+        for target, copy in restored:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            write_atomic(target, copy.read_text("utf-8"))
+        return self._valid(validate)
+
+    def _command(self, phase, name, arguments, outputs, *, acceptable=(0,), validate=None):
+        from docproof import platform_io as fcntl
+        with (self.directory / f"{name}.lock").open("a") as lock:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise EnginePhaseError(f"{name}: another coordinator owns this operation",
+                                       kind="active") from exc
+            try:
+                return self._command_locked(phase, name, arguments, outputs,
+                                            acceptable=acceptable, validate=validate)
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    def _command_locked(self, phase, name, arguments, outputs, *, acceptable=(0,), validate=None):
+        from galley.driver import PhaseSpec, detect_credential_failure
+        from galley.manifest import sha256_file
+        context = Path(arguments[arguments.index("--context") + 1]) if "--context" in arguments else None
+        identity = {"source": sha256_file(self.driver.book),
+                    "config": sha256_file(self._config()), "arguments": arguments,
+                    "context": sha256_file(context) if context else None}
+        fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        build = self._build()
+        self._available(phase)
         receipt = self.directory / f"{name}.json"
+        saved = {}
         if receipt.exists():
-            saved = _json(receipt)
-            if saved["fingerprint"] != fingerprint:
-                raise EnginePhaseError(f"{name}: inputs differ from the saved operation")
-            if saved.get("status") == "running":
-                raise EnginePhaseError(f"{name}: interrupted operation needs receipt reconciliation")
-            if saved.get("status") == "completed":
-                same_outputs = all(p.is_file() and saved["outputs"].get(str(p)) == sha256_file(p)
-                                   for p in outputs)
-                same_build = saved.get("output_build") == build
-                if (not same_build and same_outputs and run and phase == "verify"
-                        and name.startswith("verify-") and arguments[:1] == ["verify"]
-                        and len(outputs) == 2 and {p.name for p in outputs}
-                        == {"change_verify.json", "finished_walk.json"} and validate is not None):
-                    # Only a completed reader may follow an explicit packaging
-                    # transition. Its output files and all other build fields
-                    # stay exact; validate() must still recheck the full proof.
-                    from galley.verify import has_reading_input_transition
-                    prior = saved.get("output_build") or {}
-                    same_build = (
-                        {k: v for k, v in prior.items() if k != "build_sha256"}
-                        == {k: v for k, v in build.items() if k != "build_sha256"}
-                        and has_reading_input_transition(run, prior.get("build_sha256"),
-                                                         build.get("build_sha256")))
-                if same_build and same_outputs and (validate is None or validate()):
-                    return
-                # Later valid phases may supersede these files. The phase
-                # caller must choose a new operation name for a fresh read.
-                raise EnginePhaseError(f"{name}: completed output has changed; reconcile the saved operation")
+            try:
+                saved = _json(receipt)
+                if not isinstance(saved, Mapping) or not isinstance(saved.get("fingerprint"), str):
+                    saved = {}
+            except (ValueError, OSError):
+                saved = {}                 # checkpoint validators remain authoritative
+            if saved.get("fingerprint") != fingerprint and saved:
+                prior = saved.get("identity") or {}
+                prior = prior if isinstance(prior, Mapping) else {}
+                if prior and any(prior.get(k) != identity[k] for k in ("source", "config")):
+                    raise EnginePhaseError(f"{name}: approved inputs differ from the saved operation")
+                # A newer code-owned output path or updated context is fresh
+                # work under the same approval. Legacy receipts without an
+                # identity cannot authorize reuse, but need not prevent a
+                # fresh command from proving its current inputs.
+            elif self._restore_outputs(saved, outputs, validate=validate):
+                return
+        # A killed parent can miss the command's final receipt even though the
+        # reader committed both full gates. Only an independent semantic proof
+        # can adopt that result; file existence alone cannot.
+        if validate is not None and all(p.is_file() for p in outputs) and self._valid(validate):
+            if receipt.exists():
+                history = self.directory / "attempts" / name
+                history.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(receipt, history / (uuid.uuid4().hex + ".json"))
+            self._complete_command(receipt, identity, fingerprint, arguments, build, outputs,
+                                   recovered=True)
+            return
+        # Keep every prior attempt. The driver's durable reservation decides
+        # whether an earlier child is still alive before execute can relaunch.
+        if receipt.exists():
+            history = self.directory / "attempts" / name
+            history.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(receipt, history / (uuid.uuid4().hex + ".json"))
         argv = ["docproof", "galley", *arguments]
-        log_path = self.directory / f"{name}.log"
-        write_atomic(receipt, json.dumps({"fingerprint": fingerprint,
-            "status": "running", "arguments": arguments, "input_build": build}, indent=2))
+        log_path = self.directory / f"{name}-{uuid.uuid4().hex}.log"
+        base = {"fingerprint": fingerprint, "identity": identity,
+                "arguments": arguments, "input_build": build}
+        write_atomic(receipt, json.dumps({**base, "status": "running"}, indent=2))
         env = self.driver._resource_env(phase, self.driver._engine_env)
         env["DOCPROOF_RESOURCE_PARENT_OPERATION"] = name
         spec = PhaseSpec(phase=phase, prompt="", workspace=self.ws,
@@ -150,26 +241,41 @@ class EnginePhases:
                          timeout_s=self.driver.timeout_for(phase))
         result = self.execute(spec)
         if result.returncode not in acceptable or result.limit:
-            write_atomic(receipt, json.dumps({"fingerprint": fingerprint,
-                "status": "failed", "arguments": arguments, "input_build": build,
+            write_atomic(receipt, json.dumps({**base, "status": "failed",
                 "log": str(getattr(result, "log_path", log_path)),
                 "returncode": result.returncode, "limit": result.limit,
                 "reason": result.tail}, indent=2))
             if result.limit == "usage":
                 from docproof.subscription_limits import UsageLimitError
                 raise UsageLimitError(result.tail)
-            raise EnginePhaseError(f"{name}: {result.limit or result.returncode}: {result.tail}")
-        if not all(p.is_file() for p in outputs) or (validate is not None and not validate()):
-            write_atomic(receipt, json.dumps({"fingerprint": fingerprint,
-                "status": "incomplete", "arguments": arguments, "input_build": build}, indent=2))
-            raise EnginePhaseError(f"{name}: command ended without complete required evidence")
-        output_build = build_fingerprints(run) if run else {}
-        if run and (run / "findings.json").is_file():
-            output_build["findings_sha256"] = sha256_file(run / "findings.json")
-        write_atomic(receipt, json.dumps({"fingerprint": fingerprint,
-            "status": "completed", "arguments": arguments,
-            "input_build": build, "output_build": output_build,
-            "outputs": {str(p): sha256_file(p) for p in outputs}}, indent=2))
+            if result.limit == "credentials" or detect_credential_failure(result.tail):
+                from galley.driver import CredentialsError
+                raise CredentialsError(result.tail)
+            hard = (result.limit in {"timeout", "budget", "max_turns"}
+                    or result.returncode in {2, 5, 130, 143})
+            raise EnginePhaseError(f"{name}: {result.limit or result.returncode}: {result.tail}",
+                                   retryable=not hard, kind="transient" if not hard else "limit")
+        if not all(p.is_file() for p in outputs) or not self._valid(validate):
+            write_atomic(receipt, json.dumps({**base, "status": "incomplete"}, indent=2))
+            raise EnginePhaseError(f"{name}: command ended without complete required evidence",
+                                   retryable=True, kind="incomplete")
+        self._complete_command(receipt, identity, fingerprint, arguments, build, outputs)
+
+    def _complete_command(self, receipt, identity, fingerprint, arguments, build, outputs,
+                          *, recovered=False):
+        from galley.manifest import sha256_file
+        hashes = {str(p): sha256_file(p) for p in outputs}
+        copies = {}
+        for index, path in enumerate(outputs):
+            target = self.directory / "artifacts" / receipt.stem / hashes[str(path)] / f"{index}.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.exists():
+                shutil.copyfile(path, target)
+            copies[str(path)] = str(target.relative_to(self.directory))
+        write_atomic(receipt, json.dumps({"fingerprint": fingerprint, "identity": identity,
+            "status": "completed", "arguments": arguments, "input_build": build,
+            "output_build": self._build(), "outputs": hashes, "output_copies": copies,
+            "recovered": recovered}, indent=2))
 
     def _context(self, pass_id):
         parts = []
@@ -228,7 +334,25 @@ class EnginePhases:
             [self.ws / "runs" / "audit.json"])
         self._advance("audited")
 
-    def _coverage(self, run, *, require_full_passes=False, only_pass=None):
+    def _reader(self, pass_id):
+        from docproof.providers.subagent import SubagentProvider, resolve_model
+        from docproof.__main__ import _effective_cfg, _verification_policy
+        model = READER_MODELS[pass_id]
+        cfg = _effective_cfg(SimpleNamespace(config=str(self._config()), stage=None, genre=None))
+        return (SubagentProvider(model=model, effort=cfg.api.effort),
+                f"subagent:{resolve_model(model)}",
+                dict(context=self._context(pass_id).read_text("utf-8"), engine="subagent",
+                     pass_id=pass_id, required_pass_ids=PASS_IDS, policy_id=POLICY_ID,
+                     config_sha256=_verification_policy(SimpleNamespace(), cfg)["config_sha256"]))
+
+    def _coverage(self, run, *, require_full_passes=False, only_pass=None, directory=None):
+        try:
+            return self._coverage_checked(run, require_full_passes=require_full_passes,
+                                          only_pass=only_pass, directory=directory)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return False
+
+    def _coverage_checked(self, run, *, require_full_passes=False, only_pass=None, directory=None):
         from galley.verify import (build_fingerprints, applied_edits, accepted_text,
                                    verification_artifact_matches_build)
         fp = build_fingerprints(run)
@@ -239,19 +363,13 @@ class EnginePhases:
             dirs.append((run / "verification" / "type-compare", "type-compare"))
         if only_pass:
             dirs = [(run if only_pass == "primary" else run / "verification" / only_pass, only_pass)]
+        if directory is not None:
+            dirs = [(Path(directory), only_pass or "primary")]
         for directory, pass_id in dirs:
             if require_full_passes:
                 from galley.verify import validate_complete_pass
-                from docproof.providers.subagent import SubagentProvider, resolve_model
-                from docproof.__main__ import _effective_cfg, _verification_policy
-                from types import SimpleNamespace
-                model = READER_MODELS[pass_id]
-                cfg = _effective_cfg(SimpleNamespace(config=str(self._config()), stage=None, genre=None))
-                provider = SubagentProvider(model=model, effort=cfg.api.effort)
-                if not validate_complete_pass(run, directory, provider,
-                        f"subagent:{resolve_model(model)}", context=self._context(pass_id).read_text("utf-8"),
-                        engine="subagent", pass_id=pass_id, required_pass_ids=PASS_IDS,
-                        policy_id=POLICY_ID, config_sha256=_verification_policy(SimpleNamespace(), cfg)["config_sha256"]):
+                provider, model, options = self._reader(pass_id)
+                if not validate_complete_pass(run, directory, provider, model, **options):
                     return False
             for filename, count_key, count, gate in (
                     ("change_verify.json", "applied_edits", len(applied_edits(run)), "changes"),
@@ -274,21 +392,94 @@ class EnginePhases:
                         return False
         return True
 
+    def _restore_archived_read(self, run, pass_id, output):
+        """A validated archive can repair projections without another reader."""
+        from galley.manifest import sha256_file
+        receipt = self.directory / "initial-coverage.json"
+        try:
+            saved = _json(receipt)
+            paths = {}
+            for relative, digest in saved.get("artifacts", {}).items():
+                path = (self.directory / relative).resolve()
+                if (path.parent.name == pass_id
+                        and path.name in ("change_verify.json", "finished_walk.json")
+                        and path.is_relative_to((self.directory / "coverage").resolve())
+                        and path.is_file() and sha256_file(path) == digest):
+                    paths[path.name] = path
+            if len(paths) != 2 or len({p.parent for p in paths.values()}) != 1:
+                return False
+            directory = next(iter(paths.values())).parent
+            if not self._coverage(run, require_full_passes=True, only_pass=pass_id, directory=directory):
+                return False
+            self._available("verify")
+            for name, path in paths.items():
+                target = output / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if target.exists() and sha256_file(target) != sha256_file(path):
+                    backup = self.directory / "attempts" / "reading-artifacts"
+                    backup.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(target, backup / (uuid.uuid4().hex + ".json"))
+                write_atomic(target, path.read_text("utf-8"))
+            return True
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return False
+
+    def _recover_read(self, run, pass_id, output):
+        """Resume a named pass's saved windows; never claim another read ran."""
+        from docproof import platform_io as fcntl
+        from galley.verify import verification_invocation, _digest
+        # If a completed command lost or damaged its final artifacts, reopen
+        # only its exact transaction as incomplete. The reader independently
+        # validates each cached window and buys only missing/invalid responses.
+        # A changed book/model/context produces a different identity and cannot
+        # reuse those windows. Do not alter a currently locked invocation.
+        self._available("verify")
+        provider, model, options = self._reader(pass_id)
+        invocation = verification_invocation(run, provider, model, output_dir=output, **options)
+        state_path = invocation.root / "state.json"
+        if not state_path.is_file():
+            return
+        with (invocation.root / "lock").open("a") as lock:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise EnginePhaseError(f"{pass_id}: this reader is still active", kind="active") from exc
+            try:
+                state = _json(state_path)
+                if (isinstance(state, Mapping) and state.get("status") == "completed"
+                        and state.get("identity_sha256") == _digest(invocation._identity())):
+                    state.update(status="incomplete", recovery="restore missing or stale output artifacts")
+                    write_atomic(state_path, json.dumps(state, indent=2))
+            except (OSError, ValueError, TypeError):
+                # Corrupt transaction state cannot identify reusable windows;
+                # the ordinary reader creates a fresh provable invocation.
+                pass
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
     def verify(self, *, cycle=0):
         run = self.driver._final_run()
         if run is None:
             raise EnginePhaseError("Verification needs a completed manuscript")
         exhausted = self._exhausted_review_budget()
-        if cycle == 0 and ((self.directory / "initial-coverage.json").exists() or exhausted):
-            if not self._initial_coverage_saved(run) or not self._coverage(run, require_full_passes=True):
-                raise EnginePhaseError("Saved independent reads do not prove current full coverage")
-            # Preserve the original archive and operation receipts. An explicit
-            # package transition can leave current projections with other bytes.
-            return
-        if exhausted:
-            raise EnginePhaseError("Review budget exhausted; a fresh verification cycle cannot start")
+        if cycle == 0 and self._initial_coverage_saved(run) and self._coverage(run, require_full_passes=True):
+            self._available("verify")
+            return                     # preserve original archives across proven packaging transitions
+        if exhausted and not self._coverage(run, require_full_passes=True):
+            for pass_id in PASS_IDS:
+                output = run if pass_id == "primary" else run / "verification" / pass_id
+                self._restore_archived_read(run, pass_id, output)
+            if not self._coverage(run, require_full_passes=True):
+                raise EnginePhaseError("Review budget exhausted; incomplete verification cannot start a fresh read",
+                                       kind="limit")
         for pass_id, model in READER_MODELS.items():
             out = run if pass_id == "primary" else run / "verification" / pass_id
+            # Existing same-build proof includes its actual request/response
+            # windows, model, context, and policy. Never pay for that read again.
+            if not (all((out / name).is_file() for name in ("change_verify.json", "finished_walk.json"))
+                    and self._coverage(run, require_full_passes=True, only_pass=pass_id)):
+                if not self._restore_archived_read(run, pass_id, out):
+                    self._recover_read(run, pass_id, out)
             args = ["verify", str(run), "--config", str(self._config()),
                     "--engine", "subagent", "--model", model,
                     "--verification-pass", pass_id, "--verification-policy", POLICY_ID,
@@ -299,21 +490,27 @@ class EnginePhases:
                           acceptable=(0, 1), validate=lambda p=pass_id:
                           self._coverage(run, require_full_passes=True, only_pass=p))
         if not self._coverage(run, require_full_passes=True):
-            raise EnginePhaseError("Both independent reads must prove complete coverage of this manuscript")
-        import shutil
+            raise EnginePhaseError("Both independent reads must prove complete coverage of this manuscript",
+                                   retryable=True, kind="incomplete")
         from galley.manifest import sha256_file
+        current = {(pass_id, name): sha256_file(
+                       (run if pass_id == "primary" else run / "verification" / pass_id) / name)
+                   for pass_id in PASS_IDS for name in ("change_verify.json", "finished_walk.json")}
+        digest = hashlib.sha256(json.dumps(sorted(current.items())).encode()).hexdigest()
         artifacts = {}
-        archive = self.directory / "coverage" / str(cycle)
-        for pass_id in PASS_IDS:
+        # Content-addressed archives preserve old evidence even if the same
+        # cycle repairs a torn archive or receives newer valid artifacts.
+        archive = self.directory / "coverage" / str(cycle) / digest
+        for (pass_id, name), expected in current.items():
             source = run if pass_id == "primary" else run / "verification" / pass_id
-            for name in ("change_verify.json", "finished_walk.json"):
-                target = archive / pass_id / name
-                target.parent.mkdir(parents=True, exist_ok=True)
-                if target.exists() and sha256_file(target) != sha256_file(source / name):
-                    raise EnginePhaseError("Original full-read receipt has changed")
-                if not target.exists():
-                    shutil.copyfile(source / name, target)
-                artifacts[str(target.relative_to(self.directory))] = sha256_file(target)
+            target = archive / pass_id / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists() and sha256_file(target) != expected:
+                damaged = target.with_name(target.name + ".damaged-" + uuid.uuid4().hex)
+                target.rename(damaged)
+            if not target.exists():
+                shutil.copyfile(source / name, target)
+            artifacts[str(target.relative_to(self.directory))] = expected
         write_atomic(self.directory / "initial-coverage.json", json.dumps({
             "schema_version": 1, "cycle": cycle,
             "source": sha256_file(self.driver.book), "config": sha256_file(self._config()),
@@ -322,6 +519,12 @@ class EnginePhases:
         }, indent=2))
 
     def _initial_coverage_saved(self, run):
+        try:
+            return self._initial_coverage_checked(run)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return False
+
+    def _initial_coverage_checked(self, run):
         from galley.manifest import sha256_file
         path = self.directory / "initial-coverage.json"
         if not path.is_file():
@@ -351,7 +554,8 @@ class EnginePhases:
         raw = path.read_bytes()
         summary = summarize(path)
         if path.read_bytes() != raw:
-            raise EnginePhaseError("Review accounting changed during budget inspection")
+            raise EnginePhaseError("Review accounting changed during budget inspection",
+                                   retryable=True, kind="transient")
         group = summary.get("groups", {}).get("review")
         if not isinstance(group, dict):
             return None
@@ -389,10 +593,11 @@ class EnginePhases:
         state["max_rounds"] = max_rounds
         exhausted = self._exhausted_review_budget()
         if exhausted:
-            if state.get("pending_verify_cycle") is not None:
-                raise EnginePhaseError("Budget closeout cannot skip pending repair verification")
-            if not self._initial_coverage_saved(run) or not self._coverage(run, require_full_passes=True):
-                raise EnginePhaseError("Budget closeout requires both saved independent reads and current full coverage")
+            if (state.get("pending_verify_cycle") is not None
+                    or not self._initial_coverage_saved(run)
+                    or not self._coverage(run, require_full_passes=True)):
+                self.verify(cycle=state.get("pending_verify_cycle", state["rounds"]))
+            state.pop("pending_verify_cycle", None)
             from galley.review_closeout import close_review_budget
             initial = self.directory / "initial-coverage.json"
             settlement = close_review_budget(run,
@@ -411,14 +616,20 @@ class EnginePhases:
             self.verify(cycle=state["pending_verify_cycle"])
             state.pop("pending_verify_cycle")
             write_atomic(state_path, json.dumps(state, indent=2))
-        if not self._initial_coverage_saved(run):
-            raise EnginePhaseError("Original two-pass reading receipts are missing or changed")
-        if state["rounds"] == 0 and not self._coverage(run, require_full_passes=True):
-            raise EnginePhaseError("Both independent reads must complete before settlement")
+        if (not self._initial_coverage_saved(run)
+                or (state["rounds"] == 0 and not self._coverage(run, require_full_passes=True))):
+            self.verify(cycle=state["rounds"])
+        if state["rounds"] and not (run / "settlement.json").is_file():
+            prior = self.directory / f"settle-{state['rounds']}.json"
+            if prior.is_file():
+                self._restore_outputs(_json(prior), [run / "settlement.json"])
         while True:
             items = open_items(run)
             ids = {r.id for r in items}
             coverage = self._coverage(run)
+            if not coverage:
+                self.verify(cycle=state["rounds"])
+                coverage = self._coverage(run)
             action = review_action(coverage_complete=coverage, open_ids=ids,
                 prior_ids=set(state["prior_ids"]), rounds=state["rounds"],
                 max_rounds=max_rounds,
@@ -428,7 +639,8 @@ class EnginePhases:
                 "open_ids": sorted(ids), "fingerprints": build_fingerprints(run)})
             write_atomic(state_path, json.dumps(state, indent=2))
             if action == "blocked":
-                raise EnginePhaseError("Required reading evidence is missing")
+                raise EnginePhaseError("Required reading evidence is missing",
+                                       retryable=True, kind="incomplete")
             if action.startswith("final_review") and (run / "settlement.json").is_file():
                 break
             if state["rounds"] >= max_rounds:
@@ -458,7 +670,10 @@ class EnginePhases:
                 state.pop("pending_verify_cycle")
                 write_atomic(state_path, json.dumps(state, indent=2))
         if not self._coverage(run):
-            raise EnginePhaseError("Repaired manuscript still has unread or stale evidence")
+            self.verify(cycle=state["rounds"])
+            if not self._coverage(run):
+                raise EnginePhaseError("Repaired manuscript still has unread or stale evidence",
+                                       retryable=True, kind="incomplete")
         self._advance("settled")
 
     def run(self, phase):

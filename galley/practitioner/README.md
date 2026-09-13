@@ -55,6 +55,20 @@ CLI defaults remain distinct. Approved configs are reused after the gate, never
 rewritten by ladder. Editorial models, lanes, independent readers, and two-pass
 coverage are unchanged by this reference layout.
 
+The unattended driver now runs whole-book adjudication after audit and any
+approved reread, before verification. It accounts for completed bespoke sweeps,
+the paid ladder, and the subscription fleet together in `runs/ADJUDICATE.md`,
+screens their combined findings, and creates the corrected build. Advancing to
+`adjudicated` requires the report and the built manuscript and pins that build
+for verification. If settlement later creates another build, its validated
+state transition updates the selection before final review and delivery.
+Existing runs at settlement or later keep their progress.
+
+Decision logs distinguish the selected build's settlement counts from retained
+workspace snapshots and measured execution attempts. Snapshot round counts may
+overlap and are never added together. Reserved time or turns from an interrupted
+operation are not reported as measured reading work.
+
 ## Launch
 
 For a whole book unattended, use `docproof galley drive` (below). `launch.sh`
@@ -300,18 +314,34 @@ Author-knowledge questions belong in final manuscript comments, and mechanical
 judgments use the book and house rules. Notes and recovery evidence are preserved
 in the final decision log.
 
-A failed operation or missing required state receives at most one continuation,
-using the original phase's remaining turns and time. Missing usage never grants
-a fresh allowance. Recovery resumes checkpoints rather than repeating completed
-paid lanes; it cannot change frozen approval, expand scope/spend, reduce coverage,
-or bypass verification. A rejected unapproved draft can be corrected once within
-the remaining profile budget, then the same deterministic gate decides again.
+A failed operation or missing required state continues while it makes measurable
+progress, using the phase's remaining turns and time. A capped session that
+leaves new evidence can receive at most two recorded grants of half the phase
+allowance, with the same conversation resumed when its transcript is available.
+These grants do not expand the approved API spending or reading scope. Three
+consecutive failures with no evidence progress stop immediate recovery (four for
+temporary transport failures). These counts survive restarts; new logs and timestamps do
+not count as progress. Missing usage never grants a fresh allowance. A rejected
+unapproved draft can be corrected within the remaining profile budget, and the
+same deterministic gate decides again. Frozen approval, scope, spending, required
+coverage and verification remain authoritative.
+
+Code commands keep durable process receipts, so a restarted coordinator can rejoin
+live work or recover completed work. Verification restores validated saved outputs
+and reruns only missing or invalid windows. A lost final-build pointer is recovered
+from source-bound selection evidence rather than guessed from modification times.
+Missing derived certificates and delivery copies are rebuilt against the exact
+reviewed manuscript. Completed model output is reused; confirmed transient or
+invalid-output Codex failures retry within the original saved request envelope.
 
 If required work still cannot complete, the enrolled driver records an operational
 `blocked` result and preserves checkpoints without overriding Astra's editorial
-verdict. The agent holds an exhausted operation against repeated spending on the
-same release and moves on to other books; a later deployment enables resume.
-Authentication and infrastructure recovery remain service-level operations.
+verdict. Temporary outages with remaining allowance stay eligible for service
+retry; exhausted or repeatedly stalled work is held against repeated spending.
+Authentication and subscription availability use service-level recovery. Delivery
+keeps retrying its frozen package with capped backoff and one persistence alert;
+it never abandons a finished manuscript merely because an upload cutoff elapsed.
+Matching duplicate remote copies are adopted only after content verification.
 Explicit `--approve email` / `manual` modes retain their requested interactive
 behavior. Exit codes: **0** finished, **8** operationally blocked, **7** final
 human-review/legacy outcome, **2** setup error. Evidence lives in `runs/driver/`.

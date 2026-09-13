@@ -267,25 +267,28 @@ def test_prompt_schema_and_result_are_pinned(fake, tmp_path):
 
 @pytest.mark.parametrize("output", ["not json", "{}", "[]", '{"ready":true,"reason":"ok","extra":0}',
                                   '{"ready":1,"reason":"ok"}'])
-def test_invalid_output_is_operational_and_never_replayed(fake, tmp_path, output):
+def test_invalid_output_can_resume_within_original_allowance(fake, tmp_path, output):
     fake.output = output
     with pytest.raises(AstraReviewError, match="invalid structured") as failure:
         run(tmp_path)
-    assert failure.value.operational and not failure.value.retryable
+    assert failure.value.operational and failure.value.retryable
     assert receipt(tmp_path)["failure_category"] == "invalid_output"
     assert "editorial_verdict" not in receipt(tmp_path)
-    with pytest.raises(AstraReviewError, match="previous Codex review"):
-        run(tmp_path)
-    assert len(fake.calls) == 2
+    fake.output = json.dumps(RESULT)
+    assert run(tmp_path) == RESULT
+    assert receipt(tmp_path)["attempt"] == 2
+    assert len(fake.calls) == 4
+    assert run(tmp_path) == RESULT
+    assert len(fake.calls) == 4
 
 
-def test_missing_final_output_blocks_without_replay(fake, tmp_path):
+def test_missing_final_output_retries_only_the_failed_request(fake, tmp_path):
     fake.write_output = False
     with pytest.raises(AstraReviewError, match="invalid structured"):
         run(tmp_path)
-    with pytest.raises(AstraReviewError, match="previous Codex review"):
-        run(tmp_path)
-    assert len(fake.calls) == 2
+    fake.write_output = True
+    assert run(tmp_path) == RESULT
+    assert len(fake.calls) == 4
 
 
 def test_timeout_kills_process_group_and_blocks_replay(fake, tmp_path, monkeypatch):
@@ -308,9 +311,10 @@ def test_rate_limit_is_generic_and_never_leaks_raw_diagnostics(fake, tmp_path):
         run(tmp_path)
     assert "SECRET_AUTH_VALUE" not in str(failure.value)
     assert "SECRET_AUTH_VALUE" not in json.dumps(receipt(tmp_path))
-    with pytest.raises(AstraReviewError, match="previous Codex review"):
-        run(tmp_path)
-    assert len(fake.calls) == 2
+    assert not failure.value.retryable  # Do not hammer an exhausted subscription.
+    fake.returncode, fake.stderr = 0, ""
+    assert run(tmp_path) == RESULT     # A later availability recovery can resume.
+    assert len(fake.calls) == 4
 
 
 def test_explicit_reset_archives_exited_failure_and_authorizes_one_new_attempt(fake, tmp_path):
@@ -371,14 +375,14 @@ def test_spawn_failure_is_safe_to_try_after_repair(fake, tmp_path):
     assert len(fake.calls) == 4
 
 
-def test_interrupted_record_is_not_resubmitted(fake, tmp_path):
+def test_completed_process_output_is_adopted_after_receipt_interruption(fake, tmp_path):
     run(tmp_path)
     directory = cr.request_directory(tmp_path / "work", "chapter-1")
     record = receipt(tmp_path)
     record.update(status="running")
     (directory / "receipt.json").write_text(json.dumps(record))
-    with pytest.raises(AstraReviewError, match="previous Codex review"):
-        run(tmp_path)
+    assert run(tmp_path) == RESULT
+    assert receipt(tmp_path)["recovered_completion_at"]
     assert len(fake.calls) == 2
 
 

@@ -1037,6 +1037,35 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
                             owner_key=key)
         if had_note and fix == res.owner_corrected:
             return Decision("revert", "editorial_note", owner_key=key)
+        if zones is not None and getattr(zones, "any", False):
+            from types import SimpleNamespace
+            from docproof.intent_zones import _edit_span, permits
+
+            def violation(corrected: str):
+                # A verifier's replacement can change words outside the
+                # original edit-map segment. Check its complete source-based
+                # change, with the same occurrence/boundary rules as finish().
+                candidate = SimpleNamespace(original_text=res.owner_original,
+                    corrected_text=corrected, occurrence=owner.get("occurrence", 1))
+                span = _edit_span(candidate, source.get(res.para_id, ""))
+                if span is None:
+                    return None
+                lo, hi, inserted = span
+                zone = zones.zone_at(res.para_id, lo, hi, insert_text=inserted)
+                if zone is not None and not permits(
+                        zone, edit_kind(res.owner_original, corrected)):
+                    return zone
+                return None
+
+            zone = violation(fix)
+            if zone is not None:
+                label = getattr(zone, "label", "") or getattr(zone, "category", "")
+                # Preserve a permitted existing correction when the walker
+                # merely relitigates protected dialect. If the existing edit
+                # already violated the zone, restore the author's source.
+                if violation(res.owner_corrected) is not None:
+                    return Decision("revert", f"intent_zone:{label}", owner_key=key)
+                return Decision("drop", f"intent_zone:{label}")
         numeral = spells_out_chicago_numeral(res.owner_corrected, fix,
                                              source.get(res.para_id, ""))
         if numeral:
@@ -1800,6 +1829,16 @@ class Settler:
         log.info("settle: rebuilding %s (%d finding rows)", snapshot, len(rows))
         cfg = copy.deepcopy(self.cfg)
         cfg.output_dir = str(self.run_dir)
+        # kept_rows() intentionally returns only the deliverable's live
+        # decisions. Preserve declined rows separately: free source scans
+        # otherwise propose the same rejected question at the next rebuild.
+        # An unplaced row is a writer failure, so it is eligible for recovery
+        # rather than treated as an editorial rejection.
+        if (self.run_dir / "findings.json").is_file():
+            retired = [r for r in load_envelope(self.run_dir).get("findings", [])
+                       if terminal_state(r)[0] == "dropped"
+                       and terminal_state(r)[1] != "unplaced"]
+            rows = list(rows) + retired
         if self.opt.keep_snapshots:
             snap = self.run_dir / "settle" / snapshot
             snap.mkdir(parents=True, exist_ok=True)

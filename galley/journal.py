@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from galley.phases import ALL_PHASES as PHASE_ORDER, COPYEDIT_PHASES as _SCOPED_OUT
+from galley.run_history import RunHistory, load_history
 
 JOURNAL_NAME = "DECISION_LOG.md"
 #: The hand-off suffix, beside " - letter.md" and " - style-sheet.md".
@@ -29,6 +30,7 @@ PHASE_TITLES: dict[str, str] = {
     "ladder": "Mechanical ladder — every edit, and the reason recorded for it",
     "flights": "Copy-edit flights",
     "audit": "Audit — where a miss would hide",
+    "adjudicate": "Adjudicate — resolving findings before verification",
     "reread": "Wave-2 re-read",
     "verify": "Verify — reading the finished text for sense",
     "settle": "Settle — closing every open item",
@@ -117,6 +119,7 @@ class JournalSources:
     settlement: dict[str, Any] | None = None
     certificate: str = ""
     outcome: dict[str, Any] | None = None
+    history: RunHistory = field(default_factory=RunHistory)
     notes: list[str] = field(default_factory=list)
 
     @classmethod
@@ -148,6 +151,8 @@ class JournalSources:
             certificate=certificate,
             outcome=_load(run / "outcome.json")
             or (_load(ws / "deliverable" / "outcome.json") if ws else None),
+            history=load_history(ws, run, env if isinstance(env, dict) else None)
+            if ws else RunHistory(),
             notes=[text for text in (
                 _text(ws / "QUESTIONS.md"),
                 _text(ws / "runs" / "driver" / "deferred-questions.jsonl"),
@@ -225,8 +230,8 @@ def render_journal(run_dir: str | Path, *, workspace: str | Path | None = None,
     title = book or _book_name(src)
     doc.line(f"# Decision log — {title}")
     doc.line("")
-    doc.para("Every action Galley took on this book, in order, with the reason "
-             "recorded at the time. Rendered from the run's own artifacts by "
+    doc.para("Recorded decisions and retained execution evidence for this book, "
+             "with the reasons recorded at the time. Rendered from run artifacts by "
              "`docproof galley journal`; nothing here is written by hand.")
     if generated_at:
         doc.para(f"*Run `{src.run_dir}` · generated {generated_at}*")
@@ -235,6 +240,7 @@ def render_journal(run_dir: str | Path, *, workspace: str | Path | None = None,
 
     _section_summary(doc, src)
     _section_driver(doc, src)
+    _section_history(doc, src)
     if src.notes:
         doc.heading(2, "Local notes retained for final review")
         doc.para("These are recorded observations, including historical failures; "
@@ -277,6 +283,9 @@ def _not_run(doc: _Doc, why: str) -> None:
 
 def _section_summary(doc: _Doc, src: JournalSources) -> None:
     doc.heading(2, "At a glance")
+    doc.para("These counts describe the selected build only. Earlier snapshots "
+             "and retained session receipts are reported separately below; "
+             "a clean final build does not mean no earlier repair work occurred.")
     rows = _rows(src.envelope)
     applied = [r for r in rows if r.get("applied") is True]
     queried = [r for r in rows if r.get("queried") is True]
@@ -295,9 +304,10 @@ def _section_summary(doc: _Doc, src: JournalSources) -> None:
         counts.append(("Residuals the finished-text walk raised",
                        len(src.finished_walk.get("residuals") or [])))
     if isinstance(src.settlement, dict):
-        counts.append(("Items settled",
+        counts.append(("Items settled in this build",
                        len(src.settlement.get("records") or [])))
-        counts.append(("Settle rounds", src.settlement.get("rounds", 0)))
+        counts.append(("Settle rounds recorded for this build",
+                       src.settlement.get("rounds", 0)))
     doc.line("| | |")
     doc.line("|---|---|")
     for label, value in counts:
@@ -311,9 +321,12 @@ def _section_summary(doc: _Doc, src: JournalSources) -> None:
 def _section_driver(doc: _Doc, src: JournalSources) -> None:
     doc.heading(2, "Driver events")
     if not isinstance(src.driver, dict):
-        _not_run(doc, "no `runs/driver/driver.json`; this run was driven by "
-                      "hand, one phase at a time")
+        doc.para("No `runs/driver/driver.json` was retained. Other retained "
+                 "session evidence, if available, is listed below.")
         return
+    doc.para("The current driver invocation's ledger follows. A resumed "
+             "invocation may omit earlier phases; retained evidence follows "
+             "in the next section.")
     gate = src.driver.get("gate") or {}
     for entry in src.driver.get("phases") or []:
         if not isinstance(entry, dict):
@@ -342,6 +355,75 @@ def _section_driver(doc: _Doc, src: JournalSources) -> None:
     if stopped:
         doc.para(f"**The run stopped at `{stopped}`:** "
                  f"{_clip(src.driver.get('reason'), 600)}")
+
+
+def _section_history(doc: _Doc, src: JournalSources) -> None:
+    doc.heading(2, "Retained execution history")
+    history = src.history
+    if history.sessions:
+        doc.heading(3, "Phase session receipts")
+        doc.para("Each row is a distinct retained receipt, including earlier "
+                 "invocations and recovery attempts. Identical copies share a "
+                 "row. Execution-ledger and driver-clock durations take precedence "
+                 "over the matching CLI result, so an operation is not counted twice. "
+                 "Running reservations and charged turn ceilings are not reported "
+                 "as measured work.")
+        doc.line("| Phase / attempt evidence | Minutes | Parent turns | Status | Timing source |")
+        doc.line("|---|---:|---:|---|---|")
+        for session in history.sessions:
+            paths = ", ".join(f"`{_clip(path, 200)}`" for path in session.paths)
+            minutes = (f"{session.duration_ms / 60000:.2f}"
+                       if session.duration_ms is not None else "not recorded")
+            turns = (str(session.num_turns) if session.num_turns is not None
+                     else "not applicable" if session.phase.startswith("code-")
+                     else "not recorded")
+            doc.line(f"| {_clip(session.phase, 60)} · {paths} | {minutes} | "
+                     f"{turns} | {_clip(session.status, 80)} | {session.timing_source} |")
+        doc.line("")
+        timed = [s.duration_ms for s in history.sessions if s.duration_ms is not None]
+        counted = [s.num_turns for s in history.sessions if s.num_turns is not None]
+        if timed:
+            doc.para(f"Recorded session durations total **{sum(timed) / 60000:.2f} "
+                     f"minutes** across {len(timed)} timed receipt(s).")
+        if counted:
+            doc.para(f"Recorded parent-agent turns: **{sum(counted)}** across "
+                     f"{len(counted)} receipt(s).")
+        doc.para("These are retained session measurements, not total elapsed "
+                 "runtime or time wasted. They include reading and tools, omit "
+                 "nested-reader turn counts, and may omit overwritten legacy "
+                 "attempts or work without a receipt. Missing measurements "
+                 "are not zero. No API charge is inferred from subscription "
+                 "session cost estimates.")
+    else:
+        doc.para("No phase session timing receipts were retained. Total runtime "
+                 "and earlier attempts cannot be reconstructed from the "
+                 "selected build's counts.")
+    if history.streams_without_result:
+        doc.para("Session streams with no completion receipt (duration and turn "
+                 "counts unavailable): " + ", ".join(
+                     f"`{_clip(path, 200)}`" for path in history.streams_without_result) + ".")
+
+    if history.snapshots:
+        doc.heading(3, "Findings and settlement snapshots")
+        doc.para("Retained snapshots with the same recorded source path as the "
+                 "selected build are listed below. These may include detector "
+                 "outputs, rebuilds, and intermediate settlement views. "
+                 "Identical copies share a row; their counts are not added "
+                 "together because successive snapshots can carry the same "
+                 "findings and settlement rounds. A shared path alone does "
+                 "not prove that source bytes were unchanged.")
+        doc.line("| Snapshot | Recorded at | Applied | Queries | Settle rounds | Settlement decisions |")
+        doc.line("|---|---|---:|---:|---:|---:|")
+        for snapshot in history.snapshots:
+            paths = ", ".join(f"`{_clip(path, 200)}`" for path in snapshot.paths)
+            if snapshot.selected:
+                paths += " **(selected build)**"
+            rounds = str(snapshot.rounds) if snapshot.rounds is not None else "not recorded"
+            decisions = (str(snapshot.decisions) if snapshot.decisions is not None
+                         else "not recorded")
+            doc.line(f"| {paths} | {_clip(snapshot.generated_at, 50) or 'not recorded'} "
+                     f"| {snapshot.applied} | {snapshot.queries} | {rounds} | {decisions} |")
+        doc.line("")
 
 
 def _section_profile(doc: _Doc, src: JournalSources) -> None:
@@ -678,7 +760,7 @@ def _section_settle(doc: _Doc, src: JournalSources) -> None:
     records = [r for r in (settlement.get("records") or [])
                if isinstance(r, dict)]
     conv = settlement.get("convergence") or {}
-    doc.para(f"{len(records)} decision record(s) over "
+    doc.para(f"This build's settlement receipt records {len(records)} decision record(s) over "
              f"{settlement.get('rounds', 0)} round(s) on "
              f"`{settlement.get('engine', '?')}`. Corrections are applied or rejected "
              f"with a reason. Author questions require missing author knowledge; "
@@ -718,6 +800,19 @@ def _section_settle(doc: _Doc, src: JournalSources) -> None:
                        f"\"{_clip(rec.get('after_replacement'), 80)}\""
                        if rec.get("after_replacement") else ""))
             doc.end_list()
+
+
+def _section_adjudicate(doc: _Doc, src: JournalSources) -> None:
+    report = _text(src.workspace / "runs" / "ADJUDICATE.md") if src.workspace else ""
+    if not report:
+        _not_run(doc, "no `runs/ADJUDICATE.md` was retained; later phase state "
+                      "alone does not establish an adjudication pass")
+        return
+    doc.para("The adjudication phase retained its findings inventory and "
+             "dispositions in `runs/ADJUDICATE.md`. Recorded report follows:")
+    for line in report.splitlines():
+        doc.line("> " + line)
+    doc.line("")
 
 
 def _section_certify(doc: _Doc, src: JournalSources) -> None:
@@ -797,6 +892,7 @@ _SECTIONS = {
     "ladder": _section_ladder,
     "flights": _section_flights,
     "audit": _section_audit,
+    "adjudicate": _section_adjudicate,
     "reread": _section_reread,
     "verify": _section_verify,
     "settle": _section_settle,

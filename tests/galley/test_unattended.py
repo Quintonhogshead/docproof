@@ -127,14 +127,14 @@ def test_an_incomplete_phase_recovers_within_its_original_limits(
     assert recovery.argv[recovery.argv.index("-p") + 1] == recovery.prompt
 
 
-def test_two_real_failures_block_without_inventing_a_human_question(
+def test_repeated_no_progress_failures_block_without_inventing_a_human_question(
         book, tmp_path, workspace):
     spawn = MeteredSpawner(workspace, fail="ladder")
     result = _driver(book, tmp_path, spawn=spawn, only_phases=["ladder"],
                      astra_review=True).run()
     assert result.outcome == "blocked"
     assert result.recovery_exhausted and not result.asked
-    assert spawn.phases == ["ladder", "ladder"]
+    assert spawn.phases == ["ladder", "ladder", "ladder"]
     assert "exited 3" in result.reason
     assert not (workspace / "runs" / "outcome.json").exists()
     assert json.loads((workspace / "runs" / "driver" / "blocked.json").read_text())[
@@ -189,7 +189,7 @@ def test_recovery_cannot_approve_a_plan_that_stays_over_budget(
     result = _driver(book, tmp_path, spawn=spawn, astra_review=True).run()
     assert result.outcome == "blocked"
     assert not result.gate["approved"]
-    assert spawn.phases == ["profile", "profile"]
+    assert spawn.phases == ["profile", "profile", "profile", "profile"]
     assert not (workspace / "approval.json").exists()
 
 
@@ -220,7 +220,7 @@ def test_repeated_notes_cannot_hide_a_missing_required_checkpoint(
     assert result.outcome == "blocked"
     assert result.recovery_exhausted and not result.asked
     assert "did not advance the ledger" in result.reason
-    assert len(spawn.calls) == 2
+    assert len(spawn.calls) == 3
 
 
 @pytest.mark.parametrize("broken", ["missing_plan", "invalid_yaml"])

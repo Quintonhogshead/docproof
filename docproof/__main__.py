@@ -3449,6 +3449,36 @@ def _galley_state(args) -> int:
         return 0
 
     if getattr(args, "advance", None):
+        adjudicated_run = None
+        adjudicated_artifacts = []
+        if args.advance == "adjudicated":
+            from galley.state_machine import ArtifactHash
+            from galley.verify import deliverable_docx
+            if not getattr(args, "results", None):
+                print("error: adjudication requires --results for the curated build",
+                      file=sys.stderr)
+                return 2
+            adjudicated_run = Path(args.results).resolve()
+            try:
+                adjudicated_run.relative_to((run / "runs").resolve())
+                envelope = adjudicated_run / "findings.json"
+                findings = json.loads(envelope.read_text("utf-8"))
+                if not isinstance(findings, dict) or not isinstance(findings.get("findings"), list):
+                    raise ValueError("curated build has no findings array")
+                manuscript = deliverable_docx(adjudicated_run)
+                if manuscript is None:
+                    raise ValueError("curated build has no manuscript")
+                report = run / "runs" / "ADJUDICATE.md"
+                if not report.read_text("utf-8").strip():
+                    raise ValueError("findings consolidation report is empty")
+                # The manuscript and envelope are expected to change during
+                # settlement. Stamping their pre-settle hashes here would make
+                # a valid later resume look like artifact corruption.
+                adjudicated_artifacts = [ArtifactHash(path=str(report.resolve()),
+                    sha256=sha256_file(report))]
+            except (OSError, ValueError) as e:
+                print(f"error: incomplete adjudication evidence: {e}", file=sys.stderr)
+                return 2
         if args.advance in ("settled", "certified", "delivered") \
                 and getattr(args, "results", None):
             from galley.settle import open_items, terminal_state
@@ -3476,14 +3506,44 @@ def _galley_state(args) -> int:
                     print(f"  - {line}", file=sys.stderr)
                 print("  run `docproof galley settle` first.", file=sys.stderr)
                 return 7
+            if args.advance == "settled":
+                # Settlement may rebuild into a new directory. Keep the
+                # selected corrected document current instead of sending the
+                # pre-settlement pin to final review and delivery.
+                from galley.verify import deliverable_docx
+                try:
+                    candidate = results.resolve()
+                    candidate.relative_to((run / "runs").resolve())
+                    if deliverable_docx(candidate) is None:
+                        raise ValueError("settled build has no manuscript")
+                    adjudicated_run = candidate
+                except (OSError, ValueError) as e:
+                    print(f"error: incomplete settled build: {e}", file=sys.stderr)
+                    return 2
         try:
             # No caller-supplied `at`: advance() stamps the system clock.
             rec = machine.advance(args.advance, by=args.by,
-                                  source_sha256=src_hash, config_sha256=cfg_hash)
+                                  source_sha256=src_hash, config_sha256=cfg_hash,
+                                  results_run=(str(adjudicated_run.relative_to(run.resolve()))
+                                               if adjudicated_run is not None else ""),
+                                  artifacts=adjudicated_artifacts)
         except StateError as e:
             print(f"error: {e}", file=sys.stderr)
             return 2
         run.mkdir(parents=True, exist_ok=True)
+        if adjudicated_run is not None:
+            from docproof.utils.files import write_atomic
+            pin = run / "runs" / "driver" / "final-run.json"
+            pin.parent.mkdir(parents=True, exist_ok=True)
+            write_atomic(pin, json.dumps({
+                "run": str(adjudicated_run.relative_to(run.resolve())),
+                "selected_by": "adjudicate" if args.advance == "adjudicated" else "settle",
+                "source_sha256": src_hash or machine.source_sha256,
+                "at": rec.at,
+            }, indent=2))
+        # A completed state must never outlive the selected build's receipt.
+        # If saving state is interrupted, resume repeats the preceding phase
+        # against the already selected artifacts instead of guessing a build.
         machine.save(state_path)
         print(f"advanced to {rec.state!r} (from {len(machine.history)} "
               f"recorded state(s))")

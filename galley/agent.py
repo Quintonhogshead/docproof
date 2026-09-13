@@ -333,12 +333,15 @@ def code_id() -> str:
     return f"{__version__}@{image}" if image else __version__
 
 
-# Retry incomplete delivery without rerunning the book, up to
-# MAX_DELIVERY_ATTEMPTS.
+# Retry incomplete delivery without rerunning the book. A prolonged outage
+# earns one alert, not a permanent failure of a completed proofread.
 PENDING_DELIVERY = "pending_delivery"
-MAX_DELIVERY_ATTEMPTS = 6
-#: Backoff between delivery retries, in poll intervals: 1, 2, 4, 8, ...
+DELIVERY_ALERT_ATTEMPTS = 6
+# Compatibility name for callers that used the former retry cutoff.
+MAX_DELIVERY_ATTEMPTS = DELIVERY_ALERT_ATTEMPTS
+#: Backoff between delivery retries, in poll intervals, capped at one hour.
 DELIVERY_BACKOFF_BASE = 2
+MAX_DELIVERY_BACKOFF_S = 3600.0
 
 
 @dataclass
@@ -572,6 +575,12 @@ class Agent:
                 ledger.books[book.file_id] = {"request_id": book.request_id,
                                               "previous_runs": history}
                 ledger.save()
+
+        # Older releases permanently abandoned a finished package after six
+        # upload failures. Recover only the same still-requested, validated
+        # package; a reset/cancellation or missing/changed artifact stays put.
+        for book in books:
+            self._resume_abandoned_delivery(book, ledger)
 
         # Retry pending delivery before starting another book.
         self.retry_deliveries(ledger, report)
@@ -864,7 +873,8 @@ class Agent:
         outcome = getattr(result, "outcome", "needs_human")
         reason = getattr(result, "reason", "")
         report.outcome, report.reason = outcome, reason
-        if outcome == "blocked" and getattr(result, "recovery_exhausted", False):
+        if (outcome == "blocked" and getattr(result, "recovery_exhausted", False)
+                and not getattr(result, "retry_later", False)):
             self._hold_for_new_code(book, ledger, report, slug, folder, reason)
             return
         if outcome == "blocked":
@@ -962,7 +972,52 @@ class Agent:
         it stopped on."""
         entry = ledger.claimed(file_id)
         return (entry.get("operational_status") == HELD_FOR_CODE
-                and entry.get("held_version") == code_id())
+                and entry.get("held_version") == code_id()
+                and not self._temporary_hold_can_resume(entry))
+
+    def _temporary_hold_can_resume(self, entry: dict[str, Any]) -> bool:
+        """Release an old transport hold only with a proven remaining allowance.
+
+        This grants no new time, turns, or API spend. The resumed driver still
+        checks the current downloaded source and enforces its durable budgets.
+        """
+        import math
+        from galley.recovery import transient_failure
+        if not transient_failure(entry.get("reason", "")):
+            return False
+        try:
+            stamp = datetime.fromisoformat(str(entry["updated_at"]).replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                return False
+            if self.wall_clock() < stamp.timestamp() + max(self.poll_interval_s, 60):
+                return False
+            ws = (self.root / str(entry["slug"])).resolve()
+            ws.relative_to(self.root.resolve())
+            driver = json.loads((ws / "runs/driver/driver.json").read_text("utf-8"))
+            budget = json.loads((ws / "runs/driver/execution-budget.json").read_text("utf-8"))
+            state = json.loads((ws / "state.json").read_text("utf-8"))
+            if not state.get("source_sha256") or state["source_sha256"] != budget.get("source_sha256"):
+                return False
+            phase = driver["stopped_at"]
+            if driver.get("execution_mode") == "code":
+                phase = "code-" + phase
+            limits = budget["limits"][phase]
+            attempts = [r for r in budget["attempts"] if r.get("phase") == phase]
+            if not attempts or any(r.get("status") == "running" for r in attempts):
+                return False
+            turns, seconds = limits["turns"], limits["seconds"]
+            if (type(turns) is not int or turns < 0 or type(seconds) not in (int, float)
+                    or not math.isfinite(seconds) or seconds <= 0):
+                return False
+            for row in attempts:
+                if (type(row.get("turns")) is not int or row["turns"] < 0
+                        or type(row.get("seconds")) not in (int, float)
+                        or not math.isfinite(row["seconds"]) or row["seconds"] < 0):
+                    return False
+            return (sum(r["seconds"] for r in attempts) < seconds
+                    and (turns == 0 or sum(r["turns"] for r in attempts) < turns))
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
 
     def fetch_book(self, book: AwaitingBook) -> Path:
         """The Book 1, on this Mac, as a .docx."""
@@ -1099,7 +1154,7 @@ class Agent:
             self.log(f"{book.name}: {outcome} — {reason[:200]}")
             return
         attempts = int(entry.get("delivery_attempts") or 0) + 1
-        wait = self.poll_interval_s * (DELIVERY_BACKOFF_BASE ** (attempts - 1))
+        wait = self._delivery_wait(attempts)
         ledger.record(book.file_id, PENDING_DELIVERY, name=book.name,
                       slug=slug, folder_id=folder_id, outcome=outcome,
                       reason=reason[:400],
@@ -1112,8 +1167,53 @@ class Agent:
         self.log(f"{book.name}: {outcome} — the verdict is written but "
                  f"{len(files) - len(uploaded_names)} hand-off file(s) could "
                  f"not be uploaded{f' ({why})' if why else ''}; delivery "
-                 f"will be retried (attempt {attempts} of "
-                 f"{MAX_DELIVERY_ATTEMPTS}).")
+                 f"will be retried (attempt {attempts}).")
+
+    def _delivery_wait(self, attempts: int) -> float:
+        """Bound outage traffic without making the next retry unreachable."""
+        return min(MAX_DELIVERY_BACKOFF_S, self.poll_interval_s *
+                   DELIVERY_BACKOFF_BASE ** min(max(attempts - 1, 0), 32))
+
+    def _resume_abandoned_delivery(self, book: AwaitingBook, ledger: Ledger) -> None:
+        entry = ledger.claimed(book.file_id)
+        if (entry.get("state") != FAILED or entry.get("delivery") != "abandoned"
+                or not entry.get("verified_publication")
+                or entry.get("request_id", "") != book.request_id
+                or entry.get("folder_id") != (self.drive_folder_override or book.folder_id)):
+            return
+        from galley.astra_review import AstraReviewError, validate_receipt
+        from galley.manifest import sha256_file
+        from galley.verify import deliverable_docx
+        try:
+            workspace = (self.root / str(entry["slug"])).resolve()
+            workspace.relative_to(self.root.resolve())
+            package = json.loads((workspace / "runs/driver/package.json").read_text("utf-8"))
+            run = Path(package["run"]).resolve()
+            run.relative_to(workspace)
+            receipt = validate_receipt(run)
+            manuscript = deliverable_docx(run)
+            human = (package.get("kind") == "human_review"
+                     and receipt["review"]["editorial_verdict"] == "needs_human")
+            if (package.get("source_id") != book.file_id
+                    or (not receipt.get("delivery_ready") and not human)
+                    or manuscript is None
+                    or receipt["packet_sha256"] != package["packet_sha256"]
+                    or sha256_file(manuscript) != package["build_sha256"]):
+                return
+            artifacts = package.get("artifacts") or []
+            if len(artifacts) < (3 if human else 8):
+                return
+            for item in artifacts:
+                path = Path(item["path"]).resolve()
+                path.relative_to(workspace)
+                if not path.is_file() or sha256_file(path) != item["sha256"]:
+                    return
+        except (OSError, ValueError, KeyError, TypeError, AstraReviewError):
+            return
+        ledger.record(book.file_id, PENDING_DELIVERY, delivery="pending",
+                      next_delivery_at=0, delivery_retry_alerted=True,
+                      recovered_abandoned_delivery_at=_now())
+        self.log(f"{book.name}: resuming the validated delivery abandoned by an older release.")
 
     def _upload_missing(self, files: list[Path], folder_id: str,
                         uploaded_names: dict[str, str]) -> bool:
@@ -1150,9 +1250,7 @@ class Agent:
 
     def retry_deliveries(self, ledger: Ledger, report: RunReport,
                          *, now: float | None = None) -> None:
-        """Retry due deliveries with exponential backoff; abandon them after
-        MAX_DELIVERY_ATTEMPTS.
-        """
+        """Retry due deliveries with capped backoff, preserving completed work."""
         clock = time.time() if now is None else now
         for file_id in ledger.pending_deliveries():
             entry = ledger.claimed(file_id)
@@ -1163,24 +1261,20 @@ class Agent:
             name = str(entry.get("name") or file_id)
             outcome = str(entry.get("outcome") or "needs_human")
             attempts = int(entry.get("delivery_attempts") or 0)
-            if attempts >= MAX_DELIVERY_ATTEMPTS:
-                ledger.record(file_id, FAILED, delivery="abandoned")
-                self.log(f"{name}: delivery abandoned after {attempts} "
-                         f"attempt(s) — put {len(files)} hand-off file(s) in "
-                         f"folder {folder} by hand.")
-                report.skipped.append(f"{name} (delivery abandoned)")
+            if attempts >= DELIVERY_ALERT_ATTEMPTS and not entry.get("delivery_retry_alerted"):
+                ledger.record(file_id, PENDING_DELIVERY, delivery_retry_alerted=True)
                 self._alarm(
-                    f"{name}: hand-off could not be delivered",
+                    f"{name}: hand-off delivery is still pending",
                     f"The proofread of {name} finished ({outcome}) but its "
                     f"hand-off could not be uploaded to Drive folder {folder} "
-                    f"in {attempts} attempts, so the agent has stopped "
-                    f"trying. The files are on {self.host} under "
+                    f"in {attempts} attempts. The agent will keep retrying "
+                    f"with a wait of at most one hour, without rereading the book. "
+                    f"The files are on {self.host} under "
                     f"{self.root / str(entry.get('slug') or '')}/handoff/:\n"
                     + "".join(f"  - {f.name}\n" for f in files)
                     + f"Last error: {entry.get('delivery_error') or '?'}\n"
                     f"DocWatch is still waiting on this book.")
-                self._beat(last_error=f"{name}: delivery abandoned")
-                continue
+                self._beat(last_error=f"{name}: delivery still pending")
             uploaded_names = dict(entry.get("uploaded_names") or {})
             if entry.get("verified_publication"):
                 ok = self._retry_verified_publication(entry, folder, uploaded_names)
@@ -1196,7 +1290,7 @@ class Agent:
                 report.delivered.append(name)
                 continue
             attempts += 1
-            wait = self.poll_interval_s * (DELIVERY_BACKOFF_BASE ** (attempts - 1))
+            wait = self._delivery_wait(attempts)
             ledger.record(file_id, PENDING_DELIVERY,
                           uploaded_names=uploaded_names,
                           uploaded=list(uploaded_names.values()),
