@@ -22,6 +22,7 @@ RUN_STATES = (
     "mechanical_complete",
     "copyedit_complete",
     "audited",
+    "adjudicated",
     "settled",
     "astra_reviewed",
     "certified",
@@ -47,6 +48,7 @@ class RunStateRecord(BaseModel):
     note: str = ""
     source_sha256: str = ""
     config_sha256: str = ""
+    results_run: str = ""
     artifacts: list[ArtifactHash] = Field(default_factory=list)
 
 
@@ -76,7 +78,7 @@ class RunStateMachine(BaseModel):
 
     def advance(self, to_state: str, *, at: str = "", by: str = "",
                 note: str = "", source_sha256: str = "",
-                config_sha256: str = "",
+                config_sha256: str = "", results_run: str = "",
                 artifacts: list[ArtifactHash] | None = None) -> RunStateRecord:
         """Append a transition and return it. Allow the current state or a
         later state; reject backward and unknown transitions.
@@ -94,6 +96,7 @@ class RunStateMachine(BaseModel):
                              note=note,
                              source_sha256=source_sha256,
                              config_sha256=config_sha256,
+                             results_run=results_run,
                              artifacts=list(artifacts or []))
         self.history.append(rec)
         return rec

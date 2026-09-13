@@ -2412,7 +2412,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
            batch: bool = False, coverage=None, verify_provider=None,
            judge_held: list[dict] | None = None,
            chapter_batch_reads: dict | None = None, on_phase=None,
-           settle_locked_queries: bool = False) -> Outputs:
+           settle_locked_queries: bool = False,
+           report_only: list | None = None) -> Outputs:
     """Validate, write tracked changes, save, and report.
 
     `coverage` (a CoverageLedger, if the caller tracked one) records which
@@ -2650,7 +2651,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
         on_phase("writing")
     # Verifier rejections were never candidates for a tracked change, but they
     # belong in the report so the author sees what the overseer set aside.
-    validated = validated + verifier_rejected
+    validated = validated + verifier_rejected + list(report_only or ())
     fmt = prepared.fmt
     # A note at the top of the file naming the words the spell scan took on
     # trust — placed before the edits, since it only inserts comment range
@@ -2662,6 +2663,17 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
         fmt.annotate_excluded_words(prepared.pkg, prepared.doc,
                                     prepared.spell.lexicon)
     stats = fmt.apply_tracked_changes(prepared.pkg, prepared.doc, validated, cfg)
+    # The Word writer checks generated questions against the text that
+    # actually landed. Keep those decisions in the report without presenting
+    # a resolved question as an unplaced comment or reviving it on replay.
+    reconciled = {id(f): why for f, why in getattr(stats, "reconciled", ())}
+    if reconciled:
+        validated = [dataclasses.replace(
+            f, status=("rejected_duplicate" if reconciled[id(f)]
+                       == "duplicate_question" else "rejected_noop"),
+            force_query=False, silent=True,
+            explanation=f"{f.explanation} [Resolved: {reconciled[id(f)]}]")
+            if id(f) in reconciled else f for f in validated]
 
     # Shadow-only examination accounting. It observes the final validator and
     # writer outcomes but cannot add to `validated`, change `stats`, or touch the

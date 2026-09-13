@@ -1,14 +1,16 @@
 """Serialized, subscription-only Astra calls through the supported Codex CLI.
 
 This transport does not use the Responses API or copy authentication tokens.
-Only a completed, hash-matching result can be reused. An interrupted generation
-stops for operational recovery instead of silently spending the allowance twice.
+Only a completed, hash-matching result can be reused. Confirmed exited failures
+can resume within their original saved allowance; ambiguous generations remain
+protected from duplicate submission.
 """
 from __future__ import annotations
 
 from docproof import platform_io as fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -25,6 +27,7 @@ from typing import Any
 from galley.astra_review import AstraReviewError, MODEL, REASONING_EFFORT, _schema_check
 
 PROTOCOL_VERSION = 1
+MAX_AUTOMATIC_ATTEMPTS = 3
 MAX_OUTPUT_BYTES = 16 * 1024 * 1024
 _TAIL_BYTES = 64 * 1024
 _EVENT_TYPES = {"thread.started", "turn.started", "turn.completed", "turn.failed",
@@ -38,6 +41,11 @@ _AUTH_OPTIONS = ["-c", 'model_provider="openai"', "-c", 'forced_login_method="ch
 
 class _StartError(OSError):
     """Popen failed before a child existed, so generation is safe to retry."""
+
+
+class CodexRetryableError(AstraReviewError):
+    """A confirmed exited attempt can resume within its saved original budget."""
+    retryable = True
 
 
 def _json(value: Any) -> str:
@@ -211,6 +219,9 @@ def _safe_events(stream) -> dict:
 
 def _failure_category(text: str) -> str:
     lowered = text.lower()
+    if any(s in lowered for s in ("cancelled by user", "canceled by user",
+                                   "user cancelled", "user canceled")):
+        return "cancelled"
     if any(s in lowered for s in ("usage limit", "rate limit", "quota", "usage_limit")):
         return "subscription_limit"
     if any(s in lowered for s in ("not logged in", "unauthorized", "authentication", "refresh token", "login")):
@@ -259,6 +270,83 @@ def _cached_result(directory: Path, receipt: dict, request_sha256: str, schema: 
     if receipt.get("result_sha256") != _hash(result):
         raise AstraReviewError("Saved Codex review result has changed; it cannot be reused.")
     _schema_check(result, schema, "Codex review")
+    return result
+
+
+def _retry_allowed(receipt: dict) -> bool:
+    budget = receipt.get("execution_budget") or {}
+    seconds, used = budget.get("timeout_seconds"), budget.get("elapsed_seconds")
+    attempt, maximum = receipt.get("attempt"), budget.get("max_attempts")
+    return (receipt.get("status") == "operational_failure"
+            and receipt.get("process_exited") is True
+            and type(receipt.get("exit_code")) is int
+            and receipt.get("failure_category") in {
+                "cli_failure", "invalid_output", "authentication", "subscription_limit"}
+            and type(seconds) in (int, float) and math.isfinite(seconds)
+            and type(used) in (int, float) and math.isfinite(used)
+            and 0 <= used < seconds
+            and type(attempt) is int and type(maximum) is int
+            and 1 <= attempt < maximum <= MAX_AUTOMATIC_ATTEMPTS)
+
+
+def _archive_automatic_retry(directory: Path, receipt: dict) -> dict:
+    """Preserve failed output before making the same frozen request runnable."""
+    archives = _private_dir(directory / "attempts")
+    archive = Path(tempfile.mkdtemp(prefix=f"{receipt['attempt']:04d}-", dir=archives))
+    for filename in ("request.json", "receipt.json", "schema.json", "final.json", "result.json"):
+        source = directory / filename
+        if source.exists():
+            destination = archive / filename
+            shutil.copyfile(source, destination)
+            fcntl.private_path(destination, 0o600)
+            with destination.open("rb+") as copied:
+                os.fsync(copied.fileno())
+    authorization = {"kind": "automatic_within_original_budget",
+                     "previous_receipt_sha256": _hash(receipt),
+                     "previous_attempt": receipt["attempt"],
+                     "next_attempt": receipt["attempt"] + 1,
+                     "failure_category": receipt["failure_category"],
+                     "recorded_at": _now(), "archive": str(archive)}
+    _atomic(archive / "retry-authorization.json", authorization)
+    for filename in ("final.json", "result.json"):
+        (directory / filename).unlink(missing_ok=True)
+    replacement = {"protocol_version": PROTOCOL_VERSION,
+                   "request_sha256": receipt["request_sha256"],
+                   "transport": "codex_subscription", "model": receipt["model"],
+                   "reasoning_effort": receipt["reasoning_effort"],
+                   "status": "preflight", "submitted": False,
+                   "attempt": receipt["attempt"] + 1,
+                   "execution_budget": dict(receipt["execution_budget"]),
+                   "retry_authorization": authorization, "created_at": _now()}
+    _atomic(directory / "receipt.json", replacement)
+    return replacement
+
+
+def _adopt_completed_output(directory: Path, receipt: dict, schema: dict) -> dict | None:
+    """Close the exit-to-receipt crash window without submitting another call."""
+    if (receipt.get("status") != "running" or receipt.get("process_exited") is not True
+            or type(receipt.get("exit_code")) is not int or receipt["exit_code"] != 0
+            or not (receipt.get("event_counts") or {}).get("turn.completed")):
+        return None
+    result_path, output_path = directory / "result.json", directory / "final.json"
+    try:
+        if result_path.is_file() and receipt.get("result_sha256"):
+            result = _load(result_path)
+            if _hash(result) != receipt["result_sha256"]:
+                return None
+        elif output_path.is_file() and receipt.get("output_sha256"):
+            if hashlib.sha256(output_path.read_bytes()).hexdigest() != receipt["output_sha256"]:
+                return None
+            result = _load(output_path)
+        else:
+            return None
+        _schema_check(result, schema, "Codex review")
+    except (OSError, AstraReviewError):
+        return None
+    _atomic(result_path, result)
+    receipt.update(status="completed", result_sha256=_hash(result),
+                   recovered_completion_at=_now())
+    _atomic(directory / "receipt.json", receipt)
     return result
 
 
@@ -370,8 +458,9 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
     """Return a structured answer using the worker's ChatGPT login.
 
     All calls sharing GALLEY_CODEX_HOME serialize, including authentication.
-    The timeout includes queueing. Preflight failures may be tried again after
-    configuration is repaired; a generation that started is never auto-replayed.
+    The timeout includes queueing. Confirmed failed generations can resume the
+    same request within a persisted time/attempt envelope; completed requests
+    are reused and ambiguous legacy generations are never auto-replayed.
     A result is an editorial input, never itself a human-proofreading verdict.
     """
     if (Path(work_dir) / 'cancel-review.txt').exists():
@@ -397,7 +486,8 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
     if evidence is not None:
         request['evidence'] = evidence
     request_sha256 = _hash(request)
-    deadline = time.monotonic() + timeout_seconds
+    started = time.monotonic()
+    deadline = started + timeout_seconds
     home = codex_home()
     directory = request_directory(work_dir, request_id)
     with _serialized(home, deadline):
@@ -410,24 +500,67 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
         else:
             _atomic(request_path, request)
         retry_fields: dict[str, Any] = {"attempt": 1}
+        unsubmitted_receipt = False
+        budget = {"timeout_seconds": timeout_seconds, "elapsed_seconds": 0.0,
+                  "max_attempts": MAX_AUTOMATIC_ATTEMPTS}
         if receipt_path.exists():
             receipt = _load(receipt_path)
             if not isinstance(receipt, dict) or receipt.get("request_sha256") != request_sha256:
                 raise AstraReviewError("Saved Codex review receipt does not match its request.")
-            if receipt.get("status") == "completed" or receipt.get("submitted") is not False:
+            if receipt.get("status") == "completed":
                 result = _cached_result(directory, receipt, request_sha256, schema)
+                # A crash may have written the transport completion before its
+                # matching book-ledger completion. This append is idempotent.
+                _resource_receipt(receipt)
                 _resource_receipt(receipt, reused=True)
                 return result
+            recovered = _adopt_completed_output(directory, receipt, schema)
+            if recovered is not None:
+                _resource_receipt(receipt)
+                return recovered
+            if receipt.get("submitted") is not False:
+                if not _retry_allowed(receipt):
+                    return _cached_result(directory, receipt, request_sha256, schema)
+                receipt = _archive_automatic_retry(directory, receipt)
+            unsubmitted_receipt = receipt.get("submitted") is False
             retry_fields = {key: receipt[key] for key in ("attempt", "retry_authorization") if key in receipt}
+            if receipt.get("execution_budget"):
+                saved = receipt["execution_budget"]
+                seconds, used = saved.get("timeout_seconds"), saved.get("elapsed_seconds")
+                maximum = saved.get("max_attempts")
+                if (type(seconds) not in (int, float) or not math.isfinite(seconds)
+                        or type(used) not in (int, float) or not math.isfinite(used)
+                        or not 0 <= used <= seconds
+                        or type(maximum) is not int or not 1 <= maximum <= MAX_AUTOMATIC_ATTEMPTS):
+                    raise AstraReviewError("Saved Codex execution allowance is invalid.")
+                budget = {"timeout_seconds": min(seconds, timeout_seconds),
+                          "elapsed_seconds": used, "max_attempts": maximum}
+        used_before = budget["elapsed_seconds"]
+        deadline = min(deadline, started + budget["timeout_seconds"] - used_before)
+        if deadline <= time.monotonic():
+            raise AstraReviewError("Codex request exhausted its original execution allowance.")
         schema_path, output_path = directory / "schema.json", directory / "final.json"
         _atomic(schema_path, schema)
-        # Unfinished output can only be from a preflight-only attempt here.
+        # The receipt explicitly proves no generation was submitted. Retain
+        # unexpected preflight output for diagnosis, but do not let it block
+        # the unchanged, authorized request or treat it as a reviewed result.
         if output_path.exists():
-            raise AstraReviewError("Unexpected unfinished Codex output requires operational reconciliation.")
+            if not unsubmitted_receipt:
+                raise AstraReviewError("Codex output without a submission receipt cannot be safely reconciled.")
+            orphan_dir = _private_dir(directory / "preflight-output")
+            orphan = orphan_dir / (str(time.time_ns()) + ".json")
+            os.replace(output_path, orphan)
+            fcntl.private_path(orphan, 0o600)
         receipt = {"protocol_version": PROTOCOL_VERSION, "request_sha256": request_sha256,
                    "transport": "codex_subscription", "model": model,
                    "reasoning_effort": reasoning_effort, "status": "preflight",
-                   "submitted": False, "created_at": _now(), **retry_fields}
+                   "submitted": False, "created_at": _now(),
+                   "execution_budget": budget, **retry_fields}
+
+        def record_elapsed(*, exhausted=False):
+            budget["elapsed_seconds"] = (budget["timeout_seconds"] if exhausted else
+                used_before + max(0.0, time.monotonic() - started))
+
         _atomic(receipt_path, receipt)
         _resource_receipt(receipt)
         binary = _binary(codex_bin)
@@ -435,6 +568,7 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
         try:
             _check_login_locked(binary, env=env, cwd=directory, deadline=deadline)
         except AstraReviewError:
+            record_elapsed()
             receipt.update(status="preflight_failed", failure_category="authentication")
             _atomic(receipt_path, receipt)
             _resource_receipt(receipt)
@@ -474,26 +608,39 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
             # tool processes can run under a separate sandbox identity.
             executed = _execute(argv, prompt=prompt, env=env, cwd=Path(work_dir).resolve(), timeout=remaining)
         except _StartError as exc:
+            record_elapsed()
             receipt.update(status="preflight_failed", submitted=False, failure_category="cli_start")
             _atomic(receipt_path, receipt)
             _resource_receipt(receipt)
             raise AstraReviewError("The Codex CLI could not start; no model request was submitted.") from exc
         except OSError as exc:
+            record_elapsed()
             receipt.update(status="operational_failure", failure_category="cli_io")
             _atomic(receipt_path, receipt)
             _resource_receipt(receipt)
             raise AstraReviewError("Codex review encountered a local I/O failure after starting. "
                                    "No automatic retry was submitted.") from exc
+        record_elapsed(exhausted=executed["timed_out"])
         receipt.update(finished_at=_now(), process_exited=type(executed["returncode"]) is int,
                        exit_code=executed["returncode"], **executed["events"])
-        if executed["timed_out"] or executed["returncode"] != 0:
-            category = "timeout" if executed["timed_out"] else _failure_category(
-                executed["stdout_tail"] + "\n" + executed["stderr_tail"])
+        if output_path.is_file() and output_path.stat().st_size <= MAX_OUTPUT_BYTES:
+            receipt["output_sha256"] = hashlib.sha256(output_path.read_bytes()).hexdigest()
+        category = ("timeout" if executed["timed_out"] else
+                    "cancelled" if executed["returncode"] in (-2, 130) else
+                    _failure_category(executed["stdout_tail"] + "\n" + executed["stderr_tail"])
+                    if executed["returncode"] != 0 else "")
+        if category:
             receipt.update(status="operational_failure", failure_category=category)
-            _atomic(receipt_path, receipt)
+        # Persist process completion and output identity before parsing. A
+        # coordinator interruption here can adopt this exact completed output.
+        _atomic(receipt_path, receipt)
+        if executed["timed_out"] or executed["returncode"] != 0:
             _resource_receipt(receipt)
-            raise AstraReviewError(f"Codex subscription review stopped ({category}). "
-                                   "No automatic retry or paid API fallback was submitted.")
+            error = CodexRetryableError if category == "cli_failure" and _retry_allowed(receipt) else AstraReviewError
+            raise error(f"Codex subscription review stopped ({category}). "
+                        + ("The same request can resume within its original saved allowance."
+                           if error is CodexRetryableError else
+                           "No automatic retry or paid API fallback was submitted."))
         try:
             result = _load(output_path)
             _schema_check(result, schema, "Codex review")
@@ -501,8 +648,11 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
             receipt.update(status="operational_failure", failure_category="invalid_output")
             _atomic(receipt_path, receipt)
             _resource_receipt(receipt)
-            raise AstraReviewError("Codex returned an incomplete or invalid structured review. "
-                                   "No automatic retry was submitted.") from None
+            error = CodexRetryableError if _retry_allowed(receipt) else AstraReviewError
+            raise error("Codex returned an incomplete or invalid structured review. "
+                        + ("The same request can resume within its original saved allowance."
+                           if error is CodexRetryableError else
+                           "The saved retry allowance is exhausted.")) from None
         _atomic(directory / "result.json", result)
         fcntl.private_path(output_path, 0o600)
         receipt.update(status="completed", result_sha256=_hash(result))

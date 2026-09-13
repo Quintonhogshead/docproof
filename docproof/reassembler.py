@@ -40,6 +40,9 @@ class ReassemblyStats:
     # the model reads plain text and cannot see italics, so it reports every
     # title it finds and this is where the correct ones land.
     already_set: tuple[str, ...] = ()
+    # Exact finding objects prevent an id reused by two lanes from sharing a
+    # disposition. The report keeps these rows, without stale margin notes.
+    reconciled: tuple[tuple[Finding, str], ...] = ()
 
 
 
@@ -446,6 +449,7 @@ class _Comments:
 
     def attach(self, p, first_el, last_el, text: str) -> None:
         cid = str(next(self.ids))
+        self.last_id = cid
         af, al = _p_level(first_el, p), _p_level(last_el, p)
         start = etree.Element(qn("w:commentRangeStart"), {qn("w:id"): cid})
         end = etree.Element(qn("w:commentRangeEnd"), {qn("w:id"): cid})
@@ -464,6 +468,20 @@ class _Comments:
         cr = etree.SubElement(cp, R_TAG)
         ctxt = etree.SubElement(cr, T_TAG)
         set_text(ctxt, text)
+
+    def remove(self, p, cid: str) -> None:
+        """Remove only a comment created by this writer and its markers."""
+        for el in list(p.iter()):
+            if (el.tag in {qn("w:commentRangeStart"), qn("w:commentRangeEnd"),
+                           qn("w:commentReference")}
+                    and el.get(qn("w:id")) == cid):
+                parent = el.getparent()
+                parent.remove(el)
+                if parent.tag == R_TAG and not len(parent):
+                    parent.getparent().remove(parent)
+        for comment in list(self.root):
+            if comment.get(qn("w:id")) == cid:
+                self.root.remove(comment)
 
 
 def _p_level(el, p):
@@ -669,6 +687,7 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
     queried: list[str] = []
     already: list[str] = []
     comments: _Comments | None = None
+    generated_queries: list[tuple[Finding, etree._Element, str]] = []
 
     by_part: dict[str, list[Finding]] = {}
     for f in validated + queries:
@@ -721,6 +740,7 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                 lo, hi = query_span(f, paras[para_id].text)
                 if comments.attach_to_span(p, lo, hi, query_text(f)):
                     queried.append(f.finding_id)
+                    generated_queries.append((f, p, comments.last_id))
                 else:
                     unplaced.append(f.finding_id)
 
@@ -774,6 +794,32 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                     comments.attach(p, first, last,
                                     f.explanation or f"{f.error_type} fix")
 
+    # Source scans run again on every rebuild. Their questions must be true
+    # beside the corrected text, even when a later edit on this very build
+    # resolves the issue. Check the ACTUAL accepted view after all edits, so
+    # an edit skipped by a safety check cannot prematurely erase a question.
+    reconciled: list[tuple[Finding, str]] = []
+    if generated_queries:
+        from galley.comment_reconcile import reconciliation
+        rows = [dict(finding_id=str(i), para_id=f.para_id,
+                     status="query", original_text=f.original_text,
+                     corrected_text=f.corrected_text, occurrence=f.occurrence,
+                     explanation=f.explanation, error_type=f.error_type,
+                     withheld=f.withheld)
+                for i, (f, _p, _cid) in enumerate(generated_queries)]
+        delivered = {f.para_id: paragraph_view_text(p, "accept")
+                     for f, p, _cid in generated_queries}
+        removed = reconciliation(rows, delivered,
+                                 source={pid: p.text for pid, p in paras.items()})
+        for i, (f, p, cid) in enumerate(generated_queries):
+            if str(i) in removed:
+                comments.remove(p, cid)
+                queried.remove(f.finding_id)
+                reconciled.append((f, removed[str(i)]))
+        if reconciled:
+            log.info("Removed %d resolved or duplicate generated query comment(s) "
+                     "against the corrected text.", len(reconciled))
+
     log.info("Applied %d tracked change(s); %d skipped by safety checks.",
              len(applied), len(skipped))
     if queried or unplaced:
@@ -786,4 +832,4 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                  "left alone rather than marked as a change to click through.",
                  len(already))
     return ReassemblyStats(tuple(applied), tuple(skipped), tuple(queried),
-                           tuple(unplaced), tuple(already))
+                           tuple(unplaced), tuple(already), tuple(reconciled))

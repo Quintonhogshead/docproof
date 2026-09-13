@@ -459,6 +459,10 @@ def test_a_claimed_book_with_no_state_starts_from_the_beginning(env, tmp_path):
 def test_resume_phase_reads_the_state_machine(env, tmp_path):
     agent = _agent(env, tmp_path)
     assert agent.resume_phase("nothing-here") == ""
+    _state(agent.root, "before-consolidation", "audited")
+    assert agent.resume_phase("before-consolidation") == "adjudicate"
+    _state(agent.root, "after-consolidation", "adjudicated")
+    assert agent.resume_phase("after-consolidation") == "verify"
     _state(agent.root, "s1", "settled")
     assert agent.resume_phase("s1") == "astra_review"
     _state(agent.root, "s2", "delivered")
@@ -645,7 +649,7 @@ def test_a_crashed_run_beats_its_reason_and_ships_the_evidence(env, tmp_path):
     assert (tmp_path / "ws" / "test-drive-1" / "runs" / "driver" / "ladder.log").exists()
 
 
-def test_an_abandoned_delivery_is_shouted_about(env, tmp_path):
+def test_a_long_delivery_outage_alerts_once_and_stays_pending(env, tmp_path):
     obs = Observed()
     agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([]))
     ledger = agent.ledger()
@@ -656,12 +660,17 @@ def test_an_abandoned_delivery_is_shouted_about(env, tmp_path):
                   next_delivery_at=0, delivery_error="Drive said no")
     report = ga.RunReport()
     agent.retry_deliveries(ledger, report, now=10)
-    assert report.skipped == ["Nine - Book 1.docx (delivery abandoned)"]
+    assert report.skipped == []
+    assert ledger.state("drive-9") == ga.PENDING_DELIVERY
     assert len(obs.alerts) == 1
     subject, body = obs.alerts[0]
     assert "Nine - Book 1.docx" in subject
     assert "folder-Z" in body and "Drive said no" in body
     assert obs.beats[-1]["last_error"].startswith("Nine - Book 1.docx")
+    assert "keep retrying" in body
+    agent.retry_deliveries(ledger, report, now=1e12)
+    assert len(obs.alerts) == 1
+    assert ledger.state("drive-9") == ga.PENDING_DELIVERY
 
 
 def test_the_live_beat_reads_the_running_session(env, tmp_path):
@@ -1018,6 +1027,55 @@ def test_an_infrastructure_block_still_resumes_on_the_next_poll(env, tmp_path):
     agent.poll_once()
     agent.poll_once()
     assert len(ran) == 2
+
+
+def test_temporary_recovery_stall_retries_later_without_new_code(env, tmp_path):
+    ran = []
+    def blocked(**kw):
+        ran.append(kw)
+        result = FakeResult(outcome="blocked", reason="Service temporarily unavailable", uploaded=())
+        result.recovery_exhausted = True
+        result.retry_later = True
+        return result
+    agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
+                   download=_downloader(tmp_path), run_driver=blocked)
+    agent.poll_once()
+    assert agent.ledger().claimed("drive-1")["operational_status"] != ga.HELD_FOR_CODE
+    agent.poll_once()
+    assert len(ran) == 2
+
+
+@pytest.mark.parametrize("condition,held", [
+    ("remaining", False), ("turns_exhausted", True), ("time_exhausted", True),
+    ("changed_source", True), ("active", True), ("recent", True),
+    ("permanent", True), ("no_receipt", True)])
+def test_legacy_temporary_hold_resumes_only_with_original_budget_left(env, tmp_path, condition, held):
+    agent = _agent(env, tmp_path, wall_clock=lambda: 1_000_000_000)
+    ws = agent.root / "test-drive-1"
+    driver = ws / "runs/driver"
+    driver.mkdir(parents=True)
+    (ws / "state.json").write_text(json.dumps({"source_sha256": "source"}))
+    (driver / "driver.json").write_text(json.dumps({"stopped_at": "profile", "execution_mode": "session"}))
+    budget = {"source_sha256": "source", "limits": {"profile": {"turns": 80, "seconds": 600}},
+              "attempts": [{"phase": "profile", "status": "completed", "turns": 20, "seconds": 60}]}
+    if condition == "turns_exhausted":
+        budget["attempts"][0]["turns"] = 80
+    elif condition == "time_exhausted":
+        budget["attempts"][0]["seconds"] = 600
+    elif condition == "changed_source":
+        budget["source_sha256"] = "other-source"
+    elif condition == "active":
+        budget["attempts"][0]["status"] = "running"
+    if condition != "no_receipt":
+        (driver / "execution-budget.json").write_text(json.dumps(budget))
+    ledger = agent.ledger()
+    ledger.record("drive-1", ga.CLAIMED, slug=ws.name, held_version=ga.code_id(),
+                  operational_status=ga.HELD_FOR_CODE,
+                  reason="Hash mismatch" if condition == "permanent" else "Connection reset")
+    ledger.books["drive-1"]["updated_at"] = ("2001-09-09T01:46:30+00:00" if condition == "recent"
+                                              else "2000-01-01T00:00:00+00:00")
+    ledger.save()
+    assert agent.held_for_code("drive-1", ledger) is held
 
 
 def test_a_legacy_question_flag_alone_cannot_hold_the_unattended_queue(env, tmp_path):

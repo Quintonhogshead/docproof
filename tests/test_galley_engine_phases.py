@@ -197,8 +197,9 @@ def test_completed_command_is_reused_only_while_outputs_match(tmp_path):
     phases._command("audit", "audit-check", ["audit"], [output])
     assert len(calls) == 1
     output.write_text('{"ran": false}')
-    with pytest.raises(EnginePhaseError):
-        phases._command("audit", "audit-check", ["audit"], [output])
+    phases._command("audit", "audit-check", ["audit"], [output])
+    assert json.loads(output.read_text()) == {"ran": True}
+    assert len(calls) == 1                   # exact saved command output restored
 
 
 def test_command_failure_or_missing_output_cannot_create_completion_receipt(tmp_path):
@@ -225,7 +226,9 @@ def test_completed_verification_cannot_be_reused_after_its_evidence_changes(
     context.write_text("The speaker uses deliberate fragments.")
     output = run / "finished_walk.json"
 
+    calls = []
     def execute(spec):
+        calls.append(spec)
         output.write_text('{"ran": true}')
         return SimpleNamespace(returncode=0, limit="", tail="")
 
@@ -237,8 +240,9 @@ def test_completed_verification_cannot_be_reused_after_its_evidence_changes(
     else:
         (run / "findings.json").write_text(json.dumps({
             "source": str(driver.book), "findings": [{"finding_id": "new-evidence"}]}))
-    with pytest.raises(EnginePhaseError):
-        phases._command("verify", "verify-evidence", args, [output])
+    phases._command("verify", "verify-evidence", args, [output])
+    assert len(calls) == 2                  # new evidence triggers a fresh check
+    assert len(list((phases.directory / "attempts" / "verify-evidence").glob("*.json"))) == 1
 
 
 def test_missing_secondary_read_cannot_advance_settlement(tmp_path, monkeypatch):
@@ -247,14 +251,20 @@ def test_missing_secondary_read_cannot_advance_settlement(tmp_path, monkeypatch)
     # Old, incomplete primary files must not stand in for the required two reads.
     for name in ("change_verify.json", "finished_walk.json", "settlement.json"):
         (run / name).write_text('{"ran": false}')
-    phases = EnginePhases(driver, lambda spec: pytest.fail("must stop before model work"))
+    attempts = []
+    def incomplete(spec):
+        attempts.append(spec)
+        return SimpleNamespace(returncode=1, limit="", tail="read interrupted")
+    phases = EnginePhases(driver, incomplete)
     advanced = []
     monkeypatch.setattr(phases, "_advance", advanced.append)
     monkeypatch.setattr("galley.settle.open_items", lambda run: [])
     monkeypatch.setattr("galley.verify.accepted_text", lambda run: {"body-0000": "Text."})
     monkeypatch.setattr("galley.verify.build_fingerprints", lambda run: {"build": "current"})
-    with pytest.raises(EnginePhaseError):
+    with pytest.raises(EnginePhaseError) as error:
         phases.settle()
+    assert error.value.retryable and error.value.kind == "incomplete"
+    assert len(attempts) == 1               # recover missing reading before advancing
     assert advanced == []
 
 
@@ -352,3 +362,252 @@ def test_interrupted_broad_reread_finishes_before_resumed_settlement_can_advance
     assert commands == ["settle-1"]
     assert advanced == ["settled"]
     assert not json.loads(state_path.read_text()).get("pending_verify_cycle")
+
+
+@pytest.mark.parametrize("damage,expected_calls", [("missing_artifact", 0), ("missing_window", 1)])
+def test_saved_reader_windows_recover_without_rebuying_complete_work(
+        tmp_path, monkeypatch, damage, expected_calls):
+    import docx
+    import shutil
+    from docproof.__main__ import main
+    from galley import verify
+    from tests.galley.test_verification_checkpoints import Provider
+
+    driver = _driver(tmp_path)
+    document = docx.Document()
+    for n in range(3):
+        document.add_paragraph(f"Section {n}. " + "The book was quiet. " * 220)
+    document.save(driver.book)
+    shutil.copyfile(driver.book, driver._final_run() / "book - Atmosphere Press Proofreader.docx")
+    commands, providers = [], []
+    def execute(spec):
+        commands.append(spec.argv[spec.argv.index("--verification-pass") + 1])
+        return SimpleNamespace(returncode=main(spec.argv[1:]), limit="", tail="")
+    phases = EnginePhases(driver, execute)
+    run = _complete_verification(phases, monkeypatch)
+    path = run / "verification" / "type-compare" / "finished_walk.json"
+    proof = json.loads(path.read_text())["verification_provenance"]
+    assert len(proof["windows"]) > 1
+    if damage == "missing_artifact":
+        path.unlink()
+    else:
+        key = next(iter(proof["windows"]))
+        (run / verify._CHECKPOINT_DIR / proof["scope"] / proof["invocation_id"] / (key + ".json")).unlink()
+    def factory(*args, **kwargs):
+        provider = Provider()
+        providers.append(provider)
+        return provider
+    monkeypatch.setattr("docproof.providers.subagent.SubagentProvider", factory)
+    phases.verify()
+    assert phases._coverage(run, require_full_passes=True)
+    assert commands == ["type-compare"]
+    assert sum(len(p.calls) for p in providers) == expected_calls
+    restored = json.loads(path.read_text())["verification_provenance"]
+    assert restored["invocation_id"] == proof["invocation_id"]
+    assert phases._initial_coverage_saved(run)
+    phases.verify(cycle=1)
+    assert commands == ["type-compare"]            # same build stays proven
+    assert sum(len(p.calls) for p in providers) == expected_calls
+
+
+def test_missing_coverage_archive_is_rebuilt_from_proven_reads_without_model_work(tmp_path, monkeypatch):
+    phases = EnginePhases(_driver(tmp_path), lambda spec: pytest.fail("proven reads cannot repeat"))
+    run = _complete_verification(phases, monkeypatch)
+    phases.verify()
+    receipt = json.loads((phases.directory / "initial-coverage.json").read_text())
+    target = phases.directory / next(iter(receipt["artifacts"]))
+    target.write_text('{"damaged": true}')
+    assert not phases._initial_coverage_saved(run)
+    phases.verify()
+    assert phases._initial_coverage_saved(run)
+    assert list(target.parent.glob(target.name + ".damaged-*"))
+
+
+def test_running_engine_receipt_adopts_independently_proven_completed_output(tmp_path):
+    output = tmp_path / "runs" / "evidence.json"
+    driver = _driver(tmp_path)
+    phases = EnginePhases(driver, lambda spec: pytest.fail("proof must avoid another command"))
+    output.write_text('{"complete": true}')
+    path = phases.directory / "recovered-read.json"
+    path.write_text('{"status": "running"}')
+    # A malformed/incomplete engine receipt has no authority. The explicit
+    # semantic validator proves the output, and its durable receipt is rebuilt.
+    phases._command("verify", "recovered-read", ["verify"], [output],
+                    validate=lambda: json.loads(output.read_text())["complete"])
+    assert json.loads(path.read_text())["status"] == "completed"
+    assert json.loads(path.read_text())["recovered"] is True
+
+
+def test_running_receipt_resumes_through_budget_authority_and_keeps_attempt(tmp_path):
+    output = tmp_path / "runs" / "evidence.json"
+    calls = []
+    driver = _driver(tmp_path)
+    def execute(spec):
+        calls.append(spec)
+        output.write_text('{"complete": true}')
+        return SimpleNamespace(returncode=0, limit="", tail="")
+    phases = EnginePhases(driver, execute)
+    phases._command("audit", "recovered", ["audit"], [output])
+    path = phases.directory / "recovered.json"
+    saved = json.loads(path.read_text())
+    saved["status"] = "running"
+    path.write_text(json.dumps(saved))
+    output.unlink()
+    phases._command("audit", "recovered", ["audit"], [output])
+    assert len(calls) == 2
+    assert len(list((phases.directory / "attempts" / "recovered").glob("*.json"))) == 1
+    assert json.loads(path.read_text())["status"] == "completed"
+
+
+def test_active_budget_owner_does_not_lose_its_operation_receipt(tmp_path):
+    from galley.execution_budget import ExecutionBudgetError
+    driver = _driver(tmp_path)
+    class Budget:
+        def assert_available(self, phase):
+            assert phase == "code-verify"
+            raise ExecutionBudgetError("A live reader owns this phase")
+    driver._execution_budget = Budget
+    phases = EnginePhases(driver, lambda spec: pytest.fail("must not overlap the active reader"))
+    receipt = phases.directory / "active-read.json"
+    receipt.write_text('{"status": "running", "owner": "existing"}')
+    before = receipt.read_bytes()
+    with pytest.raises(ExecutionBudgetError, match="live reader"):
+        phases._command("verify", "active-read", ["verify"], [])
+    assert receipt.read_bytes() == before
+
+
+@pytest.mark.parametrize("code,limit,retryable", [(1, "", True), (0, "", True),
+    (2, "", False), (5, "", False), (130, "", False), (143, "", False),
+    (1, "timeout", False)])
+def test_command_recovery_does_not_reset_hard_limits(tmp_path, code, limit, retryable):
+    phases = EnginePhases(_driver(tmp_path), lambda spec:
+                          SimpleNamespace(returncode=code, limit=limit, tail="failed"))
+    with pytest.raises(EnginePhaseError) as error:
+        phases._command("audit", "failure", ["audit"], [tmp_path / "missing.json"])
+    assert error.value.retryable is retryable
+
+
+@pytest.mark.parametrize("limit,tail", [("credentials", "Sign in required"),
+                                      ("", "Invalid API key")])
+def test_command_credentials_use_the_existing_sign_in_recovery(tmp_path, limit, tail):
+    from galley.driver import CredentialsError
+    phases = EnginePhases(_driver(tmp_path), lambda spec:
+                          SimpleNamespace(returncode=1, limit=limit, tail=tail))
+    with pytest.raises(CredentialsError):
+        phases._command("audit", "failure", ["audit"], [tmp_path / "missing.json"])
+    receipt = json.loads((phases.directory / "failure.json").read_text())
+    assert receipt["status"] == "failed"
+    assert receipt["reason"] == tail
+
+
+@pytest.mark.parametrize("field,value", [("output_copies", ["corrupt"]),
+    ("outputs", ["corrupt"]), ("output_copies", {"target": 123}),
+    ("identity", ["corrupt"])])
+def test_malformed_receipt_metadata_recovers_through_current_proof(tmp_path, field, value):
+    output = tmp_path / "artifact.json"
+    commands = []
+    def execute(spec):
+        commands.append(spec)
+        output.write_text('{"complete": true}')
+        return SimpleNamespace(returncode=0, limit="", tail="")
+    phases = EnginePhases(_driver(tmp_path), execute)
+    phases._command("audit", "shape", ["audit"], [output])
+    path = phases.directory / "shape.json"
+    saved = json.loads(path.read_text())
+    saved[field] = value
+    if field == "identity":
+        saved["fingerprint"] = "damaged"
+    path.write_text(json.dumps(saved))
+    phases._command("audit", "shape", ["audit"], [output],
+                    validate=lambda: json.loads(output.read_text()) == {"complete": True})
+    assert len(commands) == 1
+    assert json.loads(path.read_text())["status"] == "completed"
+
+
+def test_missing_settlement_output_is_restored_without_an_extra_repair_round(tmp_path, monkeypatch):
+    from galley.manifest import sha256_file
+    driver = _driver(tmp_path)
+    run = driver._final_run()
+    output = run / "settlement.json"
+    calls = []
+    def execute(spec):
+        calls.append(spec)
+        output.write_text('{"rounds": 2, "records": [], "open": ["r-persistent"]}')
+        return SimpleNamespace(returncode=0, limit="", tail="")
+    phases = EnginePhases(driver, execute)
+    phases._command("settle", "settle-2", ["settle"], [output])
+    output.unlink()
+    identity = {"source": sha256_file(driver.book), "run": str(run.resolve()),
+                "config": sha256_file(phases._config())}
+    (phases.directory / "review-loop.json").write_text(json.dumps({
+        "schema_version": 1, "identity": identity, "rounds": 2,
+        "prior_ids": ["r-persistent"], "history": []}))
+    monkeypatch.setattr(phases, "_coverage", lambda *a, **k: True)
+    monkeypatch.setattr(phases, "_initial_coverage_saved", lambda run: True)
+    monkeypatch.setattr("galley.settle.open_items", lambda run: [SimpleNamespace(id="r-persistent", para_id="body-0000")])
+    advanced = []
+    monkeypatch.setattr(phases, "_advance", advanced.append)
+    phases.settle()
+    assert len(calls) == 1 and output.is_file()
+    assert advanced == ["settled"]
+    assert json.loads((phases.directory / "review-loop.json").read_text())["rounds"] == 2
+
+
+@pytest.mark.parametrize("changed", ["source", "config"])
+def test_receipt_recovery_never_reuses_a_different_approval(tmp_path, changed):
+    driver = _driver(tmp_path)
+    output = tmp_path / "runs" / "audit.json"
+    def execute(spec):
+        output.write_text('{"ran": true}')
+        return SimpleNamespace(returncode=0, limit="", tail="")
+    phases = EnginePhases(driver, execute)
+    phases._command("audit", "audit", ["audit"], [output])
+    if changed == "config":
+        phases._config().write_text("api: {model: changed-model}\n")
+    else:
+        driver.book.write_bytes(driver.book.read_bytes() + b"changed source")
+    with pytest.raises(EnginePhaseError, match="approved inputs") as error:
+        phases._command("audit", "audit", ["audit"], [output])
+    assert not error.value.retryable
+
+
+def test_settlement_finishes_missing_secondary_read_before_advancing(tmp_path, monkeypatch):
+    from docproof.__main__ import main
+    from tests.galley.test_verification_checkpoints import Provider
+    driver = _driver(tmp_path)
+    commands, providers = [], []
+    def execute(spec):
+        commands.append(spec.argv[spec.argv.index("--verification-pass") + 1])
+        return SimpleNamespace(returncode=main(spec.argv[1:]), limit="", tail="")
+    phases = EnginePhases(driver, execute)
+    run = _complete_verification(phases, monkeypatch)
+    (run / "verification" / "type-compare" / "finished_walk.json").unlink()
+    def factory(*args, **kwargs):
+        p = Provider()
+        providers.append(p)
+        return p
+    monkeypatch.setattr("docproof.providers.subagent.SubagentProvider", factory)
+    (run / "settlement.json").write_text('{"rounds": 0, "records": [], "open": []}')
+    advanced = []
+    monkeypatch.setattr(phases, "_advance", advanced.append)
+    phases.settle()
+    assert commands == ["type-compare"]
+    assert sum(len(p.calls) for p in providers) == 0
+    assert advanced == ["settled"] and phases._initial_coverage_saved(run)
+
+
+def test_recovery_does_not_mutate_an_active_reader_transaction(tmp_path, monkeypatch):
+    import fcntl
+    from galley.verify import verification_invocation
+    phases = EnginePhases(_driver(tmp_path), lambda spec: pytest.fail("active read cannot repeat"))
+    run = _complete_verification(phases, monkeypatch)
+    provider, model, options = phases._reader("primary")
+    invocation = verification_invocation(run, provider, model, output_dir=run, **options)
+    state = invocation.root / "state.json"
+    before = state.read_bytes()
+    with (invocation.root / "lock").open("a") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        with pytest.raises(EnginePhaseError) as error:
+            phases._recover_read(run, "primary", run)
+        assert error.value.kind == "active" and not error.value.retryable
+    assert state.read_bytes() == before

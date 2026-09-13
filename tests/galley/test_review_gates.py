@@ -357,10 +357,11 @@ def test_a_retried_delivery_uploads_only_what_is_missing(env, tmp_path):
                                             for p in entry["handoff_files"]}
 
 
-def test_delivery_is_abandoned_after_the_bounded_retries(env, tmp_path):
+def test_delivery_survives_a_long_outage_without_repeating_the_book(env, tmp_path):
+    ran = []
     agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
                    download=_downloader(tmp_path), poll_interval_s=60,
-                   run_driver=lambda **kw: _reviewed_escalation(tmp_path),
+                   run_driver=lambda **kw: ran.append(kw) or _reviewed_escalation(tmp_path),
                    upload=lambda f, d: (_ for _ in ()).throw(
                        RuntimeError("down")))
     agent.poll_once()
@@ -372,7 +373,13 @@ def test_delivery_is_abandoned_after_the_bounded_retries(env, tmp_path):
             "next_delivery_at") or 0) + 1)
         agent.retry_deliveries(ledger, ga.RunReport(), now=clock)
     entry = ga.Ledger.load(agent.ledger_path).books["drive-1"]
-    assert entry["state"] == ga.FAILED and entry["delivery"] == "abandoned"
+    assert entry["state"] == ga.PENDING_DELIVERY
+    assert entry["next_delivery_at"] - clock <= ga.MAX_DELIVERY_BACKOFF_S
+    agent.upload = lambda files, folder: [f"id-{p.name}" for p in files]
+    agent.retry_deliveries(agent.ledger(), ga.RunReport(), now=clock + ga.MAX_DELIVERY_BACKOFF_S)
+    entry = ga.Ledger.load(agent.ledger_path).books["drive-1"]
+    assert entry["delivery"] == "delivered"
+    assert len(ran) == 1
 
 
 @pytest.mark.parametrize("files_present", ["none", "some", "all"])

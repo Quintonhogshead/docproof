@@ -40,6 +40,11 @@ class AstraReviewError(RuntimeError):
     retryable = False
 
 
+class AstraRetryableError(AstraReviewError):
+    """Only a proven unsubmitted request or a saved response ID may resume."""
+    retryable = True
+
+
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -842,7 +847,7 @@ def _consume_response(run, packet, pending, response, client, timeout_seconds):
     deadline = time.monotonic() + timeout_seconds
     while raw.get("status") in {"queued", "in_progress"}:
         if not raw.get("id") or time.monotonic() >= deadline:
-            raise AstraReviewError("Astra background response needs recovery by its saved response ID")
+            raise AstraRetryableError("Astra background response needs recovery by its saved response ID")
         time.sleep(min(2, max(0, deadline - time.monotonic())))
         response = client.responses.retrieve(raw["id"])
         raw = _dump(response)
@@ -916,6 +921,9 @@ def recover_review(run_dir, *, client=None, timeout_seconds=1800, docx_path=None
         return _consume_response(run, packet, pending, response, client, timeout_seconds)
     except Exception as exc:
         _record_failure(run, pending, exc)
+        from galley.recovery import transient_failure
+        if pending.get("response_id") and transient_failure(exc):
+            raise AstraRetryableError("Astra response recovery transport failed; resume the saved response ID") from exc
         if isinstance(exc, AstraReviewError):
             raise
         raise AstraReviewError("Astra response recovery failed; the saved request was not resubmitted") from exc
@@ -923,7 +931,74 @@ def recover_review(run_dir, *, client=None, timeout_seconds=1800, docx_path=None
 
 def review_run(run_dir, *, budget_usd, max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
                client=None, docx_path=None, context_paths=(), timeout_seconds=1800) -> dict:
-    """Submit once; cache success; never retry pending, failed, or stale requests."""
+    """Submit once; serialize proven preflight recovery and reuse saved replies."""
+    from docproof.platform_io import flock, LOCK_EX, LOCK_NB, LOCK_UN
+    run = Path(run_dir).resolve()
+    with (run / ".astra-api.lock").open("a+") as lock:
+        try:
+            flock(lock, LOCK_EX | LOCK_NB)
+        except BlockingIOError as exc:
+            raise AstraReviewError("Another API Astra review owns this run") from exc
+        try:
+            return _review_run_locked(run, budget_usd=budget_usd,
+                max_output_tokens=max_output_tokens, client=client, docx_path=docx_path,
+                context_paths=context_paths, timeout_seconds=timeout_seconds)
+        finally:
+            flock(lock, LOCK_UN)
+
+
+def _resume_unsubmitted(run, pending, *, budget_usd, max_output_tokens,
+                        client, docx_path, context_paths, timeout_seconds):
+    """Continue preflight using its exact packet, resource ID and output cap.
+
+    Legacy pending files lack an owner lock, so only their terminal, explicitly
+    unsubmitted failures can resume. A versioned pending file is safe after
+    acquiring the same lock that every versioned submitter holds through POST.
+    """
+    if (pending.get("submitted") is not False or pending.get("response_id")
+            or pending.get("schema_version") != 1
+            or pending.get("transport") not in (None, "api")
+            or pending.get("model") != MODEL or pending.get("reasoning_effort") != REASONING_EFFORT
+            or pending.get("status") not in ("pending", "operational_failure")
+            or (pending.get("status") == "pending" and pending.get("submission_protocol") != 2)
+            or (pending.get("status") == "operational_failure" and not pending.get("failed_at"))):
+        raise AstraReviewError("Unsubmitted Astra request lacks safe ownership/completion evidence")
+    inputs = pending.get("inputs")
+    if not isinstance(inputs, dict):
+        raise AstraReviewError("Unsubmitted Astra request lost its saved inputs")
+    packet = build_packet(run, docx_path=docx_path or inputs.get("docx_path"),
+        context_paths=context_paths or inputs.get("context_paths", ()))
+    if packet["packet_sha256"] != pending.get("packet_sha256") or packet.get("coverage_issues"):
+        raise AstraReviewError("Evidence changed since the unsubmitted Astra request")
+    frozen_path = run / PACKET_FILE
+    if frozen_path.exists() and _hash(_load(frozen_path)) != _hash(packet):
+        raise AstraReviewError("Saved unsubmitted packet differs from current evidence")
+    expected_operation = "astra-api:" + _hash({"run": str(run), "packet": packet["packet_sha256"],
+                                             "started_at": pending.get("started_at")})
+    if not pending.get("started_at") or pending.get("resource_operation_id") != expected_operation:
+        raise AstraReviewError("Unsubmitted Astra request lost its resource identity")
+    estimate = pending.get("estimate")
+    if not isinstance(estimate, dict):
+        raise AstraReviewError("Unsubmitted Astra request lost its approved estimate")
+    saved_output = estimate.get("max_output_tokens")
+    tokens = estimate.get("input_tokens_upper_bound")
+    if (type(saved_output) is not int or type(tokens) is not int or tokens < 1
+            or type(max_output_tokens) is not int or max_output_tokens < saved_output):
+        raise AstraReviewError("Unsubmitted Astra request conflicts with the current output allowance")
+    checked = estimate_review(packet, saved_output, input_tokens=tokens)
+    if (not checked["fits_context"] or any(estimate.get(key) != checked[key] for key in
+            ("estimated_max_cost_usd", "long_context_rates", "fits_context", "rates_checked"))
+            or type(budget_usd) not in (int, float) or not math.isfinite(budget_usd)
+            or budget_usd < checked["estimated_max_cost_usd"]):
+        raise AstraReviewError("Unsubmitted Astra request conflicts with its saved budget")
+    client = _client(client, timeout_seconds)
+    pending.update(status="pending", submission_protocol=2)
+    return _submit_pending(run, packet, pending, client=client,
+                           timeout_seconds=timeout_seconds)
+
+
+def _review_run_locked(run_dir, *, budget_usd, max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+                       client=None, docx_path=None, context_paths=(), timeout_seconds=1800) -> dict:
     run = Path(run_dir).resolve()
     if (run / RECEIPT_FILE).exists():
         prior = _load(run / RECEIPT_FILE)
@@ -931,6 +1006,10 @@ def review_run(run_dir, *, budget_usd, max_output_tokens=DEFAULT_MAX_OUTPUT_TOKE
             result = validate_receipt(run, docx_path=docx_path, context_paths=context_paths)
             _resource_receipt(run, result, reused=True)
             return result
+        if prior.get("submitted") is False:
+            return _resume_unsubmitted(run, prior, budget_usd=budget_usd,
+                max_output_tokens=max_output_tokens, client=client, docx_path=docx_path,
+                context_paths=context_paths, timeout_seconds=timeout_seconds)
         return recover_review(run, client=client, timeout_seconds=timeout_seconds,
                               docx_path=docx_path, context_paths=context_paths)
     packet = build_packet(run, docx_path=docx_path, context_paths=context_paths)
@@ -949,7 +1028,7 @@ def review_run(run_dir, *, budget_usd, max_output_tokens=DEFAULT_MAX_OUTPUT_TOKE
     pending = {"schema_version": 1, "status": "pending", "model": MODEL,
                "reasoning_effort": REASONING_EFFORT, "packet_sha256": packet["packet_sha256"],
                "started_at": _now(), "estimate": estimate, "response_id": None,
-               "submitted": False,
+               "submitted": False, "submission_protocol": 2,
                "inputs": {"docx_path": str(Path(docx_path).resolve()) if docx_path else None,
                           "context_paths": [str(Path(p).resolve()) for p in context_paths]}}
     pending["resource_operation_id"] = "astra-api:" + _hash({
@@ -960,9 +1039,13 @@ def review_run(run_dir, *, budget_usd, max_output_tokens=DEFAULT_MAX_OUTPUT_TOKE
             f.write(_json(pending)); f.flush(); os.fsync(f.fileno())
     except FileExistsError as exc:
         raise AstraReviewError("Another Astra submission already owns this run") from exc
+    return _submit_pending(run, packet, pending, client=client, timeout_seconds=timeout_seconds)
+
+
+def _submit_pending(run, packet, pending, *, client, timeout_seconds):
     try:
         _atomic(run / PACKET_FILE, packet)
-        source_docx = _choose_docx(run, docx_path)
+        source_docx = _choose_docx(run, pending["inputs"].get("docx_path"))
         if hashlib.sha256(source_docx.read_bytes()).hexdigest() != packet["document_sha256"]:
             raise AstraReviewError("Manuscript changed before Astra submission")
         saved_source = run / SOURCE_FILE
@@ -971,11 +1054,14 @@ def review_run(run_dir, *, budget_usd, max_output_tokens=DEFAULT_MAX_OUTPUT_TOKE
         _resource_receipt(run, pending, status="started")
         pending["submitted"] = True
         _atomic(run / RECEIPT_FILE, pending)
-        response = client.responses.create(**request_payload(packet, max_output_tokens))
+        response = client.responses.create(**request_payload(packet, pending["estimate"]["max_output_tokens"]))
         return _consume_response(run, packet, pending, response, client, timeout_seconds)
     except Exception as exc:
         # A timeout may have consumed the full request. Never quietly submit again.
         _record_failure(run, pending, exc)
+        from galley.recovery import transient_failure
+        if (pending.get("submitted") is False or pending.get("response_id")) and transient_failure(exc):
+            raise AstraRetryableError("Astra transport/preflight failed; resume its proven saved request") from exc
         if isinstance(exc, AstraReviewError):
             raise
         raise AstraReviewError("Astra request or response failed; receipt requires explicit recovery before any resubmission") from exc

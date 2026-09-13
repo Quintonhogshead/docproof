@@ -411,11 +411,12 @@ def test_summary_names_the_query_channel_in_the_formats_own_word(tmp_path):
     for fmt, noun in ((DOCX, "margin comment"), (IDML, "note")):
         out = tmp_path / f"{fmt.suffix.strip('.')}.md"
         write_summary_md(out, doc=doc, findings=findings, usage=Usage(),
-                         cfg=cfg, applied_ids=(), fmt=fmt)
+                         cfg=cfg, applied_ids=(), fmt=fmt,
+                         queried_ids=tuple(f.finding_id for f in findings))
         text = out.read_text("utf-8")
         # One per section that puts a finding in the file: queries, below-gate,
         # oversized. Plus the closing line, which names the noun on its own.
-        assert text.count(f"each is a {noun} in the reviewed file") == 3
+        assert text.count(f"1 of these finding(s) have a {noun} in the reviewed file") == 3
         assert f"carries a {noun} explaining itself" in text
         assert "margin margin" not in text
 

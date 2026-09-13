@@ -336,6 +336,9 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
             continue
 
         raw_type = str(item.get("error_type") or "")
+        old_status = str(item.get("status") or "")
+        retired = (old_status.startswith(("rejected_", "skipped_"))
+                   or item.get("state") in ("dropped", "rejected"))
         is_format_row = bool(item.get("format")) or raw_type in format_keys
         if is_format_row and not (format_round_trip
                                   and raw_type in format_keys):
@@ -353,7 +356,7 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
                             "title_italics) round-trip via import-findings/"
                             "replay, which arm the format channel"})
             continue
-        if remap_unchanneled and not is_format_row:
+        if remap_unchanneled and not is_format_row and not retired:
             resolved_type, was_remapped = resolve_error_type(
                 raw_type, registry, DEFAULT_IMPORT_TYPE)
         else:
@@ -372,6 +375,7 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
         # produce.
         et_shipped = format_registry.get(resolved_type)
         force_query = bool(item.get("force_query") or item.get("queried")
+                           or item.get("status") == "query"
                            or (et_shipped is not None and et_shipped.is_query))
 
         confidence = item.get("confidence", "medium")
@@ -412,6 +416,11 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
             if item.get(field) is True:
                 keep[field] = True
 
+        # Anchors are recomputed, but a rejection is an editorial decision,
+        # not an anchor. Replaying a finished report must not promote a
+        # verifier rejection (or an explicitly dropped query) into an edit.
+        status = (old_status if old_status.startswith(("rejected_", "skipped_"))
+                  else "rejected_noop") if retired else "pending"
         findings.append(Finding(
             finding_id=f"f-{next(ids):04d}",
             chunk_id=str(item.get("chunk_id") or id_prefix),
@@ -423,12 +432,10 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
             explanation=str(item.get("explanation") or item.get("comment")
                             or ""),
             confidence=confidence,
-            force_query=force_query,
-            # status/anchor are deliberately NOT carried over from the row:
-            # they belong to whatever run produced it (a different
-            # content_hash may not even hold the same offsets). finish() and
-            # validate_findings re-derive both fresh, the same as any other
-            # source of findings.
+            force_query=force_query and not retired,
+            status=status,
+            # Live rows get fresh status/anchors against this manuscript;
+            # retired rows remain visible in the report only.
             **keep,
         ))
     return findings, rejects, remapped
@@ -505,6 +512,20 @@ def rebuild_from_rows(cfg: Config, *, manuscript: str | Path, rows: list[dict],
         remap_unchanneled=remap_unchanneled, id_prefix=id_prefix,
         format_round_trip=True,
         paragraphs={p.para_id: p.text for p in prepared.doc.paragraphs})
+    retired = [f for f in findings if f.status != "pending"]
+    findings = [f for f in findings if f.status == "pending"]
+    if retired:
+        # Free scans run on the source at every rebuild. Honor a recorded
+        # rejection there too, unless the input also explicitly keeps that
+        # same proposal (a normal accepted/duplicate pair in findings.json).
+        def decision_key(f):
+            return (f.para_id, f.error_type, f.original_text,
+                    f.occurrence, f.corrected_text)
+        declined = {decision_key(f) for f in retired}
+        declined -= {decision_key(f) for f in findings}
+        for attr in ("sweep_findings", "consistency_findings", "genre_findings"):
+            setattr(prepared, attr, [f for f in getattr(prepared, attr)
+                                     if decision_key(f) not in declined])
     from .sweepguard import SweepGuard
     sweep_guard = SweepGuard.from_config(cfg, prepared.variant)
     checked = validate_findings(findings, prepared.doc, cfg.min_confidence,
@@ -538,6 +559,7 @@ def rebuild_from_rows(cfg: Config, *, manuscript: str | Path, rows: list[dict],
                             h.para_id,
                             f"dropped {h.dropped_id}" if h.resolved
                             else "UNRESOLVED")
+    checked += retired
     tally: dict[str, int] = {}
     for f in checked:
         tally[f.status] = tally.get(f.status, 0) + 1
@@ -551,7 +573,8 @@ def rebuild_from_rows(cfg: Config, *, manuscript: str | Path, rows: list[dict],
     usage = Usage()
     outputs = finish(prepared, findings, usage, cfg,
                      out_dir=Path(cfg.output_dir), source_path=str(manuscript),
-                     settle_locked_queries=settle_locked_queries)
+                     settle_locked_queries=settle_locked_queries,
+                     report_only=retired)
     # A formatting row that reached the change channel deletes the sentence it
     # should only have marked, and the reject-all audit cannot see it. Catch it
     # by word count before calling the deliverable done.

@@ -34,6 +34,17 @@ def snapshot(tmp_path):
                           ("change_verify.json", {}), ("finished_walk.json", {}),
                           ("settlement.json", {"records": [], "open": [], "rounds": 0})):
         (run / name).write_text(json.dumps(payload))
+    # Real local reader outputs establish complete current-build coverage.
+    # Empty JSON files must never let a failed coordinator pass this gate.
+    from docproof.models import Usage
+    from galley import verify
+    from .test_verification_checkpoints import Provider, POLICY, MODEL
+    reader = Provider()
+    changes = verify.verify_run(run, reader, MODEL, Usage(), run_walk=False, **POLICY)
+    walk = verify.verify_run(run, reader, MODEL, Usage(), run_changes=False, **POLICY)
+    verify.write_artifacts(run, changes, walk, model=MODEL, engine="provider",
+        usage_changes=Usage(), usage_walk=Usage(), applied=len(verify.applied_edits(run)),
+        paragraphs=sum(bool(text.strip()) for text in verify.accepted_text(run).values()))
     machine = RunStateMachine.load(ws / "state.json")
     machine.advance("settled", by="test", source_sha256=machine.source_sha256,
                     config_sha256="config")
@@ -419,3 +430,29 @@ def test_default_workspace_enrollment_blocks_early_heuristic_verdict(snapshot, t
     assert go.requires_astra_review(run)
     with pytest.raises(ar.AstraReviewError, match="pending"):
         go.assess(run)
+
+
+@pytest.mark.parametrize("damaged_certificate", [None, "[1]", "{"])
+def test_delivery_restores_certificate_and_corrected_copy_without_model_reread(snapshot, tmp_path, monkeypatch, damaged_certificate):
+    book, ws, run = snapshot
+    calls = install_review(monkeypatch, receipt())
+    (ws / "approval.json").write_text(json.dumps({
+        "config_path": str(Path(__file__).resolve().parents[2] / "config/default.yaml")}))
+    certifications = []
+    def certify(*args, **kw):
+        certifications.append(args[0])
+        return gm.Certificate([gm.Check("structural gate", "pass")])
+    monkeypatch.setattr(gm, "certify_run", certify)
+    first = _driver(book, tmp_path, astra_review=True, start_phase="astra_review").run()
+    assert first.outcome == "done", first.reason
+    frozen = {p: p.read_bytes() for p in first.handoff}
+    (run / "certificate.json").unlink()
+    if damaged_certificate is not None:
+        (run / "certificate.json").write_text(damaged_certificate)
+    from galley.verify import deliverable_docx
+    deliverable_docx(ws / "deliverable").write_bytes(b"interrupted delivery copy")
+    second = _driver(book, tmp_path, astra_review=True, start_phase="deliver").run()
+    assert second.outcome == "done", second.reason
+    assert len(certifications) == 2 and len(calls) == 1
+    assert deliverable_docx(ws / "deliverable").read_bytes() == deliverable_docx(run).read_bytes()
+    assert frozen == {p: p.read_bytes() for p in first.handoff}

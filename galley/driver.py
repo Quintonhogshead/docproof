@@ -33,6 +33,7 @@ REQUIRED_STATE: dict[str, str] = {
     "approve": "plan_approved",
     "ladder": "mechanical_complete",
     "audit": "audited",
+    "adjudicate": "adjudicated",
     "settle": "settled",
     "astra_review": "astra_reviewed",
     "certify": "certified",
@@ -64,7 +65,7 @@ PHASE_MODEL: dict[str, str] = {
 DEFAULT_EFFORT = "high"
 PHASE_EFFORT: dict[str, str] = {
     phase: DEFAULT_EFFORT for phase in
-    ("approve", "ladder", "flights", "audit", "reread", "settle")
+    ("approve", "ladder", "flights", "audit", "reread", "adjudicate", "settle")
 }
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 DEFAULT_PERMISSION_MODE = "acceptEdits"
@@ -93,6 +94,7 @@ PHASE_MAX_TURNS: dict[str, int] = {
     "flights": 150,
     "audit": 100,
     "reread": 150,
+    "adjudicate": 150,
     "verify": 250,      # re-reads every applied edit; may re-run per paragraph
     "settle": 400,      # the until-clean sweep, round after round
     "certify": 60,
@@ -102,6 +104,7 @@ PHASE_MAX_TURNS: dict[str, int] = {
 DEFAULT_PHASE_TIMEOUT_S = 2 * 3600.0
 PHASE_TIMEOUT_S: dict[str, float] = {
     "ladder": 3 * 3600.0,
+    "adjudicate": 2 * 3600.0,
     "verify": 4 * 3600.0,
     "settle": 4 * 3600.0,
 }
@@ -115,7 +118,7 @@ PHASE_TIMEOUT_S: dict[str, float] = {
 # and 17 minutes on a 3.6k-word story (2026-09-07). The word count comes from
 # the workspace's profile.json, so nothing scales until profile has run — and
 # profile itself never scales.
-LENGTH_SCALED_PHASES = ("ladder", "verify", "settle")
+LENGTH_SCALED_PHASES = ("ladder", "adjudicate", "verify", "settle")
 LENGTH_BASELINE_WORDS = 50_000
 LENGTH_SCALE_MAX = 4.0
 # Settle's work tracks the residual count, not the word count: a dense short
@@ -348,7 +351,9 @@ _PROMPTS: dict[str, str] = {
         "Phase: mechanical ladder. The six-window chapter sweep is wave 1 "
         "line 1 — `chapter_sweep` on Luna in the run config (the "
         "mechanical-wave stage enables it) PLUS the six-window Sonnet $0 "
-        "session-subagent sweep, imported before the ladder's own findings. "
+        "session-subagent sweep. Preserve both lanes' findings for the "
+        "adjudicate phase; running a detector is not evidence that its findings "
+        "were included in the final build. "
         "Reuse the exact approved config unchanged from PLAN.md and "
         "approval.json; do not rewrite or regenerate it after approval. Run "
         "`docproof review … --approval approval.json` to runs/ladder/ with "
@@ -392,9 +397,30 @@ _PROMPTS: dict[str, str] = {
         "only summaries + the dollar line. Stop when the marginal cost per "
         "finding crosses the ceiling. Advance the state machine (--source and "
         "--config). Report findings added and spend."),
+    "adjudicate": (
+        "Phase: consolidate and screen ALL completed findings before verification. "
+        "Follow /adjudicate once, across the whole book. Inventory PLAN.md, the "
+        "plan ledger, runs/ladder findings, bespoke sweep outputs, the Sonnet "
+        "subscription fleet, and any approved flights or wave-2 outputs. Reuse "
+        "their completed artifacts; do not rerun detectors. For every lane record "
+        "the evidence path, row count, and disposition (included, duplicate of "
+        "another lane, or excluded with a reason) in runs/ADJUDICATE.md. No "
+        "completed lane may remain awaiting import. Screen the union in sentence "
+        "context, retain intent zones, resolve duplicate and overlapping proposals, "
+        "and collapse comment families before rebuilding. Use final-replay with "
+        "all paid detection off and the approved source to produce ONE curated "
+        "build at runs/final/. Record its path and applied/query counts in "
+        "runs/ADJUDICATE.md. Do not treat an old rejected row as a fresh correction "
+        "or re-fire source-only queries. Run the artifact scan and reject-all "
+        "round trip. Advance with `docproof galley state . --advance adjudicated "
+        "--results runs/final --source source/{book} --config <run config>`. "
+        "The next phase verifies this corrected build; newly discovered residuals "
+        "then belong to settlement."),
     "verify": (
         "Phase: verify the finished text for SENSE on the $0 subscription "
-        "lane. Run `docproof galley verify runs/<final> --config <run config> "
+        "lane. Read runs/ADJUDICATE.md for the curated final build and use that "
+        "corrected document, never an earlier ladder build. Run "
+        "`docproof galley verify runs/<final> --config <run config> "
         "--engine subagent > runs/verify.log 2>&1` (add --context <notes file> "
         "if the workspace has voice notes; --dry-run first if you want the "
         "read count). It re-reads every applied edit and proofreads the "
@@ -491,6 +517,7 @@ _PHASE_REFERENCES: dict[str, tuple[str, ...]] = {
     "flights": ("legacy-copyedit.md", "house-rules.md", "findings.md"),
     "audit": ("house-rules.md",),
     "reread": ("legacy-copyedit.md", "house-rules.md"),
+    "adjudicate": ("house-rules.md", "findings.md", "comment-reconciliation.md"),
     "verify": ("house-rules.md", "verification.md"),
     "settle": ("house-rules.md", "comment-reconciliation.md"),
     "certify": ("delivery.md",),
@@ -930,6 +957,10 @@ def _render_stream_line(raw: str) -> str:
     return ""
 
 
+class ProcessNotStartedError(DriverError):
+    """Failure before Popen returned: no target command began execution."""
+
+
 def spawn_claude(spec: PhaseSpec) -> PhaseResult:
     """Run a headless phase with turn and wall-clock limits.
 
@@ -937,50 +968,56 @@ def spawn_claude(spec: PhaseSpec) -> PhaseResult:
     result to classify termination; fall back to transcript detection when
     it is absent.
     """
-    if os.name == "nt":
-        # Check containment support before starting a child. Import failure
-        # inside Popen's context would otherwise wait for an unbounded phase.
+    from contextlib import ExitStack
+    with ExitStack() as files:
         try:
-            __import__("win32api")
-            __import__("win32job")
-        except ImportError as exc:
-            raise DriverError("Windows phase containment requires pywin32; "
-                              "install docproof[galley].") from exc
-    spec.log_path.parent.mkdir(parents=True, exist_ok=True)
-    stream_path = spec.log_path.with_suffix(".stream.jsonl")
-    with open(spec.log_path, "w", encoding="utf-8") as fh:
-        fh.write(f"{DRIVER_LINE_PREFIX}: phase {spec.phase} at {_now()} "
-                 f"(max-turns {spec.max_turns}, timeout "
-                 f"{spec.timeout_s / 3600:.1f}h)\n")
-        fh.flush()
-        timed_out = False
-        with open(stream_path, "w", encoding="utf-8") as raw:
+            if os.name == "nt":
+                # Containment dependencies are checked before a child exists.
+                __import__("win32api")
+                __import__("win32job")
+            spec.log_path.parent.mkdir(parents=True, exist_ok=True)
+            stream_path = spec.log_path.with_suffix(".stream.jsonl")
+            fh = files.enter_context(open(spec.log_path, "w", encoding="utf-8"))
+            fh.write(f"{DRIVER_LINE_PREFIX}: phase {spec.phase} at {_now()} "
+                     f"(max-turns {spec.max_turns}, timeout "
+                     f"{spec.timeout_s / 3600:.1f}h)\n")
+            fh.flush()
+            raw = files.enter_context(open(stream_path, "w", encoding="utf-8"))
             from docproof.platform_io import process_job, terminate_process_tree
             containment = ({"creationflags": subprocess.CREATE_NO_WINDOW |
                             subprocess.CREATE_NEW_PROCESS_GROUP}
                            if os.name == "nt" else {"start_new_session": True})
-            with subprocess.Popen(spec.argv, cwd=str(spec.workspace),
-                                  env=spec.env, stdout=raw,
-                                  stderr=subprocess.STDOUT, text=True,
-                                  **containment) as proc:
-                with process_job(proc):
+            proc = subprocess.Popen(spec.argv, cwd=str(spec.workspace),
+                                    env=spec.env, stdout=raw,
+                                    stderr=subprocess.STDOUT, text=True,
+                                    **containment)
+        except (OSError, ImportError) as exc:
+            detail = ("Windows phase containment requires pywin32; install docproof[galley]."
+                      if os.name == "nt" and isinstance(exc, ImportError) else str(exc))
+            raise ProcessNotStartedError(f"Could not start {spec.phase}: {detail}") from exc
+        # Errors from waiting, containment, or reading completed logs are not
+        # proof that nothing ran. Preserve their type and unknown usage.
+        timed_out = False
+        with proc:
+            with process_job(proc):
+                try:
+                    proc.wait(timeout=spec.timeout_s)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    terminate_process_tree(proc)
                     try:
-                        proc.wait(timeout=spec.timeout_s)
-                    except subprocess.TimeoutExpired:
-                        timed_out = True
-                        terminate_process_tree(proc)
-                        try:
-                            proc.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            pass
-                    finally:
-                        # A shell/tool child may outlive the supervisor, even
-                        # when that supervisor exits promptly on SIGTERM.
-                        # A phase owns all of its work: no children may keep
-                        # rebuilding after timeout, interruption, or completion.
-                        terminate_process_tree(proc, force=True)
                         proc.wait(timeout=5)
-        # the raw stream is closed now; render it into the readable log
+                    except subprocess.TimeoutExpired:
+                        pass
+                finally:
+                    # A shell/tool child may outlive the supervisor, even
+                    # when that supervisor exits promptly on SIGTERM.
+                    # A phase owns all of its work: no children may keep
+                    # rebuilding after timeout, interruption, or completion.
+                    terminate_process_tree(proc, force=True)
+                    proc.wait(timeout=5)
+        raw.close()
+        # The raw stream is closed now; render it into the readable log.
         _render_stream(stream_path, fh)
         if timed_out:
             fh.write(f"\n# TIMEOUT: killed after {spec.timeout_s / 3600:.1f}h\n")
@@ -1257,6 +1294,7 @@ class DriveResult:
     # Legacy interactive question stop; unattended notes never set this.
     asked: bool = False
     recovery_exhausted: bool = False
+    retry_later: bool = False
     recovery: list[dict[str, Any]] = field(default_factory=list)
 
     @property
@@ -1280,6 +1318,7 @@ class DriveResult:
             "uploaded": list(self.uploaded),
             "asked": self.asked,
             "recovery_exhausted": self.recovery_exhausted,
+            "retry_later": self.retry_later,
             "recovery": list(self.recovery),
         }
 
@@ -1433,6 +1472,11 @@ class Driver:
     def open_items(self) -> int | None:
         """What verify left for settle in the final run: change problems plus
         walk residuals. None until verify has written either file."""
+        # Cap previews may run before intake has copied the manuscript. There
+        # is no source-verified residual count yet; the length/default caps
+        # still apply. Actual build selection keeps its source check.
+        if not self.book.is_file():
+            return None
         run = self._final_run()
         if run is None:
             return None
@@ -1533,6 +1577,38 @@ class Driver:
         from galley.manifest import sha256_file
         return ExecutionBudget(self._driver_dir() / "execution-budget.json",
                                sha256_file(self.book))
+
+    def _recovery_ledger(self):
+        from galley.manifest import sha256_file
+        from galley.recovery import RecoveryLedger
+        return RecoveryLedger(self.workspace, sha256_file(self.book))
+
+    def _retry_operation(self, phase, operation):
+        """Retry a resumable operation; its own durable budget remains authoritative."""
+        from galley.recovery import progress_fingerprint, transient_failure
+        ledger = self._recovery_ledger()
+        while True:
+            before = progress_fingerprint(self.workspace)
+            try:
+                value = operation()
+            except (UsageLimitError, CredentialsError):
+                raise
+            except Exception as exc:
+                retryable = getattr(exc, "retryable", None)
+                temporary = transient_failure(exc)
+                if retryable is False or not (retryable or temporary):
+                    raise
+                if not ledger.failed(phase, before=before,
+                        after=progress_fingerprint(self.workspace), reason=str(exc),
+                        transient=temporary):
+                    raise
+                self.log(f"{phase}: recovering from {type(exc).__name__} using saved evidence")
+                self._progress("recovery", phase=phase, reason=str(exc)[:600])
+                if temporary:
+                    self.sleep(2)
+                continue
+            ledger.complete(phase)
+            return value
 
     def _spec(self, phase: str, env: dict[str, str]) -> PhaseSpec:
         prompt = phase_prompt(phase, self.book.name,
@@ -1673,21 +1749,9 @@ class Driver:
                 f"proofreader")
 
     def _final_run(self) -> Path | None:
-        """The run directory the build ended in: the newest `runs/*` holding a
-        findings envelope."""
-        pin = self.workspace / "runs" / DRIVER_DIR / "final-run.json"
-        if pin.is_file():
-            try:
-                rel = json.loads(pin.read_text("utf-8"))["run"]
-                run = (self.workspace / rel).resolve()
-                run.relative_to(self.workspace.resolve())
-                if (run / "findings.json").is_file():
-                    return run
-            except (OSError, ValueError, KeyError, TypeError):
-                pass
-        runs = sorted((self.workspace / "runs").glob("*/findings.json"),
-                      key=lambda p: p.stat().st_mtime, reverse=True)
-        return runs[0].parent if runs else None
+        from galley.build_selection import final_run
+        from galley.manifest import sha256_file
+        return final_run(self.workspace, sha256_file(self.book))
 
     def _current_state(self) -> str:
         from galley.state_machine import RunStateMachine
@@ -1745,11 +1809,49 @@ class Driver:
         return result
 
     def _review_snapshot_available(self) -> bool:
-        from galley.verify import deliverable_docx
-        run = self._final_run()
-        return bool(run and deliverable_docx(run)
-                    and all((run / name).is_file() for name in
-                            ("findings.json", "change_verify.json", "finished_walk.json")))
+        """A failed coordinator can leave a complete read, never assume it did."""
+        from galley import verify
+        from galley.verify import applied_edits, build_fingerprints, paragraph_views
+        try:
+            run = self._final_run()
+            if run is None:
+                return False
+            findings = _read_json(run / "findings.json")
+            if not isinstance(findings, dict) or not isinstance(findings.get("findings"), list):
+                return False
+            fingerprints = build_fingerprints(run)
+            if not fingerprints:
+                return False
+            _original, accepted = paragraph_views(run)
+            pair_ids = []
+            for filename, rows, unread, count_key, count in (
+                    ("change_verify.json", "problems", "unread_batches", "applied_edits",
+                     len(applied_edits(run))),
+                    ("finished_walk.json", "residuals", "unread_paragraphs", "paragraphs",
+                     sum(bool(text.strip()) for text in accepted.values()))):
+                artifact = _read_json(run / filename)
+                if not isinstance(artifact, dict):
+                    return False
+                proof = artifact.get("verification_provenance")
+                if proof is not None and (not isinstance(proof, dict) or proof.get("complete") is not True):
+                    return False
+                matches_build = getattr(verify, "verification_artifact_matches_build", None)
+                bound = (matches_build(run, artifact, fingerprints) if callable(matches_build)
+                         and isinstance(artifact, dict) else isinstance(artifact, dict)
+                         and all(artifact.get(k) == value for k, value in fingerprints.items()))
+                if (not isinstance(artifact, dict) or artifact.get("ran") is not True
+                        or artifact.get("reason") or not isinstance(artifact.get(rows), list)
+                        or type(artifact.get(count_key)) is not int or artifact[count_key] != count
+                        or artifact.get(unread) != [] or artifact.get("unverified_paragraphs") != []
+                        or artifact.get("paragraphs_verified") is not None or not bound):
+                    return False
+                pair_ids.append(artifact.get("verification_pair_id"))
+            # Two separately written generations cannot become a full read by
+            # accident after a crash between the artifact replacements.
+            return bool(isinstance(pair_ids[0], str) and pair_ids[0]
+                        and pair_ids[0] == pair_ids[1])
+        except (OSError, ValueError, TypeError, KeyError):
+            return False
 
     def _enroll_astra(self) -> Path:
         from docproof.utils.files import write_atomic
@@ -1760,6 +1862,7 @@ class Driver:
                               max_chunk_bytes=self.astra_chunk_bytes, persist=True)
         write_atomic(self._driver_dir() / "final-run.json", json.dumps({
             "run": str(run.relative_to(self.workspace)),
+            "source_sha256": self._execution_budget().source_sha256,
         }, indent=2))
         return run
 
@@ -1780,12 +1883,14 @@ class Driver:
             with use_context(self._resource_env(phase, {})):
                 if settings["transport"] == "api":
                     from galley.astra_review import review_run
-                    receipt = review_run(run, budget_usd=self.astra_budget_usd,
-                                         max_output_tokens=self.astra_max_output_tokens,
-                                         client=self.astra_client, **context_kwargs)
+                    receipt = self._retry_operation(phase, lambda: review_run(
+                        run, budget_usd=self.astra_budget_usd,
+                        max_output_tokens=self.astra_max_output_tokens,
+                        client=self.astra_client, **context_kwargs))
                 else:
                     from galley.astra_subscription import review_run
-                    receipt = review_run(run, max_chunk_bytes=settings["max_chunk_bytes"], **context_kwargs)
+                    receipt = self._retry_operation(phase, lambda: review_run(
+                        run, max_chunk_bytes=settings["max_chunk_bytes"], **context_kwargs))
             if (receipt["review"]["editorial_verdict"] == "ready"
                     and receipt.get("repair_required")):
                 from galley.astra_reconcile import reconcile_run
@@ -1800,6 +1905,8 @@ class Driver:
             # assess validates the receipt again; pending repairs cannot write done.
             verdict = astra_outcome(run)
             verdict.save(run)
+        except (UsageLimitError, CredentialsError):
+            raise
         except Exception as e:                              # noqa: BLE001
             path.write_text(str(e) + "\n", encoding="utf-8")
             result.phases.append(PhaseResult(phase, 8, path, str(e)))
@@ -1881,15 +1988,27 @@ class Driver:
                                     config_sha256=previous.config_sha256)
                     machine.save(self.workspace / "state.json")
             else:
-                certificate = json.loads((run / "certificate.json").read_text("utf-8"))
+                certificate = _read_json(run / "certificate.json")
+                certificate = certificate if isinstance(certificate, dict) else {}
                 fingerprints = build_fingerprints(run)
+                if (not certificate.get("passed") or not fingerprints
+                        or certificate.get("build_sha256") != fingerprints["build_sha256"]):
+                    stopped = self._run_final_phase("certify", result)
+                    if stopped is not None:
+                        return stopped
+                    certificate = _read_json(run / "certificate.json")
+                    certificate = certificate if isinstance(certificate, dict) else {}
+                    fingerprints = build_fingerprints(run)
                 if (not certificate.get("passed") or not fingerprints
                         or certificate.get("build_sha256") != fingerprints["build_sha256"]):
                     raise DriverError("No passing certificate covers the exact final manuscript.")
                 if not self._packaged_files():
-                    self._render_final_reports(run)
+                    self._retry_operation("delivery-copy", lambda: self._render_final_reports(run))
                 final_docx = deliverable_docx(run)
                 copied = deliverable_docx(self.workspace / "deliverable")
+                if final_docx and (not copied or sha256_file(final_docx) != sha256_file(copied)):
+                    self._retry_operation("delivery-copy", lambda: self._render_final_reports(run))
+                    copied = deliverable_docx(self.workspace / "deliverable")
                 if not final_docx or not copied or sha256_file(final_docx) != sha256_file(copied):
                     raise DriverError("The delivery copy does not match the certified manuscript.")
             path.write_text(f"{phase} completed deterministically\n", encoding="utf-8")
@@ -1897,6 +2016,8 @@ class Driver:
             self._write_ledger(result)
             self._progress("phase_end", phase=phase, ok=True, returncode=0)
             return None
+        except (UsageLimitError, CredentialsError):
+            raise
         except Exception as e:                              # noqa: BLE001
             path.write_text(str(e) + "\n", encoding="utf-8")
             result.phases.append(PhaseResult(phase, 8, path, str(e)))
@@ -2188,6 +2309,8 @@ class Driver:
             if (repair and env is not None and turns > 0 and seconds > 0
                     and not (self.workspace / "approval.json").exists()
                     and not self._state_reached("plan_approved")):
+                from galley.recovery import progress_fingerprint
+                before = progress_fingerprint(self.workspace)
                 stopped = self._run_session_phase("profile", env, result,
                     guidance=f"The automatic plan gate refused the draft: {reason}. "
                     "Correct only the plan/proposed config before approval. "
@@ -2196,7 +2319,9 @@ class Driver:
                     "existing scope and budget; do not ask to enlarge them.")
                 if stopped is not None:
                     return False
-                return self.run_gate(result, env, repair=False)
+                retry = self._recovery_ledger().failed("plan-gate", before=before,
+                    after=progress_fingerprint(self.workspace), reason=reason)
+                return self.run_gate(result, env, repair=retry)
             result.recovery_exhausted = True
             self._stop(result, "approve", f"plan gate refused: {reason}")
             return False
@@ -2307,11 +2432,25 @@ class Driver:
             log_path = spec.log_path.with_name(spec.log_path.stem + "-" + uuid.uuid4().hex + ".log")
             key, _, seconds = budget.reserve("code-" + spec.phase, 0,
                 self.timeout_for(spec.phase), log_path=log_path)
-            spec = replace(spec, timeout_s=seconds, log_path=log_path)
+            argv = (spec.argv if self.command_spawn else
+                    budget.command_argv(key, spec.argv))
+            spec = replace(spec, argv=argv, timeout_s=seconds, log_path=log_path)
             self._progress("phase_start", phase=spec.phase, model="code",
                            timeout_s=seconds, log_path=str(log_path))
             started = self.clock()
-            outcome = (self.command_spawn or spawn_claude)(spec)
+            try:
+                try:
+                    outcome = (self.command_spawn or spawn_claude)(spec)
+                finally:
+                    if not self.command_spawn:
+                        budget.terminate_process(key)
+            except ProcessNotStartedError:
+                budget.finish(key, turns=0, seconds=max(0.0, self.clock() - started),
+                              status="not-started")
+                raise
+            except Exception:
+                budget.reconcile(parse_session_result)
+                raise
             elapsed = max(0.0, self.clock() - started)
             if outcome.limit == "timeout":
                 elapsed = max(elapsed, seconds)
@@ -2327,20 +2466,29 @@ class Driver:
                            returncode=outcome.returncode, limit=outcome.limit)
             return outcome
         try:
-            EnginePhases(self, execute).run(phase)
+            self._retry_operation(phase, lambda: EnginePhases(self, execute).run(phase))
         except UsageLimitError as exc:
             self._block(result, phase, str(exc))
             raise
+        except CredentialsError:
+            raise
         except Exception as exc:
+            from galley.engine_phases import EnginePhaseError
+            from galley.execution_budget import ActiveExecutionError, ExecutionBudgetError
+            result.recovery_exhausted = bool(
+                isinstance(exc, EnginePhaseError) and not exc.retryable
+                and exc.kind in {"integrity", "limit"}
+                or isinstance(exc, ExecutionBudgetError) and not isinstance(exc, ActiveExecutionError))
             return self._block(result, phase, str(exc))
         return None
 
     def _run_session_phase(self, phase: str, env: dict[str, str],
                            result: DriveResult, *, guidance: str = ""
                            ) -> DriveResult | None:
-        """One session, at most one recovery within the original caps, and at
-        most RECOVERY_MAX_GRANTS continuations for a session the caps cut off
-        while it was measurably advancing the book.
+        """Recover within the available caps until completion or a stall.
+
+        A session cut off while measurably advancing the book may receive at
+        most RECOVERY_MAX_GRANTS durable continuation grants.
 
         A local question is evidence for autonomous triage, never a hold. Only
         an actual failed operation or missing required state can block the run.
@@ -2349,9 +2497,11 @@ class Driver:
         from galley.execution_budget import ExecutionBudgetError
         from docproof.resource_ledger import append_usage, record_claude_result, use_context
         unattended = self.approve == "auto"
-        recoveries_left = 1 if unattended and not guidance else 0
         resume_session = ""
+        from galley.recovery import progress_fingerprint, transient_failure
+        ledger = self._recovery_ledger()
         while True:
+            progress_before = progress_fingerprint(self.workspace)
             spec = self._spec(phase, env)
             turns, seconds = self._remaining_phase_budget(phase)
             if turns <= 0 or seconds <= 0:
@@ -2425,7 +2575,20 @@ class Driver:
             before = self._questions_text()
             marker = self._progress_marker()
             started = self.clock()
-            outcome = self._spawner()(spec)
+            try:
+                outcome = self._spawner()(spec)
+            except ProcessNotStartedError:
+                execution.finish(key, turns=0, seconds=max(0.0, self.clock() - started),
+                                 status="not-started")
+                from docproof.resource_ledger import TOKEN_FIELDS
+                with use_context({**spec.env, "DOCPROOF_RESOURCE_PARENT_OPERATION": ""}):
+                    append_usage(receipt_id=key, operation_id=operation,
+                        model=self.model_for(phase), transport="claude-code",
+                        status="not-started", usage={k: 0 for k in TOKEN_FIELDS})
+                raise
+            except Exception:
+                execution.reconcile(parse_session_result)
+                raise
             elapsed = max(0.0, self.clock() - started)
             progressed = self._progress_marker() != marker
             resume_session = outcome.session_id or ""
@@ -2482,16 +2645,21 @@ class Driver:
                         guidance += "\nLocal notes:\n" + notes
                     continue
                 remaining_turns, remaining_seconds = self._remaining_phase_budget(phase)
-                if recoveries_left > 0 and remaining_turns > 0 and remaining_seconds > 0:
-                    recoveries_left -= 1
+                recover = ledger.failed(phase, before=progress_before,
+                    after=progress_fingerprint(self.workspace),
+                    reason=problem or notes, transient=transient_failure(problem))
+                if recover and remaining_turns > 0 and remaining_seconds > 0:
                     guidance = problem or "Resolve the local notes and complete this phase."
                     if notes:
                         guidance += "\nLocal notes:\n" + notes
                     continue
             if problem:
                 result.recovery_exhausted = True
+                result.retry_later = bool(transient_failure(problem)
+                    and remaining_turns > 0 and remaining_seconds > 0)
                 return (self._block if self.execution_mode == "code" else self._stop)(result, phase,
                     f"Automatic recovery could not complete the required work: {problem}")
+            ledger.complete(phase)
             return None
 
     def run(self) -> DriveResult:
@@ -2567,18 +2735,18 @@ class Driver:
             return self._block(result, "deliver", str(e))
         if "deliver" in phases:
             try:
-                result.handoff = self.run_handoff()
+                result.handoff = self._retry_operation("handoff", self.run_handoff)
             except DriverError as e:
                 return self._stop(result, "deliver", f"hand-off failed: {e}")
             if self.drive_folder_id:
                 try:
                     if self.astra_review:
                         package = json.loads((self._driver_dir() / "package.json").read_text("utf-8"))
-                        result.uploaded = publish_verified_handoff(
-                            package, self.drive_folder_id,
-                            self._driver_dir() / "delivery.json",
-                            source_id=self.source_id or self.slug,
-                            upload=self.upload, verify=self.verify_upload)
+                        result.uploaded = self._retry_operation("drive-delivery", lambda:
+                            publish_verified_handoff(package, self.drive_folder_id,
+                                self._driver_dir() / "delivery.json",
+                                source_id=self.source_id or self.slug,
+                                upload=self.upload, verify=self.verify_upload))
                     else:
                         uploader = self.upload or _default_upload
                         result.uploaded = uploader(result.handoff, self.drive_folder_id)
@@ -3026,6 +3194,8 @@ def publish_verified_handoff(package: dict[str, Any], folder_id: str,
     for row in records:
         path = Path(row["path"])
         old = ledger["artifacts"].get(row["name"], {})
+        equivalent_ids = []
+        preverified = False
         if old and old.get("sha256") != row["sha256"]:
             raise DriverError(f"Delivery receipt hash changed for {row['name']}")
         file_id = str(old.get("file_id") or "")
@@ -3037,7 +3207,18 @@ def publish_verified_handoff(package: dict[str, Any], folder_id: str,
                        and item.app_properties.get("galley_sha256") == row["sha256"]
                        and item.app_properties.get("galley_source") == source_id]
             if len(matches) > 1:
-                raise DriverError(f"Multiple remote copies match {row['name']}; reconcile them before retry.")
+                # An ambiguous upload acknowledgement can leave duplicate
+                # copies of the same frozen artifact. Verify every candidate
+                # before adopting one stable ID; never delete a user's files
+                # or hide a candidate whose bytes no longer match its tags.
+                matches.sort(key=lambda item: item.id)
+                for item in matches:
+                    actual = hashlib.sha256(drive.download_bytes(
+                        token, item.id, what="reconcile a handoff artifact")).hexdigest()
+                    if actual != row["sha256"]:
+                        raise DriverError(f"A matching remote copy has different content: {row['name']}")
+                    equivalent_ids.append(item.id)
+                preverified = True
             if matches:
                 file_id = matches[0].id
         if not file_id:
@@ -3055,8 +3236,10 @@ def publish_verified_handoff(package: dict[str, Any], folder_id: str,
                 file_id = str(uploaded[0])
         ledger["artifacts"][row["name"]] = {
             "sha256": row["sha256"], "file_id": file_id, "verified": False}
+        if equivalent_ids:
+            ledger["artifacts"][row["name"]]["equivalent_file_ids"] = equivalent_ids
         save()  # Retain the id even if the subsequent read-back fails.
-        confirmed = (hashlib.sha256(drive.download_bytes(
+        confirmed = preverified or (hashlib.sha256(drive.download_bytes(
             token, file_id, what="verify a handoff artifact")).hexdigest() == row["sha256"]
                      if token else bool(verify(path, file_id, folder_id)))
         if not confirmed:
