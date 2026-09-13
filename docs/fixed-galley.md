@@ -37,6 +37,50 @@ The agreed sequence is:
 9. Fable 5.1 sweeps the resulting book and reviews every proposed Galley comment.
 10. Astra sweeps the Fable-corrected book and reviews every surviving comment.
 
+## Concurrent execution
+
+Independent windows run concurrently in typed detection, number review, Opus
+adjudication, poetry-section classification, whole-book sweeps, and comment
+review. Separate provider pools prevent queued Claude calls from blocking Luna.
+The current configuration permits eight Claude subscription reads, 24 OpenAI
+API reads, and eight ChatGPT subscription reads in flight. Concurrent batches
+share these ceilings; they do not multiply them. The explicit serial diagnostic
+setting still enforces one call globally.
+
+Preparation overlaps Story Sheet generation. Local scans overlap typed reads,
+and embedded-poetry and prose detectors can run together. Each independent
+correction window advances through meaning review, any Opus adjudication,
+correction review, and its final adjudication without waiting for unrelated
+windows. Changes remain isolated until committed in manuscript order. Fable
+waits for the checked ensemble result; Astra waits for the checked Fable result
+and comment dispositions. These are genuine text dependencies.
+
+Sol and Astra use one [Codex App Server](https://learn.chatgpt.com/docs/app-server)
+process with isolated ephemeral threads. One owner protects the refreshable
+ChatGPT login while concurrent turns keep distinct schemas, outputs and durable
+receipts. No authentication tokens are copied and no API fallback is introduced.
+Same-request locks still prevent duplicate submission. Completed turns can be
+recovered after interrupted bookkeeping; an unknown turn cannot be replayed.
+Claude turns have a 15-minute timeout and Codex requests retain their bounded
+30-minute execution allowance. An unavailable review follows the safe-skip
+policy below rather than requiring an operator to rescue it.
+
+The offline 720-detector/155-dispute scheduling benchmark, using an identical
+20 ms simulated delay per call, ran about 5.1 times faster. This is a scheduler
+measurement, not a promised production-book duration or quality comparison.
+
+## Unattended model failures
+
+After bounded retries, production runs freeze unusable model requests as
+explicitly skipped and continue. Skipped readings receive no coverage credit,
+unreviewed proposals are discarded, and failed correction checks restore the
+preceding text and formatting. Operational problems never become author
+questions. Original responses, failed/unknown receipts, coverage contracts,
+and spending reservations remain intact; restarts reuse the saved skip.
+The result and report explicitly disclose incomplete review coverage, and the
+certificate rejects hidden or altered skip evidence. Source/package integrity
+and local-check evidence gates remain enforced.
+
 The number sweep reads the house policy shipped in
 `config/error_types/number_style.yaml` and `galley/house_style.py`, including
 contextual exceptions such as already written-out large numbers. A model does
@@ -58,7 +102,8 @@ Typed coverage must include every owned paragraph exactly once. If a reader
 also lists paragraphs supplied as read-only context, Galley removes only those
 known context IDs from the working coverage view. Raw responses remain intact,
 and context findings cannot become edits in this chunk. Missing owned IDs,
-duplicate IDs and unknown IDs still block completion.
+duplicate IDs and unknown IDs invalidate the response; exhausted requests are
+skipped without approving their proposals.
 
 New model suggestions need exact quotations in their assigned paragraphs. An
 unknown paragraph, absent quotation or invalid occurrence rejects that proposal
@@ -89,8 +134,8 @@ preserved. A previously cached, schema-valid incomplete answer can be reconciled
 without changing its request identity or repeating other completed reads.
 Missing or changed coverage contracts block recovery and certification.
 Subscription retries use distinct transport request IDs, so a retry cannot
-simply return the same incomplete cached answer. Unknown submissions still
-require reconciliation; exhaustion never grants a fresh retry allowance.
+simply return the same incomplete cached answer. Unknown submissions retain their reservation and are skipped without automatic
+resubmission; exhaustion never grants a fresh retry allowance.
 
 The supplied Atmosphere pasted-chat method is preserved with an
 [item-level coverage review](galley-press-prompt-coverage.md). Its 120 indexed
@@ -243,7 +288,8 @@ the mapping and resulting hash; raw responses and coverage inventories remain
 unchanged. Saved validation failures are rechecked before considering another
 attempt, so an already-complete alternative representation can recover even
 at its saved retry limit without another submission or additional allowance.
-Missing actual decisions still block when the original allowance is exhausted.
+Missing actual decisions discard the unresolved suggestions when the original
+allowance is exhausted; the skipped review remains explicit in the evidence.
 
 Extra unassigned decisions are discarded consistently for disputes, meaning and
 correction checks, number-reader comment outputs, and final comment reviews.

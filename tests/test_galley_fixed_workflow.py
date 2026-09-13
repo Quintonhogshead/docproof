@@ -530,31 +530,24 @@ def test_final_comment_cannot_silently_anchor_to_wrong_repeated_word(make_book, 
     assert "unambiguous contextual quote" in flow.history[-1]["rejected_proposal"]["reason"]
 
 
-def test_failed_typed_stage_cancels_queued_reads(make_book, tmp_path, monkeypatch):
+def test_failed_parallel_batch_cancels_queued_reads(monkeypatch):
     from concurrent.futures import Future
+    from galley.fixed_parallel import ReadScheduler
+    from galley.fixed_policy import configuration
     scheduled = []
-
     class ControlledExecutor:
-        def __init__(self, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
         def submit(self, callback, *args):
             future = Future()
             if not scheduled:
-                future.set_result(ProviderResult(stop_reason="refusal"))
+                future.set_exception(FixedWorkflowError("failed read"))
             scheduled.append(future)
             return future
-
-    monkeypatch.setattr("galley.fixed_workflow.ThreadPoolExecutor", ControlledExecutor)
-    with pytest.raises(FixedWorkflowError, match="typed detector did not complete"):
-        FixedWorkflow(make_book("A quiet paragraph."), tmp_path / "blocked", calls=Readers()).run()
-    assert len(scheduled) > 1
+    monkeypatch.setattr("galley.fixed_parallel.ThreadPoolExecutor", ControlledExecutor)
+    with pytest.raises(FixedWorkflowError, match="failed read"):
+        ReadScheduler(configuration()).map([(SONNET, lambda: None)] * 4)
     assert all(future.cancelled() for future in scheduled[1:])
 
 
@@ -740,7 +733,7 @@ def test_local_collector_cannot_emit_a_candidate_in_embedded_poetry(
     with pytest.raises(FixedWorkflowError, match="protected poetry"):
         FixedWorkflow(make_book("The Moon\n  waits", "She waited by the door."),
                       tmp_path / "mixed-local", calls=readers).run()
-    assert not any(row["stage"] in {"typed", "spelling", "typed_disputes"} for row in readers.events)
+    assert not any(row["stage"] in {"typed_disputes", "fable", "astra"} for row in readers.events)
 
 
 def test_real_local_generators_exclude_embedded_poetry_at_both_checkpoints(
@@ -779,7 +772,7 @@ def test_real_local_generators_exclude_embedded_poetry_at_both_checkpoints(
         assert all(check["paragraph_ids"] == ["body-0001"] for check in local["checks"])
 
 
-def test_missing_languagetool_blocks_before_typed_calls(
+def test_missing_languagetool_prevents_later_stages_after_parallel_reads(
         make_book, tmp_path, monkeypatch, local_scans):
     from galley.fixed_local import FixedLocalError
 
@@ -788,7 +781,7 @@ def test_missing_languagetool_blocks_before_typed_calls(
     readers = Readers()
     with pytest.raises((FixedLocalError, FixedWorkflowError), match="LanguageTool"):
         FixedWorkflow(make_book("A quiet paragraph."), tmp_path / "missing-local", calls=readers).run()
-    assert not any(row["stage"] in {"typed", "spelling", "fable"} for row in readers.events)
+    assert not any(row["stage"] in {"fable", "astra"} for row in readers.events)
     assert not (tmp_path / "missing-local/result.json").exists()
 
 

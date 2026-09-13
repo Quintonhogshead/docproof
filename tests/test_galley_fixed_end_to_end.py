@@ -177,13 +177,15 @@ def test_failed_local_code_repair_resumes_without_repeating_paid_intake(tmp_path
     worker = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode="fixed")
     result = worker.run()
     assert result.outcome == "blocked" and "Simulated" in result.reason
-    assert [model for model, _ in readers.requests] == [SONNET, LUNA]
+    assert [model for model, _ in readers.requests][:2] == [SONNET, LUNA]
+    paid_before = list(readers.requests)
     monkeypatch.setattr(fixed_local, "_versions", lambda: {"checker.py": "repaired"})
     monkeypatch.setattr(fixed_local, "_language_tool", language_tool)
     result = worker.run()
     assert result.outcome == "done", result.reason
     assert [user for _, user in readers.requests].count(readers.requests[0][1]) == 1
     assert [user for _, user in readers.requests].count(readers.requests[1][1]) == 1
+    assert all(readers.requests.count(request) == paid_before.count(request) for request in paid_before)
     package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
     assert validate_delivery_package(package)["delivery_ready"] is True
 

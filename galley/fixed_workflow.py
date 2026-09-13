@@ -5,12 +5,15 @@ can run commands, change the recipe, or turn a transport failure into a query.
 """
 from __future__ import annotations
 
+import copy
 import dataclasses
 import hashlib
 import itertools
 import json
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from pathlib import Path
+from functools import partial
 
 from docproof.utils.files import write_atomic
 
@@ -44,6 +47,10 @@ def workflow_plan():
         {"stage": "fable", "model": FABLE, "description": "Read the corrected book and decide every proposed Galley comment"},
         {"stage": "astra", "model": ASTRA, "description": "Read the Fable-corrected book and review every surviving comment"},
     ]
+
+
+def _submit(pool, operation, *args, **kwargs):
+    return pool.submit(copy_context().run, partial(operation, *args, **kwargs))
 
 
 def _json(value):
@@ -272,7 +279,9 @@ class FixedWorkflow:
         if calls is None:
             from galley.fixed_calls import FixedCalls
             calls = FixedCalls(self.directory / "calls", self.identity, self.cfg,
-                               max_api_usd=max_api_usd, continue_on_model_failure=True)
+                               max_api_usd=max_api_usd, continue_on_model_failure=True, parallel_subscription=True)
+        from galley.fixed_parallel import ReadScheduler
+        self.scheduler = ReadScheduler(self.cfg)
         self.calls = calls
         self.current = {}
         self.original = {}
@@ -328,9 +337,9 @@ class FixedWorkflow:
     def _ask(self, stage, model, system, payload, schema, *, effort="low", max_tokens=12000):
         self._cancel()
         policy = self.base_policy if stage in {"poetry", "poetry_sections", "story_sheet"} else self.policy
-        result = self.calls.ask(stage, model=model, system=policy + "\n\n" + system,
+        result = self.scheduler.run(model, partial(self.calls.ask, stage, model=model, system=policy + "\n\n" + system,
                               user=_json(payload), schema=schema, schema_name="galley_fixed",
-                              effort=effort, max_tokens=max_tokens, coverage=_call_coverage(payload, schema))
+                              effort=effort, max_tokens=max_tokens, coverage=_call_coverage(payload, schema)))
         if "_skipped_read" in result:
             self.history.append({"stage": stage, "skipped_read": result["_skipped_read"]})
             return None
@@ -350,10 +359,11 @@ class FixedWorkflow:
             self.poetry_ids = set(self.original)
         elif result["classification"] in {"mixed", "uncertain"}:
             # A fixed fallback covers all text and protects embedded verse.
-            for window in _windows([{"id": k, "text": v} for k, v in self.original.items()]):
-                decisions = self._ask("poetry_sections", SONNET,
+            windows = list(_windows([{"id": k, "text": v} for k, v in self.original.items()]))
+            jobs = [(SONNET, partial(self._ask,"poetry_sections", SONNET,
                     "Classify EVERY supplied paragraph as poetry or prose in its surrounding context. Protect deliberate verse. Return exactly one classification per id.",
-                    window, _object(paragraphs=_array(_object(id=S, poetry=B))))
+                    window, _object(paragraphs=_array(_object(id=S, poetry=B))))) for window in windows]
+            for window, decisions in zip(windows, self.scheduler.map(jobs)):
                 if decisions is None:
                     self.poetry_ids.update(x["id"] for x in window)
                     continue
@@ -408,37 +418,29 @@ class FixedWorkflow:
                         continue
                     selected = dataclasses.replace(chunk, paragraphs=subset)
                     work.append((model, p.index, selected, analyzers[p.index]))
-        with ThreadPoolExecutor(max_workers=min(4, cfg.concurrency_for())) as pool:
-            futures = [pool.submit(_fetch_owned, analyzer, chunk) for _, _, chunk, analyzer in work]
-            try:
-                for (model, index, chunk, analyzer), future in zip(work, futures):
-                    self._cancel()
-                    raw = future.result()
-                    if raw.stop_reason == "skipped":
-                        self.history.append({"stage": "spelling" if poetry else "typed",
-                                             "skipped_read": raw.parsed["_skipped_read"]})
-                        coverage.append({"model": model, "pass": index, "chunk": chunk.chunk_id,
-                            "paragraph_ids": [], "assigned_paragraph_ids": [p.para_id for p in chunk.paragraphs],
-                            "status": "skipped"})
-                        continue
-                    response = _typed_response(raw, chunk)
-                    found, ok = analyzer.process_result(response, chunk, Usage())
-                    if not ok:
-                        raise FixedWorkflowError("A typed detector did not complete its assigned reading")
-                    texts = {p.para_id: p.text for p in chunk.paragraphs}
-                    for f in found:
-                        row = self._reader_candidate("spelling" if poetry else "typed", dataclasses.asdict(f), texts, model,
-                                         query_types=prepared.query_types, format_types=prepared.format_types)
-                        if row:
-                            row["confidence"] = f.confidence
-                            all_candidates.append(row)
-                    coverage.append({"model": model, "pass": index, "chunk": chunk.chunk_id, "paragraph_ids": list(texts)})
-            except BaseException:
-                # Running calls finish into durable receipts, but a blocked
-                # stage must not start paying for the rest of its queued work.
-                for future in futures:
-                    future.cancel()
-                raise
+        responses = self.scheduler.map((model, partial(_fetch_owned, analyzer, chunk))
+                                       for model, _, chunk, analyzer in work)
+        for (model, index, chunk, analyzer), raw in zip(work, responses):
+            self._cancel()
+            if raw.stop_reason == "skipped":
+                self.history.append({"stage": "spelling" if poetry else "typed",
+                                     "skipped_read": raw.parsed["_skipped_read"]})
+                coverage.append({"model": model, "pass": index, "chunk": chunk.chunk_id,
+                    "paragraph_ids": [], "assigned_paragraph_ids": [p.para_id for p in chunk.paragraphs],
+                    "status": "skipped"})
+                continue
+            response = _typed_response(raw, chunk)
+            found, ok = analyzer.process_result(response, chunk, Usage())
+            if not ok:
+                raise FixedWorkflowError("A typed detector did not complete its assigned reading")
+            texts = {p.para_id: p.text for p in chunk.paragraphs}
+            for f in found:
+                row = self._reader_candidate("spelling" if poetry else "typed", dataclasses.asdict(f), texts, model,
+                                 query_types=prepared.query_types, format_types=prepared.format_types)
+                if row:
+                    row["confidence"] = f.confidence
+                    all_candidates.append(row)
+            coverage.append({"model": model, "pass": index, "chunk": chunk.chunk_id, "paragraph_ids": list(texts)})
         # Each awaited result above validates its own completed read. The
         # global delivery audit belongs after all stages: during replay, a
         # later failed dispute must be reached so its saved response can recover.
@@ -572,10 +574,11 @@ class FixedWorkflow:
             disputed.append({"id": "d-" + _hash([x["id"] for x in group])[:20], "para_id": pid,
                              "start": lo, "end": hi, "before": self.current[pid][lo:hi],
                              "paragraph": self.current[pid], "source": self.original[pid], "proposals": group})
-        for window in _windows(disputed, 20000):
-            result = self._ask(stage + "_disputes", OPUS,
+        windows = list(_windows(disputed, 20000))
+        jobs = [(OPUS, partial(self._ask,stage + "_disputes", OPUS,
                 "Settle EVERY disputed site. Apply only a clear proofreading correction supported by context; you may reject every proposal. replacement replaces exactly the before span: preserve all unchanged text inside that span, and do not include text outside it. The span may cover a word, several sentences, or the entire paragraph. Drop false alarms, stylistic preferences and resolved issues. Query only an actual textual problem whose missing fact or intended meaning requires the author. A disagreement alone is not a query. Preserve formatting proposals only when a house rule requires them.",
-                {"story_sheet": self.context, "sites": window}, DECISIONS, effort="high")
+                {"story_sheet": self.context, "sites": window}, DECISIONS, effort="high")) for window in windows]
+        for window, result in zip(windows, self.scheduler.map(jobs)):
             result = self._drop_unreviewed(window) if result is None else result["decisions"]
             _exact_ids([x["id"] for x in result], [x["id"] for x in window], "Opus adjudication")
             by_id = {x["id"]: x for x in result}
@@ -649,23 +652,23 @@ class FixedWorkflow:
         from galley.fixed_policy import extract_numbers
         sites = extract_numbers({k: v for k, v in self.current.items() if k not in self.poetry_ids})
         results = []
-        for model in (SONNET, LUNA):
-            for window in _windows(sites, 16000):
-                answer = self._ask("numbers", model,
+        work = [(model, window) for model in (SONNET, LUNA) for window in _windows(sites, 16000)]
+        jobs = [(model, partial(self._ask,"numbers", model,
                     "Check EVERY numbered site against the supplied existing number and currency policy. reviewed_ids must contain every site id, even when correct. Findings quote the paragraph verbatim and specify para_id. Never change numerical values or invent AM/PM. Preserve all policy exceptions. Only report clear errors or evidence-backed author questions. No comment decisions are needed.",
                     {"story_sheet": self.context, "sites": window,
-                     "paragraphs": {x["para_id"]: self.current[x["para_id"]] for x in window}}, READ_SCHEMA)
-                if answer is None:
-                    continue
-                _exact_ids(answer["reviewed_ids"], [x["id"] for x in window], "Number coverage")
-                if answer["comment_decisions"]:
-                    raise FixedWorkflowError("Number sweep returned unassigned comment decisions")
-                allowed = {x["para_id"]: self.current[x["para_id"]] for x in window}
-                for row in answer["findings"]:
-                    candidate = self._reader_candidate("numbers", row, allowed, model,
-                        allowed_categories={"number_style", "currency_style", "author_question"})
-                    if candidate:
-                        results.append(candidate)
+                     "paragraphs": {x["para_id"]: self.current[x["para_id"]] for x in window}}, READ_SCHEMA)) for model, window in work]
+        for (model, window), answer in zip(work, self.scheduler.map(jobs)):
+            if answer is None:
+                continue
+            _exact_ids(answer["reviewed_ids"], [x["id"] for x in window], "Number coverage")
+            if answer["comment_decisions"]:
+                raise FixedWorkflowError("Number sweep returned unassigned comment decisions")
+            allowed = {x["para_id"]: self.current[x["para_id"]] for x in window}
+            for row in answer["findings"]:
+                candidate = self._reader_candidate("numbers", row, allowed, model,
+                    allowed_categories={"number_style", "currency_style", "author_question"})
+                if candidate:
+                    results.append(candidate)
         self._apply("numbers", self._adjudicate("numbers", results, (SONNET, LUNA)))
         self._record("numbers", sites=sites)
 
@@ -705,11 +708,13 @@ class FixedWorkflow:
             citations = citation_context(paragraphs)
             formatting = current_formatting(self.original, snapshot, self.source_marks, self.formats)
             parts = {p.para_id: {"part": p.part, "location": p.location} for p in paragraphs}
+        jobs, windows = [], []
+        order = list(snapshot)
+        positions = {pid: i for i, pid in enumerate(order)}
         for window in _windows([{"id": k, "text": snapshot[k]} for k in keys]):
             owned = {x["id"]: x["text"] for x in window}
             questions = [q for q in self.questions if q["para_id"] in owned] if comments else []
-            indexes = [list(snapshot).index(k) for k in owned]
-            order = list(snapshot)
+            indexes = [positions[k] for k in owned]
             context_ids = set()
             for i in indexes:
                 context_ids.update(order[max(0, i - 2):i] + order[i + 1:i + 3])
@@ -742,10 +747,12 @@ class FixedWorkflow:
                           "Use it to compare clear contents/body wording or numbering errors only when both copies are present. "
                           "Do not infer missing entries from this excerpt; ignore page numbers, legitimate shortened titles, "
                           "and capitalization or punctuation preferences. Findings still belong only to owned paragraphs. ")
-            result = self._ask(stage, model,
+            windows.append((owned, questions, assigned))
+            jobs.append((model, partial(self._ask, stage, model,
                 scope + "Context paragraphs are read-only. Preserve poetry except demonstrable misspellings. Return reviewed_ids for all owned paragraphs. For EVERY assigned comment explicitly drop, retain, or replace it: answer from the book where possible, remove false/stale/duplicate/style concerns, and retain only specific questions requiring author knowledge. Retained comments must use an exact contextual quote that occurs only once in its paragraph. To resolve with an edit return the edit plus a drop decision. Do not invent or omit comment IDs. New questions require missing_knowledge. needs_human means substantive unresolved damage/meaning beyond a proofread, never an operational failure. Findings must quote their exact current paragraph. Never retype clean paragraphs.",
                 payload,
-                FRONTIER_SCHEMA if frontier else READ_SCHEMA, effort="high", max_tokens=16000)
+                FRONTIER_SCHEMA if frontier else READ_SCHEMA, effort="high", max_tokens=16000)))
+        for (owned, questions, assigned), result in zip(windows, self.scheduler.map(jobs)):
             if result is None:
                 decisions.extend(self._drop_unreviewed(questions))
                 coverage.append({"paragraph_ids": [], "comment_ids": [], "status": "skipped",
@@ -794,15 +801,16 @@ class FixedWorkflow:
                        [q for q in self.questions if q["id"] not in by_id])
             changed_context = [{"para_id": pid, "before": before[pid], "after": self.current[pid]}
                                for pid in self.current if pid in changed_ids | rejected]
-            for window in _windows(refresh, 16000):
-                result = self._ask(stage + "_comment_review", model,
+            windows = list(_windows(refresh, 16000))
+            jobs = [(model, partial(self._ask,stage + "_comment_review", model,
                     "Review EVERY assigned potential author comment against the FINAL CHECKED text, including changed_passages elsewhere in the book that may answer it. Prior edit proposals may have been rejected; do not rely on their proposed resolutions. Drop false positives, style preferences, resolved issues and questions answerable from context. Retain or replace only a specific unresolved proofreading question requiring missing author knowledge. Use an exact contextual quote occurring only once in the current paragraph for retained questions. Return one decision per assigned id. This final comment-only review cannot propose new edits or new questions.",
                     {"story_sheet": self.context, "comments": window,
                      "paragraphs": {q["para_id"]: self.current[q["para_id"]] for q in window},
                      "source": {q["para_id"]: self.original[q["para_id"]] for q in window},
                      "changed_passages": changed_context,
                      "prior_decisions": [by_id[q["id"]] for q in window if q["id"] in by_id]},
-                    _object(decisions=_array(COMMENT_DECISION)), effort="high")
+                    _object(decisions=_array(COMMENT_DECISION)), effort="high")) for window in windows]
+            for window, result in zip(windows, self.scheduler.map(jobs)):
                 result = self._drop_unreviewed(window) if result is None else result["decisions"]
                 _exact_ids([x["id"] for x in result], [q["id"] for q in window], stage + " final comments")
                 by_id.update({x["id"]: x for x in result})
@@ -835,7 +843,40 @@ class FixedWorkflow:
                     "format_proposals": [f for f in pending_formats if f["para_id"] == pid]}
                    for pid, text in self.current.items() if pid not in self.poetry_ids
                    and (text != before[pid] or any(f["para_id"] == pid for f in pending_formats))]
+        windows = list(_windows(changed, 16000))
+        def review(window):
+            # Check chains depend on their own paragraph's adjudication, not
+            # another window's result. Isolate mutations until ordered commit.
+            child = copy.copy(self)
+            child.current, child.formats = dict(self.current), list(self.formats)
+            child.history, child.questions = [], []
+            child._check_questions = {}
+            child._check_window(stage, before, window, pending_formats)
+            return child
+        with ThreadPoolExecutor(max_workers=max(1, min(len(windows), sum(self.scheduler.widths.values())))) as pool:
+            futures = [_submit(pool, review, window) for window in windows]
+            try:
+                reviewed = [future.result() for future in futures]
+            except BaseException:
+                for future in futures:
+                    future.cancel()
+                raise
+        for window, child in zip(windows, reviewed):
+            ids = {row["id"] for row in window}
+            for pid in ids:
+                self.current[pid] = child.current[pid]
+            self.formats = [f for f in self.formats if f["para_id"] not in ids or f in child.formats]
+        # Preserve the old canonical meaning-then-correction evidence order.
         for kind in ("meaning", "correction"):
+            for child in reviewed:
+                self.questions.extend(child._check_questions[kind])
+                self.history.extend(h for h in child.history if h["stage"].startswith(stage + "_" + kind))
+        self._checked_format_count = len(self.formats)
+        return changed
+
+    def _check_window(self, stage, before, changed, pending_formats):
+        for kind in ("meaning", "correction"):
+            question_start = len(self.questions)
             for window in _windows(changed, 16000):
                 active = [dict(x, after=self.current[x["id"]],
                                format_proposals=[f for f in x["format_proposals"] if f in self.formats])
@@ -887,6 +928,7 @@ class FixedWorkflow:
                             self.formats = [f for f in self.formats if not (f in pending_formats and f["para_id"] == pid)]
                             if d["action"] == "query":
                                 self._question(pid, self.current[pid], d["question"], d["missing_knowledge"], d["reason"], stage)
+            self._check_questions[kind] = self.questions[question_start:]
         self._checked_format_count = len(self.formats)
         return changed
 
@@ -901,6 +943,14 @@ class FixedWorkflow:
             raise FixedWorkflowError("The source changed during the fixed proofread")
 
     def run(self):
+        try:
+            return self._run()
+        finally:
+            close = getattr(self.calls, "close", None)
+            if close is not None:
+                close()
+
+    def _run(self):
         from docproof.pipeline import prepare
         from docproof.formats import get_format
         from docproof.utils.xml_helpers import walk_package, paragraph_text
@@ -920,25 +970,36 @@ class FixedWorkflow:
         self._stage("poetry")
         self._classify()
         all_poetry = self.poetry_ids == set(self.original)
-        if not all_poetry:
-            self._stage("story_sheet")
-            self._story()
-        self._stage("typed")
-        candidates, coverage, local_evidence = [], [], None
-        prose_prepared = None
-        for poetry in ([True] if all_poetry else ([False, True] if self.poetry_ids else [False])):
-            cfg = configuration(poetry)
-            prepared = prepare(cfg, self.source, Path(__file__).resolve().parent.parent / "config/error_types")
+        modes = [True] if all_poetry else ([False, True] if self.poetry_ids else [False])
+        def prepare_mode(poetry):
+            prepared = prepare(configuration(poetry), self.source,
+                               Path(__file__).resolve().parent.parent / "config/error_types")
             if any(self.original.get(p.para_id) != p.text for p in prepared.doc.paragraphs):
                 raise FixedWorkflowError("Preparation silently changed source text")
-            if not poetry:
-                prose_prepared = prepared
-                self.prose_prepared = prepared
-                local, local_evidence = self._local_initial(prepared)
+            return prepared
+        # Local preparation needs classification but not the Story Sheet.
+        with ThreadPoolExecutor(max_workers=len(modes)) as pool:
+            preparations = [_submit(pool, prepare_mode, poetry) for poetry in modes]
+            if not all_poetry:
+                self._stage("story_sheet")
+                self._story()
+            prepared_modes = list(zip(modes, [future.result() for future in preparations]))
+        self._stage("typed")
+        candidates, coverage, local_evidence = [], [], None
+        prose_prepared = next((prepared for poetry, prepared in prepared_modes if not poetry), None)
+        self.prose_prepared = prose_prepared
+        # Poetry/prose detectors and the independent local scan share no edits.
+        # Their findings are committed below in the original deterministic order.
+        with ThreadPoolExecutor(max_workers=len(modes) + 1) as pool:
+            local_future = _submit(pool, self._local_initial, prose_prepared) if prose_prepared else None
+            readings = [_submit(pool, self._typed, prepared, poetry=poetry) for poetry, prepared in prepared_modes]
+            if local_future is not None:
+                local, local_evidence = local_future.result()
                 candidates.extend(local)
-            found, covered = self._typed(prepared, poetry=poetry)
-            candidates.extend(found)
-            coverage.extend(covered)
+            for reading in readings:
+                found, covered = reading.result()
+                candidates.extend(found)
+                coverage.extend(covered)
         initial = dict(self.current)
         accepted = self._adjudicate("typed", candidates, (SONNET,) if all_poetry else (SONNET, LUNA))
         self._apply("typed", accepted)
@@ -962,7 +1023,7 @@ class FixedWorkflow:
             self._stage("ensemble_sweep")
             snapshot = dict(self.current)
             with ThreadPoolExecutor(max_workers=2) as pool:
-                futures = [pool.submit(self._read, "ensemble_sweep_" + name, model, texts=snapshot)
+                futures = [_submit(pool, self._read, "ensemble_sweep_" + name, model, texts=snapshot)
                            for name, model in (("opus", OPUS), ("sol", SOL))]
                 readings = [f.result() for f in futures]
             rows = [x for reading in readings for x in reading[0]]
