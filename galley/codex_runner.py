@@ -298,7 +298,8 @@ def _retry_allowed(receipt: dict) -> bool:
     seconds, used = budget.get("timeout_seconds"), budget.get("elapsed_seconds")
     attempt, maximum = receipt.get("attempt"), budget.get("max_attempts")
     return (receipt.get("status") == "operational_failure"
-            and receipt.get("process_exited") is True
+            and (receipt.get("process_exited") is True or
+                 receipt.get("execution_kind") == "app_server" and receipt.get("turn_terminal") is True)
             and type(receipt.get("exit_code")) is int
             and receipt.get("failure_category") in {
                 "cli_failure", "invalid_output", "authentication", "subscription_limit"}
@@ -346,7 +347,8 @@ def _archive_automatic_retry(directory: Path, receipt: dict) -> dict:
 
 def _adopt_completed_output(directory: Path, receipt: dict, schema: dict) -> dict | None:
     """Close the exit-to-receipt crash window without submitting another call."""
-    if (receipt.get("status") != "running" or receipt.get("process_exited") is not True
+    if (receipt.get("status") != "running" or not (receipt.get("process_exited") is True or
+            receipt.get("execution_kind") == "app_server" and receipt.get("turn_terminal") is True)
             or type(receipt.get("exit_code")) is not int or receipt["exit_code"] != 0
             or not (receipt.get("event_counts") or {}).get("turn.completed")):
         return None
@@ -482,10 +484,12 @@ def _resource_receipt(receipt, *, reused=False):
 def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str,
                    timeout_seconds: int = 1800, codex_bin: str | None = None,
                    model: str = MODEL, reasoning_effort: str = REASONING_EFFORT,
-                   no_tools: bool = False) -> dict:
+                   no_tools: bool = False, session=None) -> dict:
     """Return a structured answer using the worker's ChatGPT login.
 
-    All calls sharing GALLEY_CODEX_HOME serialize, including authentication.
+    Legacy CLI calls serialize the shared authentication cache. Fixed readers
+    can share an app-server session: authentication remains single-owner while
+    independent turns run concurrently under per-request locks.
     The timeout includes queueing. Confirmed failed generations can resume the
     same request within a persisted time/attempt envelope; completed requests
     are reused and ambiguous legacy generations are never auto-replayed.
@@ -525,7 +529,9 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
     deadline = started + timeout_seconds
     home = codex_home()
     directory = request_directory(work_dir, request_id)
-    with _serialized(home, deadline):
+    if session is not None and not no_tools:
+        raise AstraReviewError("Shared subscription sessions are only for fixed readers without tools")
+    with _serialized(directory if session is not None else home, deadline):
         _private_dir(directory.parent)
         _private_dir(directory)
         request_path, receipt_path = directory / "request.json", directory / "receipt.json"
@@ -605,7 +611,10 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
         binary = _binary(codex_bin)
         env = child_env(home)
         try:
-            _check_login_locked(binary, env=env, cwd=directory, deadline=deadline)
+            if session is None:
+                _check_login_locked(binary, env=env, cwd=directory, deadline=deadline)
+            else:
+                session.check_login(binary, home, deadline)
         except AstraReviewError:
             record_elapsed()
             receipt.update(status="preflight_failed", failure_category="authentication")
@@ -654,7 +663,8 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
             # Model tools start beside the materialized evidence. The receipt
             # directory is private to the desktop account on Windows, where
             # tool processes can run under a separate sandbox identity.
-            executed = _execute(argv, prompt=prompt, env=env, cwd=Path(work_dir).resolve(), timeout=remaining)
+            execute = _execute if session is None else session.execute
+            executed = execute(argv, prompt=prompt, env=env, cwd=Path(work_dir).resolve(), timeout=remaining)
         except _StartError as exc:
             record_elapsed()
             receipt.update(status="preflight_failed", submitted=False, failure_category="cli_start")
@@ -669,13 +679,13 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
             raise AstraReviewError("Codex review encountered a local I/O failure after starting. "
                                    "No automatic retry was submitted.") from exc
         record_elapsed(exhausted=executed["timed_out"])
-        receipt.update(finished_at=_now(), process_exited=type(executed["returncode"]) is int,
+        receipt.update(finished_at=_now(), process_exited=session is None and type(executed["returncode"]) is int,
                        exit_code=executed["returncode"], **executed["events"])
         if output_path.is_file() and output_path.stat().st_size <= MAX_OUTPUT_BYTES:
             receipt["output_sha256"] = hashlib.sha256(output_path.read_bytes()).hexdigest()
         category = ("timeout" if executed["timed_out"] else
                     "cancelled" if executed["returncode"] in (-2, 130) else
-                    _failure_category(executed["stdout_tail"] + "\n" + executed["stderr_tail"])
+                    executed["events"].get("failure_category") or _failure_category(executed["stdout_tail"] + "\n" + executed["stderr_tail"])
                     if executed["returncode"] != 0 else "")
         if category:
             receipt.update(status="operational_failure", failure_category=category)

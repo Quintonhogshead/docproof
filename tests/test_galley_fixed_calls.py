@@ -829,3 +829,28 @@ def test_unattended_skips_are_durable_honest_and_do_not_resubmit(tmp_path, failu
         ask(restarted)
     with pytest.raises(fc.FixedCallError):
         fc.validate_fixed_call_evidence(caller.directory)
+
+
+def test_parallel_reservations_enforce_one_shared_budget_and_skip_excess_work(tmp_path):
+    provider = FakeProvider()
+    caller = calls(tmp_path, provider, max_calls=3, continue_on_model_failure=True)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda i: ask(caller, user=f"Independent excerpt {i}"), range(8)))
+    assert len(provider.requests) == 3
+    assert sum("_skipped_read" in result for result in results) == 5
+    assert caller.usage_summary()["calls"] == 3
+    caller.assert_complete()
+
+
+
+def test_claude_subscription_read_has_a_bounded_timeout(monkeypatch):
+    import asyncio
+    from docproof.providers import subagent
+    async def stalled(*args, **kwargs):
+        await asyncio.Event().wait()
+    monkeypatch.setattr(subagent, "availability", lambda: (True, ""))
+    monkeypatch.setattr(subagent.SubagentProvider, "_turn", stalled)
+    monkeypatch.setattr(fc, "CLAUDE_READ_TIMEOUT_SECONDS", .02)
+    provider = fc._default_provider(Config(), model="claude-sonnet-5")
+    with pytest.raises(TimeoutError):
+        asyncio.run(provider._turn(evidence={}))

@@ -329,6 +329,9 @@ def _transport(model: str, requested: str | None) -> str:
     return expected
 
 
+CLAUDE_READ_TIMEOUT_SECONDS = 900
+
+
 def _default_provider(cfg: Config, *, model: str):
     if not model.startswith("claude-"):
         return build_provider(cfg, model=model)
@@ -339,7 +342,9 @@ def _default_provider(cfg: Config, *, model: str):
 
     class CheckedSubagentProvider(SubagentProvider):
         async def _turn(self, *args, evidence, **kwargs):
-            result = await super()._turn(*args, evidence=evidence, **kwargs)
+            import asyncio
+            result = await asyncio.wait_for(super()._turn(*args, evidence=evidence, **kwargs),
+                                            timeout=CLAUDE_READ_TIMEOUT_SECONDS)
             message = evidence.get("result")
             if message is None:
                 return replace(result, stop_reason="incomplete", error="Claude supplied no terminal result")
@@ -375,7 +380,7 @@ class FixedCalls:
     def __init__(self, directory: Path, identity: dict, cfg: Config, *,
                  provider_factory=None, codex_runner=None, max_calls=10_000,
                  max_output_tokens=20_000_000, max_api_usd=10.0, max_attempts=3,
-                 progress=None, continue_on_model_failure=False):
+                 progress=None, continue_on_model_failure=False, parallel_subscription=False):
         for name, value in (("max_calls", max_calls), ("max_output_tokens", max_output_tokens),
                             ("max_attempts", max_attempts)):
             if type(value) is not int or value < 1:
@@ -391,6 +396,10 @@ class FixedCalls:
         self.codex_runner = codex_runner
         self.progress = progress
         self.continue_on_model_failure = continue_on_model_failure
+        self.subscription_session = None
+        if parallel_subscription:
+            from galley.codex_session import SubscriptionSession
+            self.subscription_session = SubscriptionSession()
         self.max_attempts = max_attempts
         self.directory.mkdir(parents=True, exist_ok=True)
         platform_io.private_path(self.directory, 0o700)
@@ -428,6 +437,10 @@ class FixedCalls:
             "missing_fields": {key: sum((row.get("usage") or {}).get(key) is None for row in entries) for key in TOKEN_FIELDS},
             "incomplete_attempts": sum(row["status"] in {"started", "unknown"} for row in entries),
             "note": "Known token totals only; unknown attempts retain their maximum reservations."}
+
+    def close(self):
+        if self.subscription_session is not None:
+            self.subscription_session.close()
 
     def usage_summary(self) -> dict:
         with _locked(self.directory / "budget.lock"):
@@ -520,8 +533,9 @@ class FixedCalls:
                 runner = self.codex_runner or codex.run_structured
                 work = directory / "reader"
                 work.mkdir(parents=True, exist_ok=True)
+                options = {"session": self.subscription_session} if self.subscription_session is not None and self.codex_runner is None else {}
                 parsed = runner(request["system"] + "\n\n" + request["user"], request["schema"], work,
-                    request_id=self._codex_request_id(request, attempt), model=request["model"], reasoning_effort=request["effort"], no_tools=True)
+                    request_id=self._codex_request_id(request, attempt), model=request["model"], reasoning_effort=request["effort"], no_tools=True, **options)
                 result = ProviderResult(parsed=parsed, usage=NormalizedUsage(billed=False), actual_model=request["model"])
             else:
                 result = provider.complete_structured(**{key: request[key] for key in
@@ -734,13 +748,15 @@ class FixedCalls:
                     usage = self._usage(ProviderResult(), transport_ledger)
                     if request["transport"] == "codex_subscription":
                         from galley import codex_runner as codex
-                        transport_receipt = codex.request_directory(directory / "reader", sha) / "receipt.json"
+                        transport_receipt = codex.request_directory(directory / "reader", self._codex_request_id(request, attempt)) / "receipt.json"
                         if transport_receipt.exists():
                             transport_state = _load(transport_receipt)
                             usage = normalize_usage(transport_state.get("usage"))
                             if (transport_state.get("submitted") is False or
                                     transport_state.get("status") == "operational_failure" and
-                                    transport_state.get("process_exited") is True):
+                                    (transport_state.get("process_exited") is True or
+                                     transport_state.get("execution_kind") == "app_server" and
+                                     transport_state.get("turn_terminal") is True)):
                                 receipt.update(status="failed", retryable=bool(
                                     transport_state.get("submitted") is False or codex._retry_allowed(transport_state)),
                                     failure_category=transport_state.get("failure_category", type(exc).__name__))
