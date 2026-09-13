@@ -259,6 +259,9 @@ def _checked_response(parsed, request, directory, receipt):
                 raise FixedCallContractError("Saved dispute normalization changed")
             receipt["decision_normalization"] = audit
             _schema(normalized, request["schema"])
+    from galley.fixed_decisions import nested_proposal_ids
+    nested_ids = nested_proposal_ids(request)
+    discarded = {}
     for field, rule in coverage.items():
         rows = normalized.get(field)
         actual = ([row.get(rule["id_key"]) if isinstance(row, dict) else None for row in rows]
@@ -266,12 +269,29 @@ def _checked_response(parsed, request, directory, receipt):
         if not isinstance(actual, list) or any(not isinstance(x, str) for x in actual):
             raise FixedCallCoverageError(f"{field}: invalid coverage IDs")
         owned, context = set(rule["ids"]), set(rule["context_ids"])
+        if field in {"decisions", "comment_decisions"} and rule["id_key"] == "id":
+            assigned = [x for x in actual if x in owned]
+            # An unassigned decision has no authority to edit or comment. It
+            # may be discarded only when every real assignment is present once.
+            if len(assigned) == len(owned) and set(assigned) == owned:
+                extra = [row for row in rows if row["id"] not in owned]
+                if extra and not (field == "decisions" and any(row["id"] in nested_ids for row in extra)):
+                    discarded[field] = extra
+                    normalized[field] = rows = [row for row in rows if row["id"] in owned]
+                    actual = assigned
         missing, unknown = owned - set(actual), set(actual) - owned - context
         duplicates = len(actual) - len(set(actual))
         if missing or unknown or duplicates:
             raise FixedCallCoverageError(f"{field}: {len(missing)} missing, {len(unknown)} unknown, {duplicates} duplicate IDs")
         if context:
             normalized[field] = [row for row in rows if row in owned]
+    if discarded:
+        audit = {"request_sha256": _hash(request), "normalized_sha256": _hash(normalized),
+                 "rejected_unassigned_decisions": discarded}
+        if receipt.get("discarded_decisions") not in (None, audit):
+            raise FixedCallContractError("Saved unassigned-decision audit changed")
+        receipt["discarded_decisions"] = audit
+        _schema(normalized, request["schema"])
     return normalized
 
 

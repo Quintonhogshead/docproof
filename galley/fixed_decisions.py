@@ -8,6 +8,22 @@ from __future__ import annotations
 import json
 
 
+def nested_proposal_ids(request):
+    """Known alternate IDs cannot be mistaken for invented extra decisions."""
+    if not request["stage"].endswith("_disputes"):
+        return set()
+    try:
+        payload = json.loads(request["user"])
+    except ValueError:
+        return set()
+    sites = payload.get("sites", []) if isinstance(payload, dict) else []
+    if not isinstance(sites, list):
+        return set()
+    return {p["id"] for site in sites if isinstance(site, dict)
+            for p in (site.get("proposals") or [])
+            if isinstance(p, dict) and isinstance(p.get("id"), str)}
+
+
 def grouped_decisions(parsed, request, rule):
     """Return a working view and audit, or None for an unrelated/incomplete read."""
     if not request["stage"].endswith("_disputes") or rule["id_key"] != "id":
@@ -26,9 +42,13 @@ def grouped_decisions(parsed, request, rule):
     ids = [p["id"] for p in proposals]
     rows = parsed.get("decisions", [])
     actual = [d.get("id") for d in rows]
-    if (len(ids) != len(set(ids)) or set(ids) & set(rule["ids"])
-            or len(actual) != len(ids) or set(actual) != set(ids)):
+    owned = set(ids)
+    assigned = [x for x in actual if x in owned]
+    if (len(ids) != len(owned) or owned & set(rule["ids"])
+            or set(actual) & set(rule["ids"])
+            or len(assigned) != len(ids) or set(assigned) != owned):
         return None
+    ignored = [d for d in rows if d["id"] not in owned]
     # Validate all coordinates before interpreting any decision. A group-span
     # replacement must never be substituted into a shorter proposal span.
     for site in sites:
@@ -80,4 +100,7 @@ def grouped_decisions(parsed, request, rule):
                            "reason": reason, "missing_knowledge": "", "question": ""})
         audit.append({"site_id": site["id"], "proposal_ids": [p["id"] for p in members],
                       "action": action, "rejected_ambiguous": unusable})
-    return {**parsed, "decisions": normalized}, {"version": 1, "kind": "complete_proposal_decisions", "sites": audit}
+    evidence = {"version": 1, "kind": "complete_proposal_decisions", "sites": audit}
+    if ignored:
+        evidence["rejected_unassigned_decisions"] = ignored
+    return {**parsed, "decisions": normalized}, evidence
