@@ -55,6 +55,36 @@ def packet(evidence):
     return json.loads(Path(evidence["path"]).read_text())
 
 
+@pytest.mark.parametrize("offset", [0, 4, 16])
+def test_empty_quote_insertion_gets_exact_nonempty_comparison(offset):
+    p = para("p1", "She walked home.")
+    finding = Finding("f1", "sweep", p.para_id, "punctuation", "", offset + 1, "!",
+                      "Insert punctuation.", "high")
+    row = local._finding(finding, {p.para_id: p}, "local:sweeps")
+    assert row["quote"] == p.text and row["occurrence"] == 1
+    assert row["replacement"] == p.text[:offset] + "!" + p.text[offset:]
+    assert row["local_evidence"]["start"] == row["local_evidence"]["end"] == offset
+
+
+def test_missing_terminal_period_runs_through_all_local_checks(tmp_path):
+    p = para("p1", "She walked down the quiet lane and went home before the rain arrived")
+    rows, evidence = collect(tmp_path, prepared(p))
+    found = [r for r in rows if r["category"] == "sweep_terminal_period"]
+    assert len(found) == 1
+    assert found[0]["quote"] == p.text and found[0]["replacement"] == p.text + "."
+    assert p.text == "She walked down the quiet lane and went home before the rain arrived"
+    local.validate_local_evidence(evidence, tmp_path / "local", IDENTITY)
+
+
+@pytest.mark.parametrize("occurrence,replacement", [(0, "."), (99, "."), (True, "."), (1, "")])
+def test_invalid_empty_quote_insertions_still_block(occurrence, replacement):
+    p = para("p1", "Text")
+    finding = Finding("f1", "sweep", p.para_id, "punctuation", "", occurrence, replacement,
+                      "Insert punctuation.", "high")
+    with pytest.raises(local.FixedLocalError):
+        local._finding(finding, {p.para_id: p}, "local:sweeps")
+
+
 def test_full_local_coverage_includes_heading_and_excludes_poetry(tmp_path):
     source = prepared(para("p1", "She have letters."), para("title", "a small heading", reviewable=False, style="Heading1"),
                       para("verse", "She have a star."))

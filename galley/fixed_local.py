@@ -227,6 +227,19 @@ def _finding(finding, by_id, source):
     if finding.para_id not in by_id:
         return None
     para = by_id[finding.para_id]
+    # Legacy sweep findings encode a pure insertion as an empty quotation:
+    # occurrence_of(text, "", offset) is offset + 1. Give the fixed readers a
+    # nonempty comparison without changing the insertion position or content.
+    if finding.original_text == "":
+        if (type(finding.occurrence) is not int or
+                not 1 <= finding.occurrence <= len(para.text) + 1 or
+                not isinstance(finding.corrected_text, str) or not finding.corrected_text):
+            raise FixedLocalError("A local insertion needs an exact offset and replacement")
+        offset = finding.occurrence - 1
+        return _span(para, offset, offset, None if finding.force_query else finding.corrected_text,
+            finding.error_type, finding.explanation, source,
+            metadata={"finding_id": finding.finding_id, "producer": finding.error_type,
+                      "original_quote": "", "source_occurrence": finding.occurrence})
     _locate(para.text, finding.original_text, finding.occurrence)
     return {"para_id": finding.para_id, "quote": finding.original_text,
         "replacement": finding.corrected_text, "occurrence": finding.occurrence,
