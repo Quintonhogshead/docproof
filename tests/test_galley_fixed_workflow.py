@@ -572,7 +572,7 @@ def test_new_astra_question_gets_explicit_final_astra_comment_review(make_book, 
     assert readers.events[-1]["model"] == ASTRA
 
 
-def test_stale_source_and_tracked_input_fail_before_any_model_call(make_book, tmp_path):
+def test_stale_source_fails_before_any_model_call(make_book, tmp_path):
     source = make_book("A quiet paragraph.")
     readers = Readers()
     flow = FixedWorkflow(source, tmp_path / "run", calls=readers)
@@ -584,10 +584,6 @@ def test_stale_source_and_tracked_input_fail_before_any_model_call(make_book, tm
     assert readers.events == []
     with pytest.raises(FixedWorkflowError, match="source or fixed recipe changed"):
         FixedWorkflow(source, tmp_path / "run", calls=readers)
-    tracked = Path(__file__).parent / "fixtures/tracked.docx"
-    from docproof.ingest import IngestError
-    with pytest.raises(IngestError):
-        FixedWorkflow(tracked, tmp_path / "tracked", calls=readers).run()
     assert readers.events == []
 
 

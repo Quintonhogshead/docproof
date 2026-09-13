@@ -187,6 +187,9 @@ class FixedWorkflow:
         self.source = Path(source).resolve()
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
+        from galley.fixed_intake import prepare_source
+        self.input_source = self.source
+        self.source, self.intake = prepare_source(self.input_source, self.directory)
         self.progress = progress or (lambda *a, **k: None)
         self.cfg = configuration()
         self.base_policy = PROOFREADING_POLICY
@@ -201,6 +204,8 @@ class FixedWorkflow:
                          "policy_sha256": _hash(self.policy), "recipe": workflow_plan(),
                          "configuration": self.cfg.model_dump(mode="json")}
         self.identity["press_prompt_sha256"] = policy_identity()
+        if self.intake is not None:
+            self.identity["intake"] = self.intake
         self.manifest = self.directory / "workflow.json"
         if self.manifest.exists():
             saved = json.loads(self.manifest.read_text())
@@ -717,15 +722,23 @@ class FixedWorkflow:
         self._checked_format_count = len(self.formats)
         return changed
 
+    def _validate_source(self):
+        from galley.manifest import sha256_file
+        if self.intake is not None:
+            from galley.fixed_intake import validate_intake
+            validate_intake(self.directory, self.intake, self.source)
+            if sha256_file(self.input_source) != self.intake["original_sha256"]:
+                raise FixedWorkflowError("The incoming manuscript changed during the fixed proofread")
+        if sha256_file(self.source) != self.identity["source_sha256"]:
+            raise FixedWorkflowError("The source changed during the fixed proofread")
+
     def run(self):
         from docproof.pipeline import prepare
         from docproof.formats import get_format
         from docproof.utils.xml_helpers import walk_package, paragraph_text
         from galley.fixed_policy import configuration
-        from galley.manifest import sha256_file
         # The immutable source includes paragraphs that typed detectors skip.
-        if sha256_file(self.source) != self.identity["source_sha256"]:
-            raise FixedWorkflowError("The source changed before the fixed proofread started")
+        self._validate_source()
         fmt = get_format(self.source)
         if fmt.suffix != ".docx":
             raise FixedWorkflowError("The fixed workflow currently requires a Word manuscript")
@@ -808,8 +821,7 @@ class FixedWorkflow:
                 else:
                     self._record(stage, coverage=read_coverage)
         self.calls.assert_complete()
-        if sha256_file(self.source) != self.identity["source_sha256"]:
-            raise FixedWorkflowError("The source changed during the fixed proofread")
+        self._validate_source()
         result = {"identity": self.identity, "execution_mode": "fixed", "status": "completed",
                   "source": str(self.source), "original": self.original, "accepted": self.current,
                   "questions": self.questions, "history": self.history, "formats": self.formats,
@@ -829,7 +841,8 @@ def run_fixed_driver(driver):
     from galley.fixed_documents import package_result, validate_delivery_package
     from galley.state_machine import RunStateMachine
     from docproof.subscription_limits import UsageLimitError, is_usage_limited
-    result = DriveResult(workspace=driver.workspace)
+    result = DriveResult(workspace=driver.workspace, outcome="running",
+                         reason="Fixed proofreading is in progress; no certified manuscript is ready.")
     directory = driver.workspace / "runs" / "fixed"
     try:
         driver._write_ledger(result)

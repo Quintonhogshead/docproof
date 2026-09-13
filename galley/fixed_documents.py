@@ -1,7 +1,8 @@
 """Native Word output and independently checked fixed-workflow handoff.
 
-Every build starts from the author's original package. Net changes are tracked;
-rejecting them reproduces the original text, including headers and tables.
+Every build starts from the frozen source package (the accepted intake baseline
+when incoming revisions were present). Net changes are tracked; rejecting them
+reproduces that source text, including headers and tables.
 """
 from __future__ import annotations
 
@@ -184,6 +185,9 @@ def _verify_result(result, directory):
     if _hash({k: v for k, v in result.items() if k not in {"usage", "result_sha256"}}) != result.get("result_sha256"):
         raise FixedDocumentError("The fixed result's content no longer matches its receipt")
     source = Path(result["source"])
+    if "intake" in result["identity"]:
+        from galley.fixed_intake import validate_intake
+        validate_intake(directory, result["identity"]["intake"], source)
     if sha256_file(source) != result["identity"]["source_sha256"]:
         raise FixedDocumentError("The original manuscript changed after review")
     if paragraph_views(source) != result["original"] or set(result["original"]) != set(result["accepted"]):
@@ -267,6 +271,10 @@ def _report(result, details):
     lines += [f"- {labels[q['para_id']]}: {q['question']}" for q in result["questions"]] or ["None."]
     lines += ["", "## Completed reading stages", ""]
     lines += [f"- {stage_labels[s['stage']]}" for s in result["stages"]]
+    if result["identity"].get("intake"):
+        lines += ["", "Incoming tracked changes were accepted in a separate working baseline using Galley's intake policy. "
+                  "The uploaded original is preserved with a verified receipt. Rejecting Galley's new corrections restores "
+                  "that accepted baseline; it does not undo edits the manuscript arrived with."]
     if result["identity"].get("press_prompt_sha256"):
         from collections import Counter
         stages = {s["stage"]: json.loads(Path(s["path"]).read_text())["evidence"] for s in result["stages"]}

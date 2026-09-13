@@ -127,12 +127,14 @@ def test_real_fixed_driver_delivers_and_resumes_without_new_generations(tmp_path
     assert {x["name"]: x["sha256"] for x in reused["artifacts"]} == hashes
 
 
-def test_interrupted_stage_resumes_from_paid_read_receipts(tmp_path, monkeypatch):
+@pytest.mark.parametrize("text", ["She recieved two letters.",
+    "She walked down the quiet lane and went home before the rain arrived"])
+def test_interrupted_stage_resumes_from_paid_read_receipts(tmp_path, monkeypatch, text):
     from galley.fixed_workflow import FixedWorkflow
 
     source = tmp_path / "Writer - Book 1.docx"
     document = Document()
-    document.add_paragraph("She recieved two letters.")
+    document.add_paragraph(text)
     document.save(source)
     readers = ScriptedReaders(False)
     monkeypatch.setattr(fc, "_default_provider", lambda *a, **k: readers)
@@ -156,6 +158,83 @@ def test_interrupted_stage_resumes_from_paid_read_receipts(tmp_path, monkeypatch
     assert [model for model, _ in readers.requests[count:]] == [FABLE, ASTRA]
     package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
     assert validate_delivery_package(package)["delivery_ready"] is True
+
+
+def test_failed_local_code_repair_resumes_without_repeating_paid_intake(tmp_path, monkeypatch):
+    from galley import fixed_local
+    source = tmp_path / "Writer.docx"
+    document = Document()
+    document.add_paragraph("She recieved two letters.")
+    document.save(source)
+    readers = ScriptedReaders(False)
+    monkeypatch.setattr(fc, "_default_provider", lambda *a, **k: readers)
+    monkeypatch.setattr(codex_runner, "run_structured", readers.subscription)
+    language_tool = fixed_local._language_tool
+    def fail(*a, **k):
+        raise fixed_local.FixedLocalError("Simulated local checker failure")
+    monkeypatch.setattr(fixed_local, "_versions", lambda: {"checker.py": "before"})
+    monkeypatch.setattr(fixed_local, "_language_tool", fail)
+    worker = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode="fixed")
+    result = worker.run()
+    assert result.outcome == "blocked" and "Simulated" in result.reason
+    assert [model for model, _ in readers.requests] == [SONNET, LUNA]
+    monkeypatch.setattr(fixed_local, "_versions", lambda: {"checker.py": "repaired"})
+    monkeypatch.setattr(fixed_local, "_language_tool", language_tool)
+    result = worker.run()
+    assert result.outcome == "done", result.reason
+    assert [user for _, user in readers.requests].count(readers.requests[0][1]) == 1
+    assert [user for _, user in readers.requests].count(readers.requests[1][1]) == 1
+    package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
+    assert validate_delivery_package(package)["delivery_ready"] is True
+
+
+def test_fixed_checkpoint_never_reports_done_before_certification(tmp_path, monkeypatch):
+    from galley.fixed_workflow import FixedWorkflow
+    source = tmp_path / "Writer.docx"
+    document = Document()
+    document.add_paragraph("A quiet room.")
+    document.save(source)
+    def stop(self):
+        checkpoint = json.loads((self.directory.parent / "driver/driver.json").read_text())
+        assert checkpoint["outcome"] == "running"
+        raise OSError("Still waiting for required reads")
+    monkeypatch.setattr(FixedWorkflow, "run", stop)
+    worker = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode="fixed")
+    result = worker.run()
+    assert result.outcome == "blocked" and "Still waiting" in result.reason
+    checkpoint = json.loads((worker.workspace / "runs/driver/driver.json").read_text())
+    assert checkpoint["outcome"] == "blocked"
+
+
+def test_revised_input_delivers_and_resumes_with_certified_original(tmp_path, monkeypatch):
+    from test_galley_fixed_intake import revised_book
+    from galley.fixed_intake import FixedIntakeError
+
+    source = revised_book(tmp_path)
+    incoming = source.read_bytes()
+    readers = ScriptedReaders(False)
+    monkeypatch.setattr(fc, "_default_provider", lambda *a, **k: readers)
+    monkeypatch.setattr(codex_runner, "run_structured", readers.subscription)
+    worker = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode="fixed")
+    result = worker.run()
+    assert result.outcome == "done", result.reason
+    assert source.read_bytes() == incoming
+    package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
+    assert validate_delivery_package(package)["delivery_ready"] is True
+    final = json.loads((worker.workspace / "runs/fixed/result.json").read_text())
+    assert final["identity"]["intake"]["original_sha256"] == hashlib.sha256(incoming).hexdigest()
+    tracked = next(Path(x["path"]) for x in package["artifacts"] if x["role"] == "tracked")
+    assert paragraph_views(tracked, "reject") == paragraph_views(source)
+    assert "She received two letters." in paragraph_views(tracked).values()
+    count = len(readers.requests)
+    assert worker.run().outcome == "done"
+    assert len(readers.requests) == count
+    original = worker.workspace / "runs/fixed/intake/original" / source.name
+    original.write_bytes(original.read_bytes() + b"changed")
+    with pytest.raises(FixedIntakeError, match="original or accepted baseline changed"):
+        validate_delivery_package(package)
+    assert worker.run().outcome == "blocked"
+    assert len(readers.requests) == count
 
 
 def test_certified_local_checks_cannot_be_removed_after_delivery(tmp_path, monkeypatch):
