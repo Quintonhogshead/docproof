@@ -412,7 +412,9 @@ class FixedWorkflow:
                 for future in futures:
                     future.cancel()
                 raise
-        self.calls.assert_complete()
+        # Each awaited result above validates its own completed read. The
+        # global delivery audit belongs after all stages: during replay, a
+        # later failed dispute must be reached so its saved response can recover.
         return all_candidates, coverage
 
     def _reject_proposal(self, stage, row, texts, model, reason, status="rejected_invalid_proposal"):

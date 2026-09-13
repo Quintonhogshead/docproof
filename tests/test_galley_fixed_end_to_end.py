@@ -525,7 +525,8 @@ def test_invalid_suggestions_across_all_reader_stages_preserve_valid_edits_and_r
     assert all(p.read_bytes() == value for p, value in response_bytes.items())
 
 
-def test_nested_dispute_ids_reach_certified_book_and_resume_without_new_calls(tmp_path, monkeypatch):
+@pytest.mark.parametrize("recover_exhausted", [False, True])
+def test_nested_dispute_ids_reach_certified_book_and_resume_without_new_calls(tmp_path, monkeypatch, recover_exhausted):
     source = tmp_path / "Writer.docx"
     doc = Document()
     doc.add_paragraph("She recieved two letters.")
@@ -550,8 +551,23 @@ def test_nested_dispute_ids_reach_certified_book_and_resume_without_new_calls(tm
     monkeypatch.setattr(fc, "_default_provider", lambda *a, **k: readers)
     monkeypatch.setattr(codex_runner, "run_structured", readers.subscription)
     worker = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode="fixed")
+    if recover_exhausted:
+        import galley.fixed_decisions as adapter
+        real = adapter.grouped_decisions
+        monkeypatch.setattr(adapter, "grouped_decisions", lambda *a: None)
+        stopped = worker.run()
+        assert stopped.outcome == "blocked" and "invalid_coverage" in stopped.reason
+        count_before = len(readers.requests)
+        monkeypatch.setattr(adapter, "grouped_decisions", real)
     result = worker.run()
     assert result.outcome == "done", result.reason
+    if recover_exhausted:
+        # Intake, typed reads and the exhausted dispute are reused. Only later
+        # stages may submit new requests after this recovery.
+        assert not any(request in readers.requests[:count_before] for request in readers.requests[count_before:])
+        receipts = [json.loads(p.read_text()) for p in (worker.workspace / "runs/fixed/calls/calls").glob("*/receipt.json")]
+        recovered = [r for r in receipts if r.get("decision_normalization")]
+        assert any(r["attempt"] == r["max_attempts"] == 3 for r in recovered)
     final = json.loads((worker.workspace / "runs/fixed/result.json").read_text())
     assert list(final["accepted"].values()) == ["She received two letters."]
     assert final["questions"] == [] and source.read_bytes() == original
