@@ -60,6 +60,16 @@ known context IDs from the working coverage view. Raw responses remain intact,
 and context findings cannot become edits in this chunk. Missing owned IDs,
 duplicate IDs and unknown IDs still block completion.
 
+New model suggestions need exact quotations in their assigned paragraphs. An
+unknown paragraph, absent quotation or invalid occurrence rejects that proposal
+as `rejected_no_anchor`, preserving the original response and a source-bound
+diagnostic in the review evidence. It creates neither an edit nor an author
+comment, and other valid suggestions from the completed read still proceed.
+This applies to typed readers, number checks and whole-book readers, including
+broken-sentence repair and frontier formatting proposals. It never authorizes
+fuzzy matching or suppresses incomplete coverage, invalid local evidence, stale
+applied edits or final document-integrity failures.
+
 Coverage is validated inside the durable call layer before an answer is marked
 complete. Orchestration supplies an immutable, request-bound `coverage.json`
 inventory for typed paragraphs, number sites, full-book reads, focused checks,

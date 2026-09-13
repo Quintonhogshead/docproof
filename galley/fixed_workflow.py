@@ -27,6 +27,10 @@ class FixedWorkflowError(ValueError):
     pass
 
 
+class RejectedModelProposal(FixedWorkflowError):
+    """A proposed correction lacks an exact anchor in its assigned text."""
+
+
 def workflow_plan():
     return [
         {"stage": "intake", "model": "code", "description": "Freeze the original manuscript and paragraph identities"},
@@ -175,10 +179,13 @@ def _minimal(before, after, start=0):
 def _candidate(row, texts, model, *, query_types=(), format_types=None):
     pid = row.get("para_id")
     if pid not in texts:
-        raise FixedWorkflowError("Reader returned a paragraph outside its assigned evidence")
+        raise RejectedModelProposal("Reader returned a paragraph outside its assigned evidence")
     quote = row.get("quote", row.get("original_text", ""))
     replacement = row.get("replacement", row.get("corrected_text", ""))
-    lo, hi = _locate(texts[pid], quote, row.get("occurrence", 1))
+    try:
+        lo, hi = _locate(texts[pid], quote, row.get("occurrence", 1))
+    except FixedWorkflowError as exc:
+        raise RejectedModelProposal(str(exc)) from exc
     category = row.get("category", row.get("error_type", "grammar"))
     action = row.get("action", "query" if row.get("force_query") or category in query_types else "edit")
     mark = (format_types or {}).get(category, "")
@@ -296,6 +303,13 @@ class FixedWorkflow:
         self.progress("phase_start", phase=stage, model=row.get("model"), effort=None)
 
     def _record(self, stage, **evidence):
+        # Concurrent Opus/Sol reads may reject suggestions in either order.
+        # Freeze their diagnostic inventory in a stable order at the stage gate.
+        rejected = [h for h in self.history if h.get("rejected_proposal") and
+                    (h["stage"] == stage or h["stage"].startswith(stage + "_") or
+                     stage == "typed" and h["stage"] == "spelling")]
+        if rejected:
+            evidence["rejected_proposals"] = sorted(rejected, key=_json)
         payload = {"stage": stage, "accepted_sha256": _hash(self.current),
                    "questions": self.questions, "evidence": evidence}
         path = self.directory / "stages" / f"{stage}.json"
@@ -386,7 +400,7 @@ class FixedWorkflow:
                         raise FixedWorkflowError("A typed detector did not complete its assigned reading")
                     texts = {p.para_id: p.text for p in chunk.paragraphs}
                     for f in found:
-                        row = _candidate(dataclasses.asdict(f), texts, model,
+                        row = self._reader_candidate("spelling" if poetry else "typed", dataclasses.asdict(f), texts, model,
                                          query_types=prepared.query_types, format_types=prepared.format_types)
                         if row:
                             row["confidence"] = f.confidence
@@ -400,6 +414,21 @@ class FixedWorkflow:
                 raise
         self.calls.assert_complete()
         return all_candidates, coverage
+
+    def _reader_candidate(self, stage, row, texts, model, **options):
+        """Reject unanchored model proposals, not a completed paragraph read.
+
+        Keep raw responses and a source-bound diagnostic. Never fuzzy-match a
+        quotation, turn a rejected proposal into a comment, or catch local-check,
+        coverage, applied-edit or output-integrity errors here.
+        """
+        try:
+            return _candidate(row, texts, model, **options)
+        except RejectedModelProposal as exc:
+            self.history.append({"stage": stage, "rejected_proposal": {
+                "model": model, "finding": json.loads(_json(row)), "reason": str(exc),
+                "status": "rejected_no_anchor", "reviewed_sha256": _hash(texts)}})
+            return None
 
     def _local_candidates(self, rows, *, texts, prepared):
         """Local signals enter the same anchored proposal queue as readers."""
@@ -562,7 +591,7 @@ class FixedWorkflow:
                 for row in answer["findings"]:
                     if row["category"] not in {"number_style", "currency_style", "author_question"}:
                         raise FixedWorkflowError("Number sweep exceeded its assigned scope")
-                    candidate = _candidate(row, allowed, model)
+                    candidate = self._reader_candidate("numbers", row, allowed, model)
                     if candidate:
                         results.append(candidate)
         self._apply("numbers", self._adjudicate("numbers", results, (SONNET, LUNA)))
@@ -652,7 +681,7 @@ class FixedWorkflow:
             for row in result["findings"]:
                 if stage == "broken_repair" and row["category"] not in {"broken_sentence", "author_question"}:
                     raise FixedWorkflowError("Broken-sentence repair exceeded its assigned scope")
-                candidate = _candidate(row, owned, model, format_types={"format": "italic"} if frontier else None)
+                candidate = self._reader_candidate(stage, row, owned, model, format_types={"format": "italic"} if frontier else None)
                 if candidate and candidate.get("format"):
                     lo, hi, pid = candidate["start"], candidate["end"], candidate["para_id"]
                     roman = [r for r in formatting[pid] if r["start"] < hi and r["end"] > lo]
@@ -870,7 +899,10 @@ class FixedWorkflow:
         self._validate_source()
         result = {"identity": self.identity, "execution_mode": "fixed", "status": "completed",
                   "source": str(self.source), "original": self.original, "accepted": self.current,
-                  "questions": self.questions, "history": self.history, "formats": self.formats,
+                  "questions": self.questions,
+                  "history": ([h for h in self.history if not h.get("rejected_proposal")] +
+                              sorted((h for h in self.history if h.get("rejected_proposal")), key=_json)),
+                  "formats": self.formats,
                   "stages": self.stages, "poetry_only": all_poetry,
                   "editorial_verdict": "needs_human" if self.needs_human else "ready",
                   "usage": self.calls.usage_summary()}
