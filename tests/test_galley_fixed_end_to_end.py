@@ -466,3 +466,51 @@ def test_all_six_reader_models_recover_incomplete_coverage_before_stage_completi
     count = len(readers.requests)
     assert worker.run().outcome == "done"
     assert len(readers.requests) == count
+
+
+def test_unanchored_suggestions_across_all_reader_stages_preserve_valid_edits_and_resume(tmp_path, monkeypatch):
+    source = tmp_path / "Writer.docx"
+    document = Document()
+    document.add_paragraph("She recieved 20 letters while waiting in the quiet room.")
+    document.save(source)
+    original_bytes = source.read_bytes()
+    readers = ScriptedReaders(False)
+    answer = readers.answer
+    def suggestions(model, user, schema):
+        result = answer(model, user, schema)
+        if "reviewed_paragraph_ids" in result and result["findings"]:
+            bad = {**result["findings"][0], "original_text": "Invented quotation that never appears in this book.",
+                   "corrected_text": "An equally unsupported replacement."}
+            return {**result, "findings": result["findings"] + [bad]}
+        if "reviewed_ids" in result:
+            payload = json.loads(user)
+            number = "sites" in payload
+            pid = payload["sites"][0]["para_id"] if number else payload["paragraphs"][0]["id"]
+            category = "number_style" if number else "broken_sentence" if model == OPUS else "format" if model == FABLE else "author_question" if model == ASTRA else "grammar"
+            bad = {"para_id": pid, "quote": "A nonexistent quotation spanning several imaginary paragraphs.",
+                   "occurrence": 1, "replacement": "Unsupported correction.", "category": category,
+                   "action": "query" if model == ASTRA else "edit", "reason": "Synthetic unanchored proposal.",
+                   "missing_knowledge": "Unsupported synthetic question." if model == ASTRA else ""}
+            return {**result, "findings": [bad]}
+        return result
+    readers.answer = suggestions
+    monkeypatch.setattr(fc, "_default_provider", lambda *a, **k: readers)
+    monkeypatch.setattr(codex_runner, "run_structured", readers.subscription)
+    worker = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode="fixed")
+    result = worker.run()
+    assert result.outcome == "done", result.reason
+    final = json.loads((worker.workspace / "runs/fixed/result.json").read_text())
+    rejected = [h for h in final["history"] if h.get("rejected_proposal")]
+    assert {h["stage"] for h in rejected} == {"typed", "numbers", "ensemble_sweep_opus", "ensemble_sweep_sol", "fable", "astra"}
+    assert {h["rejected_proposal"]["model"] for h in rejected} == {SONNET, LUNA, OPUS, SOL, FABLE, ASTRA}
+    assert final["questions"] == [] and source.read_bytes() == original_bytes
+    assert list(final["accepted"].values()) == ["She received 20 letters while waiting in the quiet room."]
+    package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
+    assert validate_delivery_package(package)["delivery_ready"] is True
+    report = next(Path(row["path"]) for row in package["artifacts"] if row["role"] == "report")
+    assert "model suggestions were rejected" in report.read_text()
+    count = len(readers.requests)
+    response_bytes = {p: p.read_bytes() for p in (worker.workspace / "runs/fixed/calls/calls").glob("*/attempts/*/response.json")}
+    assert worker.run().outcome == "done"
+    assert len(readers.requests) == count
+    assert all(p.read_bytes() == value for p, value in response_bytes.items())

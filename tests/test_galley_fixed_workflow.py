@@ -831,3 +831,71 @@ def test_call_coverage_freezes_all_assigned_inventories_and_only_known_read_cont
     assert _call_coverage({"sites": [{"id": "n1"}], "paragraphs": {"p1": "Text."}}, READ_SCHEMA)["reviewed_ids"]["ids"] == ["n1"]
     assert _call_coverage({"changes": [{"id": "p1"}]}, CHECK_SCHEMA)["decisions"]["ids"] == ["p1"]
     assert _call_coverage({"sites": [{"id": "d1"}]}, DECISIONS)["decisions"]["ids"] == ["d1"]
+
+
+@pytest.mark.parametrize("defect", ["missing_quote", "unknown_paragraph", "bad_occurrence", "empty_quote"])
+def test_unanchored_reader_proposal_is_audited_without_edit_or_comment(make_book, tmp_path, defect):
+    from galley.fixed_workflow import _hash
+    flow = FixedWorkflow(make_book("A quiet room."), tmp_path / "run", calls=Readers())
+    texts = {"p1": "A quiet room."}
+    row = finding("p1", "quiet", "silent")
+    if defect == "missing_quote":
+        row["quote"] = "A quote longer than the entire paragraph that the reader invented."
+    elif defect == "unknown_paragraph":
+        row["para_id"] = "another-paragraph"
+    elif defect == "bad_occurrence":
+        row["occurrence"] = 2
+    else:
+        row["quote"] = ""
+    before = json.loads(json.dumps(row))
+    assert flow._reader_candidate("fable", row, texts, FABLE) is None
+    rejected = flow.history[0]["rejected_proposal"]
+    assert rejected["status"] == "rejected_no_anchor"
+    assert rejected["finding"] == row == before
+    assert rejected["reviewed_sha256"] == _hash(texts)
+    assert flow.questions == [] and texts == {"p1": "A quiet room."}
+    valid = flow._reader_candidate("fable", finding("p1", "quiet", "silent"), texts, FABLE)
+    assert valid is not None
+    text = texts["p1"]
+    assert text[:valid["start"]] + valid["replacement"] + text[valid["end"]:] == "A silent room."
+
+
+def test_rejected_model_proposal_handling_does_not_hide_local_or_internal_failures(make_book, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    flow = FixedWorkflow(make_book("A quiet room."), tmp_path / "run", calls=Readers())
+    texts = {"p1": "A quiet room."}
+    row = {**finding("p1", "Invented quote.", "Replacement."), "source": "local:sweeps"}
+    with pytest.raises(FixedWorkflowError, match="quote does not occur"):
+        flow._local_candidates([row], texts=texts, prepared=SimpleNamespace(query_types=(), format_types={}))
+    assert flow.history == []
+    def unexpected(*args, **kwargs):
+        raise RuntimeError("Unrelated integrity failure")
+    monkeypatch.setattr("galley.fixed_workflow._candidate", unexpected)
+    with pytest.raises(RuntimeError, match="Unrelated integrity failure"):
+        flow._reader_candidate("typed", row, texts, SONNET)
+    assert flow.history == []
+
+
+def test_broken_sentence_reader_rejects_unanchored_repairs_but_keeps_coverage(make_book, tmp_path):
+    def handler(stage, model, payload, kwargs):
+        return {"reviewed_ids": ["p"], "findings": [finding("p", "An invented longer sentence.", "A rewrite.", "broken_sentence")],
+                "comment_decisions": [], "editorial_verdict": "ready"}
+    flow = _flow(make_book, tmp_path, Readers(handler=handler))
+    proposals, comments, coverage = flow._read("broken_repair", OPUS, ids=["p"])
+    assert proposals == comments == []
+    assert coverage[0]["paragraph_ids"] == ["p"]
+    assert flow.history[0]["rejected_proposal"]["status"] == "rejected_no_anchor"
+
+
+def test_rejected_proposal_stage_evidence_is_stable_across_reader_completion_order(make_book, tmp_path):
+    flow = FixedWorkflow(make_book("A quiet room."), tmp_path / "run", calls=Readers())
+    texts = {"p1": "A quiet room."}
+    for label, model in (("opus", OPUS), ("sol", SOL)):
+        flow._reader_candidate("ensemble_sweep_" + label, finding("p1", "Missing text.", "Replacement."), texts, model)
+    flow._record("ensemble_sweep", readings=[])
+    path = flow.directory / "stages/ensemble_sweep.json"
+    before = path.read_bytes()
+    assert len(json.loads(before)["evidence"]["rejected_proposals"]) == 2
+    flow.history.reverse()
+    flow._record("ensemble_sweep", readings=[])
+    assert path.read_bytes() == before
