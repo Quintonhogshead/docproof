@@ -60,6 +60,20 @@ known context IDs from the working coverage view. Raw responses remain intact,
 and context findings cannot become edits in this chunk. Missing owned IDs,
 duplicate IDs and unknown IDs still block completion.
 
+Coverage is validated inside the durable call layer before an answer is marked
+complete. Orchestration supplies an immutable, request-bound `coverage.json`
+inventory for typed paragraphs, number sites, full-book reads, focused checks,
+adjudications, meaning/correction checks, poetry sections and comment decisions.
+The inventory comes from assigned work, not IDs parsed from manuscript prose.
+Incomplete terminal answers consume an attempt and retry only that request
+within its original allowance and budget. Raw responses and usage remain
+preserved. A previously cached, schema-valid incomplete answer can be reconciled
+without changing its request identity or repeating other completed reads.
+Missing or changed coverage contracts block recovery and certification.
+Subscription retries use distinct transport request IDs, so a retry cannot
+simply return the same incomplete cached answer. Unknown submissions still
+require reconciliation; exhaustion never grants a fresh retry allowance.
+
 The supplied Atmosphere pasted-chat method is preserved with an
 [item-level coverage review](galley-press-prompt-coverage.md). Its 120 indexed
 rules plus prose and table instructions become 149 accounted-for source items.

@@ -121,6 +121,36 @@ def _typed_response(response, chunk):
         "reviewed_paragraph_ids": [pid for pid in actual if pid in owned]})
 
 
+def _fetch_owned(analyzer, chunk):
+    fetch = getattr(analyzer.provider, "fetch_owned", None)
+    return fetch(analyzer, chunk) if fetch else analyzer.fetch(chunk)
+
+
+def _call_coverage(payload, schema):
+    """Freeze the same logical inventories enforced at every workflow gate."""
+    properties, coverage = schema.get("properties", {}), {}
+    def add(field, rows, key="id", context=()):
+        coverage[field] = {"ids": [r["id"] for r in rows], "id_key": key,
+                           "context_ids": list(context)}
+    if isinstance(payload, list):
+        if "paragraphs" in properties:
+            add("paragraphs", payload)
+        return coverage
+    if "reviewed_ids" in properties:
+        add("reviewed_ids", payload["sites"] if "sites" in payload else payload["paragraphs"], None,
+            context=payload.get("context", {}) if "sites" not in payload else ())
+    if "reviewed_check_ids" in properties:
+        add("reviewed_check_ids", payload["focused_sites"], None)
+    if "comment_decisions" in properties:
+        add("comment_decisions", payload.get("comments", []))
+    if "decisions" in properties:
+        inventory = next((payload[k] for k in ("sites", "changes", "comments") if k in payload), None)
+        if inventory is None:
+            raise FixedWorkflowError("A decision call lacks its assigned coverage inventory")
+        add("decisions", inventory)
+    return coverage
+
+
 def _locate(text, quote, occurrence=1):
     if not quote or type(occurrence) is not int or occurrence < 1:
         raise FixedWorkflowError("A finding needs a nonempty exact quote and positive occurrence")
@@ -281,7 +311,7 @@ class FixedWorkflow:
         policy = self.base_policy if stage in {"poetry", "poetry_sections", "story_sheet"} else self.policy
         return self.calls.ask(stage, model=model, system=policy + "\n\n" + system,
                               user=_json(payload), schema=schema, schema_name="galley_fixed",
-                              effort=effort, max_tokens=max_tokens)
+                              effort=effort, max_tokens=max_tokens, coverage=_call_coverage(payload, schema))
 
     def _classify(self):
         from galley.fixed_policy import poetry_samples
@@ -346,7 +376,7 @@ class FixedWorkflow:
                     selected = dataclasses.replace(chunk, paragraphs=subset)
                     work.append((model, p.index, selected, analyzers[p.index]))
         with ThreadPoolExecutor(max_workers=min(4, cfg.concurrency_for())) as pool:
-            futures = [pool.submit(analyzer.fetch, chunk) for _, _, chunk, analyzer in work]
+            futures = [pool.submit(_fetch_owned, analyzer, chunk) for _, _, chunk, analyzer in work]
             try:
                 for (model, index, chunk, analyzer), future in zip(work, futures):
                     self._cancel()
