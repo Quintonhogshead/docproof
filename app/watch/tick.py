@@ -120,6 +120,12 @@ class TickReport:
     # missing and nothing failed, but a person may want to move the CRM on, so it
     # rides the same alert email. Each is (author, reason).
     stuck_ready: list[tuple[str, str]] = field(default_factory=list)
+    # By-name intake only: unmarked Book Originals the pass passed over because
+    # their folder already holds a later stage of the series (a hand-made
+    # book 0, a Book 1) — formatted before DocProof looked, so not done again.
+    # Each is (filename, the file that proves it). Informational: nothing is
+    # wrong, so it rides no alert, but `status` can say why a book was skipped.
+    already_formatted: list[tuple[str, str]] = field(default_factory=list)
     plan: list[tuple[str, str]] = field(default_factory=list)
     # Dry run only: files in the folder a pass would leave alone — already
     # prepared, DocProof's own outputs, not manuscripts, marked failed. Counted
@@ -205,11 +211,28 @@ def run_prep(token: str, home: Path, ws: WatchSettings,
     # has already gated in `_discover` — every manuscript in `listing` came from
     # a ready record — so the gate is not run again over it.
     if ws.hubspot_enabled and not ws.subfolders_enabled:
-        todo = _gate_hubspot(hs_token, ws, todo, state,
-                             ready_value=ws.hubspot_format_ready_value,
-                             id_get=lambda r: r.hubspot_id,
-                             id_set=lambda r, v: setattr(r, "hubspot_id", v),
-                             opener=opener, report=report)
+        if by_name(ws):
+            # Nobody flips a record for formatting: every labelled manuscript
+            # goes on. HubSpot is only consulted afterwards, to move a record
+            # that happens to sit at ready — see `_match_ready_record`.
+            ready = _ready_records(hs_token, ws, opener=opener)
+            for file in todo:
+                rec = state.get(file.id)
+                if not rec.hubspot_id:
+                    _match_ready_record(ws, rec, file.name,
+                                        naming.source_surname(file.name)
+                                        or key_from_name(
+                                            file.name, ws.hubspot_key_pattern),
+                                        ready)
+                    rec.name = file.name
+                    state.record(rec)
+        else:
+            todo = _gate_hubspot(
+                hs_token, ws, todo, state,
+                ready_value=ws.hubspot_format_ready_value,
+                id_get=lambda r: r.hubspot_id,
+                id_set=lambda r, v: setattr(r, "hubspot_id", v),
+                opener=opener, report=report)
 
     if len(todo) > ws.max_files_per_tick:
         # Said out loud, not swallowed: a cap that quietly drops work reads
@@ -1431,6 +1454,196 @@ def _adopt(token: str, subfolder_id: str, file_id: str, listing: list[DriveFile]
                    or not stage.candidate(f))
 
 
+def by_name(ws: WatchSettings) -> bool:
+    """Whether formatting finds its books by name rather than by a HubSpot
+    flag — `format_intake = "folder"`."""
+    return (ws.format_intake or "hubspot").strip().lower() == "folder"
+
+
+def _ready_records(hs_token: str | None, ws: WatchSettings, *,
+                   opener) -> list | None:
+    """The records at formatting's ready value, fetched once per pass for the
+    by-name intake's write-back match — or `None` when HubSpot is off or did
+    not answer, in which case no record is moved this pass and nothing is
+    held up over it. A bad token still stops the pass, as everywhere."""
+    if not (ws.hubspot_enabled and hs_token):
+        return None
+    want = [p for p in (ws.hubspot_status_property, ws.hubspot_key_property,
+                        ws.hubspot_first_property, ws.hubspot_last_property)
+            if p]
+    try:
+        return hubspot.find_by_value(
+            hs_token, ws.hubspot_object, ws.hubspot_status_property,
+            ws.hubspot_format_ready_value, want_properties=want, opener=opener)
+    except HubSpotAuthError:
+        raise
+    except HubSpotError as e:
+        log.info("Could not fetch the ready Projects from HubSpot (%s); books "
+                 "are still formatted, but no record is moved on this pass.", e)
+        return None
+
+
+def _match_ready_record(ws: WatchSettings, rec, name: str, surname: str,
+                        ready: list | None) -> None:
+    """Tie a by-name book to its HubSpot record, if exactly one record for the
+    surname sits at the ready value, so `_finish_hubspot` moves it on the same
+    way a flagged book is moved. No match, or two, is not a reason to wait —
+    the book is formatted either way — it only means the CRM is left where
+    it is, which the completion email says."""
+    if not ready or not surname:
+        return
+    matches = [r for r in ready if hubspot.name_matches(
+        r.properties.get(ws.hubspot_key_property, ""), surname)]
+    if len(matches) == 1:
+        rec.hubspot_id = matches[0].id
+        log.info("%s: matched HubSpot record %s at '%s'; it will be moved on "
+                 "when the book is back.", name, matches[0].id,
+                 ws.hubspot_format_ready_value)
+    elif len(matches) > 1:
+        log.info("%s: %d records are '%s' for %s; none will be moved on.",
+                 name, len(matches), ws.hubspot_format_ready_value, surname)
+
+
+def _folder_past_formatting(contents: list[DriveFile]) -> str:
+    """The name of a file proving this folder was formatted before DocProof
+    looked — a "<surname> - book 0" somebody made by hand, or a later stage of
+    the series (a "Book 1", a "Book 2") — or "" when there is none.
+
+    The by-name intake sees every unmarked Book Original in the press's
+    history, not just this season's, and a folder already carrying its next
+    stage is a book long past formatting. Formatting it again would spend a
+    model run to put a second "book 0" beside the first, so it is left alone
+    without a marker: nothing is written into a folder on a guess."""
+    for f in contents:
+        if naming.is_output_name(f.name) or naming.has_proof_source_label(f.name):
+            return f.name
+    return ""
+
+
+def _discover_by_name(token: str, hs_token: str | None, ws: WatchSettings,
+                      state: WatchState, *, opener, report: TickReport,
+                      dry_run: bool) -> tuple[list[DriveFile], dict[str, str]]:
+    """Subfolder mode's other answer to "what is there": search Drive for every
+    "<surname> - Book Original" nobody has formatted, and look only in the
+    folders those files are in.
+
+    HubSpot no longer drives. One `search_files` query finds the intake files
+    by name across the account; each hit's `parents` says which folder it sits
+    in, and that folder's own parent has to be the watched Author Folder (or,
+    for a multi-book author, the Author Folder's child) for the file to count
+    — a Book Original anywhere else is somebody else's. The parent is still
+    never listed: the work scales with unformatted books, not with authors.
+
+    Same refusals as the flagged path, for the same reasons: a folder holding
+    two new labelled manuscripts is nobody's to guess and is reported; a folder
+    already carrying a later stage of the series is a book formatted before
+    DocProof looked, and is passed over silently rather than done again.
+
+    The CRM is consulted once, afterwards, to move a matching ready record on;
+    a book with no record at ready is formatted all the same."""
+    stage = format_stage(ws)
+    # "Original" rather than the whole token: Drive's `contains` is a word
+    # match, and an em-dashed "Johnson — Book Original" has to be found too.
+    # `has_source_label` then applies the real, dash-tolerant recogniser.
+    q = "name contains 'Original' and trashed = false"
+    hits = [f for f in drive.search_files(token, q, opener=opener)
+            if not f.is_folder and naming.has_source_label(f.name)
+            and stage.candidate(f)]
+
+    # Which folder is each hit in, and is that folder ours? A folder is asked
+    # about once however many hits it holds.
+    lineage: dict[str, tuple[str, str] | None] = {}   # folder -> (author folder id, author name)
+
+    def _place(folder_id: str) -> tuple[str, str] | None:
+        if folder_id in lineage:
+            return lineage[folder_id]
+        try:
+            folder = drive.get_file(token, folder_id, opener=opener,
+                                    with_parents=True)
+        except DriveError as e:
+            log.info("Could not read folder %s (%s); its manuscript waits.",
+                     folder_id, e)
+            lineage[folder_id] = None
+            return None
+        placed = None
+        if ws.folder_id in folder.parents:
+            placed = (folder.id, folder.name)          # the author's folder
+        elif folder.parents:
+            try:
+                above = drive.get_file(token, folder.parents[0], opener=opener,
+                                       with_parents=True)
+            except DriveError:
+                above = None
+            if above is not None and ws.folder_id in above.parents:
+                placed = (above.id, above.name)        # author -> book folder
+        lineage[folder_id] = placed
+        return placed
+
+    by_folder: dict[str, list[DriveFile]] = {}
+    for hit in hits:
+        if not hit.parents:
+            continue
+        by_folder.setdefault(hit.parents[0], []).append(hit)
+
+    ready = _ready_records(hs_token, ws, opener=opener) if not dry_run else None
+    listing: list[DriveFile] = []
+    routes: dict[str, str] = {}
+    for folder_id, found in by_folder.items():
+        placed = _place(folder_id)
+        if placed is None:
+            log.info("%s is not under the watched Author Folder; left alone.",
+                     ", ".join(f.name for f in found))
+            continue
+        author_folder_id, author = placed
+        contents = drive.list_folder(token, folder_id, opener=opener)
+        manuscripts = [f for f in contents if stage.candidate(f)
+                       and naming.has_source_label(f.name)]
+        if not manuscripts:
+            continue
+        later = _folder_past_formatting(contents)
+        if later:
+            log.info("%s: '%s' is already beside it, so the book was formatted "
+                     "before DocProof looked; left alone.",
+                     manuscripts[0].name, later)
+            report.already_formatted += [(f.name, later) for f in manuscripts]
+            continue
+        if len(manuscripts) > 1:
+            reason = (f"{len(manuscripts)} new manuscripts are in {author}'s "
+                      f"folder, so DocProof cannot tell which is the book to do.")
+            log.warning("Needs a person: %s (%s)", author, reason)
+            report.needs_human.append((author, reason))
+            report.waiting += 1
+            continue
+        book = manuscripts[0]
+        surname = naming.source_surname(book.name)
+        if not dry_run:
+            rec = state.get(book.id)
+            rec.name = book.name
+            rec.author_last = rec.author_last or surname
+            rec.subfolder_id = folder_id          # its outputs, and its resume, here
+            rec.subfolder_name = author
+            if not rec.hubspot_id:
+                _match_ready_record(ws, rec, book.name, surname, ready)
+            state.record(rec)
+            flags.remember(book, state, author_last=surname,
+                           subfolder_id=folder_id, subfolder_name=author)
+        listing.extend(f for f in contents if f.id == book.id
+                       or not stage.candidate(f))
+        routes[book.id] = folder_id
+
+    # A book already in flight whose intake file the search no longer returns
+    # (renamed, or moved) is re-listed from the folder it recorded, as the
+    # flagged path does, so a job spanning ticks is finished where it started.
+    for rec in list(state.files.values()):
+        if (rec.job_id and rec.subfolder_id and not rec.marked
+                and rec.file_id not in routes and not rec.hubspot_id):
+            _adopt(token, rec.subfolder_id, rec.file_id, listing, routes,
+                   stage=stage, opener=opener)
+
+    uniq = {f.id: f for f in listing}
+    return list(uniq.values()), routes
+
+
 def _one(token: str, home: Path, ws: WatchSettings, file: DriveFile,
          listing: list[DriveFile], state: WatchState, runner: JobRunner,
          store: JobStore, *, mock: bool, opener, hs_token: str | None,
@@ -1676,6 +1889,13 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     if not refresh:
         raise NotConfigured("DocProof is not signed in to Google. Run "
                             "`docproof-watch auth`.")
+    if (ws.format_intake or "hubspot").strip().lower() not in ("hubspot",
+                                                                "folder"):
+        raise NotConfigured(
+            f"format_intake is '{ws.format_intake}'; it has to be 'hubspot' "
+            f"(an editor flags the record) or 'folder' (any unformatted "
+            f"'<surname> - Book Original' is done). Run `docproof-watch init "
+            f"--format-intake hubspot|folder`.")
     if ws.hubspot_enabled:
         # Half-configured is worse than off: a gate that cannot ask HubSpot
         # would either prep everything ungated or nothing at all, so it is
@@ -1873,9 +2093,14 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
         # asks who is ready and looks only in those authors' folders, handing
         # back the same shape of listing the flat path builds plus a map of
         # where each book's outputs belong.
-        listing, routes = _discover(token, hs_token, ws, state,
-                                    stage=format_stage(ws), opener=opener,
-                                    report=report, dry_run=dry_run)
+        if by_name(ws):
+            listing, routes = _discover_by_name(
+                token, hs_token, ws, state, opener=opener, report=report,
+                dry_run=dry_run)
+        else:
+            listing, routes = _discover(token, hs_token, ws, state,
+                                        stage=format_stage(ws), opener=opener,
+                                        report=report, dry_run=dry_run)
     else:
         listing = drive.list_folder(token, ws.folder_id, opener=opener)
         if not dry_run:
@@ -2014,7 +2239,11 @@ def _preview_rows(ws: WatchSettings, listing: list[DriveFile],
                  and (not ws.subfolders_enabled or f.id in proof_routes)]
     gated = ws.hubspot_enabled and not ws.subfolders_enabled
     if gated:
-        rows = [(name, stage + PREVIEW_GATED) for name, stage in rows]
+        # By-name formatting asks HubSpot nothing before it starts, so its rows
+        # are promises; every other stage's still hang on the CRM's answer.
+        rows = [(name, stage if (by_name(ws)
+                                 and stage == Stage.NEW_MANUSCRIPT.value)
+                 else stage + PREVIEW_GATED) for name, stage in rows]
     if ws.subfolders_enabled:
         return rows
 

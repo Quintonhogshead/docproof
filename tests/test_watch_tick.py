@@ -1739,3 +1739,163 @@ def test_the_terminal_counts_every_automation_in_one_sentence():
     one = ticklib.TickReport(dry_run=True, plan=[("a.docx", "new")])
     assert cli._preview_counts(one) == "prepare 1 manuscript(s)"
     assert cli._preview_counts(ticklib.TickReport(dry_run=True)) == "do nothing"
+
+
+# --- formatting by name: `format_intake = "folder"` --------------------------
+#
+# Nobody flips a HubSpot record. One Drive search finds every unformatted
+# "<surname> - Book Original"; each is formatted in the folder it sits in, as
+# long as that folder is under the Author Folder. HubSpot is consulted only
+# afterwards, to move a record that happens to be at ready, and never holds a
+# book up. The properties worth holding this to: the parent is never listed,
+# a book outside the Author Folder is never touched, and a folder already
+# carrying the next stage of the series is passed over rather than done again.
+
+def name_ws(**over):
+    fields = dict(format_intake="folder")
+    fields.update(over)
+    return sub_ws(**fields)
+
+
+def test_a_book_is_formatted_by_name_with_no_hubspot_flag(tmp_path, provider):
+    ws = name_ws()
+    opener = fake_drive({
+        SUB: author_folder("Quinton Johnson"),
+        "m-1": in_sub("Johnson - Book Original.docx"),
+        # A Book Original outside the Author Folder is somebody else's.
+        "elsewhere": author_folder("Old Projects", parent="not-ours"),
+        "x-1": in_sub("Stray - Book Original.docx", sub="elsewhere"),
+    }, docx=MANUSCRIPT, hubspot={})              # nothing is flagged ready
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.ok and report.prepped == ["Johnson - Book Original.docx"]
+    placed = uploads_in(opener)
+    assert "Johnson - book 0.docx" in placed
+    for entry in placed.values():
+        assert entry["parents"] == [SUB]
+    assert not any("Stray" in name for name in placed)
+    rec = WatchState.load(tmp_path / "state.json").get("m-1")
+    assert rec.hubspot_id == ""                  # nothing to move on
+    assert rec.subfolder_id == SUB and rec.subfolder_name == "Quinton Johnson"
+    assert rec.author_last == "Johnson"
+    assert rec.marked == FORMATTED
+    # One search by name; the Author Folder itself was never listed.
+    queries = _queries(opener)
+    assert any("name contains 'Original'" in q for q in queries)
+    assert f"'{FOLDER}' in parents and trashed = false" not in queries
+    assert not any(c.get_method() == "PATCH" and "hubapi" in c.full_url
+                   for c in opener.calls)
+
+
+def test_a_by_name_book_still_moves_a_matching_ready_record(tmp_path, provider):
+    """HubSpot did not gate the book, but a record for the surname sitting at
+    ready is moved to done all the same, so a press that still flags books
+    keeps its CRM in step."""
+    ws = name_ws()
+    opener = fake_drive({SUB: author_folder("Quinton Johnson"),
+                         "m-1": in_sub("Johnson - Book Original.docx")},
+                        docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == ["Johnson - Book Original.docx"]
+    assert hs_props(opener, "Johnson")["docproof"] == "Formatting Complete"
+    rec = WatchState.load(tmp_path / "state.json").get("m-1")
+    assert rec.hubspot_id == "hs-Johnson" and rec.hubspot_done
+
+
+def test_a_folder_already_past_formatting_is_passed_over(tmp_path, provider):
+    """A hand-made book 0 beside an unmarked Book Original means the book was
+    formatted before DocProof looked. Doing it again would put a second book 0
+    beside the first, so it is left alone — and no marker is written."""
+    ws = name_ws()
+    opener = fake_drive({
+        SUB: author_folder("Quinton Johnson"),
+        "m-1": in_sub("Johnson - Book Original.docx"),
+        "h-1": in_sub("Johnson - book 0.docx"),          # no DocProof marker
+        "sf-2": author_folder("Jane Smith"),
+        "m-2": in_sub("Smith - Book Original.docx", sub="sf-2"),
+        "b-2": in_sub("Smith - Book 2.docx", sub="sf-2"),  # a later stage
+    }, docx=MANUSCRIPT, hubspot={})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == [] and not uploads_in(opener)
+    assert sorted(report.already_formatted) == [
+        ("Johnson - Book Original.docx", "Johnson - book 0.docx"),
+        ("Smith - Book Original.docx", "Smith - Book 2.docx")]
+    assert not opener.files["m-1"].get("appProperties", {}).get(STATE_PROP)
+
+
+def test_a_multi_book_author_is_formatted_in_each_book_folder(tmp_path, provider):
+    ws = name_ws()
+    opener = fake_drive({
+        SUB: author_folder("Quinton Johnson"),
+        "bk-1": author_folder("Wolves", parent=SUB),
+        "bk-2": author_folder("Foxes", parent=SUB),
+        "m-1": in_sub("Johnson - Book Original.docx", sub="bk-1"),
+        "m-2": in_sub("Johnson - Book Original.docx", sub="bk-2"),
+    }, docx=MANUSCRIPT, hubspot={})
+
+    report = run(tmp_path, ws, opener)
+
+    assert sorted(report.prepped) == ["Johnson - Book Original.docx"] * 2
+    parents = sorted(e["parents"][0] for e in opener.files.values()
+                     if e.get("appProperties", {}).get(OUTPUT_PROP)
+                     and e["name"] == "Johnson - book 0.docx")
+    assert parents == ["bk-1", "bk-2"]
+
+
+def test_two_labelled_manuscripts_by_name_are_left_for_a_person(tmp_path,
+                                                                provider):
+    ws = name_ws()
+    opener = fake_drive({
+        SUB: author_folder("Quinton Johnson"),
+        "m-1": in_sub("Johnson - Book Original.docx"),
+        "m-2": in_sub("Johnson - Book Original.docx"),   # Drive allows twins
+    }, docx=MANUSCRIPT, hubspot={})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == [] and not uploads_in(opener)
+    assert report.needs_human and "cannot tell which" in report.needs_human[0][1]
+
+
+def test_a_by_name_dry_run_promises_plainly_and_writes_nothing(tmp_path,
+                                                               provider):
+    ws = name_ws()
+    opener = fake_drive({SUB: author_folder("Quinton Johnson"),
+                         "m-1": in_sub("Johnson - Book Original.docx")},
+                        docx=MANUSCRIPT, hubspot={})
+
+    report = run(tmp_path, ws, opener, dry_run=True)
+
+    assert ("Johnson - Book Original.docx", "new") in report.plan
+    assert not uploads_in(opener)
+    assert WatchState.load(tmp_path / "state.json").get("m-1").subfolder_id == ""
+
+
+def test_by_name_in_a_flat_folder_skips_the_gate(tmp_path, provider):
+    """Flat mode with HubSpot on used to hold every book for a flag. By-name
+    intake formats the labelled manuscript regardless, and still moves a
+    matching ready record on."""
+    ws = hs_ws(format_intake="folder", require_source_label=True)
+    opener = fake_drive(folder(f_1=drive_entry("Wolves - Book Original.docx"),
+                               f_2=drive_entry("Hares - Book Original.docx")),
+                        docx=MANUSCRIPT, hubspot={"Wolves": ready("Wolves")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert sorted(report.prepped) == ["Hares - Book Original.docx",
+                                      "Wolves - Book Original.docx"]
+    assert hs_props(opener)["docproof"] == "Formatting Complete"
+    assert report.waiting == 0
+
+
+def test_a_bad_format_intake_value_is_refused(tmp_path, provider):
+    ws = name_ws(format_intake="sometimes")
+    opener = fake_drive({}, docx=MANUSCRIPT, hubspot={})
+    with pytest.raises(ticklib.NotConfigured, match="format_intake"):
+        run(tmp_path, ws, opener)

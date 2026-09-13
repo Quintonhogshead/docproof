@@ -121,6 +121,13 @@ def main(argv=None) -> int:
                           "any field left out")
     ini.add_argument("--disable-hubspot", action="store_true",
                      help="stop gating on HubSpot")
+    ini.add_argument("--format-intake", choices=("hubspot", "folder"),
+                     help="how formatting finds its books: 'hubspot' (an "
+                          "editor flags the record 'Ready for Formatting') or "
+                          "'folder' (any unformatted '<surname> - Book "
+                          "Original' in the author folders is formatted, no "
+                          "flag needed; a matching ready record is still "
+                          "moved on afterwards)")
     ini.add_argument("--hubspot-object",
                      help="the objectType: deals, contacts, or a custom id")
     ini.add_argument("--hubspot-key-property",
@@ -398,6 +405,11 @@ def cmd_init(args, home: Path) -> int:
               f"{ws.hubspot_last_property or '— last not set'}")
     if ws.require_source_label:
         print("Preparing only '<surname> - Book Original'")
+    if (ws.format_intake or "hubspot").lower() == "folder":
+        print("Formatting intake: by name — every unformatted '<surname> - "
+              "Book Original' in the author folders is formatted without a "
+              "HubSpot flag; a single matching record at the ready value is "
+              "moved on afterwards")
     if ws.hubspot_enabled:
         print(f"HubSpot gate on: {ws.hubspot_object}, "
               f"{ws.hubspot_status_property or '— property not set'}: "
@@ -475,6 +487,8 @@ def _apply_hubspot(args, ws: WatchSettings) -> None:
             setattr(ws, attr, value)
     if getattr(args, "enable_hubspot", False):
         ws.hubspot_enabled = True
+    if getattr(args, "format_intake", None):
+        ws.format_intake = args.format_intake
     if getattr(args, "hubspot_write_back", None) is not None:
         ws.hubspot_write_back = args.hubspot_write_back
     if not ws.hubspot_enabled:

@@ -346,6 +346,28 @@ def test_completion_says_what_formatting_did_to_the_file(tmp_path):
     assert "accepted revisions: 37" in text        # and in the raw detail
 
 
+def test_completion_says_how_the_book_was_found(tmp_path):
+    """By-name intake: the book was formatted because of its name, and the
+    CRM may not have been moved. Both are said outright — a dash where the
+    record should be reads as a failed write-back, which this is not."""
+    job = _job(_with_prep(tmp_path))
+    ws = _ws(format_intake="folder", hubspot_enabled=True,
+             hubspot_format_ready_value="Ready for Formatting")
+    _, text, _ = notify.completion(ws, job, _file(), _rec(hubspot_id=""),
+                                   [], "sf-1")
+    assert "Found by: its name in the author folder" in text
+    assert ("HubSpot record: none at 'Ready for Formatting' for this surname "
+            "— no status was moved") in text
+
+    _, text, _ = notify.completion(ws, job, _file(), _rec(), [], "sf-1")
+    assert "HubSpot record: 0-970 / hs-Johnson" in text
+
+    _, text, _ = notify.completion(
+        _ws(hubspot_format_ready_value="Ready for Formatting"), job, _file(),
+        _rec(), [], "sf-1")
+    assert "Found by: HubSpot 'Ready for Formatting' flag" in text
+
+
 def test_a_plain_manuscript_reads_as_one(tmp_path):
     """No revisions, nothing preserved: neither row appears, rather than a row
     of noughts."""

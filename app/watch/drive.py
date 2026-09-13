@@ -63,6 +63,9 @@ class DriveFile:
     modified_time: str = ""
     size: int = 0                    # 0 for a native Doc: Drive omits it
     md5_checksum: str = ''
+    # Filled only by the calls that ask for it (`search_files`, `get_file`
+    # with `with_parents`): a listing scoped to one folder already knows.
+    parents: list[str] = field(default_factory=list)
 
     @property
     def is_folder(self) -> bool:
@@ -82,6 +85,7 @@ class DriveFile:
             modified_time=str(raw.get("modifiedTime", "")),
             size=int(raw.get("size") or 0),
             md5_checksum=str(raw.get('md5Checksum') or ''),
+            parents=[str(p) for p in (raw.get("parents") or [])],
         )
 
 
@@ -252,10 +256,42 @@ def list_folder(token: str, folder_id: str, *, opener=_open_url,
             return files
 
 
-def get_file(token: str, file_id: str, *, opener=_open_url) -> DriveFile:
+def search_files(token: str, q: str, *, opener=_open_url,
+                 page_size: int = 200) -> list[DriveFile]:
+    """Every file matching one Drive query, wherever it sits, with its parents.
+
+    The one call here that is not scoped to a folder. It exists for formatting's
+    by-name intake, which needs "every '<surname> - Book Original' not yet
+    formatted" without listing a parent holding a thousand author folders —
+    one query answers that, and `parents` says whose folder each hit is in so
+    the caller can check it really is under the watched Author Folder."""
+    files: list[DriveFile] = []
+    page_token = ""
+    while True:
+        params = {
+            "q": q,
+            "fields": f"nextPageToken,files({FILE_FIELDS},parents)",
+            "pageSize": str(page_size),
+            **SHARED_DRIVE_LIST,
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        answer = _json_call(_request(_url(f"{API}/files", params), token),
+                            opener=opener, what="search for manuscripts")
+        for raw in answer.get("files") or []:
+            if isinstance(raw, dict):
+                files.append(DriveFile.from_api(raw))
+        page_token = str(answer.get("nextPageToken", "") or "")
+        if not page_token:
+            return files
+
+
+def get_file(token: str, file_id: str, *, opener=_open_url,
+             with_parents: bool = False) -> DriveFile:
     """One file's details, by id — its real type rather than a guess from
-    its name."""
-    params = {"fields": FILE_FIELDS, **SHARED_DRIVE}
+    its name. `with_parents` also asks which folder(s) hold it."""
+    fields = f"{FILE_FIELDS},parents" if with_parents else FILE_FIELDS
+    params = {"fields": fields, **SHARED_DRIVE}
     raw = _json_call(_request(_url(f"{API}/files/{file_id}", params), token),
                      opener=opener, what="read a file's details")
     return DriveFile.from_api(raw)

@@ -198,6 +198,15 @@ class WatchSettings:
     # The status value DocProof writes back once the formatted file is in the
     # folder.
     hubspot_format_done_value: str = ""
+    # How formatting finds the book to do. "hubspot" (the default): an editor
+    # flips the record to the ready value and the pass looks only in that
+    # author's folder. "folder": nobody flips anything — the pass searches the
+    # author folders for any "<surname> - Book Original" not yet formatted and
+    # formats it; HubSpot is still moved to the done value afterwards when
+    # exactly one record for that surname sits at the ready value, and left
+    # alone otherwise. Formatting only: proofing, promo, the plan and
+    # corrections keep their own gates. See `tick._discover_by_name`.
+    format_intake: str = "hubspot"
     # The proofing values, on the same dropdown. One value in — "Ready for
     # Proofing" — and two ways out, because a proofread ends at one of two
     # verdicts and both of them move the book on: "Proofing Complete" when the

@@ -283,15 +283,31 @@ def _groups(ws, job, file, rec, uploaded: list[str],
     prompt = prep.get("tagging_prompt") if isinstance(
         prep.get("tagging_prompt"), dict) else {}
 
+    # How the pass came to this book: an editor's flag, or the file's own
+    # name. With by-name intake there may be no record to move on, and the
+    # log has to say so plainly rather than show a dash somebody reads as
+    # "the write-back failed".
+    found_by_name = (getattr(ws, "format_intake", "hubspot") or "hubspot"
+                     ).lower() == "folder"
+    if rec.hubspot_id:
+        record = f"{ws.hubspot_object} / {rec.hubspot_id}"
+    elif found_by_name and ws.hubspot_enabled:
+        record = (f"none at '{ws.hubspot_format_ready_value}' for this "
+                  f"surname — no status was moved")
+    else:
+        record = "—"
     groups: list[tuple[str, list]] = [
         ("Routing", [
             ("Author", author, None),
+            ("Found by",
+             "its name in the author folder — no HubSpot flag needed"
+             if found_by_name else
+             f"HubSpot '{ws.hubspot_format_ready_value or 'ready'}' flag",
+             None),
             ("Subfolder", rec.subfolder_name or "(flat watched folder)",
              DRIVE_FOLDER.format(dest_folder_id) if dest_folder_id else None),
             ("Source", file.name, DRIVE_FILE.format(file.id)),
-            ("HubSpot record",
-             f"{ws.hubspot_object} / {rec.hubspot_id}" if rec.hubspot_id
-             else "—", None),
+            ("HubSpot record", record, None),
         ]),
         ("Outputs", outputs),
         ("Model run", [
