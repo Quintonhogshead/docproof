@@ -1,13 +1,14 @@
 """Run Galley phases with plan approval, subprocess limits, state checks, and
 artifact handoff.
 
-Each phase runs in a separate session. Mechanical mode excludes copyediting
-phases; unattended sessions recover within caps without waiting for replies.
+New mechanical jobs run a fixed recipe without supervising sessions. Existing
+session and code jobs preserve their saved workflow when resumed.
 """
 from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -1342,7 +1343,7 @@ class Driver:
     astra_chunk_bytes: int | None = None
     astra_client: Any = None
     # The legacy mode remains explicit for controlled comparison. Production
-    # mechanical jobs choose code orchestration through the CLI/agent.
+    # mechanical jobs choose the fixed recipe through the CLI/agent.
     execution_mode: str | None = "session"
     review_rounds: int = 2
     review_calls: int = 400
@@ -1412,21 +1413,81 @@ class Driver:
     def workspace(self) -> Path:
         return Path(str(self.workspace_root)).expanduser() / self.slug
 
-    def resolve_execution_mode(self):
-        if self.execution_mode is not None:
-            return self.execution_mode
+    def resolve_execution_mode(self) -> str:
+        """Keep the recorded workflow; select the fixed recipe for new jobs.
+
+        A fixed checkpoint can precede the first driver result. Its existence
+        must therefore also pin the mode after a crash or usage-limit pause.
+        """
         saved_path = self.workspace / "runs" / DRIVER_DIR / "driver.json"
-        saved = json.loads(saved_path.read_text("utf-8")) if saved_path.is_file() else {}
+        try:
+            saved = json.loads(saved_path.read_text("utf-8")) if saved_path.is_file() else {}
+            if not isinstance(saved, dict):
+                raise ValueError("expected an object")
+        except (OSError, ValueError) as e:
+            raise DriverError(f"Cannot read saved execution mode at {saved_path}: {e}") from e
         prior = saved.get("execution_mode")
-        if prior in {"code", "session"}:
+        fixed_marker = self.workspace / "runs" / "fixed" / "workflow.json"
+        if fixed_marker.is_file():
+            if prior not in {None, "", "fixed"}:
+                raise DriverError("Conflicting saved fixed and legacy workflow records; resume evidence needs repair.")
+            prior = "fixed"
+        if prior not in {None, "", "code", "session", "fixed"}:
+            raise DriverError(f"Unknown saved execution mode {prior!r}; refusing to replace this workflow.")
+        if prior == "fixed" and self.execution_mode not in {None, "fixed"}:
+            raise DriverError("This manuscript uses the fixed workflow; resume with --execution-mode fixed.")
+        if self.execution_mode == "fixed" and prior in {"code", "session"}:
+            raise DriverError("This manuscript already uses a legacy workflow. Resume its saved mode, "
+                              "or use a new workspace to start the fixed workflow; mid-book migration is unsupported.")
+        if self.execution_mode is None and prior:
             self.execution_mode = prior
-        elif not self.mechanical_only or not self.astra_review or self._final_run() is not None:
-            # An existing unversioned manuscript does not have the new initial
-            # full-read receipts. Preserve its workflow during an upgrade.
-            self.execution_mode = "session"
-        else:
-            self.execution_mode = "code"
+        if self.execution_mode in {None, "fixed"} and prior != "fixed":
+            driver_dir = self.workspace / "runs" / DRIVER_DIR
+            legacy_progress = (bool(saved) or bool(self._current_state())
+                or (driver_dir.is_dir() and any(driver_dir.iterdir()))
+                or (self.workspace / "PLAN.md").is_file()
+                or (self.workspace / "approval.json").is_file()
+                or any((self.workspace / "runs").glob("*/findings.json")))
+            if legacy_progress:
+                if self.execution_mode == "fixed":
+                    raise DriverError("This manuscript has legacy progress. Resume its saved workflow, "
+                                      "or use a new workspace for the fixed workflow; mid-book migration is unsupported.")
+                self.execution_mode = "session"
+        if self.execution_mode is None:
+            self.execution_mode = "fixed" if self.mechanical_only and self.astra_review else "session"
         return self.execution_mode
+
+    def validate_execution_options(self) -> None:
+        """Reject options that a fixed recipe cannot honor, before any calls."""
+        if self.execution_mode not in {None, "session", "code", "fixed"}:
+            raise DriverError("execution_mode must be fixed, session, or code")
+        if self.execution_mode in {"code", "fixed"} and (not self.mechanical_only or not self.astra_review):
+            raise DriverError(f"{self.execution_mode.title()} orchestration requires mechanical proofreading and final Astra review")
+        if self.execution_mode != "fixed":
+            if not 1 <= self.review_rounds <= 2 or self.review_calls <= 0 or self.review_output_tokens <= 0:
+                raise DriverError("Review requires 1–2 rounds and positive call/output budgets")
+            return
+        if type(self.budget_usd) not in (int, float) or not math.isfinite(self.budget_usd) or self.budget_usd < 0:
+            raise DriverError("The fixed API budget must be a finite nonnegative amount.")
+        if self.review_rounds != 2 or self.review_calls != 400 or self.review_output_tokens != 2_000_000:
+            raise DriverError("--review-rounds, --review-calls, and --review-output-tokens configure legacy verify/settle only. "
+                              "The fixed recipe records its own 10,000-call and 20,000,000-output-token ceilings.")
+        if self.start_phase or self.only_phases is not None:
+            raise DriverError("The fixed workflow does not accept --from or --phases. "
+                              "Resume the entire fixed workflow; completed calls are reused from checkpoints.")
+        if self.model or self.model_by_phase or self.effort or self.effort_by_phase:
+            raise DriverError("The fixed workflow pins its reader models and effort. "
+                              "Remove --model, --phase-model, --effort, and --phase-effort overrides.")
+        if self.astra_transport not in {None, "codex"}:
+            raise DriverError("The fixed workflow uses Astra through the ChatGPT subscription; "
+                              "--astra-transport api is supported only by legacy workflows.")
+        if (self.astra_chunk_bytes is not None or self.astra_max_output_tokens != DEFAULT_ASTRA_MAX_OUTPUT_TOKENS
+                or self.astra_budget_usd != DEFAULT_ASTRA_BUDGET_USD):
+            raise DriverError("The fixed recipe pins its Astra chunk and output settings. "
+                              "Remove --astra-chunk-bytes, --astra-max-output-tokens, and --astra-budget overrides.")
+        if self.approve != "auto":
+            raise DriverError("The fixed workflow uses its recorded recipe and budget with --approve auto; "
+                              "use --dry-run to inspect the recipe before running it.")
 
     def _spawner(self) -> Callable[[PhaseSpec], PhaseResult]:
         return self.spawn or spawn_claude
@@ -2268,6 +2329,14 @@ class Driver:
         if Path(self.book).parent.name == "formatted" and intake.is_file():
             payload["preparation_resources"] = summarize(intake)
         payload["execution_mode"] = self.execution_mode
+        if self.execution_mode == "fixed":
+            from galley.fixed_calls import fixed_usage_summary
+            fixed_calls = self.workspace / "runs/fixed/calls"
+            if (fixed_calls / "budget.json").is_file():
+                try:
+                    payload["fixed_usage"] = fixed_usage_summary(fixed_calls)
+                except (OSError, ValueError, RuntimeError):
+                    payload["fixed_usage_error"] = "The fixed usage budget needs reconciliation."
         path.write_text(json.dumps(payload, indent=2,
                                    ensure_ascii=False), encoding="utf-8")
         return path
@@ -2665,22 +2734,19 @@ class Driver:
     def run(self) -> DriveResult:
         # Invalid setup raises without writing an outcome for the
         # manuscript.
-        if self.execution_mode not in {None, "session", "code"}:
-            raise DriverError("execution_mode must be session or code")
-        if self.execution_mode == "code" and (not self.mechanical_only or not self.astra_review):
-            raise DriverError("Code orchestration requires mechanical proofreading and final Astra review")
-        if not 1 <= self.review_rounds <= 2 or self.review_calls <= 0 or self.review_output_tokens <= 0:
-            raise DriverError("Review requires 1–2 rounds and positive call/output budgets")
-        phases = select_phases(mechanical_only=self.mechanical_only,
-                               start=self.start_phase, only=self.only_phases,
-                               astra_review=self.astra_review)
+        self.validate_execution_options()
         ws = seed_workspace(self.book, self.slug,
                             workspace_root=self.workspace_root,
                             source_id=self.source_id,
                             on_source_change=self.on_source_change)
         self.resolve_execution_mode()
-        if self.execution_mode == "code" and (not self.mechanical_only or not self.astra_review):
-            raise DriverError("Saved code orchestration requires mechanical proofreading and final Astra review")
+        self.validate_execution_options()
+        if self.execution_mode == "fixed":
+            from galley.fixed_workflow import run_fixed_driver
+            return run_fixed_driver(self)
+        phases = select_phases(mechanical_only=self.mechanical_only,
+                               start=self.start_phase, only=self.only_phases,
+                               astra_review=self.astra_review)
         if not self.astra_review:
             from galley.outcome import requires_astra_review
             prior = self._final_run()
@@ -3097,6 +3163,13 @@ def live_progress(workspace: str | Path, phase: str | None) -> dict[str, Any]:
     settlement.json (rounds). Cheap enough to call every minute."""
     ws = Path(workspace)
     out: dict[str, Any] = {}
+    fixed_calls = ws / "runs/fixed/calls"
+    if (fixed_calls / "budget.json").is_file():
+        from galley.fixed_calls import fixed_usage_summary
+        try:
+            out["fixed_usage"] = fixed_usage_summary(fixed_calls)
+        except (OSError, ValueError, RuntimeError):
+            out["fixed_usage_error"] = "The fixed usage budget needs reconciliation."
     if phase:
         stream = ws / "runs" / DRIVER_DIR / f"{phase}.stream.jsonl"
         try:

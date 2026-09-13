@@ -1073,7 +1073,18 @@ class Agent:
         from galley.driver import MECHANICAL_PHASES, REQUIRED_STATE
         from galley.state_machine import RunStateMachine
 
-        path = self.root / slug / "state.json"
+        workspace = self.root / slug
+        # Fixed jobs own their checkpoints and must never receive a legacy
+        # --from phase merely because their delivery state advanced.
+        if (workspace / "runs/fixed/workflow.json").is_file():
+            return ""
+        try:
+            saved = json.loads((workspace / "runs/driver/driver.json").read_text("utf-8"))
+            if isinstance(saved, dict) and saved.get("execution_mode") == "fixed":
+                return ""
+        except (OSError, ValueError):
+            pass
+        path = workspace / "state.json"
         if not path.is_file():
             return ""
         try:
@@ -1190,7 +1201,12 @@ class Agent:
             package = json.loads((workspace / "runs/driver/package.json").read_text("utf-8"))
             run = Path(package["run"]).resolve()
             run.relative_to(workspace)
-            receipt = validate_receipt(run)
+            fixed = package.get("execution_mode") == "fixed"
+            if fixed:
+                from galley.fixed_documents import validate_delivery_package
+                receipt = validate_delivery_package(package)
+            else:
+                receipt = validate_receipt(run)
             manuscript = deliverable_docx(run)
             human = (package.get("kind") == "human_review"
                      and receipt["review"]["editorial_verdict"] == "needs_human")
@@ -1201,7 +1217,7 @@ class Agent:
                     or sha256_file(manuscript) != package["build_sha256"]):
                 return
             artifacts = package.get("artifacts") or []
-            if len(artifacts) < (3 if human else 8):
+            if len(artifacts) < (3 if human or fixed else 8):
                 return
             for item in artifacts:
                 path = Path(item["path"]).resolve()
@@ -1313,7 +1329,11 @@ class Agent:
         try:
             package = json.loads((driver_dir / "package.json").read_text("utf-8"))
             run = Path(package["run"])
-            receipt = validate_receipt(run)
+            if package.get("execution_mode") == "fixed":
+                from galley.fixed_documents import validate_delivery_package
+                receipt = validate_delivery_package(package)
+            else:
+                receipt = validate_receipt(run)
             manuscript = deliverable_docx(run)
             human = (package.get("kind") == "human_review"
                      and receipt["review"]["editorial_verdict"] == "needs_human")
@@ -1478,6 +1498,12 @@ def _run_driver(**kwargs: Any) -> Any:
     driver = Driver(approve="auto", mechanical_only=True, **kwargs)
     if upload is not None:
         driver.upload = upload
+    driver.resolve_execution_mode()
+    driver.validate_execution_options()
+    if driver.execution_mode == "fixed":
+        # Preserve the source and classify poetry first. The spelling-only
+        # branch does not use ChatGPT; prose readers check their own login.
+        return driver.run()
     # A missing final-review login is an operational setup problem. Detect it
     # before spending Claude allowance on a book that cannot finish its handoff.
     if driver.astra_review:

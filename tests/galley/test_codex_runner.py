@@ -145,6 +145,38 @@ def test_unknown_model_never_starts_subscription_cli(fake, tmp_path):
     assert not fake.calls
 
 
+def test_sol_fixed_reader_uses_subscription_and_disables_model_tools(fake, tmp_path):
+    assert run(tmp_path, model="gpt-5.6-sol", reasoning_effort="high", no_tools=True) == RESULT
+    generation = next(call for call in fake.calls if not call.is_auth)
+    assert generation.argv[generation.argv.index("--model") + 1] == "gpt-5.6-sol"
+    disabled = {generation.argv[index + 1] for index, value in enumerate(generation.argv[:-1]) if value == "--disable"}
+    assert {"shell_tool", "unified_exec", "multi_agent", "apps", "plugins"} <= disabled
+    assert {'web_search="disabled"', "mcp_servers={}", "apps._default.enabled=false"} <= set(generation.argv)
+    assert receipt(tmp_path)["no_tools"] is True
+    assert run(tmp_path, model="gpt-5.6-sol", reasoning_effort="high", no_tools=True) == RESULT
+    assert len(fake.calls) == 2
+
+
+@pytest.mark.parametrize("events", [[], [{"type": "turn.failed"}], [
+    {"type": "item.completed", "item": {"type": "command_execution"}},
+    {"type": "turn.completed", "usage": {"output_tokens": 12}},
+], [{"type": "turn.completed"}, {"type": "turn.completed"}]])
+def test_fixed_reader_rejects_tools_and_missing_or_multiple_terminal_turns(fake, tmp_path, events):
+    fake.events = "\n".join(map(json.dumps, events))
+    with pytest.raises(AstraReviewError, match="exactly one turn"):
+        run(tmp_path, model="gpt-5.6-sol", no_tools=True)
+    assert receipt(tmp_path)["failure_category"] == "fixed_reader_contract"
+    with pytest.raises(AstraReviewError):
+        run(tmp_path, model="gpt-5.6-sol", no_tools=True)
+    assert len(fake.calls) == 2
+
+
+def test_fixed_reader_contract_changes_request_identity(fake, tmp_path):
+    run(tmp_path, model="gpt-5.6-sol")
+    with pytest.raises(AstraReviewError, match="different evidence"):
+        run(tmp_path, model="gpt-5.6-sol", no_tools=True)
+
+
 def test_cancelled_local_review_never_starts_cli(fake, tmp_path):
     (tmp_path/'work').mkdir()
     (tmp_path/'work/cancel-review.txt').write_text('Input download was invalid.')

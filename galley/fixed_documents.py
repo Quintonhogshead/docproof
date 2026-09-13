@@ -1,0 +1,373 @@
+"""Native Word output and independently checked fixed-workflow handoff.
+
+Every build starts from the author's original package. Net changes are tracked;
+rejecting them reproduces the original text, including headers and tables.
+"""
+from __future__ import annotations
+
+import copy
+import dataclasses
+import difflib
+import hashlib
+import itertools
+import json
+import re
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+
+from lxml import etree
+
+from docproof.utils.files import write_atomic
+from galley.manifest import sha256_file
+
+
+class FixedDocumentError(ValueError):
+    pass
+
+
+def _json(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _hash(value):
+    return hashlib.sha256(_json(value).encode()).hexdigest()
+
+
+def _save(path, value):
+    write_atomic(Path(path), json.dumps(value, ensure_ascii=False, indent=2))
+
+
+def paragraph_views(path, view="accept"):
+    from docproof.reassembler import paragraph_view_text
+    from docproof.utils.xml_helpers import DocxPackage, walk_package
+    return {p.para_id: paragraph_view_text(p.element, view) for p in walk_package(DocxPackage(path))}
+
+
+def _back_span(original, current, lo, hi, *, exact=False):
+    """Map a current range to source. Formatting requires an unchanged range."""
+    ranges = []
+    for tag, i, j, a, b in difflib.SequenceMatcher(a=original, b=current, autojunk=False).get_opcodes():
+        if a < hi and b > lo:
+            if exact and tag != "equal":
+                raise FixedDocumentError("A format proposal overlaps a text correction")
+            ranges.append((i + max(0, lo - a), i + min(b, hi) - a) if tag == "equal" else (i, j))
+    if not ranges:
+        raise FixedDocumentError("Cannot anchor a final comment or formatting change to the original")
+    return min(a for a, _ in ranges), max(b for _, b in ranges)
+
+
+def _diffs(original, corrected):
+    # Word-sized revisions preserve meaningful accept/reject units. Whitespace
+    # and punctuation remain independent tokens, so no whole paragraph rewrite.
+    pattern = r"\w+|[^\w\s]|\s+"
+    left, right = list(re.finditer(pattern, original)), list(re.finditer(pattern, corrected))
+    for tag, i, j, a, b in difflib.SequenceMatcher(
+            a=[m.group() for m in left], b=[m.group() for m in right], autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        start = left[i].start() if i < len(left) else len(original)
+        end = left[j - 1].end() if j > i else start
+        replacement = "".join(m.group() for m in right[a:b])
+        yield start, end, replacement
+
+
+def _comments(pkg):
+    from docproof.utils.xml_helpers import qn
+    if not pkg.has("word/comments.xml"):
+        return {}
+    return {x.get(qn("w:id")): etree.tostring(x, method="c14n")
+            for x in pkg.tree("word/comments.xml") if x.tag == qn("w:comment")}
+
+
+def write_manuscripts(source, destination, accepted, questions=(), formats=()):
+    from docproof.models import Anchor, DocumentModel, Finding, ParagraphRef
+    from docproof.reassembler import apply_tracked_changes, _MARKS
+    from docproof.cleancopy import write_clean_copy
+    from docproof.utils.xml_helpers import DocxPackage, walk_package, paragraph_text, qn
+    from galley.fixed_policy import configuration
+    from galley.fixed_workflow import _locate
+
+    source, destination = Path(source), Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    pkg = DocxPackage(source)
+    walked = list(walk_package(pkg))
+    original = {p.para_id: paragraph_text(p.element) for p in walked}
+    if set(original) != set(accepted):
+        raise FixedDocumentError("The final manuscript added or omitted paragraph identities")
+    original_comments = _comments(pkg)
+    cfg = configuration()
+    cfg.comments = False
+    cfg.query_comments = True
+    cfg.not_applied_comments = False
+    paragraphs = tuple(ParagraphRef(p.para_id, p.part, p.location, original[p.para_id], "", True) for p in walked)
+    doc = DocumentModel(str(source), paragraphs)
+    findings, details = [], []
+    for pid, before in original.items():
+        for start, end, replacement in _diffs(before, accepted[pid]):
+            fid = "fixed-" + _hash([pid, start, end, replacement])[:20]
+            anchor = Anchor(start, end, before[start:end], replacement)
+            f = Finding(fid, "fixed-final", pid, "proofreading", before[start:end], 1,
+                        replacement, "Clear proofreading correction.", "high", "validated",
+                        anchor=anchor, silent=True)
+            findings.append(f)
+            details.append({**dataclasses.asdict(f), "applied": True, "queried": False})
+    format_keys = set()
+    for row in formats:
+        pid = row["para_id"]
+        lo, hi = _back_span(original[pid], row["snapshot"], row["start"], row["end"], exact=True)
+        if row["format"] not in _MARKS:
+            raise FixedDocumentError("Unsupported proofreading format operation")
+        key = (pid, lo, hi, row["format"])
+        if key in format_keys:
+            continue
+        format_keys.add(key)
+        f = Finding("format-" + _hash(key)[:20], "fixed-final", pid, "title_italics",
+                    original[pid][lo:hi], 1, original[pid][lo:hi], row["reason"], "high", "validated",
+                    anchor=Anchor(lo, hi, original[pid][lo:hi], original[pid][lo:hi]),
+                    format=row["format"], silent=True)
+        findings.append(f)
+        details.append({**dataclasses.asdict(f), "applied": True, "queried": False})
+    for q in questions:
+        pid = q["para_id"]
+        if not q.get("missing_knowledge") or not q.get("question"):
+            raise FixedDocumentError("A final author query lacks its required evidence")
+        lo, hi = _locate(accepted[pid], q["quote"], q.get("occurrence", 1))
+        start, end = _back_span(original[pid], accepted[pid], lo, hi)
+        if start == end:
+            # A question about inserted text needs a real source anchor.
+            start, end = max(0, start - 1), min(len(original[pid]), end + 1)
+        if start == end:
+            raise FixedDocumentError("A final question cannot be anchored to an empty paragraph")
+        quote = original[pid][start:end]
+        occurrence = sum(original[pid].startswith(quote, offset) for offset in range(start)) + 1
+        f = Finding(q["id"], "fixed-final", pid, "author_question", quote, occurrence,
+                    original[pid][start:end], q["question"], "high", "query",
+                    anchor=Anchor(start, end, original[pid][start:end], original[pid][start:end]), force_query=True)
+        findings.append(f)
+        details.append({**dataclasses.asdict(f), "applied": False, "queried": True})
+    stats = apply_tracked_changes(pkg, doc, findings, cfg)
+    expected_edits = {f.finding_id for f in findings if f.status == "validated"}
+    actual_edits = set(stats.applied) | set(stats.already_set)
+    if expected_edits != actual_edits or stats.skipped or stats.unplaced:
+        raise FixedDocumentError("Not every approved correction and query could be written")
+    if set(stats.queried) != {q["id"] for q in questions}:
+        raise FixedDocumentError("Not every final author question received a Word comment")
+    for row in details:
+        row["applied"] = row["finding_id"] in stats.applied
+        if row["finding_id"] in stats.already_set:
+            row["already_set"] = True
+    if any(_comments(pkg).get(cid) != value for cid, value in original_comments.items()):
+        raise FixedDocumentError("An original author comment was changed")
+    tracked = destination / f"{source.stem} - Atmosphere Press Proofreader.docx"
+    pkg.save(tracked)
+    if paragraph_views(tracked, "reject") != original or paragraph_views(tracked) != accepted:
+        raise FixedDocumentError("Tracked output does not reproduce the original and corrected manuscript views")
+    clean = destination / f"{source.stem} - Clean.docx"
+    write_clean_copy(tracked, clean)
+    if paragraph_views(clean) != accepted:
+        raise FixedDocumentError("Clean copy differs from the accepted tracked manuscript")
+    # Non-manuscript package members (images, styles, numbering, embedded files)
+    # cannot change during proofreading. Only touched story/comment metadata may.
+    from zipfile import ZipFile
+    with ZipFile(source) as a, ZipFile(tracked) as b:
+        allowed = {p.part for p in walked} | {"word/comments.xml", "[Content_Types].xml", "word/_rels/document.xml.rels"}
+        for name in a.namelist():
+            if name not in allowed and (name not in b.namelist() or a.read(name) != b.read(name)):
+                raise FixedDocumentError(f"Proofreading changed a protected package member: {name}")
+    return tracked, clean, details
+
+
+def _verify_result(result, directory):
+    if result.get("execution_mode") != "fixed" or result.get("status") != "completed":
+        raise FixedDocumentError("The fixed workflow has not completed")
+    if _hash({k: v for k, v in result.items() if k not in {"usage", "result_sha256"}}) != result.get("result_sha256"):
+        raise FixedDocumentError("The fixed result's content no longer matches its receipt")
+    source = Path(result["source"])
+    if sha256_file(source) != result["identity"]["source_sha256"]:
+        raise FixedDocumentError("The original manuscript changed after review")
+    if paragraph_views(source) != result["original"] or set(result["original"]) != set(result["accepted"]):
+        raise FixedDocumentError("The fixed result does not preserve the original paragraph identities and text")
+    if result.get("editorial_verdict") not in {"ready", "needs_human"}:
+        raise FixedDocumentError("The fixed result lacks an editorial verdict")
+    marker = json.loads((Path(directory) / "workflow.json").read_text())
+    if (marker.get("identity") != result["identity"] or marker.get("execution_mode") != "fixed"
+            or marker.get("status") != "completed" or marker.get("result_sha256") != result["result_sha256"]):
+        raise FixedDocumentError("The fixed workflow checkpoint does not match its completed result")
+    stages = result["stages"]
+    expected = (["poetry", "typed", "poetry_complete"] if result["poetry_only"] else
+                ["poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks", "ensemble_sweep", "fable", "astra"])
+    if [s["stage"] for s in stages] != expected:
+        raise FixedDocumentError("A required fixed proofreading stage is missing or out of order")
+    for stage in stages:
+        path = Path(stage["path"]).resolve()
+        if not path.is_relative_to(Path(directory).resolve() / "stages") or _hash(json.loads(path.read_text())) != stage["sha256"]:
+            raise FixedDocumentError("A fixed stage's reading evidence changed")
+    last_stage = json.loads(Path(stages[-1]["path"]).read_text())
+    if last_stage.get("accepted_sha256") != _hash(result["accepted"]):
+        raise FixedDocumentError("The last reviewed manuscript differs from the final accepted text")
+    return source
+
+
+def _report(result, details):
+    edits = [x for x in details if x["applied"]]
+    paragraphs = len({x["para_id"] for x in edits})
+    scope = "Spelling only (poetry)" if result["poetry_only"] else "Clear proofreading errors only"
+    labels = {pid: f"Paragraph {index}" for index, pid in enumerate(paragraph_views(result["source"]), 1)}
+    stage_labels = {"poetry": "Poetry classification", "story_sheet": "Story Sheet",
+        "typed": "Proofreading detectors", "numbers": "Number style review",
+        "broken_repair": "Broken sentence repair", "checks": "Meaning and correction checks",
+        "ensemble_sweep": "Opus and Sol complete readings", "fable": "Fable final reading and comment review",
+        "astra": "Astra final reading and comment review", "poetry_complete": "Spelling-only proofread complete"}
+    lines = ["# Galley proofreading report", "", f"Scope: {scope}.", "",
+             f"{len(edits)} tracked corrections across {paragraphs} paragraphs; {len(result['questions'])} author questions.", "",
+             "## Corrections", ""]
+    for x in edits:
+        change = ("Set in italics" if x.get("format") == "italic" else json.dumps(x['corrected_text'], ensure_ascii=False))
+        lines += [f"- {labels[x['para_id']]}: {json.dumps(x['original_text'], ensure_ascii=False)} → {change}"]
+    lines += ["", "## Author questions", ""]
+    lines += [f"- {labels[q['para_id']]}: {q['question']}" for q in result["questions"]] or ["None."]
+    lines += ["", "## Completed reading stages", ""]
+    lines += [f"- {stage_labels[s['stage']]}" for s in result["stages"]]
+    return "\n".join(lines) + "\n"
+
+
+def package_result(driver, result):
+    """Build once, freeze artifact hashes, and preserve exact package on resume."""
+    from galley.state_machine import RunStateMachine
+    from galley.verify import build_fingerprints
+    from galley.fixed_calls import validate_fixed_call_evidence
+    from galley.driver import handoff_base
+    directory = driver.workspace / "runs/fixed"
+    package_path = driver.workspace / "runs/driver/package.json"
+    if package_path.exists():
+        package = json.loads(package_path.read_text())
+        if package.get("packet_sha256") != result["result_sha256"]:
+            raise FixedDocumentError("A different corrected manuscript is already packaged")
+        if driver.handoff_dir and any(Path(row["path"]).resolve().parent != Path(driver.handoff_dir).resolve()
+                                      for row in package.get("artifacts", [])):
+            raise FixedDocumentError("This proofread already has a frozen handoff directory; resume with its original --handoff setting")
+        validate_delivery_package(package)
+        return package
+    source = _verify_result(result, directory)
+    call_evidence = validate_fixed_call_evidence(directory / "calls", identity=result["identity"])
+    run = driver.workspace / "runs/final"
+    tracked, clean, details = write_manuscripts(source, run, result["accepted"], result["questions"], result["formats"])
+    findings = {"source": str(source), "source_sha256": result["identity"]["source_sha256"],
+                "execution_mode": "fixed", "findings": details}
+    _save(run / "findings.json", findings)
+    report = run / f"{source.stem} - Proofreading report.md"
+    write_atomic(report, _report(result, details))
+    evidence = run / f"{source.stem} - Review evidence.json"
+    _save(evidence, result)
+    outcome = run / f"{source.stem} - outcome.json"
+    outcome_value = "needs_human" if result["editorial_verdict"] == "needs_human" else "done"
+    reason = "Fixed proofreading complete; every required reading and output check passed."
+    _save(outcome, {"schema_version": 1, "outcome": outcome_value,
+                    "reason": reason,
+                    "set_by": "Galley fixed proofreading", "execution_mode": "fixed",
+                    "author_questions": len(result["questions"])})
+    _save(run / "outcome.json", json.loads(outcome.read_text()))
+    certificate_path = run / "fixed-certificate.json"
+    certificate = {"schema_version": 1, "execution_mode": "fixed", "delivery_ready": True,
+                   "source_id": driver.source_id or driver.slug,
+                   "source_sha256": result["identity"]["source_sha256"],
+                   "packet_sha256": result["result_sha256"], "result_path": str(directory / "result.json"),
+                   "result_file_sha256": sha256_file(directory / "result.json"),
+                   "workflow_sha256": sha256_file(directory / "workflow.json"),
+                   "call_evidence": call_evidence,
+                   "tracked": {"path": str(tracked), "sha256": sha256_file(tracked)},
+                   "clean": {"path": str(clean), "sha256": sha256_file(clean)},
+                   "review": {"editorial_verdict": result["editorial_verdict"]},
+                   "checks": ["complete stage evidence", "source identity", "reject-all original text",
+                              "accept-all corrected text", "clean-copy equality", "comment placement", "protected package members"]}
+    _save(certificate_path, certificate)
+    out = Path(driver.handoff_dir) if driver.handoff_dir else driver.workspace / "handoff"
+    out.mkdir(parents=True, exist_ok=True)
+    artifacts = []
+    base = handoff_base(source.name)
+    sources = [("tracked", tracked, f"{base}.docx"),
+               ("clean", clean, f"{base} - clean.docx"),
+               ("report", report, f"{base} - proofreading report.md"),
+               ("evidence", evidence, f"{base} - review evidence.json"),
+               ("outcome", outcome, f"{base} - outcome.json"),
+               ("certificate", certificate_path, f"{base} - fixed certificate.json")]
+    for role, path, name in sources:
+        target = out / name
+        shutil.copyfile(path, target)
+        artifacts.append({"role": role, "name": target.name, "path": str(target.resolve()),
+                          "origin": str(path.resolve()), "sha256": sha256_file(target)})
+    fingerprints = build_fingerprints(run)
+    package = {"schema_version": 1, "execution_mode": "fixed", "kind": "human_review" if outcome_value == "needs_human" else "proofread",
+               "source_id": driver.source_id or driver.slug, "outcome": outcome_value, "reason": reason,
+               "packet_sha256": result["result_sha256"], "build_sha256": fingerprints["build_sha256"],
+               "run": str(run.resolve()), "certificate": str(certificate_path.resolve()),
+               "certificate_sha256": sha256_file(certificate_path), "artifacts": artifacts}
+    _save(package_path, package)
+    _save(driver.workspace / "runs/driver/final-run.json",
+          {"run": "runs/final", "source_sha256": result["identity"]["source_sha256"]})
+    state = RunStateMachine.load(driver.workspace / "state.json")
+    if not state.reached("certified"):
+        state.advance("certified", by="Galley fixed proofreading", source_sha256=result["identity"]["source_sha256"],
+                      config_sha256=_hash(result["identity"]["configuration"]), results_run="runs/final")
+        state.save(driver.workspace / "state.json")
+    return package
+
+
+def validate_delivery_package(package):
+    """Shared by initial delivery and the worker's interrupted-upload recovery."""
+    from galley.verify import build_fingerprints
+    from galley.fixed_calls import validate_fixed_call_evidence
+    if package.get("execution_mode") != "fixed":
+        raise FixedDocumentError("This is not a fixed-workflow package")
+    run = Path(package["run"]).resolve()
+    certificate_path = Path(package["certificate"]).resolve()
+    if certificate_path != run / "fixed-certificate.json" or sha256_file(certificate_path) != package["certificate_sha256"]:
+        raise FixedDocumentError("Fixed delivery certificate changed")
+    certificate = json.loads(certificate_path.read_text())
+    path = Path(certificate["result_path"]).resolve()
+    directory = run.parent / "fixed"
+    if path != directory / "result.json" or sha256_file(path) != certificate["result_file_sha256"]:
+        raise FixedDocumentError("Fixed review result changed after certification")
+    result = json.loads(path.read_text())
+    _verify_result(result, directory)
+    if sha256_file(directory / "workflow.json") != certificate.get("workflow_sha256"):
+        raise FixedDocumentError("Fixed workflow checkpoint changed after certification")
+    calls = validate_fixed_call_evidence(directory / "calls", identity=result["identity"])
+    if calls != certificate.get("call_evidence"):
+        raise FixedDocumentError("Fixed model-call evidence changed after certification")
+    if (certificate.get("delivery_ready") is not True or package["packet_sha256"] != result["result_sha256"]
+            or certificate["packet_sha256"] != result["result_sha256"]):
+        raise FixedDocumentError("Fixed package belongs to another reviewed manuscript")
+    expected_outcome = "needs_human" if result["editorial_verdict"] == "needs_human" else "done"
+    if (package.get("source_id") != certificate.get("source_id")
+            or certificate.get("review", {}).get("editorial_verdict") != result["editorial_verdict"]
+            or package.get("outcome") != expected_outcome
+            or package.get("kind") != ("human_review" if expected_outcome == "needs_human" else "proofread")):
+        raise FixedDocumentError("Fixed delivery metadata contradicts its reviewed result")
+    for key in ("tracked", "clean"):
+        row = certificate[key]
+        if Path(row["path"]).resolve().parent != run or sha256_file(row["path"]) != row["sha256"]:
+            raise FixedDocumentError("The certified manuscript changed")
+        if paragraph_views(row["path"]) != result["accepted"]:
+            raise FixedDocumentError("The delivered manuscript differs from the reviewed text")
+    if paragraph_views(certificate["tracked"]["path"], "reject") != result["original"]:
+        raise FixedDocumentError("The tracked manuscript no longer reproduces the original")
+    if build_fingerprints(run)["build_sha256"] != package["build_sha256"]:
+        raise FixedDocumentError("Fixed final build changed")
+    source = Path(result["source"])
+    expected_origins = {"tracked": Path(certificate["tracked"]["path"]), "clean": Path(certificate["clean"]["path"]),
+        "report": run / f"{source.stem} - Proofreading report.md", "evidence": run / f"{source.stem} - Review evidence.json",
+        "outcome": run / f"{source.stem} - outcome.json", "certificate": certificate_path}
+    artifacts = package.get("artifacts", [])
+    if (len(artifacts) != len(expected_origins) or {x.get("role") for x in artifacts} != set(expected_origins)
+            or len({x["path"] for x in artifacts}) != len(artifacts)
+            or len({x["name"] for x in artifacts}) != len(artifacts)):
+        raise FixedDocumentError("Fixed delivery lacks its manuscript and supporting artifacts")
+    for row in artifacts:
+        if (Path(row.get("origin", "")).resolve() != expected_origins[row["role"]].resolve()
+                or Path(row["path"]).name != row["name"]
+                or sha256_file(row["path"]) != row["sha256"]
+                or sha256_file(row["origin"]) != row["sha256"]):
+            raise FixedDocumentError("A fixed handoff artifact changed")
+    return certificate

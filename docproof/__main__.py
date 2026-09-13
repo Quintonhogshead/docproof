@@ -1768,14 +1768,32 @@ def _galley_drive(args) -> int:
 
     if args.dry_run:
         try:
+            drv.validate_execution_options()
             ws = gd.seed_workspace(drv.book, drv.slug,
                                    workspace_root=drv.workspace_root)
+            drv.resolve_execution_mode()
+            drv.validate_execution_options()
+            if drv.execution_mode == "fixed":
+                from galley.fixed_workflow import workflow_plan
+                recipe = workflow_plan()
+                print(f"workspace {ws}")
+                print("execution: fixed; no supervising Brain")
+                for row in recipe:
+                    print(f"{row['stage']}: {row['model']} — {row['description']}")
+                print(f"API budget: ${drv.budget_usd:.2f}; clear proofreading errors only")
+                if args.json:
+                    print(json.dumps({"workspace": str(ws), "execution_mode": "fixed",
+                        "phases": [row["stage"] for row in recipe], "recipe": recipe,
+                        "brains": {}, "approve": args.approve,
+                        "budget_usd": drv.budget_usd,
+                        "astra_transport": "codex",
+                        "mechanical_only": True}, ensure_ascii=False))
+                return 0
+            review_settings = gd.astra_review_settings(drv._final_run() or ws,
+                transport=drv.astra_transport, max_chunk_bytes=drv.astra_chunk_bytes)
             phases = gd.select_phases(mechanical_only=mechanical_only,
                                       start=args.from_phase, only=args.phases,
                                       astra_review=drv.astra_review)
-            drv.resolve_execution_mode()
-            review_settings = gd.astra_review_settings(drv._final_run() or ws,
-                transport=drv.astra_transport, max_chunk_bytes=drv.astra_chunk_bytes)
         except gd.DriverError as e:
             print(f"error: {e}", file=sys.stderr)
             return 2
@@ -1795,6 +1813,7 @@ def _galley_drive(args) -> int:
         print("brains: " + ", ".join(f"{p}={b}" for p, b in brains.items()))
         if args.json:
             print(json.dumps({"workspace": str(ws), "phases": phases,
+                              "execution_mode": drv.execution_mode,
                               "brains": brains,
                               "approve": args.approve,
                               "budget_usd": drv.budget_usd,

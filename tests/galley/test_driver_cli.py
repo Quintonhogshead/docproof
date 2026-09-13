@@ -45,10 +45,11 @@ def test_print_prompt_refuses_a_copyedit_phase_in_scope(book, capsys):
     assert "flight-deck" in capsys.readouterr().out
 
 
-def test_dry_run_seeds_the_workspace_and_prints_the_sequence(book, tmp_path,
+def test_legacy_dry_run_seeds_the_workspace_and_prints_the_sequence(book, tmp_path,
                                                              capsys):
     rc = main(["galley", "drive", "--book", str(book), "--slug", "ford",
-               "--workspace-root", str(tmp_path / "ws"), "--dry-run", "--json"])
+               "--workspace-root", str(tmp_path / "ws"), "--execution-mode", "session",
+               "--dry-run", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert payload["phases"] == list(gd.MECHANICAL_PHASES)
@@ -71,7 +72,7 @@ def test_drive_blocks_at_the_gate_without_an_editorial_verdict(book, tmp_path, c
 
     monkeypatch.setattr(gd, "spawn_claude", fake)
     rc = main(["galley", "drive", "--book", str(book), "--slug", "ford",
-               "--workspace-root", str(tmp_path / "ws"), "--budget", "1",
+               "--workspace-root", str(tmp_path / "ws"), "--execution-mode", "session", "--budget", "1",
                "--no-state-gate", "--json"])
     # profile ran, the gate refused the $2.80 plan against a $1 budget.
     assert calls == ["profile"]
@@ -86,7 +87,7 @@ def test_drive_blocks_at_the_gate_without_an_editorial_verdict(book, tmp_path, c
 def test_drive_reports_a_setup_error_as_exit_2(book, tmp_path, capsys):
     rc = main(["galley", "drive", "--book", str(book), "--slug", "ford",
                "--workspace-root", str(tmp_path / "ws"),
-               "--phases", "flights"])
+               "--execution-mode", "session", "--phases", "flights"])
     # An out-of-scope phase is the caller's mistake: exit 2, and NO
     # needs_human outcome.json for DocWatch to act on.
     assert rc == 2
