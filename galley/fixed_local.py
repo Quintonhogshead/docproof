@@ -108,7 +108,7 @@ def _packet(directory, request, build):
     with _locked(directory / ("stage-" + stage_key + ".lock")):
         if marker_path.exists():
             if _load(marker_path) != marker:
-                raise FixedLocalError("The local-check inputs, configuration or dependencies changed inside this run; start a new run to use changed local evidence")
+                _recover_failed_scan(directory, marker_path, marker, request)
         else:
             _atomic(marker_path, marker)
         if path.exists():
@@ -124,7 +124,7 @@ def _packet(directory, request, build):
                 _atomic(path, saved)
             except Exception as exc:
                 _atomic(directory / (sha + ".failure.json"), {"request_sha256": sha,
-                    "status": "failed", "error_type": type(exc).__name__})
+                    "request": request, "status": "failed", "error_type": type(exc).__name__})
                 raise
     evidence = {"kind": "fixed_local", "version": VERSION, "stage": request["stage"],
         "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -134,6 +134,43 @@ def _packet(directory, request, build):
         "excluded_poetry_ids": request["excluded_poetry_ids"], "checks": saved["checks"],
         "proposal_count": len(saved["findings"]), "diagnostic_count": len(saved["diagnostics"])}
     return saved["findings"], evidence
+
+
+def _recover_failed_scan(directory, marker_path, marker, request):
+    """Retry an unpublished failed scan after a code repair, under its lock.
+
+    No completed packet is ever reused or relabeled. Source, policy, runtime
+    assets and prepared findings must be identical; only implementation hashes
+    may change. Model receipts and their original budgets remain untouched.
+    """
+    message = ("The local-check inputs, configuration or dependencies changed inside this run; "
+               "start a new run to use changed local evidence")
+    prior = _load(marker_path)
+    sha = prior.get("request_sha256", "")
+    # A valid marker must name a hash, never a path supplied by a damaged file.
+    if not isinstance(sha, str) or len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha):
+        raise FixedLocalError(message)
+    failure_path = directory / (sha + ".failure.json")
+    if (directory / (request["stage"] + "-" + sha + ".json")).exists() or not failure_path.is_file():
+        raise FixedLocalError(message)
+    failure = _load(failure_path)
+    old = failure.get("request")
+    if (not isinstance(old, dict) or _hash(old) != sha or
+            failure.get("status") != "failed" or failure.get("request_sha256") != sha or
+            prior != {"stage": request["stage"], "identity_sha256": _hash(request["identity"]),
+                      "request_sha256": sha} or
+            {k: v for k, v in old.items() if k != "implementations"} !=
+            {k: v for k, v in request.items() if k != "implementations"} or
+            not isinstance(old.get("implementations"), dict) or
+            not isinstance(request.get("implementations"), dict)):
+        raise FixedLocalError(message)
+    # Persist the transition before replacing the marker: either side of an
+    # interruption can replay safely. The failure and its inputs stay intact.
+    _atomic(directory / ("recovery-" + sha + "-" + marker["request_sha256"] + ".json"),
+            {"status": "rescan_required", "reason": "implementation repair after unpublished failure",
+             "previous_marker": prior, "next_marker": marker,
+             "failure_sha256": hashlib.sha256(failure_path.read_bytes()).hexdigest()})
+    _atomic(marker_path, marker)
 
 
 def _validate_packet(saved, request):

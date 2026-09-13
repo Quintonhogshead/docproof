@@ -152,6 +152,85 @@ def test_language_tool_failure_closes_runtime_and_never_caches_clean_result(tmp_
     assert json.loads(next((tmp_path / "local").glob("*.failure.json")).read_text())["status"] == "failed"
 
 
+def test_failed_local_scan_recovers_after_code_repair_without_relabeling(tmp_path, monkeypatch):
+    source = prepared(para("p1", "The room was quiet."))
+    monkeypatch.setattr(local, "_versions", lambda: {"checker.py": "before"})
+    tool = Tool(lambda text: (_ for _ in ()).throw(RuntimeError("incompleteResults")))
+    with pytest.raises(local.FixedLocalError):
+        collect(tmp_path, source, tool)
+    failure = next((tmp_path / "local").glob("*.failure.json"))
+    failure_bytes = failure.read_bytes()
+    prior = json.loads(failure_bytes)
+    assert prior["request"]["implementations"] == {"checker.py": "before"}
+    monkeypatch.setattr(local, "_versions", lambda: {"checker.py": "repaired"})
+    successful = Tool()
+    _, evidence = collect(tmp_path, source, successful)
+    assert successful.requests == ["The room was quiet."] and successful.closed
+    assert failure.read_bytes() == failure_bytes
+    recovery = json.loads(next((tmp_path / "local").glob("recovery-*.json")).read_text())
+    assert recovery["previous_marker"]["request_sha256"] == prior["request_sha256"]
+    assert recovery["next_marker"]["request_sha256"] == evidence["request_sha256"]
+    local.validate_local_evidence(evidence, tmp_path / "local", IDENTITY)
+    assert not (tmp_path / "local" / ("initial-" + prior["request_sha256"] + ".json")).exists()
+
+
+@pytest.mark.parametrize("change", ["source", "policy", "assets", "missing_request", "tampered_request", "completed"])
+def test_code_repair_cannot_bypass_changed_inputs_or_completed_evidence(tmp_path, monkeypatch, change):
+    source = prepared(para("p1", "The room was quiet."))
+    monkeypatch.setattr(local, "_versions", lambda: {"checker.py": "before"})
+    if change == "completed":
+        collect(tmp_path, source)
+    else:
+        tool = Tool(lambda text: (_ for _ in ()).throw(RuntimeError("incompleteResults")))
+        with pytest.raises(local.FixedLocalError):
+            collect(tmp_path, source, tool)
+    monkeypatch.setattr(local, "_versions", lambda: {"checker.py": "after"})
+    cfg = configuration()
+    if change == "source":
+        source.doc = replace(source.doc, paragraphs=(para("p1", "The room was cold."),))
+    elif change == "policy":
+        cfg.languagetool.scan_chars = 1
+    elif change == "assets":
+        monkeypatch.setattr("galley.local_assets.local_asset_identity", lambda *a: {"asset": "changed"})
+    elif change in {"missing_request", "tampered_request"}:
+        path = next((tmp_path / "local").glob("*.failure.json"))
+        data = json.loads(path.read_text())
+        if change == "missing_request":
+            data.pop("request")
+        else:
+            data["request"]["implementations"] = {"checker.py": "tampered"}
+        path.write_text(json.dumps(data))
+    with pytest.raises(local.FixedLocalError, match="changed inside this run"):
+        collect(tmp_path, source, cfg=cfg)
+    assert not list((tmp_path / "local").glob("recovery-*.json"))
+
+
+def test_interrupted_recovery_marker_replays_without_losing_old_failure(tmp_path, monkeypatch):
+    source = prepared(para("p1", "The room was quiet."))
+    monkeypatch.setattr(local, "_versions", lambda: {"checker.py": "before"})
+    with pytest.raises(local.FixedLocalError):
+        collect(tmp_path, source, Tool(lambda text: (_ for _ in ()).throw(RuntimeError("incompleteResults"))))
+    failure = next((tmp_path / "local").glob("*.failure.json"))
+    original = failure.read_bytes()
+    atomic = local._atomic
+    def interrupt(path, value):
+        if path.name.endswith(".identity.json"):
+            raise OSError("Interrupted recovery marker")
+        atomic(path, value)
+    monkeypatch.setattr(local, "_versions", lambda: {"checker.py": "repaired"})
+    monkeypatch.setattr(local, "_atomic", interrupt)
+    tool = Tool()
+    with pytest.raises(OSError, match="Interrupted"):
+        collect(tmp_path, source, tool)
+    assert tool.requests == []
+    monkeypatch.setattr(local, "_atomic", atomic)
+    _, evidence = collect(tmp_path, source, tool)
+    assert tool.requests == ["The room was quiet."]
+    assert failure.read_bytes() == original
+    assert len(list((tmp_path / "local").glob("recovery-*.json"))) == 1
+    local.validate_local_evidence(evidence, tmp_path / "local", IDENTITY)
+
+
 def test_shutdown_failure_does_not_certify_a_complete_check(tmp_path):
     source = prepared(para("p1", "The room was quiet."))
     tool = Tool()

@@ -5,6 +5,16 @@ chunk boundaries, model assignments, adjudication, verification, and delivery.
 There is no supervising Brain. Every reader corrects only clear proofreading
 errors: no stylistic polishing, copyediting, smoothing, or rewriting.
 
+Incoming Word revisions use the same accepted-view policy as Galley's prep
+intake. Before any model call, Galley preserves the uploaded original and
+creates a separate revision-free working baseline under `runs/fixed/intake`.
+The receipt binds both file hashes, the accepted text, resolved revision counts
+and changed package members to the review and final certificate. Existing
+comments and untouched package members are preserved. Rejecting Galley's new
+corrections restores this baseline, including the edits the book arrived with.
+Unsupported revision types stop before paid reads with a specific intake error.
+Clean files keep their existing source identity; no baseline is created.
+
 The agreed sequence is:
 
 1. Preserve and identify the incoming manuscript.
@@ -43,6 +53,12 @@ Whole-book sweeps record coverage of every paragraph, including books that must
 be divided into multiple requests. The workflow checkpoints completed work and
 reuses saved responses on resume. A fresh run can still yield different model
 judgments; fixed orchestration does not promise identical AI output.
+
+Typed coverage must include every owned paragraph exactly once. If a reader
+also lists paragraphs supplied as read-only context, Galley removes only those
+known context IDs from the working coverage view. Raw responses remain intact,
+and context findings cannot become edits in this chunk. Missing owned IDs,
+duplicate IDs and unknown IDs still block completion.
 
 The supplied Atmosphere pasted-chat method is preserved with an
 [item-level coverage review](galley-press-prompt-coverage.md). Its 120 indexed
@@ -96,6 +112,17 @@ incomplete LanguageTool response, or failed scan blocks completion rather than
 being counted as a clean paragraph. Final native-document checks still require
 that rejecting tracked edits restores the source, accepting them matches the
 clean manuscript, and the delivered files match their certified evidence.
+
+A failed local scan stores its complete normalized request. After a code repair,
+resume may rerun that unpublished scan when only implementation hashes changed.
+The failure and marker transition remain recorded, and every local check runs
+again. Completed packets are never relabeled or replaced; changes to source,
+configuration, runtime assets or prepared findings still require a fresh run.
+Earlier model responses and their original budgets remain intact. An old failure
+without a complete request cannot take this automatic recovery path.
+
+Fixed driver checkpoints report `running` until certification and packaging
+finish. A startup checkpoint is never proof that a manuscript is complete.
 
 The hosted image includes Java and a pinned LanguageTool 6.8 distribution,
 installed and smoke-tested during the image build. It uses the
