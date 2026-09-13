@@ -580,7 +580,15 @@ block shows exactly where the outputs landed, so a book put in the wrong author'
 folder is obvious the same morning rather than found weeks later.
 
 Every finished job gets the same log, whichever pipeline ran it, with one group
-that differs by what the job produced. For a **proofread** that group reports
+that differs by what the job produced. For a **format** that group says what
+was done to the manuscript: the words and paragraphs styled, how many tracked
+changes were accepted before formatting (a file that arrives with revisions
+showing is formatted from its accepted view, so the deliverable no longer shows
+them), what was left in place untouched (tables, images on their own line,
+equations), the flags raised for a person, and whether the author's words were
+verified intact. Each output is named by what it is — the plain Times New Roman
+reading copy (`<surname> - book 0.docx`), the InDesign-ready IDML, the same
+decisions as tracked changes — with a Drive link. For a **proofread** that group reports
 both halves of the deliverable: the corrections made as tracked changes, the
 queries left for the author as margin comments, and — as a share of those
 queries, not a number to add to them — how many are corrections a judge gate

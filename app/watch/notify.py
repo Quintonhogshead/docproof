@@ -1,7 +1,9 @@
 """Telling a person when a pass needs one.
 
 Some outcomes are nobody's to guess — a surname matching two Projects both
-flagged ready, a manuscript that failed prep three runs running. Those land in
+flagged ready, a manuscript formatting refused at the door (a legacy .doc, a
+table-cell revision) or one whose finished file failed the word-for-word check,
+or one that failed some other way three runs running. Those land in
 `TickReport.needs_human` and `failed`, and this turns them into one email, sent
 as the same Google account that reads the Drive, through Gmail's send API. One
 request, on the injected opener the rest of the watcher already uses, so no test
@@ -22,7 +24,7 @@ from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
 
-from . import drive
+from . import drive, naming
 from .drive import DriveError
 
 log = logging.getLogger("docproof.app.watch.notify")
@@ -124,7 +126,10 @@ def summary(report) -> tuple[str, str] | None:
     if report.failed:
         if lines:
             lines.append("")
-        lines.append("Manuscripts that failed to prepare:")
+        lines.append("Manuscripts DocProof could not format (nothing about "
+                     "the original was changed; fix the file, then clear its "
+                     "flag under Automations → History or with "
+                     "`docproof-watch clear`):")
         lines += [f"  - {name}: {reason}" for name, reason in report.failed]
     count = (len(report.needs_human) + len(report.missing_source)
              + len(report.stuck_ready) + len(report.awaiting_proof)
@@ -205,6 +210,63 @@ def _load_prep(job) -> dict:
         return {}
 
 
+def _counts(prep: dict) -> dict:
+    counts = prep.get("counts")
+    return counts if isinstance(counts, dict) else {}
+
+
+# What each file formatting hands back is, by the name it carries in the
+# author's folder (see `prep.artifacts` and `naming`). The bare "<surname> -
+# book 0.docx" is the deliverable: the manuscript restyled as a plain Times New
+# Roman 12 reading copy, blank lines resolved, tables and images left where they
+# were. Its companions sit beside it under a suffix.
+_OUTPUT_LABELS = (
+    (naming.INDESIGN_SUFFIX.lower(), "InDesign-ready IDML"),
+    (naming.TRACKED_SUFFIX.lower(), "Same decisions as tracked changes"),
+    (naming.NOTES_SUFFIX.lower(), "Prep notes"),
+)
+
+
+def _output_label(name: str) -> str:
+    stem = Path(name).stem.lower()
+    for suffix, label in _OUTPUT_LABELS:
+        if stem.endswith(suffix):
+            return label
+    if name.lower().endswith(".idml"):
+        return "InDesign-ready IDML"
+    return "Formatted manuscript (plain Times New Roman 12)"
+
+
+def _format_rows(job, counts: dict) -> list:
+    """What formatting did to this manuscript, from the job record and the
+    run's prep.json counts. The rows that are only sometimes true — revisions
+    accepted before formatting, content left in place — appear only when
+    there is something to say, so a plain manuscript reads as one."""
+    rows: list = [("Words", _int(job.words), None)]
+    # A file that arrived with tracked changes was formatted from its accepted
+    # view — insertions kept, deletions dropped — exactly what Accept All in
+    # Word would leave. Said here because the deliverable no longer shows
+    # those revisions, and someone may go looking for them.
+    accepted = counts.get("accepted_revisions") or 0
+    if accepted:
+        rows.append(("Tracked changes accepted first",
+                     f"{_int(accepted)} — the file was formatted from the "
+                     f"accepted view", None))
+    rows.append(("Paragraphs styled", _int(job.tagged), None))
+    # Never restyled, never tagged: everything inside a table, images on their
+    # own line, equations. Counted so nobody wonders whether they were seen.
+    kept = [(counts.get("table_paragraphs") or 0, "table paragraph"),
+            (counts.get("image_lines") or 0, "image line"),
+            (counts.get("equation_paragraphs") or 0, "equation")]
+    said = [f"{_int(n)} {what}{'' if n == 1 else 's'}" for n, what in kept if n]
+    if said:
+        rows.append(("Left in place", ", ".join(said), None))
+    rows.append(("Flags for a human", _int(job.flags), None))
+    rows.append(("Author's words verified intact",
+                 "yes" if job.verified else "no", None))
+    return rows
+
+
 def _groups(ws, job, file, rec, uploaded: list[str],
             dest_folder_id: str, prep: dict) -> list[tuple[str, list]]:
     """The log as titled groups of `(label, text, link-or-None)` rows, so the
@@ -212,9 +274,9 @@ def _groups(ws, job, file, rec, uploaded: list[str],
     author = (rec.subfolder_name
               or " ".join(p for p in (rec.author_first, rec.author_last) if p)
               or "—")
-    outputs: list = [(name, name, DRIVE_FILE.format(oid))
+    outputs: list = [(_output_label(name), name, DRIVE_FILE.format(oid))
                      for name, oid in rec.uploaded.items()] or [("—", "—", None)]
-    counts = prep.get("counts") if isinstance(prep.get("counts"), dict) else {}
+    counts = _counts(prep)
     usage = prep.get("usage") if isinstance(prep.get("usage"), dict) else {}
     sheet = prep.get("style_sheet") if isinstance(
         prep.get("style_sheet"), dict) else {}
@@ -246,13 +308,7 @@ def _groups(ws, job, file, rec, uploaded: list[str],
             ("Cache read", _int(job.cache_read_tokens), None),
             ("Cache write", _int(job.cache_write_tokens), None),
         ]),
-        ("Manuscript", [
-            ("Words", _int(job.words), None),
-            ("Paragraphs styled", _int(job.tagged), None),
-            ("Flags for a human", _int(job.flags), None),
-            ("Author's words verified intact",
-             "yes" if job.verified else "no", None),
-        ]),
+        ("Formatting", _format_rows(job, counts)),
         ("Timing", [
             ("Started", job.created_at or "—", None),
             ("Finished", job.updated_at or "—", None),
@@ -272,7 +328,8 @@ def _groups(ws, job, file, rec, uploaded: list[str],
     for key in ("paragraphs", "blank_lines", "scene_breaks_inserted",
                 "scene_breaks_from_author", "blank_lines_removed",
                 "paragraphs_trimmed", "italic_paragraphs", "link_paragraphs",
-                "unanswered", "untouched_outside_body"):
+                "unanswered", "untouched_outside_body", "accepted_revisions",
+                "table_paragraphs", "image_lines", "equation_paragraphs"):
         if key in counts:
             detail.append((key.replace("_", " "), _int(counts[key]), None))
     if usage:
@@ -325,7 +382,7 @@ def completion(ws, job, file, rec, uploaded: list[str],
     author = rec.subfolder_name or file.name
     # The tagged subject is for the inbox; the body keeps the plain heading, so
     # the tags sort the mail without cluttering the log a person reads.
-    title = f"DocProof finished {author} — {file.name}"
+    title = f"DocProof formatted {author} — {file.name}"
     subject = f"{DONE_TAGS} {author} — {file.name}"
     groups = _groups(ws, job, file, rec, uploaded, dest_folder_id, prep)
     return subject, _text(title, groups), _html(title, groups)
@@ -368,7 +425,8 @@ def maybe_complete(token: str, ws, job, file, rec, uploaded: list[str],
 # no author folder, no HubSpot record, no Drive file — so this builds the same
 # grouped schema from the job record alone, and adapts the middle group to what
 # the pipeline actually did: a proofread reports changes, a format reports styled
-# paragraphs, promo reports the copy and its grounding flags.
+# paragraphs (and revisions it accepted first, and content it left in place),
+# promo reports the copy and its grounding flags.
 
 PIPELINE_LABEL = {"review": "Proofread", "prep": "Format", "promo": "Promo copy",
                   "corrections": "Corrections"}
@@ -409,13 +467,7 @@ def _result_group(job) -> tuple[str, list]:
             ("Grounding flags to check", _int(job.unverified), None),
         ])
     if job.kind == "prep":
-        return ("Manuscript", [
-            ("Words", _int(job.words), None),
-            ("Paragraphs styled", _int(job.tagged), None),
-            ("Flags for a human", _int(job.flags), None),
-            ("Author's words verified intact",
-             "yes" if job.verified else "no", None),
-        ])
+        return ("Formatting", _format_rows(job, _counts(_load_prep(job))))
     # A proofread hands back two things, and for a long time this said only one
     # of them. The queries are the questions in the margins — nothing was
     # changed for them, and someone has to answer them — so a log that reports
@@ -682,7 +734,7 @@ def send_test(watch_home, *, get_key=None, opener=drive._open_url) -> str:
     body = ("This is a test from DocWatch, sent because someone asked for one.\n\n"
             "If it reached you, the alerts a pass raises when it needs a person — "
             "a ready author with no Book Original, a book whose status is stuck, "
-            "a manuscript that failed to prepare — will reach this inbox too.\n\n"
+            "a manuscript DocProof could not format — will reach this inbox too.\n\n"
             "Nothing was prepared, changed or charged for.")
     send(token, ws.notify_email, subject, body, opener=opener)
     return ws.notify_email
