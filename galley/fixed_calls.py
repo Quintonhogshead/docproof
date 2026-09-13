@@ -248,8 +248,19 @@ def _checked_response(parsed, request, directory, receipt):
         raise FixedCallContractError("Coverage contract belongs to another request")
     coverage = _coverage_contract(saved.get("coverage"), request["schema"])
     normalized = dict(parsed)
+    rule = coverage.get("decisions")
+    if rule and rule["id_key"] == "id":
+        from galley.fixed_decisions import grouped_decisions
+        recovered = grouped_decisions(parsed, request, rule)
+        if recovered is not None:
+            normalized, audit = recovered
+            audit.update(request_sha256=_hash(request), normalized_sha256=_hash(normalized))
+            if receipt.get("decision_normalization") not in (None, audit):
+                raise FixedCallContractError("Saved dispute normalization changed")
+            receipt["decision_normalization"] = audit
+            _schema(normalized, request["schema"])
     for field, rule in coverage.items():
-        rows = parsed.get(field)
+        rows = normalized.get(field)
         actual = ([row.get(rule["id_key"]) if isinstance(row, dict) else None for row in rows]
                   if isinstance(rows, list) and rule["id_key"] else rows)
         if not isinstance(actual, list) or any(not isinstance(x, str) for x in actual):
@@ -597,9 +608,9 @@ class FixedCalls:
             _bind_coverage(directory, request, receipt, coverage)
             while True:
                 response_path = directory / "attempts" / str(receipt["attempt"]) / "response.json"
-                recover_schema = (receipt["status"] == "failed" and
-                                  receipt.get("failure_category") == "invalid_schema")
-                if (receipt["status"] in {"started", "completed", "unknown"} or recover_schema) and response_path.exists():
+                recover_validation = (receipt["status"] == "failed" and
+                                      receipt.get("failure_category") in {"invalid_schema", "invalid_coverage"})
+                if (receipt["status"] in {"started", "completed", "unknown"} or recover_validation) and response_path.exists():
                     envelope = _load(response_path)
                     if receipt.get("response_sha256") and receipt["response_sha256"] != _hash(envelope):
                         raise FixedCallError("Saved fixed response has changed")

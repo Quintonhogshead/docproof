@@ -620,3 +620,126 @@ def test_coverage_response_accounting_interruption_recovers_without_resubmitting
     assert covered(caller) == {"reviewed_paragraph_ids": ["p1", "p2"]}
     assert len(provider.requests) == 1
     caller.assert_complete()
+
+
+def dispute_fixture():
+    from galley.fixed_workflow import DECISIONS
+    proposals = [
+        {"id": "f-hyphen", "para_id": "p", "start": 4, "end": 5, "before": "-", "replacement": "", "action": "edit", "format": ""},
+        {"id": "f-word", "para_id": "p", "start": 0, "end": 9, "before": "fami-liar", "replacement": "fame-liar", "action": "edit", "format": ""}]
+    site = {"id": "d-site", "para_id": "p", "paragraph": "fami-liar face", "start": 0, "end": 9,
+            "before": "fami-liar", "proposals": proposals}
+    decisions = [{"id": p["id"], "action": "apply" if i == 0 else "drop", "replacement": "",
+                  "reason": "Exact correction." if i == 0 else "False positive.",
+                  "question": "", "missing_knowledge": ""} for i, p in enumerate(proposals)]
+    kwargs = dict(model="claude-opus-5", system="Settle every grouped site.",
+                  user=json.dumps({"sites": [site]}), schema=DECISIONS, schema_name="disputes",
+                  coverage={"decisions": {"ids": ["d-site"], "id_key": "id", "context_ids": []}})
+    return site, decisions, kwargs
+
+
+def test_complete_nested_proposal_decisions_are_composed_from_exact_spans_and_reused(tmp_path):
+    site, decisions, kwargs = dispute_fixture()
+    provider = FakeProvider([replace(GOOD, parsed={"decisions": decisions})])
+    caller = calls(tmp_path, provider)
+    result = caller.ask("typed_disputes", **kwargs)
+    assert result["decisions"][0]["id"] == "d-site"
+    assert result["decisions"][0]["replacement"] == "familiar"
+    assert result["decisions"][0]["action"] == "apply"
+    folder = next(caller.directory.glob("calls/*"))
+    raw = (folder / "attempts/1/response.json").read_bytes()
+    assert json.loads(raw)["result"]["parsed"]["decisions"] == decisions
+    receipt = json.loads((folder / "receipt.json").read_text())
+    assert receipt["decision_normalization"]["sites"][0]["proposal_ids"] == [p["id"] for p in site["proposals"]]
+    assert caller.ask("typed_disputes", **kwargs) == result
+    caller.assert_complete()
+    assert len(provider.requests) == 1 and caller.usage_summary()["calls"] == 1
+    assert (folder / "attempts/1/response.json").read_bytes() == raw
+
+
+@pytest.mark.parametrize("defect", ["missing", "duplicate", "unknown", "mixed", "stale_span", "outside_span", "wrong_paragraph"])
+def test_nested_decision_normalization_never_invents_missing_coverage_or_source(tmp_path, defect):
+    site, decisions, kwargs = dispute_fixture()
+    if defect == "missing":
+        decisions.pop()
+    elif defect == "duplicate":
+        decisions[1] = dict(decisions[0])
+    elif defect == "unknown":
+        decisions[0]["id"] = "f-unknown"
+    elif defect == "mixed":
+        decisions[0]["id"] = "d-site"
+    elif defect == "stale_span":
+        site["proposals"][0]["before"] = "x"
+    elif defect == "outside_span":
+        site["proposals"][0]["end"] = 100
+    else:
+        site["proposals"][0]["para_id"] = "other"
+    kwargs["user"] = json.dumps({"sites": [site]})
+    provider = FakeProvider([replace(GOOD, parsed={"decisions": decisions})])
+    caller = calls(tmp_path, provider, max_attempts=1)
+    for run in (caller, calls(tmp_path, provider)):
+        with pytest.raises(fc.FixedCallError, match="invalid_coverage.*exhausted"):
+            run.ask("typed_disputes", **kwargs)
+    assert len(provider.requests) == 1 and caller.usage_summary()["calls"] == 1
+
+
+@pytest.mark.parametrize("defect", ["novel_replacement", "conflict", "query", "format"])
+def test_complete_but_ambiguous_nested_dispositions_drop_site(tmp_path, defect):
+    site, decisions, kwargs = dispute_fixture()
+    if defect == "novel_replacement":
+        decisions[0]["replacement"] = "A whole paragraph cannot replace a hyphen."
+    elif defect == "query":
+        decisions[0].update(action="query", question="Who?", missing_knowledge="Identity")
+    elif defect == "format":
+        site["proposals"][0]["format"] = "italic"
+    else:
+        decisions[1].update(action="apply", replacement=site["proposals"][1]["replacement"])
+    kwargs["user"] = json.dumps({"sites": [site]})
+    provider = FakeProvider([replace(GOOD, parsed={"decisions": decisions})])
+    caller = calls(tmp_path, provider)
+    result = caller.ask("typed_disputes", **kwargs)["decisions"]
+    assert result[0]["action"] == "drop" and result[0]["question"] == ""
+    assert len(provider.requests) == 1
+    receipt = json.loads(next(caller.directory.glob("calls/*/receipt.json")).read_text())
+    assert receipt["decision_normalization"]["sites"][0]["rejected_ambiguous"] is True
+
+
+def test_exhausted_nested_decisions_revalidate_without_resubmission_or_budget_reset(tmp_path, monkeypatch):
+    import galley.fixed_decisions as adapter
+    _, decisions, kwargs = dispute_fixture()
+    provider = FakeProvider([replace(GOOD, parsed={"decisions": decisions})])
+    real = adapter.grouped_decisions
+    monkeypatch.setattr(adapter, "grouped_decisions", lambda *args: None)
+    caller = calls(tmp_path, provider)
+    with pytest.raises(fc.FixedCallError, match="invalid_coverage.*exhausted"):
+        caller.ask("typed_disputes", **kwargs)
+    folder = next(caller.directory.glob("calls/*"))
+    frozen = {p: p.read_bytes() for p in folder.rglob("*.json") if p.name in {"response.json", "request.json", "coverage.json"}}
+    usage = caller.usage_summary()
+    monkeypatch.setattr(adapter, "grouped_decisions", real)
+    resumed = calls(tmp_path, provider)
+    result = resumed.ask("typed_disputes", **kwargs)
+    assert result["decisions"][0]["replacement"] == "familiar"
+    assert len(provider.requests) == 3
+    assert all(p.read_bytes() == data for p, data in frozen.items())
+    assert resumed.usage_summary()["calls"] == usage["calls"] == 3
+    assert resumed.usage_summary()["output_tokens"] == usage["output_tokens"] == 30
+    assert resumed.usage_summary()["limits"] == usage["limits"]
+    receipt = json.loads((folder / "receipt.json").read_text())
+    assert receipt["attempt"] == receipt["max_attempts"] == 3
+    assert receipt["status"] == "completed"
+    resumed.assert_complete()
+
+
+def test_dispute_normalization_audit_cannot_be_changed_on_replay(tmp_path):
+    _, decisions, kwargs = dispute_fixture()
+    provider = FakeProvider([replace(GOOD, parsed={"decisions": decisions})])
+    caller = calls(tmp_path, provider)
+    caller.ask("typed_disputes", **kwargs)
+    path = next(caller.directory.glob("calls/*/receipt.json"))
+    receipt = json.loads(path.read_text())
+    receipt["decision_normalization"]["normalized_sha256"] = "changed"
+    path.write_text(json.dumps(receipt))
+    with pytest.raises(fc.FixedCallContractError, match="normalization changed"):
+        caller.ask("typed_disputes", **kwargs)
+    assert len(provider.requests) == 1

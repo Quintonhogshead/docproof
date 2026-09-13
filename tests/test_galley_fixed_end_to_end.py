@@ -523,3 +523,43 @@ def test_invalid_suggestions_across_all_reader_stages_preserve_valid_edits_and_r
     assert worker.run().outcome == "done"
     assert len(readers.requests) == count
     assert all(p.read_bytes() == value for p, value in response_bytes.items())
+
+
+def test_nested_dispute_ids_reach_certified_book_and_resume_without_new_calls(tmp_path, monkeypatch):
+    source = tmp_path / "Writer.docx"
+    doc = Document()
+    doc.add_paragraph("She recieved two letters.")
+    doc.save(source)
+    original = source.read_bytes()
+    readers = ScriptedReaders(False)
+    answer = readers.answer
+    def nested(model, user, schema):
+        result = answer(model, user, schema)
+        if "reviewed_paragraph_ids" in result and model == LUNA:
+            result["findings"] = []  # Force a genuine ensemble disagreement.
+        if "decisions" in result:
+            payload = json.loads(user)
+            sites = payload.get("sites", [])
+            if sites and all(s.get("proposals") for s in sites):
+                return {"decisions": [{"id": p["id"], "action": "apply" if p["category"] == "spelling" else "drop",
+                    "replacement": p["replacement"] if p["category"] == "spelling" else "",
+                    "reason": "Clear spelling correction." if p["category"] == "spelling" else "No clear error.",
+                    "missing_knowledge": "", "question": ""} for s in sites for p in s["proposals"]]}
+        return result
+    readers.answer = nested
+    monkeypatch.setattr(fc, "_default_provider", lambda *a, **k: readers)
+    monkeypatch.setattr(codex_runner, "run_structured", readers.subscription)
+    worker = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode="fixed")
+    result = worker.run()
+    assert result.outcome == "done", result.reason
+    final = json.loads((worker.workspace / "runs/fixed/result.json").read_text())
+    assert list(final["accepted"].values()) == ["She received two letters."]
+    assert final["questions"] == [] and source.read_bytes() == original
+    receipts = [json.loads(p.read_text()) for p in (worker.workspace / "runs/fixed/calls/calls").glob("*/receipt.json")]
+    assert any(r.get("decision_normalization") for r in receipts)
+    package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
+    assert validate_delivery_package(package)["delivery_ready"] is True
+    count = len(readers.requests)
+    raw = {p: p.read_bytes() for p in (worker.workspace / "runs/fixed/calls/calls").glob("*/attempts/*/response.json")}
+    assert worker.run().outcome == "done"
+    assert len(readers.requests) == count and all(p.read_bytes() == data for p, data in raw.items())

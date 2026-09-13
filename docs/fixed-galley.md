@@ -229,3 +229,16 @@ completed checks that were absent from their recipe.
 The fixed sequence removes supervisory sessions and duplicate number checking.
 Total time, usage, comment counts, and proofreading quality still need a
 same-manuscript comparison before claiming a measured efficiency gain.
+
+Grouped dispute responses may be adapted from a complete inventory of nested
+proposal decisions. This requires every exact proposal ID once, no unknown or
+mixed IDs, and verified source coordinates for every group and proposal. Exact
+approved proposal replacements are composed into the group span; ambiguous,
+novel or conflicting proposal-ID decisions discard that group rather than
+inventing a correction or author comment. Proper group-ID decisions retain the
+usual Opus adjudication contract. A request-bound normalization audit records
+the mapping and resulting hash; raw responses and coverage inventories remain
+unchanged. Saved validation failures are rechecked before considering another
+attempt, so an already-complete alternative representation can recover even
+at its saved retry limit without another submission or additional allowance.
+Missing actual decisions still block when the original allowance is exhausted.
