@@ -487,3 +487,136 @@ def test_preflight_credentials_exception_survives_without_a_submission(tmp_path)
         ask(caller, model="claude-opus-5")
     assert raised.value is error
     assert fc.fixed_usage_summary(caller.directory)["calls"] == 0
+
+
+COVERAGE_SCHEMA = {"type": "object", "properties": {
+    "reviewed_paragraph_ids": {"type": "array", "items": {"type": "string"}}},
+    "required": ["reviewed_paragraph_ids"], "additionalProperties": False}
+COVERAGE = {"reviewed_paragraph_ids": {"ids": ["p1", "p2"], "id_key": None, "context_ids": ["c1"]}}
+
+
+def covered(caller, *, coverage=COVERAGE, model="claude-sonnet-5"):
+    return caller.ask("typed", model=model, system="Review every assigned paragraph.",
+        user='Source text containing literal <paragraph id="not-an-assignment"> markup.',
+        schema=COVERAGE_SCHEMA, schema_name="findings", max_tokens=100, coverage=coverage)
+
+
+@pytest.mark.parametrize("ids", [["p1"], ["p1", "p2", "unknown"], ["p1", "p1", "p2"]])
+def test_incomplete_coverage_retries_only_failed_read_and_keeps_raw_evidence(tmp_path, ids):
+    bad = replace(GOOD, parsed={"reviewed_paragraph_ids": ids})
+    good = replace(GOOD, parsed={"reviewed_paragraph_ids": ["c1", "p2", "p1"]})
+    provider = FakeProvider([bad, good])
+    caller = calls(tmp_path, provider)
+    assert covered(caller) == {"reviewed_paragraph_ids": ["p2", "p1"]}
+    assert len(provider.requests) == 2
+    assert caller.usage_summary()["calls"] == 2 and caller.usage_summary()["output_tokens"] == 20
+    raw = {p: p.read_bytes() for p in caller.directory.glob("calls/*/attempts/*/response.json")}
+    assert any(json.loads(value)["result"]["parsed"]["reviewed_paragraph_ids"] == ids for value in raw.values())
+    assert covered(calls(tmp_path, provider)) == {"reviewed_paragraph_ids": ["p2", "p1"]}
+    assert len(provider.requests) == 2 and all(p.read_bytes() == value for p, value in raw.items())
+    caller.assert_complete()
+
+
+def test_old_schema_valid_incomplete_cache_is_reconciled_with_same_request_and_budget(tmp_path):
+    provider = FakeProvider([replace(GOOD, parsed={"reviewed_paragraph_ids": ["p1"]})])
+    caller = calls(tmp_path, provider)
+    assert covered(caller, coverage=None) == {"reviewed_paragraph_ids": ["p1"]}
+    folder = next((caller.directory / "calls").iterdir())
+    original_request = (folder / "request.json").read_bytes()
+    response = folder / "attempts/1/response.json"
+    original_response = response.read_bytes()
+    limits = caller.usage_summary()["limits"]
+    provider.answers = [replace(GOOD, parsed={"reviewed_paragraph_ids": ["p1", "p2"]})]
+    assert covered(calls(tmp_path, provider)) == {"reviewed_paragraph_ids": ["p1", "p2"]}
+    assert len(provider.requests) == 2 and len(list((caller.directory / "calls").iterdir())) == 1
+    assert (folder / "request.json").read_bytes() == original_request
+    assert response.read_bytes() == original_response
+    assert caller.usage_summary()["limits"] == limits
+    budget = json.loads((caller.directory / "budget.json").read_text())
+    assert sorted(row["status"] for row in budget["entries"].values()) == ["completed", "failed"]
+    caller.assert_complete()
+
+
+def test_coverage_failure_exhaustion_never_grants_new_retry_allowance(tmp_path):
+    provider = FakeProvider([replace(GOOD, parsed={"reviewed_paragraph_ids": ["p1"]})])
+    caller = calls(tmp_path, provider, max_attempts=2)
+    for runner in (caller, calls(tmp_path, provider)):
+        with pytest.raises(fc.FixedCallError, match="invalid_coverage.*exhausted"):
+            covered(runner)
+    assert len(provider.requests) == 2 and caller.usage_summary()["calls"] == 2
+    with pytest.raises(fc.FixedCallError):
+        caller.assert_complete()
+
+
+@pytest.mark.parametrize("change", ["remove", "alter", "replace_inventory"])
+def test_saved_coverage_cannot_be_deleted_or_weakened_to_reuse_answer(tmp_path, change):
+    provider = FakeProvider([replace(GOOD, parsed={"reviewed_paragraph_ids": ["p1", "p2"]})])
+    caller = calls(tmp_path, provider)
+    covered(caller)
+    path = next(caller.directory.glob("calls/*/coverage.json"))
+    coverage = None
+    if change == "remove":
+        path.unlink()
+    elif change == "alter":
+        path.write_bytes(path.read_bytes() + b" ")
+    else:
+        coverage = {"reviewed_paragraph_ids": {"ids": ["p1"], "id_key": None, "context_ids": ["p2"]}}
+    with pytest.raises(fc.FixedCallContractError):
+        covered(caller, coverage=coverage)
+    assert len(provider.requests) == 1
+    if change != "replace_inventory":
+        with pytest.raises(fc.FixedCallContractError):
+            caller.assert_complete()
+
+
+def test_codex_incomplete_answer_uses_distinct_retry_receipt_then_caches_success(tmp_path):
+    request_ids = []
+    def codex(prompt, schema, directory, **kwargs):
+        request_ids.append(kwargs["request_id"])
+        return {"reviewed_paragraph_ids": ["p1"] if len(request_ids) == 1 else ["p1", "p2"]}
+    caller = calls(tmp_path, codex_runner=codex)
+    assert covered(caller, model="gpt-6-astra") == {"reviewed_paragraph_ids": ["p1", "p2"]}
+    assert len(request_ids) == len(set(request_ids)) == 2
+    assert request_ids[1] == request_ids[0] + ":attempt:2"
+    assert covered(caller, model="gpt-6-astra") == {"reviewed_paragraph_ids": ["p1", "p2"]}
+    assert len(request_ids) == 2
+    caller.assert_complete()
+
+
+@pytest.mark.parametrize("field,key", [("reviewed_ids", None), ("reviewed_check_ids", None),
+    ("decisions", "id"), ("comment_decisions", "id"), ("paragraphs", "id")])
+def test_each_inventory_contract_retries_missing_required_items(tmp_path, field, key):
+    items = {"type": "string"} if key is None else {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"], "additionalProperties": False}
+    schema = {"type": "object", "properties": {field: {"type": "array", "items": items}}, "required": [field], "additionalProperties": False}
+    rows = ["p1", "p2"] if key is None else [{"id": "p1"}, {"id": "p2"}]
+    provider = FakeProvider([replace(GOOD, parsed={field: rows[:1]}), replace(GOOD, parsed={field: rows})])
+    caller = calls(tmp_path, provider)
+    result = caller.ask("review", model="gpt-5.6-luna", system="Check every assigned item.", user="Book context.",
+        schema=schema, schema_name="review", max_tokens=100,
+        coverage={field: {"ids": ["p1", "p2"], "id_key": key, "context_ids": []}})
+    assert result == {field: rows} and len(provider.requests) == 2
+    caller.assert_complete()
+
+
+def test_old_incomplete_answer_cannot_expand_its_saved_single_attempt_allowance(tmp_path):
+    provider = FakeProvider([replace(GOOD, parsed={"reviewed_paragraph_ids": ["p1"]})])
+    caller = calls(tmp_path, provider, max_attempts=1)
+    covered(caller, coverage=None)
+    resumed = calls(tmp_path, provider, max_attempts=3)
+    with pytest.raises(fc.FixedCallError, match="invalid_coverage.*exhausted"):
+        covered(resumed)
+    assert len(provider.requests) == 1 and resumed.usage_summary()["calls"] == 1
+
+
+def test_coverage_response_accounting_interruption_recovers_without_resubmitting(tmp_path, monkeypatch):
+    provider = FakeProvider([replace(GOOD, parsed={"reviewed_paragraph_ids": ["p1", "p2"]})])
+    caller = calls(tmp_path, provider)
+    account = caller._account
+    monkeypatch.setattr(caller, "_account", lambda *a, **k: (_ for _ in ()).throw(OSError("Interrupted accounting")))
+    with pytest.raises(OSError, match="Interrupted accounting"):
+        covered(caller)
+    assert len(provider.requests) == 1
+    monkeypatch.setattr(caller, "_account", account)
+    assert covered(caller) == {"reviewed_paragraph_ids": ["p1", "p2"]}
+    assert len(provider.requests) == 1
+    caller.assert_complete()

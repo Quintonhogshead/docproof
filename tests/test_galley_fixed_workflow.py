@@ -541,7 +541,7 @@ def test_failed_typed_stage_cancels_queued_reads(make_book, tmp_path, monkeypatc
         def __exit__(self, *args):
             return False
 
-        def submit(self, callback, chunk):
+        def submit(self, callback, *args):
             future = Future()
             if not scheduled:
                 future.set_result(ProviderResult(stop_reason="refusal"))
@@ -817,3 +817,17 @@ def test_unchanged_rejected_local_site_is_not_paid_for_again_at_completion(
     assert result["accepted"] == result["original"] and result["questions"] == []
     assert sum(row["stage"] == "typed_disputes" for row in readers.events) == 1
     assert not any(row["stage"] == "local_completion_disputes" for row in readers.events)
+
+
+def test_call_coverage_freezes_all_assigned_inventories_and_only_known_read_context():
+    from galley.fixed_workflow import _call_coverage, FRONTIER_SCHEMA, READ_SCHEMA, CHECK_SCHEMA, DECISIONS
+    payload = {"paragraphs": [{"id": "p1"}], "context": {"c1": "Read-only context."},
+               "focused_sites": [{"id": "f1"}], "comments": [{"id": "q1"}]}
+    contract = _call_coverage(payload, FRONTIER_SCHEMA)
+    assert contract == {
+        "reviewed_ids": {"ids": ["p1"], "id_key": None, "context_ids": ["c1"]},
+        "reviewed_check_ids": {"ids": ["f1"], "id_key": None, "context_ids": []},
+        "comment_decisions": {"ids": ["q1"], "id_key": "id", "context_ids": []}}
+    assert _call_coverage({"sites": [{"id": "n1"}], "paragraphs": {"p1": "Text."}}, READ_SCHEMA)["reviewed_ids"]["ids"] == ["n1"]
+    assert _call_coverage({"changes": [{"id": "p1"}]}, CHECK_SCHEMA)["decisions"]["ids"] == ["p1"]
+    assert _call_coverage({"sites": [{"id": "d1"}]}, DECISIONS)["decisions"]["ids"] == ["d1"]

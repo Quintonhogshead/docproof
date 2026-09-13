@@ -38,6 +38,14 @@ class FixedCallError(RuntimeError):
     """A required read has no validated, complete answer."""
 
 
+class FixedCallCoverageError(FixedCallError):
+    """A terminal model answer did not cover its complete assigned inventory."""
+
+
+class FixedCallContractError(FixedCallError):
+    """The local coverage contract cannot safely authorize another call."""
+
+
 class FixedCallInterrupted(FixedCallError):
     """Submission outcome is unknown; operator reconciliation is required."""
 
@@ -183,6 +191,77 @@ def _response_payload(parsed, request):
         payload = parsed[request["schema_name"]]
         _schema(payload, request["schema"])
         return payload
+
+
+def _coverage_contract(coverage, schema):
+    """A frozen inventory supplied by orchestration, never inferred from prose."""
+    if not isinstance(coverage, dict):
+        raise FixedCallContractError("Coverage contract must be an object")
+    for field, rule in coverage.items():
+        if (field not in schema.get("properties", {}) or not isinstance(rule, dict) or
+                set(rule) != {"ids", "id_key", "context_ids"} or
+                rule["id_key"] not in (None, "id")):
+            raise FixedCallContractError("Invalid fixed coverage contract")
+        for key in ("ids", "context_ids"):
+            values = rule[key]
+            if (not isinstance(values, list) or any(not isinstance(x, str) or not x for x in values)
+                    or len(values) != len(set(values))):
+                raise FixedCallContractError("Coverage inventory needs unique string IDs")
+        if set(rule["ids"]) & set(rule["context_ids"]) or rule["id_key"] and rule["context_ids"]:
+            raise FixedCallContractError("Coverage context must be separate read-only paragraph IDs")
+    return coverage
+
+
+def _bind_coverage(directory, request, receipt, coverage):
+    path = directory / "coverage.json"
+    if receipt.get("coverage_sha256"):
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != receipt["coverage_sha256"]:
+            raise FixedCallContractError("Saved coverage contract changed or is missing")
+    saved = _load(path) if path.exists() else None
+    if coverage is not None:
+        coverage = json.loads(_json(_coverage_contract(coverage, request["schema"])))
+        expected = {"version": 1, "request_sha256": _hash(request), "coverage": coverage}
+        if saved is not None and saved != expected:
+            raise FixedCallContractError("Coverage inventory changed for an existing request")
+        if saved is None:
+            _atomic(path, expected)
+            saved = expected
+    if saved is not None:
+        if saved.get("version") != 1 or saved.get("request_sha256") != _hash(request):
+            raise FixedCallContractError("Coverage contract belongs to another request")
+        _coverage_contract(saved.get("coverage"), request["schema"])
+        receipt["coverage_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        _atomic(directory / "receipt.json", receipt)
+
+
+def _checked_response(parsed, request, directory, receipt):
+    parsed = _response_payload(parsed, request)
+    if not receipt.get("coverage_sha256"):
+        if (directory / "coverage.json").exists():
+            raise FixedCallContractError("Coverage contract is not bound to its response receipt")
+        return parsed  # Previously certified calls retain their original contract.
+    path = directory / "coverage.json"
+    if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != receipt["coverage_sha256"]:
+        raise FixedCallContractError("Saved coverage contract changed or is missing")
+    saved = _load(path)
+    if saved.get("version") != 1 or saved.get("request_sha256") != _hash(request):
+        raise FixedCallContractError("Coverage contract belongs to another request")
+    coverage = _coverage_contract(saved.get("coverage"), request["schema"])
+    normalized = dict(parsed)
+    for field, rule in coverage.items():
+        rows = parsed.get(field)
+        actual = ([row.get(rule["id_key"]) if isinstance(row, dict) else None for row in rows]
+                  if isinstance(rows, list) and rule["id_key"] else rows)
+        if not isinstance(actual, list) or any(not isinstance(x, str) for x in actual):
+            raise FixedCallCoverageError(f"{field}: invalid coverage IDs")
+        owned, context = set(rule["ids"]), set(rule["context_ids"])
+        missing, unknown = owned - set(actual), set(actual) - owned - context
+        duplicates = len(actual) - len(set(actual))
+        if missing or unknown or duplicates:
+            raise FixedCallCoverageError(f"{field}: {len(missing)} missing, {len(unknown)} unknown, {duplicates} duplicate IDs")
+        if context:
+            normalized[field] = [row for row in rows if row in owned]
+    return normalized
 
 
 def _check_schema_definition(schema):
@@ -406,7 +485,7 @@ class FixedCalls:
                 work = directory / "reader"
                 work.mkdir(parents=True, exist_ok=True)
                 parsed = runner(request["system"] + "\n\n" + request["user"], request["schema"], work,
-                    request_id=_hash(request), model=request["model"], reasoning_effort=request["effort"], no_tools=True)
+                    request_id=self._codex_request_id(request, attempt), model=request["model"], reasoning_effort=request["effort"], no_tools=True)
                 result = ProviderResult(parsed=parsed, usage=NormalizedUsage(billed=False), actual_model=request["model"])
             else:
                 result = provider.complete_structured(**{key: request[key] for key in
@@ -421,15 +500,20 @@ class FixedCalls:
         normalized["billed"] = request["transport"] == "api"
         return replace(result, usage=NormalizedUsage(**normalized), resource_usage=usage), usage
 
-    def _saved_codex(self, request, directory):
+    @staticmethod
+    def _codex_request_id(request, attempt):
+        return _hash(request) if attempt == 1 else f"{_hash(request)}:attempt:{attempt}"
+
+    def _saved_codex(self, request, directory, attempt):
         """Adopt a completed transport receipt locally, never submit to recover."""
         from galley import codex_runner as codex
-        path = codex.request_directory(directory / "reader", _hash(request))
+        request_id = self._codex_request_id(request, attempt)
+        path = codex.request_directory(directory / "reader", request_id)
         if not (path / "receipt.json").exists():
             return None
         receipt = _load(path / "receipt.json")
         saved = _load(path / "request.json")
-        if (saved.get("request_id") != _hash(request) or saved.get("model") != request["model"] or
+        if (saved.get("request_id") != request_id or saved.get("model") != request["model"] or
                 saved.get("prompt") != request["system"] + "\n\n" + request["user"] or
                 saved.get("schema") != request["schema"] or saved.get("no_tools") is not True):
             raise FixedCallError("Subscription receipt does not match the fixed reader request")
@@ -452,7 +536,12 @@ class FixedCalls:
         reason = result.stop_reason
         if valid:
             try:
-                result = replace(result, parsed=_response_payload(result.parsed, request))
+                result = replace(result, parsed=_checked_response(result.parsed, request, directory, receipt))
+            except FixedCallCoverageError as exc:
+                valid, reason = False, "invalid_coverage"
+                receipt["coverage_error"] = str(exc)
+            except FixedCallContractError:
+                raise
             except FixedCallError:
                 valid, reason = False, "invalid_schema"
         elif result.stop_reason == "ok":
@@ -461,6 +550,8 @@ class FixedCalls:
                      bool(result.provider_response_id) or bool(usage and any(v is not None for v in usage.values())) or
                      bool(re.match(r"^[45]\d\d:", result.error or "")))
         status = "completed" if valid else "failed" if confirmed else "unknown"
+        if valid:
+            receipt.pop("coverage_error", None)
         receipt.update(status=status, response_sha256=_hash(envelope), usage=usage,
                        failure_category=None if valid else reason,
                        retryable=confirmed and reason not in {"refusal", "max_tokens"},
@@ -471,7 +562,7 @@ class FixedCalls:
         return result if valid else None
 
     def result(self, stage: str, *, model: str, system: str, user: str, schema: dict,
-               schema_name: str, max_tokens=8192, effort="low", transport=None) -> ProviderResult:
+               schema_name: str, max_tokens=8192, effort="low", transport=None, coverage=None) -> ProviderResult:
         if not all(isinstance(value, str) and value.strip() for value in (stage, model, system, user, schema_name)):
             raise ValueError("Fixed calls require nonempty stage, model, prompts and schema name")
         if type(max_tokens) is not int or max_tokens < 1:
@@ -503,6 +594,7 @@ class FixedCalls:
                     receipt["attempt"] > receipt["max_attempts"]):
                 raise FixedCallError("Saved fixed-call retry allowance is malformed")
             receipt["max_attempts"] = min(receipt["max_attempts"], self.max_attempts)
+            _bind_coverage(directory, request, receipt, coverage)
             while True:
                 response_path = directory / "attempts" / str(receipt["attempt"]) / "response.json"
                 recover_schema = (receipt["status"] == "failed" and
@@ -518,7 +610,13 @@ class FixedCalls:
                         saved_result = envelope.get("result") or {}
                         if saved_result.get("stop_reason") != "ok" or saved_result.get("error"):
                             raise FixedCallError("Saved fixed response did not complete successfully")
-                        parsed = _response_payload(saved_result.get("parsed"), request)
+                        try:
+                            parsed = _checked_response(saved_result.get("parsed"), request, directory, receipt)
+                        except FixedCallCoverageError:
+                            # Reclassify a terminal but incomplete old answer;
+                            # preserve its bytes/usage and retry only this read.
+                            self._finish(request, directory, receipt, envelope)
+                            continue
                         with _locked(self.directory / "budget.lock"):
                             accounted = _load(self.directory / "budget.json")["entries"].get(f"{sha}:{receipt['attempt']}", {})
                         if accounted.get("status") == "completed":
@@ -534,7 +632,7 @@ class FixedCalls:
                             return replace(result, usage=NormalizedUsage(billed=False), resource_usage=None)
                         return result
                 if receipt["status"] in {"started", "unknown"} and request["transport"] == "codex_subscription":
-                    saved = self._saved_codex(request, directory)
+                    saved = self._saved_codex(request, directory, receipt["attempt"])
                     if saved is not None:
                         envelope = {"request_sha256": sha, "attempt": receipt["attempt"], "result": asdict(saved)}
                         _atomic(response_path, envelope)
@@ -626,6 +724,16 @@ class FixedCalls:
             def complete_structured(self, **kwargs):
                 return calls.result(stage, effort=config.api.effort or "low", **kwargs)
 
+            def fetch_owned(self, analyzer, chunk):
+                from docproof.analyzer import render_chunk
+                owned = [p.para_id for p in chunk.paragraphs]
+                return calls.result(stage, effort=config.api.effort or "low",
+                    model=analyzer.cfg.api.model, system=analyzer.system_prompt,
+                    user=render_chunk(chunk), schema=analyzer.schema,
+                    schema_name=analyzer.schema_name, max_tokens=analyzer.cfg.api.max_output_tokens,
+                    coverage={"reviewed_paragraph_ids": {"ids": owned, "id_key": None,
+                        "context_ids": [p.para_id for p in chunk.context_paragraphs if p.para_id not in owned]}})
+
             def submit_batch(self, **kwargs):
                 raise FixedCallError("The fixed recipe requires individually receipted reads; batch mode is disabled")
 
@@ -685,7 +793,7 @@ def validate_fixed_call_evidence(directory: Path, *, identity: dict | None = Non
         if result.get("stop_reason") != "ok" or result.get("error") or not isinstance(result.get("parsed"), dict):
             raise FixedCallError("Saved fixed response is not a complete successful read")
         _check_schema_definition(request["schema"])
-        _response_payload(result["parsed"], request)
+        _checked_response(result["parsed"], request, folder, receipt)
         if normalize_usage(result.get("resource_usage")) != final.get("usage") or final.get("usage") != receipt.get("usage"):
             raise FixedCallError("Fixed-call usage evidence does not match its completed response")
         for entry in by_request[sha].values():

@@ -433,3 +433,36 @@ def test_press_method_final_scan_cannot_be_omitted_from_delivery(completed_prose
     _rehash_stage_and_result(directory, result, "astra", stage)
     with pytest.raises(FixedDocumentError, match="press-method final scan"):
         _verify_result(result, directory)
+
+
+def test_all_six_reader_models_recover_incomplete_coverage_before_stage_completion(tmp_path, monkeypatch):
+    source = tmp_path / "Writer.docx"
+    document = Document()
+    document.add_paragraph("She recieved 20 letters while waiting in the quiet room.")
+    document.save(source)
+    readers = ScriptedReaders(False)
+    answer = readers.answer
+    failed_models = set()
+    def incomplete_once(model, user, schema):
+        result = answer(model, user, schema)
+        if model not in failed_models:
+            for field in ("reviewed_paragraph_ids", "reviewed_ids", "decisions"):
+                if result.get(field):
+                    failed_models.add(model)
+                    return {**result, field: result[field][1:]}
+        return result
+    readers.answer = incomplete_once
+    monkeypatch.setattr(fc, "_default_provider", lambda *a, **k: readers)
+    monkeypatch.setattr(codex_runner, "run_structured", readers.subscription)
+    worker = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode="fixed")
+    result = worker.run()
+    assert result.outcome == "done", result.reason
+    assert failed_models == {SONNET, LUNA, OPUS, SOL, FABLE, ASTRA}
+    budget = json.loads((worker.workspace / "runs/fixed/calls/budget.json").read_text())
+    assert sum(row["status"] == "failed" for row in budget["entries"].values()) == 6
+    assert all(row["status"] in {"completed", "failed"} for row in budget["entries"].values())
+    package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
+    assert validate_delivery_package(package)["delivery_ready"] is True
+    count = len(readers.requests)
+    assert worker.run().outcome == "done"
+    assert len(readers.requests) == count
