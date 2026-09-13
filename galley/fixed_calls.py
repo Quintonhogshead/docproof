@@ -166,6 +166,25 @@ def _schema(value: Any, schema: dict, root: dict | None = None, where="$", depth
             raise FixedCallError(f"Response number outside permitted bounds at {where}")
 
 
+def _response_payload(parsed, request):
+    """Validate raw output, tolerating only Claude's exact schema-name wrapper.
+
+    Earlier subscription prompts called the response a named object. Some
+    readers returned {schema_name: payload}. Keep that raw response as evidence;
+    never drop siblings, invent fields, or relax validation of the inner object.
+    """
+    try:
+        _schema(parsed, request["schema"])
+        return parsed
+    except FixedCallError:
+        if (request.get("transport") != "claude_subscription" or
+                not isinstance(parsed, dict) or set(parsed) != {request["schema_name"]}):
+            raise
+        payload = parsed[request["schema_name"]]
+        _schema(payload, request["schema"])
+        return payload
+
+
 def _check_schema_definition(schema):
     allowed = {"type", "$ref", "$defs", "$schema", "properties", "required", "additionalProperties",
                "items", "enum", "const", "anyOf", "oneOf", "allOf", "title", "description",
@@ -433,7 +452,7 @@ class FixedCalls:
         reason = result.stop_reason
         if valid:
             try:
-                _schema(result.parsed, request["schema"])
+                result = replace(result, parsed=_response_payload(result.parsed, request))
             except FixedCallError:
                 valid, reason = False, "invalid_schema"
         elif result.stop_reason == "ok":
@@ -486,7 +505,9 @@ class FixedCalls:
             receipt["max_attempts"] = min(receipt["max_attempts"], self.max_attempts)
             while True:
                 response_path = directory / "attempts" / str(receipt["attempt"]) / "response.json"
-                if receipt["status"] in {"started", "completed", "unknown"} and response_path.exists():
+                recover_schema = (receipt["status"] == "failed" and
+                                  receipt.get("failure_category") == "invalid_schema")
+                if (receipt["status"] in {"started", "completed", "unknown"} or recover_schema) and response_path.exists():
                     envelope = _load(response_path)
                     if receipt.get("response_sha256") and receipt["response_sha256"] != _hash(envelope):
                         raise FixedCallError("Saved fixed response has changed")
@@ -497,14 +518,14 @@ class FixedCalls:
                         saved_result = envelope.get("result") or {}
                         if saved_result.get("stop_reason") != "ok" or saved_result.get("error"):
                             raise FixedCallError("Saved fixed response did not complete successfully")
-                        _schema(saved_result.get("parsed"), request["schema"])
+                        parsed = _response_payload(saved_result.get("parsed"), request)
                         with _locked(self.directory / "budget.lock"):
                             accounted = _load(self.directory / "budget.json")["entries"].get(f"{sha}:{receipt['attempt']}", {})
                         if accounted.get("status") == "completed":
                             if accounted.get("usage") != saved_result.get("resource_usage"):
                                 raise FixedCallError("Saved fixed response differs from its usage evidence")
                             self._record(receipt, reused=True)
-                            return ProviderResult(**{**saved_result, "usage": NormalizedUsage(billed=False),
+                            return ProviderResult(**{**saved_result, "parsed": parsed, "usage": NormalizedUsage(billed=False),
                                                     "resource_usage": None})
                     result = self._finish(request, directory, receipt, envelope)
                     if result is not None:
@@ -664,7 +685,7 @@ def validate_fixed_call_evidence(directory: Path, *, identity: dict | None = Non
         if result.get("stop_reason") != "ok" or result.get("error") or not isinstance(result.get("parsed"), dict):
             raise FixedCallError("Saved fixed response is not a complete successful read")
         _check_schema_definition(request["schema"])
-        _schema(result["parsed"], request["schema"])
+        _response_payload(result["parsed"], request)
         if normalize_usage(result.get("resource_usage")) != final.get("usage") or final.get("usage") != receipt.get("usage"):
             raise FixedCallError("Fixed-call usage evidence does not match its completed response")
         for entry in by_request[sha].values():

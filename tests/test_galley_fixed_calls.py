@@ -153,6 +153,77 @@ def test_schema_failures_are_bounded_and_persisted(tmp_path, parsed):
     assert caller.usage_summary()["output_tokens"] == 20
 
 
+def test_claude_named_wrapper_is_validated_reused_and_preserved(tmp_path):
+    wrapped = {"test": {"ready": True}}
+    provider = FakeProvider([replace(GOOD, parsed=wrapped)])
+    caller = calls(tmp_path, provider)
+    assert ask(caller, model="claude-sonnet-5") == {"ready": True}
+    envelope = next(caller.directory.glob("calls/*/attempts/1/response.json"))
+    saved = envelope.read_bytes()
+    assert json.loads(saved)["result"]["parsed"] == wrapped
+    assert ask(calls(tmp_path, provider), model="claude-sonnet-5") == {"ready": True}
+    assert len(provider.requests) == 1 and envelope.read_bytes() == saved
+    caller.assert_complete()
+
+
+def test_old_wrapped_schema_failure_recovers_without_retry_or_rewriting_response(tmp_path, monkeypatch):
+    provider = FakeProvider([replace(GOOD, parsed={"test": {"ready": True}})])
+    normalize = fc._response_payload
+
+    def old_validator(parsed, request):
+        fc._schema(parsed, request["schema"])
+        return parsed
+
+    monkeypatch.setattr(fc, "_response_payload", old_validator)
+    caller = calls(tmp_path, provider)
+    with pytest.raises(fc.FixedCallError, match="exhausted"):
+        ask(caller, model="claude-sonnet-5")
+    saved = {p: p.read_bytes() for p in caller.directory.glob("calls/*/attempts/*/response.json")}
+    limits = caller.usage_summary()["limits"]
+    monkeypatch.setattr(fc, "_response_payload", normalize)
+    resumed = calls(tmp_path, provider)
+    assert ask(resumed, model="claude-sonnet-5") == {"ready": True}
+    assert len(provider.requests) == 3
+    assert resumed.usage_summary()["calls"] == 3
+    assert resumed.usage_summary()["output_tokens"] == 30
+    assert resumed.usage_summary()["limits"] == limits
+    assert all(p.read_bytes() == contents for p, contents in saved.items())
+    resumed.assert_complete()
+
+
+@pytest.mark.parametrize("parsed", [
+    {"test": {"ready": True}, "extra": "do not discard"},
+    {"wrong_name": {"ready": True}},
+    {"test": {"ready": "true"}},
+    {"test": {"ready": True, "extra": 1}},
+])
+def test_claude_wrapper_never_relaxes_schema_or_discards_siblings(tmp_path, parsed):
+    provider = FakeProvider([replace(GOOD, parsed=parsed)])
+    caller = calls(tmp_path, provider, max_attempts=1)
+    with pytest.raises(fc.FixedCallError, match="invalid_schema"):
+        ask(caller, model="claude-sonnet-5")
+    with pytest.raises(fc.FixedCallError, match="invalid_schema"):
+        ask(calls(tmp_path, provider), model="claude-sonnet-5")
+    assert len(provider.requests) == 1
+    with pytest.raises(fc.FixedCallError):
+        caller.assert_complete()
+
+
+def test_api_output_is_not_unwrapped(tmp_path):
+    provider = FakeProvider([replace(GOOD, parsed={"test": {"ready": True}})])
+    with pytest.raises(fc.FixedCallError, match="invalid_schema"):
+        ask(calls(tmp_path, provider, max_attempts=1))
+
+
+def test_legitimate_root_field_named_after_schema_is_not_unwrapped(tmp_path):
+    schema = {"type": "object", "properties": {"test": SCHEMA},
+              "required": ["test"], "additionalProperties": False}
+    wrapped = {"test": {"ready": True}}
+    caller = calls(tmp_path, FakeProvider([replace(GOOD, parsed=wrapped)]))
+    assert ask(caller, model="claude-sonnet-5", schema=schema) == wrapped
+    caller.assert_complete()
+
+
 def test_confirmed_failure_may_retry_but_network_ambiguity_may_not(tmp_path):
     provider = FakeProvider([ProviderResult(stop_reason="error", error="429: rate limited"), GOOD])
     caller = calls(tmp_path, provider)

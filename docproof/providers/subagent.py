@@ -293,9 +293,10 @@ class SubagentProvider:
     @staticmethod
     def _prompt(user: str, schema: dict[str, Any], schema_name: str) -> str:
         return (f"{user}\n\n"
-                f"Reply with ONE JSON object named `{schema_name}` matching "
+                f"Reply with ONE JSON object matching "
                 f"this JSON schema exactly, and nothing else — no prose before "
-                f"or after, no markdown fence:\n"
+                f"or after, no markdown fence. `{schema_name}` is the schema label, "
+                f"not a wrapper key; put the schema's fields directly at the root:\n"
                 f"{json.dumps(schema, ensure_ascii=False)}")
 
     def _options(self, sdk: Any, model: str, system: str,
