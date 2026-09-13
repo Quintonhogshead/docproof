@@ -108,6 +108,27 @@ def _typed_row(pid, source, before, after, key):
             "confidence": "high", "explanation": "A clear proofreading error."}
 
 
+@pytest.fixture(autouse=True)
+def local_scans(monkeypatch):
+    """Existing editorial cases isolate the local scanner's transport/generators.
+
+    New local integration cases replace these stubs or restore the real adapter;
+    the workflow's anchoring, arbitration, checks and sequencing always run.
+    """
+    from galley import fixed_local
+    originals = {"initial": fixed_local.collect_local_candidates,
+                 "completion": fixed_local.collect_completion_candidates}
+    monkeypatch.setattr(fixed_local, "collect_local_candidates",
+                        lambda *args, **kwargs: ([], {"fixture": "local clean"}))
+    monkeypatch.setattr(fixed_local, "collect_completion_candidates",
+                        lambda *args, **kwargs: ([], {"fixture": "completion clean"}))
+    return originals
+
+
+def _local_row(pid, before, after, *, source="LanguageTool", category="grammar"):
+    return {**finding(pid, before, after, category), "source": source}
+
+
 def test_real_docx_full_fixed_sequence_and_successive_corrected_versions(make_book, tmp_path, monkeypatch):
     book = make_book("We seen teh 20 birds beside a apple. They was bright. It are warm. He walk home.")
 
@@ -173,6 +194,30 @@ def test_real_docx_full_fixed_sequence_and_successive_corrected_versions(make_bo
     assert "It is warm" in by_stage["astra"]["payload"]["paragraphs"][0]["text"]
     assert by_stage["astra"]["model"] == ASTRA
     assert any(x["stage"] == "astra_checks_correction" for x in events)
+
+
+def test_frontier_structure_context_uses_each_readers_current_book(make_book, tmp_path):
+    book = make_book("Chapter One: The Harbr", "The boat arrived.")
+    doc = Document(book)
+    doc.paragraphs[0].style = "Heading 1"
+    doc.save(book)
+
+    def handler(stage, model, payload, kwargs):
+        if stage == "fable":
+            row = payload["paragraphs"][0]
+            return {"reviewed_ids": [x["id"] for x in payload["paragraphs"]],
+                    "findings": [finding(row["id"], "Harbr", "Harbor", "spelling")],
+                    "comment_decisions": [], "editorial_verdict": "ready"}
+
+    readers = Readers(handler=handler)
+    FixedWorkflow(book, tmp_path / "run", calls=readers).run()
+    fable = next(x for x in readers.events if x["stage"] == "fable")
+    astra = next(x for x in readers.events if x["stage"] == "astra")
+    assert "The Harbr" in fable["payload"]["structure_context"]["excerpt"]
+    assert "The Harbor" in astra["payload"]["structure_context"]["excerpt"]
+    assert "The Harbr" not in astra["payload"]["structure_context"]["excerpt"]
+    assert astra["payload"]["structure_context"]["complete_inventory"] is False
+    assert "Do not infer missing entries" in astra["system"]
 
 
 def test_poetry_runs_only_classification_and_sonnet_spelling(make_book, tmp_path):
@@ -426,3 +471,196 @@ def test_replay_rejects_tampered_stage_evidence(make_book, tmp_path):
     path.write_text(json.dumps(data))
     with pytest.raises(FixedWorkflowError, match="Saved poetry evidence changed"):
         FixedWorkflow(source, directory, calls=Readers()).run()
+
+
+@pytest.mark.parametrize("decision", ["apply", "drop"])
+def test_local_grammar_missed_by_both_readers_requires_opus_then_luna(
+        make_book, tmp_path, monkeypatch, local_scans, decision):
+    from types import SimpleNamespace
+    scanned = []
+
+    class LocalTool:
+        picky = False
+
+        def check(self, text):
+            scanned.append(text)
+            return [SimpleNamespace(offset=text.index("is"), error_length=2,
+                replacements=["are"], rule_id="TEST_SUBJECT_AGREEMENT",
+                rule_issue_type="grammar", message="The plural subject takes are.")]
+
+        def close(self):
+            pass
+
+    def handler(stage, model, payload, kwargs):
+        if stage == "typed_disputes":
+            assert model == OPUS
+            assert len(payload["sites"]) == 1
+            proposal = payload["sites"][0]["proposals"][0]
+            assert proposal["models"] == ["local:languagetool"]
+            return {"decisions": [ruling(site, decision, "are") for site in payload["sites"]]}
+
+    # All local generators and the scanner's real filtering/coverage adapter
+    # run; only the external Java transport is replaced.
+    monkeypatch.setattr("galley.fixed_local.collect_local_candidates", local_scans["initial"])
+    monkeypatch.setattr("galley.fixed_local.default_lt_factory", lambda dictionary: LocalTool())
+    readers = Readers(handler=handler)
+    result = FixedWorkflow(make_book("They is here."), tmp_path / "local", calls=readers).run()
+
+    assert list(result["accepted"].values()) == ["They are here." if decision == "apply" else "They is here."]
+    assert result["questions"] == []
+    assert scanned == ["They is here."]
+    events = readers.events
+    typed = [row for row in events if row["stage"] == "typed"]
+    assert {row["model"] for row in typed} == {SONNET, LUNA}
+    assert any(row["stage"] == "typed_disputes" for row in events)
+    checks = [row for row in events if row["stage"] in {"checks_meaning", "checks_correction"}]
+    assert len(checks) == (2 if decision == "apply" else 0)
+    assert all(row["model"] == LUNA for row in checks)
+    if checks:
+        assert all(row["payload"]["changes"][0]["after"] == "They are here." for row in checks)
+    saved = json.loads((tmp_path / "local/stages/typed.json").read_text())
+    local = saved["evidence"]["local"]
+    assert local["proposal_count"] == 1
+    assert next(check for check in local["checks"] if check["check"] == "languagetool")["proposal_count"] == 1
+
+
+def test_local_completion_is_checked_once_before_fable_reads_corrected_book(
+        make_book, tmp_path, monkeypatch):
+    completion_calls = []
+
+    def complete(prepared, original, texts, *args, **kwargs):
+        completion_calls.append(dict(texts))
+        pid = next(iter(texts))
+        return [_local_row(pid, "teh", "the", source="recurrence", category="spelling")], {"recurrence_candidates": 1}
+
+    def handler(stage, model, payload, kwargs):
+        if stage == "local_completion_disputes":
+            assert model == OPUS
+            return {"decisions": [ruling(site, replacement=site["proposals"][0]["replacement"])
+                                  for site in payload["sites"]]}
+
+    monkeypatch.setattr("galley.fixed_local.collect_completion_candidates", complete)
+    readers = Readers(handler=handler)
+    result = FixedWorkflow(make_book("She found teh letter."), tmp_path / "completion", calls=readers).run()
+
+    assert list(result["accepted"].values()) == ["She found the letter."]
+    assert len(completion_calls) == 1
+    events = readers.events
+    stages = [row["stage"] for row in events]
+    assert max(stages.index("ensemble_sweep_opus"), stages.index("ensemble_sweep_sol")) < stages.index("local_completion_disputes")
+    assert stages.index("local_completion_disputes") < stages.index("local_completion_checks_meaning")
+    assert stages.index("local_completion_checks_meaning") < stages.index("local_completion_checks_correction") < stages.index("fable")
+    assert [row for row in events if row["stage"] == "fable"][0]["payload"]["paragraphs"][0]["text"] == "She found the letter."
+    assert result["questions"] == []
+
+
+def test_poetry_never_invokes_local_collectors(make_book, tmp_path, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("Poetry must not enter a local proofreading collector")
+
+    monkeypatch.setattr("galley.fixed_local.collect_local_candidates", forbidden)
+    monkeypatch.setattr("galley.fixed_local.collect_completion_candidates", forbidden)
+    readers = Readers(poetry=True)
+    result = FixedWorkflow(make_book("The Moon\n  waits, 20 times\n—quiet"),
+                           tmp_path / "poetry-local", calls=readers).run()
+    assert result["accepted"] == result["original"]
+    assert {row["stage"] for row in readers.events} == {"poetry", "spelling"}
+
+
+def test_local_collector_cannot_emit_a_candidate_in_embedded_poetry(
+        make_book, tmp_path, monkeypatch):
+    def handler(stage, model, payload, kwargs):
+        if stage == "poetry":
+            return {"classification": "mixed", "reason": "Verse and prose."}
+        if stage == "poetry_sections":
+            return {"paragraphs": [{"id": row["id"], "poetry": "\n" in row["text"]} for row in payload]}
+
+    def leak(prepared, texts, *args, **kwargs):
+        pid = next(iter(kwargs["poetry_ids"]))
+        return [_local_row(pid, "Moon", "moon", category="spelling")], {}
+
+    monkeypatch.setattr("galley.fixed_local.collect_local_candidates", leak)
+    readers = Readers(handler=handler)
+    with pytest.raises(FixedWorkflowError, match="protected poetry"):
+        FixedWorkflow(make_book("The Moon\n  waits", "She waited by the door."),
+                      tmp_path / "mixed-local", calls=readers).run()
+    assert not any(row["stage"] in {"typed", "spelling", "typed_disputes"} for row in readers.events)
+
+
+def test_real_local_generators_exclude_embedded_poetry_at_both_checkpoints(
+        make_book, tmp_path, monkeypatch, local_scans):
+    scanned = []
+
+    class LocalTool:
+        def check(self, text):
+            scanned.append(text)
+            return []
+
+        def close(self):
+            pass
+
+    def handler(stage, model, payload, kwargs):
+        if stage == "poetry":
+            return {"classification": "mixed", "reason": "Verse and prose."}
+        if stage == "poetry_sections":
+            return {"paragraphs": [{"id": row["id"], "poetry": "\n" in row["text"]} for row in payload]}
+
+    monkeypatch.setattr("galley.fixed_local.collect_local_candidates", local_scans["initial"])
+    monkeypatch.setattr("galley.fixed_local.collect_completion_candidates", local_scans["completion"])
+    monkeypatch.setattr("galley.fixed_local.default_lt_factory", lambda dictionary: LocalTool())
+    source = make_book("teh Moon\n  waits, 20 times\n—quiet", "A quiet paragraph.")
+    readers = Readers(handler=handler)
+    result = FixedWorkflow(source, tmp_path / "real-mixed-local", calls=readers).run()
+
+    assert scanned == ["A quiet paragraph."]
+    assert result["accepted"] == result["original"]
+    assert result["questions"] == []
+    for stage in ("typed", "ensemble_sweep"):
+        saved = json.loads((tmp_path / f"real-mixed-local/stages/{stage}.json").read_text())
+        local = saved["evidence"]["local"]
+        assert local["paragraph_ids"] == ["body-0001"]
+        assert local["excluded_poetry_ids"] == ["body-0000"]
+        assert all(check["paragraph_ids"] == ["body-0001"] for check in local["checks"])
+
+
+def test_missing_languagetool_blocks_before_typed_calls(
+        make_book, tmp_path, monkeypatch, local_scans):
+    from galley.fixed_local import FixedLocalError
+
+    monkeypatch.setattr("galley.fixed_local.collect_local_candidates", local_scans["initial"])
+    monkeypatch.setattr("docproof.languagetool.AVAILABLE", False)
+    readers = Readers()
+    with pytest.raises((FixedLocalError, FixedWorkflowError), match="LanguageTool"):
+        FixedWorkflow(make_book("A quiet paragraph."), tmp_path / "missing-local", calls=readers).run()
+    assert not any(row["stage"] in {"typed", "spelling", "fable"} for row in readers.events)
+    assert not (tmp_path / "missing-local/result.json").exists()
+
+
+def test_stylistic_diagnostic_cannot_become_a_local_proofreading_candidate(
+        make_book, tmp_path, monkeypatch):
+    def inappropriate(prepared, texts, *args, **kwargs):
+        pid = next(iter(texts))
+        return [_local_row(pid, texts[pid], texts[pid], source="reading_level", category="reading_level")], {}
+
+    monkeypatch.setattr("galley.fixed_local.collect_local_candidates", inappropriate)
+    readers = Readers()
+    with pytest.raises(FixedWorkflowError, match="stylistic diagnostic"):
+        FixedWorkflow(make_book("A quiet paragraph."), tmp_path / "style-local", calls=readers).run()
+    assert not any(row["stage"] == "typed_disputes" for row in readers.events)
+
+
+def test_unchanged_rejected_local_site_is_not_paid_for_again_at_completion(
+        make_book, tmp_path, monkeypatch):
+    def initial(prepared, texts, *args, **kwargs):
+        return [_local_row(next(iter(texts)), "quiet", "calm")], {}
+
+    def completion(prepared, original, texts, *args, **kwargs):
+        return [_local_row(next(iter(texts)), "quiet", "calm", source="recurrence")], {}
+
+    monkeypatch.setattr("galley.fixed_local.collect_local_candidates", initial)
+    monkeypatch.setattr("galley.fixed_local.collect_completion_candidates", completion)
+    readers = Readers()  # Opus rejects the stylistic suggestion.
+    result = FixedWorkflow(make_book("A quiet paragraph."), tmp_path / "dedup-local", calls=readers).run()
+    assert result["accepted"] == result["original"] and result["questions"] == []
+    assert sum(row["stage"] == "typed_disputes" for row in readers.events) == 1
+    assert not any(row["stage"] == "local_completion_disputes" for row in readers.events)

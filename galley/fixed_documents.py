@@ -199,10 +199,41 @@ def _verify_result(result, directory):
                 ["poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks", "ensemble_sweep", "fable", "astra"])
     if [s["stage"] for s in stages] != expected:
         raise FixedDocumentError("A required fixed proofreading stage is missing or out of order")
+    protected_poetry = set()
     for stage in stages:
         path = Path(stage["path"]).resolve()
-        if not path.is_relative_to(Path(directory).resolve() / "stages") or _hash(json.loads(path.read_text())) != stage["sha256"]:
+        if not path.is_relative_to(Path(directory).resolve() / "stages"):
+            raise FixedDocumentError("A fixed stage's reading evidence is outside its workspace")
+        payload = json.loads(path.read_text())
+        if _hash(payload) != stage["sha256"]:
             raise FixedDocumentError("A fixed stage's reading evidence changed")
+        if stage["stage"] == "poetry" and result["identity"].get("version") == "fixed-proofreading-v2":
+            poetry_ids = payload.get("evidence", {}).get("poetry_ids")
+            if (not isinstance(poetry_ids, list) or any(pid not in result["original"] for pid in poetry_ids)
+                    or len(poetry_ids) != len(set(poetry_ids))):
+                raise FixedDocumentError("The fixed result lacks valid poetry protection evidence")
+            protected_poetry = set(poetry_ids)
+            if result["poetry_only"] != (protected_poetry == set(result["original"])):
+                raise FixedDocumentError("The fixed result disagrees with its poetry classification")
+        if (result["identity"].get("version") == "fixed-proofreading-v2"
+                and not result["poetry_only"] and stage["stage"] in {"typed", "ensemble_sweep"}):
+            from galley.fixed_local import validate_local_evidence
+            local = payload.get("evidence", {}).get("local")
+            expected_local_stage = "initial" if stage["stage"] == "typed" else "completion"
+            if not isinstance(local, dict) or local.get("stage") != expected_local_stage:
+                raise FixedDocumentError("Required deterministic proofreading evidence is missing")
+            packet = validate_local_evidence(local, Path(directory) / "local", result["identity"])
+            request = packet["request"]
+            initial = expected_local_stage == "initial"
+            original_prose = {pid: text for pid, text in result["original"].items() if pid not in protected_poetry}
+            reviewed = {p["para_id"]: p["text"] for p in request["paragraphs"]}
+            if (request.get("stage") != expected_local_stage
+                    or request.get("completion", False) is not (not initial)
+                    or set(reviewed) != set(original_prose)
+                    or request.get("excluded_poetry_ids") != sorted(protected_poetry)
+                    or (initial and reviewed != original_prose)
+                    or (not initial and request.get("original") != result["original"])):
+                raise FixedDocumentError("Deterministic proofreading evidence does not cover its assigned stage and source")
     last_stage = json.loads(Path(stages[-1]["path"]).read_text())
     if last_stage.get("accepted_sha256") != _hash(result["accepted"]):
         raise FixedDocumentError("The last reviewed manuscript differs from the final accepted text")

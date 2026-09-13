@@ -35,16 +35,12 @@ primary_region = "iad"        # pick one near your users: fly platform regions
   # A monthly spend ceiling, in USD, for every ordinary account without one of
   # its own. Admins are never capped. Remove to leave ordinary users uncapped.
   DOCPROOF_DEFAULT_CAP = "20"
-  # LanguageTool caches its ~260 MB jar here, on the mounted /data volume, so it
-  # downloads once and survives redeploys. Harmless while the pass is disabled
-  # (the default); only read when languagetool.enabled is set.
-  #
-  # This MUST be LTP_PATH, not LTP_JAR_DIR_PATH: in language_tool_python >=3.3 the
-  # server-start path locates the jar via LTP_PATH (default ~/.cache), while
-  # LTP_JAR_DIR_PATH only suppresses the download and is otherwise ignored — set
-  # alone it makes the library skip the download AND look in ~/.cache, which is
-  # empty on Fly ("LanguageTool not found in /root/.cache/language_tool_python").
-  LTP_PATH = "/data/languagetool"
+  # The verified LanguageTool 6.8 build ships in the image. Fixed Galley uses
+  # the explicit directory; the two LTP variables also make legacy jobs reuse
+  # it without attempting downloads into a mutable per-machine cache.
+  GALLEY_LANGUAGETOOL_HOME = "/opt/languagetool/LanguageTool-6.8"
+  LTP_PATH = "/opt/languagetool"
+  LTP_JAR_DIR_PATH = "/opt/languagetool/LanguageTool-6.8"
 
 [http_service]
   processes = ["app"]
@@ -62,7 +58,7 @@ primary_region = "iad"        # pick one near your users: fly platform regions
   destination = "/data"
   processes = ["app"]
 
-# The agent's workspaces, claim ledger, log and LanguageTool jar. Create it
+# The agent's workspaces, claim ledger and log. Create it
 # once before the first deploy that carries the agent group:
 #   fly volumes create galley_data -a atmosphere-docproof -r iad -s 10
 [[mounts]]

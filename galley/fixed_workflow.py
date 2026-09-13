@@ -14,7 +14,7 @@ from pathlib import Path
 
 from docproof.utils.files import write_atomic
 
-VERSION = "fixed-proofreading-v1"
+VERSION = "fixed-proofreading-v2"
 SONNET = "claude-sonnet-5"
 LUNA = "gpt-5.6-luna"
 OPUS = "claude-opus-5"
@@ -32,11 +32,11 @@ def workflow_plan():
         {"stage": "intake", "model": "code", "description": "Freeze the original manuscript and paragraph identities"},
         {"stage": "poetry", "model": SONNET, "description": "Classify fixed samples; poetry receives spelling only"},
         {"stage": "story_sheet", "model": LUNA, "description": "Read the manuscript for the Story Sheet through the API"},
-        {"stage": "typed", "model": f"{SONNET} + {LUNA}; disputes: {OPUS}", "description": "Typed proofreading ensemble, excluding the separate number and currency group"},
+        {"stage": "typed", "model": f"{SONNET} + {LUNA}; disputes: {OPUS}", "description": "Local proofreading checks, including LanguageTool, plus the typed ensemble; number and currency review remains separate"},
         {"stage": "numbers", "model": f"{SONNET} + {LUNA}; disputes: {OPUS}", "description": "Review every extracted number in context against the existing house policy"},
         {"stage": "broken_repair", "model": OPUS, "description": "Repair triggered broken sentences with clear intended meaning"},
         {"stage": "checks", "model": LUNA, "description": "Meaning preservation and correction checks through the API"},
-        {"stage": "ensemble_sweep", "model": f"{OPUS} + {SOL}; disputes: {OPUS}", "description": "Independent complete reads of the same corrected manuscript"},
+        {"stage": "ensemble_sweep", "model": f"{OPUS} + {SOL}; disputes: {OPUS}", "description": "Independent complete reads, followed by deterministic recurrence and residual checks"},
         {"stage": "fable", "model": FABLE, "description": "Read the corrected book and decide every proposed Galley comment"},
         {"stage": "astra", "model": ASTRA, "description": "Read the Fable-corrected book and review every surviving comment"},
     ]
@@ -141,7 +141,12 @@ def _candidate(row, texts, model, *, query_types=(), format_types=None):
               "category": category, "action": action, "format": mark,
               "reason": row.get("reason", row.get("explanation", "")),
               "missing_knowledge": row.get("missing_knowledge", ""), "models": [model]}
-    result["id"] = "f-" + _hash({k: result[k] for k in ("para_id", "start", "end", "before", "replacement", "action", "format")})[:20]
+    identity = {k: result[k] for k in ("para_id", "start", "end", "before", "replacement", "action", "format")}
+    # Different local questions can share an anchor. Keep their evidence for
+    # adjudication; identical concrete edits still deduplicate across readers.
+    if action == "query":
+        identity.update({k: result[k] for k in ("category", "reason", "missing_knowledge")})
+    result["id"] = "f-" + _hash(identity)[:20]
     return result
 
 
@@ -209,6 +214,8 @@ class FixedWorkflow:
         self.stages = []
         self.context = ""
         self.needs_human = False
+        self.local_seen = set()
+        self.prose_prepared = None
 
     @staticmethod
     def _save(path, value):
@@ -333,6 +340,62 @@ class FixedWorkflow:
         self.calls.assert_complete()
         return all_candidates, coverage
 
+    def _local_candidates(self, rows, *, texts, prepared):
+        """Local signals enter the same anchored proposal queue as readers."""
+        from galley.fixed_policy import DIAGNOSTIC_ONLY_TYPES
+        candidates = []
+        for row in rows:
+            if row.get("para_id") in self.poetry_ids:
+                raise FixedWorkflowError("A local proofreading check crossed into protected poetry")
+            if row.get("category") in DIAGNOSTIC_ONLY_TYPES:
+                raise FixedWorkflowError("A stylistic diagnostic entered the proofreading queue")
+            candidate = _candidate(row, texts, row["source"],
+                                   query_types=prepared.query_types,
+                                   format_types=prepared.format_types)
+            if candidate is None:
+                continue
+            if row.get("local_evidence"):
+                candidate["local_evidence"] = row["local_evidence"]
+                anchors = row["local_evidence"].get("generator_evidence", {}).get("anchors", [])
+                related = {a.get("paragraph_id") for a in anchors}
+                candidate["related_paragraphs"] = {pid: text for pid, text in texts.items()
+                                                     if pid in related and pid != candidate["para_id"]}
+            # Rechecking an unchanged site does not justify buying the same
+            # judgment again. A changed paragraph is fresh contextual evidence.
+            key = _hash([candidate["id"], texts[candidate["para_id"]], candidate.get("related_paragraphs", {})])
+            if key in self.local_seen:
+                continue
+            self.local_seen.add(key)
+            candidates.append(candidate)
+        return candidates
+
+    def _local_initial(self, prepared):
+        from galley.fixed_local import collect_local_candidates
+        self._cancel()
+        rows, evidence = collect_local_candidates(
+            prepared, self.original, self.directory / "local", identity=self.identity,
+            poetry_ids=self.poetry_ids, cfg=self.cfg,
+            progress=lambda done, total: self._local_progress(done, total))
+        self._cancel()
+        return self._local_candidates(rows, texts=self.original, prepared=prepared), evidence
+
+    def _local_progress(self, done, total):
+        self._cancel()
+        self.progress("local_progress", phase="typed", check="LanguageTool", completed=done, total=total)
+
+    def _local_completion(self, prepared):
+        from galley.fixed_local import collect_completion_candidates
+        self._cancel()
+        snapshot = dict(self.current)
+        rows, evidence = collect_completion_candidates(
+            prepared, self.original, snapshot, self.directory / "local",
+            identity=self.identity, stage="completion", poetry_ids=self.poetry_ids, cfg=self.cfg)
+        candidates = self._local_candidates(rows, texts=snapshot, prepared=prepared)
+        self._apply("local_completion", self._adjudicate("local_completion", candidates, (OPUS,), force=True))
+        self._checks("local_completion_checks", snapshot)
+        self._cancel()
+        return evidence
+
     def _adjudicate(self, stage, candidates, expected_models=(), *, force=False):
         accepted, disputed = [], []
         for group in _groups(candidates):
@@ -359,7 +422,7 @@ class FixedWorkflow:
                              "paragraph": self.current[pid], "source": self.original[pid], "proposals": group})
         for window in _windows(disputed, 20000):
             result = self._ask(stage + "_disputes", OPUS,
-                "Settle EVERY disputed site. Apply only a clear proofreading correction supported by context; you may reject both proposals. replacement replaces exactly before, not the whole paragraph. Drop false alarms, stylistic preferences and resolved issues. Query only an actual textual problem whose missing fact or intended meaning requires the author. A disagreement alone is not a query. Preserve formatting proposals only when a house rule requires them.",
+                "Settle EVERY disputed site. Apply only a clear proofreading correction supported by context; you may reject every proposal. replacement replaces exactly the before span: preserve all unchanged text inside that span, and do not include text outside it. The span may cover a word, several sentences, or the entire paragraph. Drop false alarms, stylistic preferences and resolved issues. Query only an actual textual problem whose missing fact or intended meaning requires the author. A disagreement alone is not a query. Preserve formatting proposals only when a house rule requires them.",
                 {"story_sheet": self.context, "sites": window}, DECISIONS, effort="high")["decisions"]
             _exact_ids([x["id"] for x in result], [x["id"] for x in window], "Opus adjudication")
             by_id = {x["id"]: x for x in result}
@@ -444,10 +507,31 @@ class FixedWorkflow:
         self._apply("numbers", self._adjudicate("numbers", results, (SONNET, LUNA)))
         self._record("numbers", sites=sites)
 
+    def _structure_context(self, snapshot):
+        """Reuse local structure extraction on the reader's current text."""
+        if self.prose_prepared is None:
+            return None, set()
+        from docproof.continuity import looks_like_chapter_heading
+        from docproof.headings import is_structural_heading
+        from docproof.toccheck import structure_extract
+        from galley.fixed_local import _paragraphs
+        paragraphs = _paragraphs(self.prose_prepared, snapshot, self.poetry_ids)
+        headings = {p.para_id for p in paragraphs if p.text.strip() and p.location == "body"
+                    and (is_structural_heading(p, self.cfg.skip.is_sweep_only)
+                         or looks_like_chapter_heading(p))}
+        if not headings:
+            return None, set()
+        # Only structure-bearing/frontmatter windows need the global excerpt;
+        # ordinary body windows retain their smaller neighbouring context.
+        relevant = headings | {p.para_id for p in paragraphs[:150] if p.location == "body"}
+        return {"excerpt": structure_extract(paragraphs, self.cfg.skip),
+                "complete_inventory": False}, relevant
+
     def _read(self, stage, model, *, texts=None, comments=False, ids=None):
         snapshot = dict(self.current if texts is None else texts)
         keys = list(snapshot) if ids is None else list(ids)
         proposals, decisions, coverage = [], [], []
+        structure, structure_ids = self._structure_context(snapshot) if stage in {"fable", "astra"} else (None, set())
         for window in _windows([{"id": k, "text": snapshot[k]} for k in keys]):
             owned = {x["id"]: x["text"] for x in window}
             questions = [q for q in self.questions if q["para_id"] in owned] if comments else []
@@ -460,11 +544,18 @@ class FixedWorkflow:
             scope = ("Inspect ONLY genuinely broken sentences in the owned paragraphs. Repair a missing, garbled, or syntactically broken sentence only when its intended meaning is clear. Do not perform general spelling, punctuation, number styling, copyediting, or a fresh error sweep. Every edit must have category broken_sentence; only an actual unrepairable broken sentence may yield an author_question. "
                      if stage == "broken_repair" else
                      "Read EVERY owned paragraph, including headings and short passages, for clear proofreading errors only. ")
+            payload = {"story_sheet": self.context, "paragraphs": window,
+                       "context": {k: snapshot[k] for k in order if k in context_ids},
+                       "poetry_ids": sorted(self.poetry_ids & set(owned)), "comments": questions}
+            if structure is not None and structure_ids.intersection(owned):
+                payload["structure_context"] = structure
+                scope += ("The read-only structure_context is a bounded excerpt of the CURRENT book, not a complete inventory. "
+                          "Use it to compare clear contents/body wording or numbering errors only when both copies are present. "
+                          "Do not infer missing entries from this excerpt; ignore page numbers, legitimate shortened titles, "
+                          "and capitalization or punctuation preferences. Findings still belong only to owned paragraphs. ")
             result = self._ask(stage, model,
                 scope + "Context paragraphs are read-only. Preserve poetry except demonstrable misspellings. Return reviewed_ids for all owned paragraphs. For EVERY assigned comment explicitly drop, retain, or replace it: answer from the book where possible, remove false/stale/duplicate/style concerns, and retain only specific questions requiring author knowledge. Retained comments must use an exact contextual quote that occurs only once in its paragraph. To resolve with an edit return the edit plus a drop decision. Do not invent or omit comment IDs. New questions require missing_knowledge. needs_human means substantive unresolved damage/meaning beyond a proofread, never an operational failure. Findings must quote their exact current paragraph. Never retype clean paragraphs.",
-                {"story_sheet": self.context, "paragraphs": window,
-                 "context": {k: snapshot[k] for k in order if k in context_ids},
-                 "poetry_ids": sorted(self.poetry_ids & set(owned)), "comments": questions},
+                payload,
                 READ_SCHEMA, effort="high", max_tokens=16000)
             _exact_ids(result["reviewed_ids"], owned, stage + " paragraph coverage")
             _exact_ids([x["id"] for x in result["comment_decisions"]], [x["id"] for x in questions], stage + " comment coverage")
@@ -601,26 +692,25 @@ class FixedWorkflow:
             self._stage("story_sheet")
             self._story()
         self._stage("typed")
-        candidates, coverage = [], []
+        candidates, coverage, local_evidence = [], [], None
+        prose_prepared = None
         for poetry in ([True] if all_poetry else ([False, True] if self.poetry_ids else [False])):
             cfg = configuration(poetry)
             prepared = prepare(cfg, self.source, Path(__file__).resolve().parent.parent / "config/error_types")
             if any(self.original.get(p.para_id) != p.text for p in prepared.doc.paragraphs):
                 raise FixedWorkflowError("Preparation silently changed source text")
+            if not poetry:
+                prose_prepared = prepared
+                self.prose_prepared = prepared
+                local, local_evidence = self._local_initial(prepared)
+                candidates.extend(local)
             found, covered = self._typed(prepared, poetry=poetry)
             candidates.extend(found)
             coverage.extend(covered)
-            if not poetry:
-                for f in prepared.sweep_findings + prepared.consistency_findings:
-                    if f.para_id in self.original:
-                        row = _candidate(dataclasses.asdict(f), self.original, "code",
-                                         query_types=prepared.query_types, format_types=prepared.format_types)
-                        if row:
-                            candidates.append(row)
         initial = dict(self.current)
         accepted = self._adjudicate("typed", candidates, (SONNET,) if all_poetry else (SONNET, LUNA))
         self._apply("typed", accepted)
-        self._record("typed", coverage=coverage, candidates=candidates)
+        self._record("typed", coverage=coverage, candidates=candidates, local=local_evidence)
         if all_poetry:
             # Preserve the existing spelling-only route; no grammar, number or frontier sweeps.
             self._record("poetry_complete", skipped=[x["stage"] for x in workflow_plan()[2:] if x["stage"] != "typed"])
@@ -646,7 +736,8 @@ class FixedWorkflow:
             rows = [x for reading in readings for x in reading[0]]
             self._apply("ensemble_sweep", self._adjudicate("ensemble_sweep", rows, (OPUS, SOL)))
             self._checks("ensemble_sweep_checks", snapshot)
-            self._record("ensemble_sweep", readings=[x[2] for x in readings])
+            completion = self._local_completion(prose_prepared)
+            self._record("ensemble_sweep", readings=[x[2] for x in readings], local=completion)
             for stage, model in (("fable", FABLE), ("astra", ASTRA)):
                 self._stage(stage)
                 snapshot = dict(self.current)

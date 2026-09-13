@@ -48,9 +48,9 @@ desktop = [
     "pywebview>=5.0",
 ]
 languagetool = [
-    # Requires Java and downloads a cached jar on first use. The 3.x line uses
-    # LTP_PATH for its cache (see fly.toml).
-    "language_tool_python>=3.4,<4",
+    # Fixed Galley verifies the separately installed LanguageTool 6.8 build.
+    # Pin the wrapper too; runtime never downloads a checker (see Dockerfile).
+    "language_tool_python==3.4.0",
 ]
 canvas = [
     # Canvas chat and cover generation use the local Claude Code login.

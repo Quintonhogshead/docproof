@@ -14,6 +14,7 @@ from pathlib import Path
 import yaml
 
 from docproof.config import Config, DetectorSpec, load_config
+from docproof.candidate_generators import INITIAL_CANDIDATE_TYPES
 from docproof.stages import apply_stage
 from galley.house_style import house_rules_block
 
@@ -34,7 +35,19 @@ meaning is missing and materially different readings remain plausible. Explain
 exactly what only the author can supply. Do not turn uncertainty alone, rejected
 edits, overlaps, guard rejections, missing model responses or tool failures into
 comments. Never invent facts or change a numeric value to repair a contradiction.
+Local checks generate evidence, not proof of an error. Reading-level scores and
+word-echo counts are internal diagnostics only: never use them to justify an
+edit or an author question. A repeated word is actionable only when it is a
+clear accidental duplication, not because the author's diction repeats.
 """
+
+# The dedicated number stage inventories these two categories more broadly
+# than the older local generators. Every other available local generator runs;
+# stylistic measurements are recorded separately from proofreading candidates.
+LOCAL_CANDIDATE_TYPES = tuple(
+    key for key in INITIAL_CANDIDATE_TYPES
+    if key not in {"number_style", "currency_style"})
+DIAGNOSTIC_ONLY_TYPES = frozenset({"word_echo", "reading_level"})
 
 
 def _number_policy() -> str:
@@ -79,10 +92,11 @@ def _without_number_types(entries: list) -> list:
 
 
 def configuration(poetry: bool = False) -> Config:
-    """A fresh, typed-only model recipe; later paid stages belong to the runner.
+    """A fresh recipe for prepare and the fixed local-check adapter.
 
-    No per-book genre overlay is applied. The returned config can be passed to
-    prepare/run_sync/finish without accidentally paying for an extra reader.
+    No per-book genre overlay is applied. Model calls belong to the fixed
+    runner. Do not pass this recipe to the legacy run_sync/finish path: its
+    LanguageTool lane bundles its local scan with a separate paid confirmation.
     """
     cfg, _ = apply_stage(load_config(_CONFIG / "default.yaml"),
                          "poetry-touch" if poetry else "mechanical-wave")
@@ -99,18 +113,24 @@ def configuration(poetry: bool = False) -> Config:
     cfg.ensemble.verify_policy = "none"
     cfg.ensemble.consensus_confidence_bump = False
     cfg.candidate_screening.mode = "off"
+    cfg.candidate_screening.judgment_enabled = False
+    cfg.candidate_screening.candidate_types = LOCAL_CANDIDATE_TYPES
     cfg.examination_graph.enabled = False
     cfg.examination_graph.production_verdicts = False
     cfg.examination_graph.judgment.enabled = False
     cfg.rounds.count = 1
     cfg.flights.posture = "strict"
-    # These automatic query generators must not manufacture author questions
-    # outside the fixed comment review. The spelling scan and house sweeps stay.
-    cfg.consistency.enabled = False
+    # prepare produces evidence only; the fixed adapter routes every finding
+    # through the ordinary model gates. Legacy post-processing stays disabled
+    # because its query/application semantics do not belong to this workflow.
+    cfg.consistency.enabled = not poetry
+    cfg.languagetool.enabled = not poetry
     cfg.residuals.enabled = False
     cfg.recurrence.enabled = False
     for name in ("anachronism", "citation_format", "reading_level"):
-        getattr(cfg.genre_scans, name).enabled = False
+        getattr(cfg.genre_scans, name).enabled = not poetry
+    # No model or heuristic may invent an era to activate a historical check.
+    cfg.genre_scans.anachronism.era = None
     cfg.not_applied_comments = False
     cfg.excluded_words_comment = False
     cfg.api.model = "claude-sonnet-5"
@@ -130,6 +150,9 @@ def configuration(poetry: bool = False) -> Config:
     cfg.speaker_split.enabled = False
     if poetry:
         cfg.sweeps = []
+        cfg.style.unclosed_quote_queries = False
+        cfg.style.heading_title_case = False
+        cfg.style.heading_vocab_queries = False
     return cfg
 
 

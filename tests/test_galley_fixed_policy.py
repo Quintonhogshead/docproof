@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from galley.fixed_policy import (NUMBER_POLICY, PROOFREADING_POLICY,
+from galley.fixed_policy import (DIAGNOSTIC_ONLY_TYPES, LOCAL_CANDIDATE_TYPES,
+                                 NUMBER_POLICY, PROOFREADING_POLICY,
                                  configuration, extract_numbers, poetry_samples)
 
 
@@ -17,9 +18,9 @@ def _flat_types(cfg):
 def test_fixed_recipe_cannot_launch_unscheduled_model_stages(poetry):
     cfg = configuration(poetry)
     for name in ("glossary", "storysheet", "continuity", "chapter_continuity",
-                 "adjudicate", "rewrite", "languagetool", "sapling", "chapter_sweep",
+                 "adjudicate", "rewrite", "sapling", "chapter_sweep",
                  "repair", "smoothing", "factcheck", "toccheck", "meaning_check",
-                 "fix_check", "consistency", "residuals", "recurrence"):
+                 "fix_check", "residuals", "recurrence"):
         assert not getattr(cfg, name).enabled, name
     assert not cfg.low_confidence.confirm
     assert not cfg.smoothing.edits
@@ -27,6 +28,7 @@ def test_fixed_recipe_cannot_launch_unscheduled_model_stages(poetry):
     assert cfg.ensemble.verifier_model is None
     assert cfg.ensemble.verify_policy == "none"
     assert cfg.candidate_screening.mode == "off"
+    assert not cfg.candidate_screening.judgment_enabled
     assert not cfg.examination_graph.enabled
     assert not cfg.examination_graph.production_verdicts
     assert not cfg.examination_graph.judgment.enabled
@@ -59,6 +61,60 @@ def test_poetry_is_spelling_only_including_silent_and_structural_changes():
     assert not cfg.ensemble.enabled
     assert cfg.api.model == "claude-sonnet-5"
     assert cfg.sweeps == []
+    assert not cfg.languagetool.enabled and not cfg.consistency.enabled
+    assert not cfg.style.heading_title_case
+    assert not cfg.style.heading_vocab_queries
+    assert not cfg.style.unclosed_quote_queries
+    assert not any(getattr(cfg.genre_scans, kind).enabled
+                   for kind in ("anachronism", "citation_format", "reading_level"))
+
+
+def test_local_inventory_includes_grammar_and_comma_floor_but_separates_style():
+    cfg = configuration()
+    assert cfg.languagetool.enabled and cfg.consistency.enabled
+    assert cfg.candidate_screening.candidate_types == LOCAL_CANDIDATE_TYPES
+    assert {"grammar", "comma_boundary", "compound_sentence_comma", "homophone",
+            "heading_sequence", "list_punctuation", "term_consistency",
+            "word_echo"} <= set(LOCAL_CANDIDATE_TYPES)
+    assert not {"number_style", "currency_style"} & set(LOCAL_CANDIDATE_TYPES)
+    assert DIAGNOSTIC_ONLY_TYPES == {"word_echo", "reading_level"}
+    assert "internal diagnostics only" in PROOFREADING_POLICY
+    assert cfg.genre_scans.anachronism.enabled
+    assert cfg.genre_scans.anachronism.era is None
+
+
+def test_preparation_really_runs_local_consistency_and_citation_checks(tmp_path):
+    import docx
+    from docproof.pipeline import prepare
+    from pathlib import Path
+
+    book = docx.Document()
+    texts = [
+        "The blood-cursed rider never returns from the northern marches.",
+        "A blood-cursed name is a heavy thing for a child to carry.",
+        "She had heard of the bloodcursed before, in stories told at night.",
+        "The study found strong effects (Smith, 2019).",
+        "A later paper confirmed this (Jones, 2021).",
+        "Other researchers agree [12].",
+        "This was also noted elsewhere [13, 14].",
+        'She said, "I  keep my spaces."',
+    ]
+    for text in texts:
+        book.add_paragraph(text)
+    source = tmp_path / "local.docx"
+    book.save(source)
+    original_package = source.read_bytes()
+    prepared = prepare(configuration(), source,
+                       Path(__file__).resolve().parents[1] / "config/error_types")
+
+    assert [p.text for p in prepared.doc.paragraphs] == texts
+    assert source.read_bytes() == original_package
+    assert any("bloodcursed" in f.original_text for f in prepared.consistency_findings)
+    assert sum(f.error_type == "citation_format" for f in prepared.genre_findings) == 2
+    assert all(f.force_query for f in prepared.genre_findings)
+    # The fixed adapter, not the old paid adjudication/grammar path, owns these.
+    assert prepared.adjudicate_candidates == []
+    assert prepared.candidate_screening is None
 
 
 def test_full_house_number_exceptions_are_carried_to_readers():
