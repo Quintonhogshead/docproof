@@ -468,7 +468,8 @@ def test_all_six_reader_models_recover_incomplete_coverage_before_stage_completi
     assert len(readers.requests) == count
 
 
-def test_unanchored_suggestions_across_all_reader_stages_preserve_valid_edits_and_resume(tmp_path, monkeypatch):
+@pytest.mark.parametrize("defect", ["anchor", "content"])
+def test_invalid_suggestions_across_all_reader_stages_preserve_valid_edits_and_resume(tmp_path, monkeypatch, defect):
     source = tmp_path / "Writer.docx"
     document = Document()
     document.add_paragraph("She recieved 20 letters while waiting in the quiet room.")
@@ -481,6 +482,8 @@ def test_unanchored_suggestions_across_all_reader_stages_preserve_valid_edits_an
         if "reviewed_paragraph_ids" in result and result["findings"]:
             bad = {**result["findings"][0], "original_text": "Invented quotation that never appears in this book.",
                    "corrected_text": "An equally unsupported replacement."}
+            if defect == "content":
+                bad.update(original_text=result["findings"][0]["original_text"], corrected_text="Unsafe\x00text")
             return {**result, "findings": result["findings"] + [bad]}
         if "reviewed_ids" in result:
             payload = json.loads(user)
@@ -491,6 +494,12 @@ def test_unanchored_suggestions_across_all_reader_stages_preserve_valid_edits_an
                    "occurrence": 1, "replacement": "Unsupported correction.", "category": category,
                    "action": "query" if model == ASTRA else "edit", "reason": "Synthetic unanchored proposal.",
                    "missing_knowledge": "Unsupported synthetic question." if model == ASTRA else ""}
+            if defect == "content":
+                bad["quote"] = payload["paragraphs"][pid] if number else payload["paragraphs"][0]["text"]
+                if number:
+                    bad["category"] = "grammar"
+                elif model != FABLE:
+                    bad["replacement"] = "Unsafe\x00text"
             return {**result, "findings": [bad]}
         return result
     readers.answer = suggestions

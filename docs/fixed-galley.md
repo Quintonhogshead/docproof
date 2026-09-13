@@ -66,9 +66,17 @@ as `rejected_no_anchor`, preserving the original response and a source-bound
 diagnostic in the review evidence. It creates neither an edit nor an author
 comment, and other valid suggestions from the completed read still proceed.
 This applies to typed readers, number checks and whole-book readers, including
-broken-sentence repair and frontier formatting proposals. It never authorizes
-fuzzy matching or suppresses incomplete coverage, invalid local evidence, stale
-applied edits or final document-integrity failures.
+broken-sentence repair and frontier formatting proposals. Out-of-scope suggestions,
+unsafe replacement characters, unsupported title formatting, unusable Opus
+corrections and invalid generated author questions are also dropped individually
+as `rejected_invalid_proposal`. A rejected check-stage replacement restores the
+previous paragraph and removes the disputed formatting. Bad retained-comment
+proposals are dropped; valid comments and adjacent corrections continue. The
+raw model output stays unchanged, and no extra call is needed just to discard a
+bad proposal. Final comment review still rechecks resolutions that may have
+depended on rejected edits. This never authorizes fuzzy matching or suppresses
+incomplete coverage, invalid local evidence, stale applied edits or final
+document-integrity failures.
 
 Coverage is validated inside the durable call layer before an answer is marked
 complete. Orchestration supplies an immutable, request-bound `coverage.json`

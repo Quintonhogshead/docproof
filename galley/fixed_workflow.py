@@ -415,20 +415,53 @@ class FixedWorkflow:
         self.calls.assert_complete()
         return all_candidates, coverage
 
-    def _reader_candidate(self, stage, row, texts, model, **options):
-        """Reject unanchored model proposals, not a completed paragraph read.
+    def _reject_proposal(self, stage, row, texts, model, reason, status="rejected_invalid_proposal"):
+        """Keep source-bound diagnostics without promoting a bad suggestion."""
+        self.history.append({"stage": stage, "rejected_proposal": {
+            "model": model, "finding": json.loads(_json(row)), "reason": reason,
+            "status": status, "reviewed_sha256": _hash(texts)}})
 
-        Keep raw responses and a source-bound diagnostic. Never fuzzy-match a
-        quotation, turn a rejected proposal into a comment, or catch local-check,
-        coverage, applied-edit or output-integrity errors here.
-        """
-        try:
-            return _candidate(row, texts, model, **options)
-        except RejectedModelProposal as exc:
-            self.history.append({"stage": stage, "rejected_proposal": {
-                "model": model, "finding": json.loads(_json(row)), "reason": str(exc),
-                "status": "rejected_no_anchor", "reviewed_sha256": _hash(texts)}})
+    def _reader_candidate(self, stage, row, texts, model, *, allowed_categories=None,
+                          formatting=None, **options):
+        """Validate each model proposal separately from mandatory read coverage."""
+        from galley.settle import xml_safe
+        if allowed_categories is not None and row["category"] not in allowed_categories:
+            self._reject_proposal(stage, row, texts, model, "Proposal exceeded its assigned proofreading scope")
             return None
+        replacement = row.get("replacement", row.get("corrected_text", ""))
+        if xml_safe(replacement) != replacement:
+            self._reject_proposal(stage, row, texts, model, "Proposal contains unsupported control characters")
+            return None
+        try:
+            candidate = _candidate(row, texts, model, **options)
+        except RejectedModelProposal as exc:
+            self._reject_proposal(stage, row, texts, model, str(exc), "rejected_no_anchor")
+            return None
+        if candidate and candidate.get("format") and formatting is not None:
+            lo, hi, pid = candidate["start"], candidate["end"], candidate["para_id"]
+            roman = [r for r in formatting[pid] if r["start"] < hi and r["end"] > lo]
+            if (candidate["replacement"] != candidate["before"] or not roman
+                    or any(r["italic"] is not False for r in roman)):
+                self._reject_proposal(stage, row, texts, model,
+                                      "Title-format proposal lacks exact confirmed roman-text evidence")
+                return None
+        return candidate
+
+    def _valid_question(self, stage, row, texts, model):
+        from galley.settle import xml_safe
+        reason = None
+        if not row["missing_knowledge"].strip() or not row["question"].strip():
+            reason = "Author question lacks specific missing author knowledge"
+        elif any(xml_safe(row[k]) != row[k] for k in ("question", "missing_knowledge", "reason")):
+            reason = "Author question contains unsupported control characters"
+        else:
+            text = texts.get(row["para_id"], "")
+            if not row["quote"] or text.count(row["quote"]) != 1:
+                reason = "Author question needs an unambiguous contextual quote"
+        if reason:
+            self._reject_proposal(stage, row, texts, model, reason)
+            return False
+        return True
 
     def _local_candidates(self, rows, *, texts, prepared):
         """Local signals enter the same anchored proposal queue as readers."""
@@ -531,13 +564,21 @@ class FixedWorkflow:
                 # A multi-proposal composite must be a text edit, not guessed formatting.
                 if len(site["proposals"]) > 1:
                     row["format"] = ""
+                from galley.settle import xml_safe
+                if (xml_safe(row["replacement"]) != row["replacement"]
+                        or (row.get("format") and row["replacement"] != row["before"])):
+                    self._reject_proposal(stage + "_disputes", decision,
+                                          {site["para_id"]: self.current[site["para_id"]]}, OPUS,
+                                          "Adjudicated proposal has unsafe text or changes a formatting-only span")
+                    continue
                 accepted.append(row)
         return accepted
 
     def _question(self, pid, quote, question, missing, reason, stage):
-        if not missing.strip() or not question.strip():
-            raise FixedWorkflowError("An author question must identify missing author knowledge")
-        _locate(self.current[pid], quote)
+        row = {"para_id": pid, "quote": quote, "question": question,
+               "missing_knowledge": missing, "reason": reason}
+        if not self._valid_question(stage, row, self.current, OPUS):
+            return
         key = "q-" + _hash([pid, quote, missing])[:20]
         if not any(q["id"] == key for q in self.questions):
             self.questions.append({"id": key, "para_id": pid, "quote": quote, "question": question,
@@ -589,9 +630,8 @@ class FixedWorkflow:
                     raise FixedWorkflowError("Number sweep returned unassigned comment decisions")
                 allowed = {x["para_id"]: self.current[x["para_id"]] for x in window}
                 for row in answer["findings"]:
-                    if row["category"] not in {"number_style", "currency_style", "author_question"}:
-                        raise FixedWorkflowError("Number sweep exceeded its assigned scope")
-                    candidate = self._reader_candidate("numbers", row, allowed, model)
+                    candidate = self._reader_candidate("numbers", row, allowed, model,
+                        allowed_categories={"number_style", "currency_style", "author_question"})
                     if candidate:
                         results.append(candidate)
         self._apply("numbers", self._adjudicate("numbers", results, (SONNET, LUNA)))
@@ -679,15 +719,10 @@ class FixedWorkflow:
             if frontier:
                 _exact_ids(result.get("reviewed_check_ids", []), [s["id"] for s in assigned], stage + " focused-check coverage")
             for row in result["findings"]:
-                if stage == "broken_repair" and row["category"] not in {"broken_sentence", "author_question"}:
-                    raise FixedWorkflowError("Broken-sentence repair exceeded its assigned scope")
-                candidate = self._reader_candidate(stage, row, owned, model, format_types={"format": "italic"} if frontier else None)
-                if candidate and candidate.get("format"):
-                    lo, hi, pid = candidate["start"], candidate["end"], candidate["para_id"]
-                    roman = [r for r in formatting[pid] if r["start"] < hi and r["end"] > lo]
-                    if (row["replacement"] != row["quote"] or not roman
-                            or any(r["italic"] is not False for r in roman)):
-                        raise FixedWorkflowError("A title-format proposal lacks exact confirmed roman-text evidence")
+                candidate = self._reader_candidate(stage, row, owned, model,
+                    allowed_categories={"broken_sentence", "author_question"} if stage == "broken_repair" else None,
+                    format_types={"format": "italic"} if frontier else None,
+                    formatting=formatting if frontier else None)
                 if candidate:
                     proposals.append(candidate)
             decisions.extend(result["comment_decisions"])
@@ -715,7 +750,9 @@ class FixedWorkflow:
                         and entry.get("decision", {}).get("verdict") == "reject"}
             # A correction can answer a question in another paragraph. Refresh
             # all remaining questions once whenever the reviewed book changed.
-            refresh = (list(self.questions) if changed_ids or rejected else
+            rejected_proposals = any(h.get("stage") == stage and h.get("rejected_proposal")
+                                     for h in self.history)
+            refresh = (list(self.questions) if changed_ids or rejected or rejected_proposals else
                        [q for q in self.questions if q["id"] not in by_id])
             changed_context = [{"para_id": pid, "before": before[pid], "after": self.current[pid]}
                                for pid in self.current if pid in changed_ids | rejected]
@@ -737,12 +774,9 @@ class FixedWorkflow:
             self.history.append({"stage": stage + "_comments", "comment": q, "decision": d})
             if d["action"] == "drop":
                 continue
-            if not d["missing_knowledge"].strip() or not d["question"].strip():
-                raise FixedWorkflowError("Retained comment lacks a specific author question")
-            _locate(self.current[q["para_id"]], d["quote"])
-            if self.current[q["para_id"]].count(d["quote"]) != 1:
-                raise FixedWorkflowError("Retained comment needs an unambiguous contextual quote")
-            remaining.append({**q, **{k: d[k] for k in ("quote", "question", "missing_knowledge", "reason")}})
+            proposed = {**q, **{k: d[k] for k in ("quote", "question", "missing_knowledge", "reason")}}
+            if self._valid_question(stage + "_comments", proposed, self.current, model):
+                remaining.append(proposed)
         # Only identical questions at the same place are merged.
         unique = {}
         for q in remaining:
@@ -784,10 +818,13 @@ class FixedWorkflow:
                     for d in rulings:
                         pid = d["id"]
                         self.history.append({"stage": stage + "_" + kind + "_disputes", "decision": d})
-                        if d["action"] == "apply":
-                            from galley.settle import xml_safe
-                            if xml_safe(d["replacement"]) != d["replacement"]:
-                                raise FixedWorkflowError("Adjudicated correction contains unsupported control characters")
+                        from galley.settle import xml_safe
+                        unsafe = d["action"] == "apply" and xml_safe(d["replacement"]) != d["replacement"]
+                        if unsafe:
+                            self._reject_proposal(stage + "_" + kind + "_disputes", d,
+                                                  {pid: self.current[pid]}, OPUS,
+                                                  "Adjudicated correction contains unsupported control characters")
+                        if d["action"] == "apply" and not unsafe:
                             self.current[pid] = d["replacement"]
                         else:
                             self.current[pid] = before[pid]
