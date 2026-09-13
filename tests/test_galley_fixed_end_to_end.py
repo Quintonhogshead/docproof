@@ -237,6 +237,47 @@ def test_revised_input_delivers_and_resumes_with_certified_original(tmp_path, mo
     assert len(readers.requests) == count
 
 
+def test_context_ids_in_raw_typed_receipts_survive_certified_resume(tmp_path, monkeypatch):
+    from galley import fixed_policy
+    configuration = fixed_policy.configuration
+    def small_chunks(poetry=False):
+        cfg = configuration(poetry)
+        cfg.chunking.token_budget = 12
+        return cfg
+    monkeypatch.setattr(fixed_policy, "configuration", small_chunks)
+    source = tmp_path / "Writer.docx"
+    document = Document()
+    for text in ("She recieved two letters while she was waiting in the quiet room.",
+                 "The morning sunlight came through the window and fell across the wooden table.",
+                 "Outside the door, her sister waited patiently for the morning post to arrive."):
+        document.add_paragraph(text)
+    document.save(source)
+    # This reader deliberately lists every paragraph, including read-only context.
+    readers = ScriptedReaders(False)
+    monkeypatch.setattr(fc, "_default_provider", lambda *a, **k: readers)
+    monkeypatch.setattr(codex_runner, "run_structured", readers.subscription)
+    worker = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode="fixed")
+    result = worker.run()
+    assert result.outcome == "done", result.reason
+    responses = {}
+    for path in (worker.workspace / "runs/fixed/calls/calls").glob("*/request.json"):
+        request = json.loads(path.read_text())
+        if request["stage"] == "typed" and request["user"].startswith("<context>"):
+            receipt = json.loads(path.with_name("receipt.json").read_text())
+            response = path.parent / "attempts" / str(receipt["attempt"]) / "response.json"
+            raw = json.loads(response.read_text())["result"]["parsed"]
+            owned = re.findall(r'<paragraph id="([^"]+)">', request["user"].split("</context>")[-1])
+            assert len(raw["reviewed_paragraph_ids"]) > len(owned)
+            responses[response] = response.read_bytes()
+    assert responses
+    package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
+    assert validate_delivery_package(package)["delivery_ready"] is True
+    count = len(readers.requests)
+    assert worker.run().outcome == "done"
+    assert len(readers.requests) == count
+    assert all(path.read_bytes() == raw for path, raw in responses.items())
+
+
 def test_certified_local_checks_cannot_be_removed_after_delivery(tmp_path, monkeypatch):
     from galley.fixed_local import FixedLocalError
 

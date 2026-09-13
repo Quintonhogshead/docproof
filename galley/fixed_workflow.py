@@ -102,6 +102,25 @@ def _exact_ids(actual, expected, label):
         raise FixedWorkflowError(f"{label}: incomplete, duplicate, or unknown evidence IDs")
 
 
+def _typed_response(response, chunk):
+    """Allow coverage of known read-only context without changing raw receipts.
+
+    Some readers list context as well as every owned paragraph. Only known
+    context IDs may be removed; missing owned IDs, duplicates and unknown IDs
+    still block. Findings retain the analyzer's separate owned-paragraph guard.
+    """
+    if response.stop_reason != "ok" or not isinstance(response.parsed, dict):
+        return response
+    actual = response.parsed.get("reviewed_paragraph_ids", [])
+    if not isinstance(actual, list) or any(not isinstance(pid, str) for pid in actual):
+        raise FixedWorkflowError("Typed paragraph coverage: invalid evidence IDs")
+    owned = {p.para_id for p in chunk.paragraphs}
+    context = {p.para_id for p in chunk.context_paragraphs} - owned
+    _exact_ids(actual, owned | (set(actual) & context), "Typed paragraph coverage")
+    return dataclasses.replace(response, parsed={**response.parsed,
+        "reviewed_paragraph_ids": [pid for pid in actual if pid in owned]})
+
+
 def _locate(text, quote, occurrence=1):
     if not quote or type(occurrence) is not int or occurrence < 1:
         raise FixedWorkflowError("A finding needs a nonempty exact quote and positive occurrence")
@@ -331,10 +350,7 @@ class FixedWorkflow:
             try:
                 for (model, index, chunk, analyzer), future in zip(work, futures):
                     self._cancel()
-                    response = future.result()
-                    if response.stop_reason == "ok" and isinstance(response.parsed, dict):
-                        _exact_ids(response.parsed.get("reviewed_paragraph_ids", []),
-                                   [p.para_id for p in chunk.paragraphs], "Typed paragraph coverage")
+                    response = _typed_response(future.result(), chunk)
                     found, ok = analyzer.process_result(response, chunk, Usage())
                     if not ok:
                         raise FixedWorkflowError("A typed detector did not complete its assigned reading")

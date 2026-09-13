@@ -54,6 +54,12 @@ be divided into multiple requests. The workflow checkpoints completed work and
 reuses saved responses on resume. A fresh run can still yield different model
 judgments; fixed orchestration does not promise identical AI output.
 
+Typed coverage must include every owned paragraph exactly once. If a reader
+also lists paragraphs supplied as read-only context, Galley removes only those
+known context IDs from the working coverage view. Raw responses remain intact,
+and context findings cannot become edits in this chunk. Missing owned IDs,
+duplicate IDs and unknown IDs still block completion.
+
 The supplied Atmosphere pasted-chat method is preserved with an
 [item-level coverage review](galley-press-prompt-coverage.md). Its 120 indexed
 rules plus prose and table instructions become 149 accounted-for source items.

@@ -587,6 +587,33 @@ def test_stale_source_fails_before_any_model_call(make_book, tmp_path):
     assert readers.events == []
 
 
+@pytest.mark.parametrize("actual", [["p1", "p2"], ["c1", "p2", "p1"], ["p1", "c2", "p2", "c1"]])
+def test_typed_context_coverage_is_normalized_without_changing_response(actual):
+    from docproof.models import Chunk, ParagraphRef
+    from galley.fixed_workflow import _typed_response
+    def p(pid):
+        return ParagraphRef(pid, "word/document.xml", "body", "A quiet room.", "Normal")
+    chunk = Chunk("chunk-2", (p("p1"), p("p2")), 20, (p("c1"), p("c2")))
+    parsed = {"findings": [], "reviewed_paragraph_ids": actual[:]}
+    response = ProviderResult(parsed=parsed)
+    normalized = _typed_response(response, chunk)
+    assert set(normalized.parsed["reviewed_paragraph_ids"]) == {"p1", "p2"}
+    assert response.parsed == parsed and response.parsed["reviewed_paragraph_ids"] == actual
+    assert normalized is not response and normalized.parsed is not response.parsed
+
+
+@pytest.mark.parametrize("actual", [["p1", "c1"], ["p1", "p2", "unknown"],
+                                   ["p1", "p2", "p2"], ["p1", "p2", "c1", "c1"], [], None])
+def test_typed_context_tolerance_never_invents_or_duplicates_owned_coverage(actual):
+    from docproof.models import Chunk, ParagraphRef
+    from galley.fixed_workflow import _typed_response
+    def p(pid):
+        return ParagraphRef(pid, "word/document.xml", "body", "A quiet room.", "Normal")
+    chunk = Chunk("chunk-2", (p("p1"), p("p2")), 20, (p("c1"),))
+    with pytest.raises(FixedWorkflowError, match="Typed paragraph coverage"):
+        _typed_response(ProviderResult(parsed={"findings": [], "reviewed_paragraph_ids": actual}), chunk)
+
+
 def test_replay_rejects_tampered_stage_evidence(make_book, tmp_path):
     source = make_book("A quiet paragraph.")
     directory = tmp_path / "run"
