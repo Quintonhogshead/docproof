@@ -39,6 +39,13 @@ _FIXED_READER_DISABLED_FEATURES = (
     "plugins", "browser_use", "computer_use", "image_generation", "view_image",
     "goals", "sleep_tool", "skill_search", "code_mode", "code_mode_host",
 )
+# Codex 0.153 emits this startup notice even when code_mode was explicitly
+# disabled for a fixed reader. It confirms a tool is unavailable; it is not a
+# tool invocation or a failed model turn. All other error items still fail closed.
+_DISABLED_CODE_MODE_NOTICE = (
+    "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; "
+    "enable `features.code_mode_host` and install `codex-code-mode-host`."
+)
 _ENV_KEYS = {"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR", "TMP",
              "TEMP", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "SYSTEMROOT",
              "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA", "PATHEXT", "COMSPEC", "WINDIR"}
@@ -213,7 +220,9 @@ def _safe_events(stream) -> dict:
         counts[kind] = counts.get(kind, 0) + 1
         if kind.startswith("item.") and isinstance(event.get("item"), dict):
             item_type = event["item"].get("type")
-            if isinstance(item_type, str) and item_type not in {"agent_message", "reasoning"}:
+            if item_type == "error" and event["item"].get("message") == _DISABLED_CODE_MODE_NOTICE:
+                metadata["disabled_code_mode_notice"] = True
+            elif isinstance(item_type, str) and item_type not in {"agent_message", "reasoning"}:
                 items = metadata.setdefault("non_response_item_types", {})
                 items[item_type] = items.get(item_type, 0) + 1
         if kind == "thread.started" and isinstance(event.get("thread_id"), str) and re.fullmatch(

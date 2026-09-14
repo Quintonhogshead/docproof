@@ -83,4 +83,4 @@ fi
 
 # Claude Code lives in the image at /usr/local/bin/claude; the brain's sifter
 # wrapper at ~/galley-bin/docproof (galley/practitioner/galley-bin/docproof).
-exec docproof galley agent --env-file "$env_file" --workspace-root "$root" "$@"
+exec python3 -m docproof.teasers.supervisor -- docproof galley agent --env-file "$env_file" --workspace-root "$root" "$@"
