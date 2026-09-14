@@ -468,6 +468,17 @@ def _galley_parser(sub) -> None:
     gt.add_argument("--write", action="store_true",
                     help="also save timeline.json beside the run's result.json")
 
+    gr = gsub.add_parser(
+        "fixed-reinstate-questions",
+        help="re-screen a completed fixed run's dropped fact/logic, continuity "
+             "and structure questions in the walk-through scope, have Astra "
+             "review the survivors, and rewrite the result for re-delivery; "
+             "nothing is re-read")
+    gr.add_argument("workspace", help="the Galley workspace of a completed fixed run")
+    gr.add_argument("--book", required=True, help="the incoming manuscript the run was started from")
+    gr.add_argument("--budget", type=float, default=10.0, help="API ceiling in USD for the new calls")
+    gr.add_argument("--json", action="store_true")
+
     gl = gsub.add_parser(
         "letter", help="render the editorial letter and style sheet from a case "
                        "file — a report on the run, no API, no new decisions")

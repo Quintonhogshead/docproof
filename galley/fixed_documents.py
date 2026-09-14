@@ -250,7 +250,10 @@ def _verify_result(result, directory):
     stages = result["stages"]
     expected = (["poetry", "typed", "poetry_complete"] if result["poetry_only"] else
                 ["poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks", "ensemble_sweep", "continuity", "fable", "astra"])
-    if [s["stage"] for s in stages] != expected:
+    names = [s["stage"] for s in stages]
+    # A completed run may be extended once by the receipted re-screening of
+    # its final readers' questions (galley.fixed_reinstate).
+    if names != expected and names != expected + ["walkthrough_questions"]:
         raise FixedDocumentError("A required fixed proofreading stage is missing or out of order")
     protected_poetry = set()
     for stage in stages:
@@ -311,7 +314,8 @@ def _report(result, details, receipt=None):
         "broken_repair": "Broken sentence repair", "checks": "Meaning and correction checks",
         "ensemble_sweep": "Opus and Sol complete readings", "continuity": "Fable whole-book continuity reading",
         "fable": "Fable final reading and comment review",
-        "astra": "Astra final reading and comment review", "poetry_complete": "Spelling-only proofread complete"}
+        "astra": "Astra final reading and comment review", "poetry_complete": "Spelling-only proofread complete",
+        "walkthrough_questions": "Final readers' questions re-screened in the walk-through scope"}
     lines = ["# Galley proofreading report", "", f"Scope: {scope}.", "",
              f"{len(edits)} tracked corrections across {paragraphs} paragraphs; {len(result['questions'])} author questions.", "",
              "## Corrections", ""]

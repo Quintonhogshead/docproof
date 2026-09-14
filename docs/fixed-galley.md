@@ -163,6 +163,27 @@ opted out, is not part of the fixed local checks: on the first production book
 it produced 6,961 screening sites of which 33 were applied, and screening them
 took 48 of the run's 103 minutes.
 
+## Screening a final reader's questions
+
+A Fable or Astra edit is accepted directly; a Fable or Astra question is a
+disputed site and goes to the Sonnet/Luna screen, with Opus on disagreement.
+That screen, and that Opus ruling, carry the walk-through rider: a question
+about a fact or logic a general reader would notice, a continuity
+contradiction, or a heading or running-head inconsistency is in scope when the
+reader names what only the author can supply and the text does not settle it.
+On Wilder's first v5 run the screen, judging under the plain contract, dropped
+seven of the eight such questions as "outside proofreading scope".
+
+A completed run can be extended once, under its own identity and with new
+receipts, by `docproof galley fixed-reinstate-questions <workspace> --book
+<manuscript>`: the dropped fact/logic, continuity and structure questions are
+screened again with the rider, Astra reviews every surviving question, a
+`walkthrough_questions` stage is recorded after `astra`, and the result and
+checkpoint are rewritten so the driver packages and delivers again. Nothing is
+re-read; no correction is added or removed (an edit a screener proposes in this
+step is recorded unapplied, because the run's meaning and correction gates did
+not see it). The certificate accepts the extra trailing stage.
+
 ## Explicit disagreement gate
 
 Every Opus adjudication request must contain actual, conflicting decisions from
