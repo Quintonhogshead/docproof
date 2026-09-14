@@ -114,3 +114,19 @@ def test_cli_prints_the_table_and_the_json(run, capsys):
     assert json.loads(capsys.readouterr().out)["run"]["attempts"] == 4
     assert (run / "runs" / "fixed" / "timeline.json").exists()
     assert main(["galley", "fixed-timeline", str(run / "nothing")]) == 2
+
+
+def test_a_running_attempt_is_in_flight_not_failed(run):
+    fixed = run / "runs" / "fixed"
+    entries = json.loads((fixed / "calls" / "budget.json").read_text())
+    entries["entries"]["e" * 64 + ":1"] = {"request_sha256": "e" * 64, "attempt": 1, "status": "started",
+                                          "usage": None, "api_usd": None, "reserved_output_tokens": 1000,
+                                          "reserved_api_usd": 0.1}
+    (fixed / "calls" / "budget.json").write_text(json.dumps(entries))
+    _call(fixed, "e" * 64, stage="fable", model="claude-fable-5-1", effort="high", status="started",
+          attempt=1, usage=None, events=[{"status": "started", "recorded_at": "2026-09-14T03:30:00+00:00"}])
+    report = summarize(run)
+    assert report["run"]["in_flight"] == 1 and report["run"]["failed_attempts"] == 1
+    fable = next(s for s in report["stages"] if s["stage"] == "fable")
+    assert fable["in_flight"] == 1 and fable["failed_attempts"] == 0
+    assert "in flight 1" in render(report)

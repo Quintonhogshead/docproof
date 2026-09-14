@@ -659,7 +659,9 @@ class FixedWorkflow:
             "Query only a real proofreading problem requiring specific missing author knowledge. "
             "Judge the text independently; another reader or a local flag is not proof of an error. "
             "reason is one short sentence of at most 25 words; leave replacement, question and missing_knowledge empty unless the action needs them. "
-            "Sites are named s01, s02, ... within this request; return each decision under exactly that name.",
+            "Sites are named s01, s02, ... within this request; return each decision under exactly that name. "
+            "action is apply, drop or query only: a proposal you accept is apply (never edit). Return every field of the decision "
+            "schema for every site, with an empty string where a field does not apply, and no field the schema does not name.",
             {"story_sheet": self.context, **packet(batch)}, DECISIONS, max_tokens=16000))
             for batch in batches for model in PAIR]
         answers = iter(self.scheduler.map(jobs))

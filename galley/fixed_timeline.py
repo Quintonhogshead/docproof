@@ -89,10 +89,12 @@ def summarize(directory) -> dict:
         key = (row["stage"], row["model"], row["effort"])
         stage = stages.setdefault(key, {
             "stage": row["stage"], "model": row["model"], "effort": row["effort"],
-            "attempts": 0, "failed_attempts": 0, "first_started": None, "last_finished": None,
+            "attempts": 0, "failed_attempts": 0, "in_flight": 0, "first_started": None, "last_finished": None,
             "seconds": [], "api_usd": 0.0, "tokens": {k: 0 for k in TOKEN_FIELDS}})
         stage["attempts"] += 1
-        if row["status"] not in {"completed", "reused"}:
+        if row["status"] in {"started", "unknown"}:
+            stage["in_flight"] += 1          # a running workspace, or an unresolved submission
+        elif row["status"] not in {"completed", "reused"}:
             stage["failed_attempts"] += 1
         for k in TOKEN_FIELDS:
             stage["tokens"][k] += row["usage"].get(k) or 0
@@ -118,6 +120,7 @@ def summarize(directory) -> dict:
     return {"directory": str(fixed_directory(directory)),
             "run": {"attempts": len(rows),
                     "failed_attempts": sum(s["failed_attempts"] for s in ordered),
+                    "in_flight": sum(s["in_flight"] for s in ordered),
                     "first_started": min(starts).isoformat() if starts else None,
                     "last_finished": max(ends).isoformat() if ends else None,
                     "span_seconds": (max(ends) - min(starts)).total_seconds() if starts and ends else None,
@@ -131,7 +134,8 @@ def render(report: dict) -> str:
     span = run["span_seconds"]
     lines = [f"fixed proofread: {report['directory']}",
              f"attempts {run['attempts']}  failed {run['failed_attempts']}  "
-             f"span {span / 60:.1f} min  api ${run['api_usd']:.2f}  "
+             + (f"in flight {run['in_flight']}  " if run.get('in_flight') else "")
+             + f"span {span / 60:.1f} min  api ${run['api_usd']:.2f}  "
              f"input {run['tokens']['input_tokens'] / 1000:.0f}k  "
              f"cache read {run['tokens']['cache_read_input_tokens'] / 1000:.0f}k  "
              f"cache write {run['tokens']['cache_creation_input_tokens'] / 1000:.0f}k  "
