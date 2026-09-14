@@ -17,15 +17,20 @@ editorial approval step.
    This produces coverage-checked reading notes, then a storysheet and five-angle
    brief. Large paragraphs and long books are partitioned, never silently cut off.
 3. The Fly web server calls `Qwen/Qwen3.6-27B` through DeepInfra, using the
-   key already stored in DocProof settings. Qwen writes every author-facing field.
-4. Sol checks the exact Qwen draft against every source portion, then reviews all
+   key already stored in DocProof settings. Qwen writes the initial package.
+4. Sol checks the exact saved draft against every source portion, then reviews all
    five options and the author guide. Approval is bound to the saved draft hash
-   and the complete list of manuscript portions. Sol returns feedback, never
-   replacement teaser wording.
-5. Failed reviews automatically return to Qwen. Previously passing Qwen options
+   and the complete list of manuscript portions. Sol can directly correct names,
+   short factual phrases or individual sentences. Each exact replacement needs
+   manuscript evidence and is limited to 40 words/320 characters; a review can
+   replace at most five spans and 80 words in total. The corrected package is saved
+   with its edit history and receives a complete fresh source check and approval.
+   Proposed edits cannot approve their own output. After two correction rounds,
+   remaining issues automatically return to Qwen.
+5. Larger revisions automatically return to Qwen. Previously passing options
    retain their exact text while failed copy is revised. The complete assembled
    package still receives a fresh, source-bound review; retained prose has an
-   internal provenance link to its original draft. After five unsuccessful drafts,
+   internal provenance link to its original draft. After five unsuccessful Qwen drafts,
    Sol refreshes the brief. Temporary failures retry with increasing delays, up
    to six hours; completed, validated Sol answers are reused. At most twelve Qwen
    submissions per book per rolling day are allowed; work resumes automatically

@@ -1,4 +1,4 @@
-"""Coverage-accounted Sol analysis and review; Qwen owns every final sentence."""
+"""Coverage-accounted Sol analysis, review and bounded corrections to Qwen drafts."""
 from __future__ import annotations
 
 from pathlib import Path

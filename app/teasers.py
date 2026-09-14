@@ -1,7 +1,7 @@
 """Durable teaser queue shared by app formatting and DocWatch formatting.
 
-Only Qwen output saved by this server can reach Google. Worker reviews are bound
-to its exact hash. Network writes and per-book mutations have process-safe locks.
+Only saved, reviewed drafts can reach Google. Sol corrections are bounded and
+rechecked against their new hash. Network and per-book writes have process-safe locks.
 """
 from __future__ import annotations
 
@@ -17,8 +17,9 @@ import uuid
 from docproof import platform_io
 from docproof.promo.ingest import read_manuscript
 from docproof.providers import strict_json_schema
-from docproof.teasers import QWEN_MODEL, VERSION
-from docproof.teasers.models import Draft, Review, Storysheet, approval_issues, draft_issues, digest
+from docproof.teasers import QWEN_MODEL, SOL_MODEL, VERSION
+from docproof.teasers.models import (Draft, Review, Storysheet, approval_issues,
+                                    apply_small_edits, draft_issues, digest)
 from docproof.teasers.pipeline import chunks, evidence_for, validate_story
 from docproof.teasers.prompts import writer_prompt
 
@@ -242,8 +243,10 @@ def generate_draft(queue, task, *, provider=None):
                 sorted(o.number for o in review.options) == [1, 2, 3, 4, 5]):
             passed = {o.number for o in review.options if all((o.accurate, o.spoiler_safe,
                        o.clear, o.faithful_voice, o.distinct_angle))}
+            passed -= {e.index for e in review.edits if e.field in ("teaser", "angle")}
             retained = {o.number: o for o in prior.teasers if o.number in passed}
-            retain_guidance = review.guidance_approved
+            retain_guidance = review.guidance_approved and not any(
+                e.field not in ("teaser", "angle") for e in review.edits)
     system, user = writer_prompt(story.model_dump(), evidence_for(story.public_facts, task["chunks"]),
                                 previous, task.get("feedback"), sorted(retained))
     task["progress"] = "Qwen is writing five teasers and author guidance"
@@ -268,7 +271,7 @@ def generate_draft(queue, task, *, provider=None):
             raise TeaserError("Qwen did not complete the teaser package: " +
                               (result.error or result.stop_reason))
         draft = Draft.model_validate(result.parsed)
-        # Preserve only Qwen-authored text that passed the prior source-bound
+        # Preserve only saved text that passed the prior source-bound
         # review. The assembled package gets a new hash and a complete new review.
         if retained:
             draft.teasers = [retained.get(o.number, o) for o in draft.teasers]
@@ -280,8 +283,10 @@ def generate_draft(queue, task, *, provider=None):
                          if retained or retain_guidance else None)
         task["drafts"].append({"content": draft.model_dump(), "sha256": digest(draft),
                                "model": QWEN_MODEL, "provider": "deepinfra",
+                               "operation": "generation",
                                "retained_from": retained_from,
                                "usage": vars(result.usage)})
+        task["small_edit_rounds"] = 0
         task["progress"] = "Waiting for Sol to review the Qwen draft"
         queue.save(task, "drafted")
     except Exception as exc:
@@ -293,25 +298,52 @@ def generate_draft(queue, task, *, provider=None):
 def accept_review(queue, task, raw):
     review = Review.model_validate(raw)
     if not task["drafts"]:
-        raise TeaserError("There is no Qwen draft to review.")
+        raise TeaserError("There is no saved draft to review.")
+    same_review = (bool(task["reviews"]) and
+                   digest(review) == digest(Review.model_validate(task["reviews"][-1])))
+    if (task["state"] == "drafted" and same_review and
+            task["drafts"][-1].get("operation") == "bounded_correction" and
+            task["drafts"][-1].get("base_sha256") == review.draft_sha256):
+        # The correction was saved but its acknowledgement was lost.
+        return task
     draft = Draft.model_validate(task["drafts"][-1]["content"])
     if review.draft_sha256 != digest(draft):
         raise TeaserError("Sol reviewed a different draft; approval was not accepted.")
     if task["state"] in ("approved", "complete"):
-        if digest(raw) != digest(task["reviews"][-1]):
+        if not same_review:
             raise TeaserError("An approved review cannot be replaced.")
         return task
     if task["state"] != "drafted":
         # Recover an acknowledgement lost after a rejected review was saved.
-        if task["reviews"] and digest(raw) == digest(task["reviews"][-1]):
+        if same_review:
             return task
         raise TeaserError("This task is not waiting for editorial review.")
     issues = approval_issues(draft, review, [c["id"] for c in task["chunks"]])
     task["reviews"].append(review.model_dump())
     task["feedback"] = issues + review.feedback + [o.feedback for o in review.options if o.feedback]
+    if review.edits:
+        try:
+            if (sorted(review.covered_chunk_ids) != [c["id"] for c in task["chunks"]] or
+                    sorted(o.number for o in review.options) != [1, 2, 3, 4, 5]):
+                raise ValueError("Small corrections require a complete review of the manuscript and all five options.")
+            if task.get("small_edit_rounds", 0) >= 2:
+                raise ValueError("Two correction rounds have been used; ask Qwen for the remaining revisions.")
+            corrected = apply_small_edits(draft, review.edits,
+                {p["id"] for c in task["chunks"] for p in c["paragraphs"]})
+            task["drafts"].append({"content": corrected.model_dump(), "sha256": digest(corrected),
+                "model": SOL_MODEL, "provider": "chatgpt-subscription", "operation": "bounded_correction",
+                "base_sha256": digest(draft), "review_sha256": digest(review),
+                "edits": [e.model_dump() for e in review.edits]})
+            task["small_edit_rounds"] = task.get("small_edit_rounds", 0) + 1
+            task["progress"] = "Sol corrected small errors; checking the corrected package against the manuscript"
+            queue.save(task, "drafted")
+            return queue.get(task["id"])
+        except ValueError as exc:
+            task["feedback"].append(str(exc))
     task["progress"] = "Approved; waiting for Google Docs upload" if not issues else "Qwen revisions needed"
     state = "approved" if not issues else "story_ready"
-    if issues and len(task["drafts"]) % MAX_DRAFTS_PER_CYCLE == 0:
+    generations = sum(d.get("operation") != "bounded_correction" for d in task["drafts"])
+    if issues and generations and generations % MAX_DRAFTS_PER_CYCLE == 0:
         # Sol revisits the angle and premise after a stalled revision cycle;
         # completed manuscript readings remain reusable on the cloud worker.
         task.setdefault("prior_storysheets", []).append(task.pop("storysheet"))

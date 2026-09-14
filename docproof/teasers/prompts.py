@@ -73,7 +73,7 @@ authorship or promise any detector or watermark outcome.
 On revision, return the complete replacement package, correcting every review issue.
 Make targeted repairs to failed copy. Do not introduce new concrete story details
 while fixing an error. Preserve any approved options listed below verbatim; the
-server retains their exact Qwen wording. Every part of the resulting package will
+server retains their exact approved wording. Every part of the resulting package will
 still receive a fresh review against the manuscript.
 STORYSHEET:\n""" + data(story) + "\nORIGINAL EVIDENCE:\n" + data(evidence)
         + "\nPREVIOUS DRAFT:\n" + data(previous) + "\nEDITORIAL FEEDBACK:\n" + data(feedback)
@@ -94,16 +94,28 @@ Do not rewrite any copy. Return the supplied draft hash and chunk ID exactly.
 
 def review_prompt(story, draft, source_reviews, issues, draft_hash):
     return SOURCE_RULE + standard() + """
-FINAL APPROVAL STAGE. Review the exact Qwen package below. Every original manuscript
+FINAL APPROVAL STAGE. Review the exact saved package below. Every original manuscript
 portion has been checked against this same draft; reconcile ALL source reviews.
 Check all five teasers separately for accuracy, spoiler safety, clarity, faithful
 voice, and a meaningfully distinct angle. Compare each to the actual whole-book
 reader promise. Check optional hooks, editorial note, elements, best practices and
 modification checklist for factual fidelity, usefulness and spoiler safety too.
 All deterministic issues below must be resolved before approval. Recommend the
-strongest option by number. Return editorial feedback and approval only. Never
-return replacement teaser sentences or a polished rewrite. Return the supplied
-draft hash exactly and list every source-review chunk ID exactly once. Set approved
-false for any unresolved concern. A malformed or missing review is not approval.
+strongest option by number. For a small localized error, directly propose an exact
+replacement in edits: a name, short factual phrase, or one sentence. Do not rewrite
+an option or polish already sound prose. At most five replacements, each before
+and after at most 40 words and 320 characters, at most 80 words total on each side.
+Use field=teaser for prose, index=option number (1–5), paragraph=one-based paragraph.
+Other fields use a one-based item index and paragraph=1; editorial_note uses index=1.
+The before text must occur exactly once in that field. Include a concise reason
+and manuscript paragraph_ids supporting each correction. Keep required word counts.
+Use edits only when these small replacements can resolve the remaining concerns.
+For broader problems, return edits=[] and precise feedback for Qwen. Never return
+a replacement package. Any proposed edits mean approved=false, and affected options
+or guidance must fail their relevant checks. The server applies valid corrections
+and requires a complete fresh manuscript review before upload. Return edits=[] when
+the saved copy is ready. Return the supplied draft hash exactly and list every
+source-review chunk ID exactly once. Set approved=false for any unresolved concern.
+A malformed or missing review is not approval.
 """ + data({"storysheet": story, "draft": draft, "draft_sha256": draft_hash,
                 "source_reviews": source_reviews, "required_fixes": issues})

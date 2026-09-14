@@ -21,7 +21,7 @@ from docproof.teasers import QWEN_MODEL, SOL_MODEL
 from docproof.teasers import pipeline
 from docproof.teasers.document import write_document
 from docproof.teasers.models import (Draft, Teaser, Element, Fact, Storysheet,
-    Review, OptionCheck, digest, draft_issues, approval_issues)
+    Review, OptionCheck, SmallEdit, apply_small_edits, digest, draft_issues, approval_issues)
 
 
 @pytest.fixture
@@ -241,6 +241,84 @@ def test_generation_daily_ceiling_resumes_without_editor(queued, story, draft):
     task = generate_draft(queue, task, provider=object())
     assert task["state"] == "retry_wait"
     assert task["retry_at"] > time.time() + 86000
+
+
+def correction(draft):
+    review = approved(draft)
+    review.approved = False
+    review.options[0].accurate = False
+    review.edits = [SmallEdit(field="teaser", index=1, paragraph=1, before="Mara returns",
+                             after="Mara comes back", reason="Clarify the return.", paragraph_ids=[1])]
+    return review
+
+
+def test_small_sol_edit_is_exact_durable_and_requires_new_approval(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    review = correction(draft)
+    corrected = accept_review(queue, task, review.model_dump())
+    assert corrected["state"] == "drafted"
+    entry = corrected["drafts"][-1]
+    result = Draft.model_validate(entry["content"])
+    assert result.teasers[0].paragraphs[0] == draft.teasers[0].paragraphs[0].replace("Mara returns", "Mara comes back")
+    assert result.teasers[0].paragraphs[1] == draft.teasers[0].paragraphs[1]
+    assert result.teasers[1:] == draft.teasers[1:]
+    assert result.elements == draft.elements
+    assert entry["model"] == SOL_MODEL and entry["base_sha256"] == digest(draft)
+    assert entry["sha256"] != digest(draft)
+    assert accept_review(queue, corrected, review.model_dump())["drafts"] == corrected["drafts"]
+    with pytest.raises(TeaserError, match="Only an approved"):
+        deliver(queue, corrected, queue.root.parent)
+    assert approval_issues(draft, review, [1])
+    assert accept_review(queue, corrected, approved(result).model_dump())["state"] == "approved"
+
+
+@pytest.mark.parametrize("change", [
+    {"before": "not in draft"}, {"before": "the"}, {"paragraph_ids": [999]},
+    {"paragraph_ids": []}, {"index": 0}, {"paragraph": 99},
+    {"after": "word " * 41}, {"after": "x" * 321}, {"after": ""},
+    {"after": "A new paragraph.\nAnother paragraph."},
+])
+def test_invalid_small_edit_falls_back_to_qwen_without_changing_copy(queued, story, draft, change):
+    queue, task = drafted(queued, story, draft)
+    review = correction(draft)
+    review.edits[0] = SmallEdit.model_validate({**review.edits[0].model_dump(), **change})
+    result = accept_review(queue, task, review.model_dump())
+    assert result["state"] == "story_ready"
+    assert len(result["drafts"]) == 1
+    assert result["drafts"][-1]["content"] == draft.model_dump()
+
+
+def test_small_edit_batch_is_atomic_bounded_and_covers_guidance(draft):
+    first = correction(draft).edits[0]
+    second = SmallEdit(field="hook", index=1, paragraph=1,
+                      before="ticket", after="boat ticket", reason="Clarify the hook.", paragraph_ids=[1])
+    result = apply_small_edits(draft, [first, second], {1})
+    assert result.opening_hooks[0] == draft.opening_hooks[0].replace("ticket", "boat ticket")
+    second.before = "missing"
+    with pytest.raises(ValueError):
+        apply_small_edits(draft, [first, second], {1})
+    assert "Mara returns" in draft.teasers[0].paragraphs[0]
+    with pytest.raises(ValueError, match="at most five"):
+        apply_small_edits(draft, [first] * 6, {1})
+    with pytest.raises(ValueError, match="80 words"):
+        apply_small_edits(draft, [first.model_copy(update={"after": "word " * 30})] * 3, {1})
+
+
+def test_small_edit_loop_returns_to_qwen_and_does_not_count_as_generation(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    task["small_edit_rounds"] = 2
+    task["drafts"] += [{**task["drafts"][0], "operation": "bounded_correction"}] * 4
+    result = accept_review(queue, task, correction(draft).model_dump())
+    assert result["state"] == "story_ready" and "storysheet" in result
+    assert len(result["drafts"]) == 5
+
+
+def test_small_edit_cannot_skip_manuscript_coverage(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    review = correction(draft)
+    review.covered_chunk_ids = []
+    result = accept_review(queue, task, review.model_dump())
+    assert result["state"] == "story_ready" and len(result["drafts"]) == 1
 
 
 def test_provider_failure_retries_and_does_not_publish(queued, story):

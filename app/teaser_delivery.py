@@ -115,7 +115,7 @@ def deliver(queue, task, home, *, token=None, opener=drive._open_url):
     if task["state"] == "complete":
         return task
     if task["state"] != "approved":
-        raise TeaserError("Only an approved Qwen package can be uploaded.")
+        raise TeaserError("Only an approved teaser package can be uploaded.")
     draft = Draft.model_validate(task["drafts"][-1]["content"])
     review = Review.model_validate(task["reviews"][-1])
     issues = approval_issues(draft, review, [c["id"] for c in task["chunks"]])
