@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 from .models import Finding, ParagraphRef, Usage
 from .providers import Provider
 from .providers.base import strict_json_schema
-from .spellscan import _WORD, _dictionary
+from .spellscan import _WORD, _dictionary, _sentence_initial
 from .sweeps import sentence_window
 from .windowing import WindowReport, log_report, resolve_window
 
@@ -349,21 +349,27 @@ _MAX_ASK_SITES = 12        # a real word matching more unclaimed sites than this
                            # surface is dropped (logged), never a flood of queries
 
 
-def _propagatable(delete_text: str, insert_text: str) -> bool:
+def _propagatable(delete_text: str, insert_text: str, *, casing: bool = False) -> bool:
     """Whether a validated edit's minimal diff is a whole-word/short-phrase swap
-    that means the same thing wherever the surface appears."""
+    that means the same thing wherever the surface appears. A casing-only swap
+    (god -> God) is admitted only when the caller asks for it (`casing`): it is
+    a house decision worth carrying book-wide, but only where every proposal is
+    screened in context, since the same surface can be a common noun elsewhere."""
     return (bool(delete_text)
             and len(delete_text) >= _MIN_PROPAGATE_LEN
             and delete_text == delete_text.strip()
             and bool(_PROPAGATABLE_SURFACE.match(delete_text))
-            and delete_text.lower() != insert_text.strip().lower())
+            and (delete_text.lower() != insert_text.strip().lower()
+                 or (casing and delete_text != insert_text.strip())))
 
 
-def _word_bounded(surface: str) -> "re.Pattern[str]":
-    """A case-insensitive, word-bounded match for a surface — the same boundary
-    `site_word_candidates` uses, so a fix never lands inside a longer word."""
+def _word_bounded(surface: str, *, exact: bool = False) -> "re.Pattern[str]":
+    """A word-bounded match for a surface — the same boundary
+    `site_word_candidates` uses, so a fix never lands inside a longer word.
+    Case-insensitive unless `exact`, which a casing seed needs: `god` must
+    match only `god`, never `God` or `GOD`."""
     return re.compile(r"(?<![A-Za-z’'])" + re.escape(surface)
-                      + r"(?![A-Za-z’'])", re.IGNORECASE)
+                      + r"(?![A-Za-z’'])", 0 if exact else re.IGNORECASE)
 
 
 def propagate_recurrences(validated: Sequence[Finding],
@@ -371,7 +377,9 @@ def propagate_recurrences(validated: Sequence[Finding],
                           dictionary: str = "en_US",
                           protected: Sequence[str] = (),
                           max_sites_per_surface: int = 200,
-                          id_prefix: str = "rp") -> list[Finding]:
+                          id_prefix: str = "rp",
+                          casing: bool = False,
+                          max_ask_sites: int = _MAX_ASK_SITES) -> list[Finding]:
     """Re-emit every validated word/phrase swap at its other occurrences.
 
     A deterministic post-pass, generalizing `site_word_candidates`: it reads the
@@ -398,6 +406,13 @@ def propagate_recurrences(validated: Sequence[Finding],
         are skipped, so propagation never fights an existing finding for a span.
       * `protected` (the spell scan's lexicon) is honoured: a coined word the
         author owns is never swept, even if one site happened to be ruled an edit.
+      * With `casing`, a casing-only swap (god -> God) seeds too. Its sites are
+        matched case-sensitively on the exact old surface, skip sentence-initial
+        positions (a capital there is the sentence's doing, evidence for
+        neither side), take the exact new form, and are emitted as ordinary
+        edits rather than queries — for a caller whose screen reads every
+        proposal in context. `max_ask_sites` is the common-word query cap; a
+        caller with such a screen can lift it.
     """
     if not validated or not paragraphs:
         return []
@@ -419,6 +434,8 @@ def propagate_recurrences(validated: Sequence[Finding],
     from .validator import _is_imported     # provenance test; no import cycle
     fixes: dict[str, set[str]] = {}
     base: dict[str, str] = {}     # a fix in its natural casing, for _match_case
+    casing_olds: dict[str, set[str]] = {}   # key -> exact old surfaces of casing seeds
+    seed_sites: dict[str, int] = {}          # key -> how many validated sites seeded it
     for f in validated:
         if (f.status != "validated" or f.anchor is None or f.format
                 or f.force_query):
@@ -442,12 +459,13 @@ def propagate_recurrences(validated: Sequence[Finding],
                 or f.chunk_id in _NON_SEEDING_SOURCES):
             continue
         d, ins = f.anchor.delete_text, f.anchor.insert_text
-        if not _propagatable(d, ins):
+        if not _propagatable(d, ins, casing=casing):
             continue
         key = d.lower()
         if key in protected_l:
             continue
         ins = ins.strip()
+        is_casing = casing and d.lower() == ins.lower()
         # The degenerate-surface guard, widened: a fix of more than two
         # words is a rewrite, and a surface that is a function word is
         # context — neither recurs as the same error elsewhere.
@@ -458,8 +476,14 @@ def propagate_recurrences(validated: Sequence[Finding],
                      if len(ins.split()) > _MAX_SEED_FIX_WORDS
                      else "function-word surface")
             continue
-        fixes.setdefault(key, set()).add(ins.lower())
+        # A casing seed keeps its exact fix, so `God` and `god` for one
+        # surface read as two fixes (ambiguous, dropped), and so do a casing
+        # fix and a spelling fix of the same surface.
+        fixes.setdefault(key, set()).add(ins if is_casing else ins.lower())
         base.setdefault(key, ins)
+        seed_sites[key] = seed_sites.get(key, 0) + 1
+        if is_casing:
+            casing_olds.setdefault(key, set()).add(d)
 
     surfaces = {k: base[k] for k, fs in fixes.items() if len(fs) == 1}
     if not surfaces:
@@ -471,11 +495,14 @@ def propagate_recurrences(validated: Sequence[Finding],
     n = 0
     for key in sorted(surfaces):
         fix_base = surfaces[key]
+        is_casing = key in casing_olds and fix_base.lower() == key
         # A real dictionary word can be correct as written at another site, so
         # its recurrences are asked about rather than silently changed; a non-word
-        # (a typo, a misspelled name) wants the same fix wherever it appears.
-        ask = _known(dic, key)
-        pat = _word_bounded(key)
+        # (a typo, a misspelled name) wants the same fix wherever it appears. A
+        # casing seed is neither: it is a screened edit at every exact-case site.
+        ask = False if is_casing else _known(dic, key)
+        pats = ([_word_bounded(old, exact=True) for old in sorted(casing_olds[key])]
+                if is_casing else [_word_bounded(key)])
         # Gather the eligible sites first, so a real-word surface that turns out
         # to be a common word (many sites) can be dropped whole rather than
         # emitting a flood of queries. A non-word typo keeps propagating to every
@@ -483,23 +510,30 @@ def propagate_recurrences(validated: Sequence[Finding],
         # wherever it appears.
         sites = []
         for p in paragraphs:
-            for m in pat.finditer(p.text):
-                start, end = m.start(), m.end()
-                if any(s < end and start < e
-                       for s, e in claimed.get(p.para_id, ())):
-                    continue
-                surface = m.group(0)
-                fix = _match_case(surface, fix_base)
-                if fix == surface:
-                    continue
-                sites.append((p, start, end, surface, fix))
-        if ask and len(sites) > _MAX_ASK_SITES:
+            for pat in pats:
+                for m in pat.finditer(p.text):
+                    start, end = m.start(), m.end()
+                    if any(s < end and start < e
+                           for s, e in claimed.get(p.para_id, ())):
+                        continue
+                    surface = m.group(0)
+                    if is_casing:
+                        if _sentence_initial(p.text, start):
+                            continue
+                        fix = fix_base
+                    else:
+                        fix = _match_case(surface, fix_base)
+                    if fix == surface:
+                        continue
+                    sites.append((p, start, end, surface, fix))
+        sites.sort(key=lambda site: (paragraphs.index(site[0]), site[1]))
+        if ask and len(sites) > max_ask_sites:
             # A dictionary word matching this widely is context-dependent, not a
             # recurring typo. Dropping it whole (and saying so) beats burying the
             # real findings under dozens of "may be correct as written" queries.
             log.info('Recurrence propagation: "%s" matches %d site(s) as a '
                      'common word; not propagated (over the %d-site query cap).',
-                     key, len(sites), _MAX_ASK_SITES)
+                     key, len(sites), max_ask_sites)
             continue
         emitted = 0
         for p, start, end, surface, fix in sites:
@@ -510,7 +544,13 @@ def propagate_recurrences(validated: Sequence[Finding],
             corrected = (window[:start - lo] + fix + window[end - lo:])
             n += 1
             emitted += 1
-            if ask:
+            if is_casing:
+                explanation = (
+                    f'"{surface}" was changed to "{fix}" at {seed_sites[key]} '
+                    f'other site(s) in this run; this occurrence was left '
+                    f'unchanged. Proposed the same casing here; drop if this use '
+                    f'is a different sense (a common noun, a title, quoted text).')
+            elif ask:
                 explanation = (
                     f'"{surface}" was changed to "{fix}" elsewhere in the '
                     f'manuscript; here it may be correct as written, so this '

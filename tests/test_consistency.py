@@ -990,3 +990,75 @@ def test_accent_loanword_respects_protection_and_accented_books():
     assert find_accent_loanwords(_paras("“Sí!” she said.")) == ()
     # An ordinary book mentions none of the table's words.
     assert find_accent_loanwords(_paras("The theater was dark.")) == ()
+
+
+# --- casing splits (earth ×11 / Earth ×3 in the Wilder galley) ----------------
+
+from docproof.consistency import CASE_SPLIT_KEY, find_case_splits
+
+
+def _earth_paras(lower=11, upper=3):
+    return _paras(*[f"What on earth is that, number {i}?" for i in range(lower)],
+                  *[f"Darkness cloaks the Earth once more, number {i}." for i in range(upper)],
+                  "Earth was quiet. She said, “Earth is home.”")   # sentence-initial: not counted
+
+
+def test_a_clear_casing_split_proposes_the_dominant_form_at_each_outlier():
+    paras = _earth_paras()
+    [split] = find_case_splits(paras)
+    assert split.key == "earth" and split.dominant == "earth" and split.clear
+    assert dict(split.counts) == {"earth": 11, "Earth": 3}
+    assert len(split.outliers) == 3 and all(o.form == "Earth" for o in split.outliers)
+    findings = [f for f in to_findings(find_inconsistencies(paras, case_splits=True), paras)
+                if f.error_type == CASE_SPLIT_KEY]
+    assert [f.finding_id for f in findings] == ["k-0001", "k-0002", "k-0003"]
+    assert all("cloaks the earth once more" in f.corrected_text for f in findings)
+    assert all(not f.force_query and f.confidence == "high" for f in findings)
+    assert "“earth” ×11 vs “Earth” ×3 outside sentence-initial position; dominant form “earth” leads 11 to 3" in findings[0].explanation
+
+
+def test_close_splits_report_counts_without_a_clear_verdict_and_tiny_ones_are_ignored():
+    [split] = find_case_splits(_earth_paras(4, 3))
+    assert not split.clear and split.dominant == "earth"
+    paras = _earth_paras(4, 3)
+    f = [f for f in to_findings(find_inconsistencies(paras, case_splits=True), paras) if f.error_type == CASE_SPLIT_KEY][0]
+    assert f.confidence == "medium" and "no form clearly dominates" in f.explanation and "×4" in f.explanation
+    assert find_case_splits(_earth_paras(2, 1)) == ()
+
+
+def test_allcaps_kinship_nouns_function_words_and_protected_terms_never_split():
+    okay = _paras(*[f"It was okay, number {i}." for i in range(18)], *[f"It was OK, number {i}." for i in range(2)])
+    assert find_case_splits(okay) == ()
+    mom = _paras(*[f"I told my mom about it, number {i}." for i in range(5)],
+                 *[f"Then Mom laughed at me, number {i}." for i in range(4)])
+    assert find_case_splits(mom) == ()
+    coach = _paras(*[f"The coach blew the whistle, number {i}." for i in range(4)],
+                   *[f"So Coach blew the whistle, number {i}." for i in range(5)])
+    assert find_case_splits(coach) == ()
+    he = _paras(*[f"I said he was late, number {i}." for i in range(6)],
+                *[f"I said He was late, number {i}." for i in range(3)])
+    assert find_case_splits(he) == ()
+    assert find_case_splits(_earth_paras(), protected=["Earth"]) == ()
+    assert find_case_splits(_earth_paras(), exclude=["earth"]) == ()
+
+
+def test_capitalized_phrases_count_only_as_bigrams():
+    paras = _paras(*[f"She found it in easy speed, number {i}." for i in range(6)],
+                   *[f"She found it in Easy Speed, number {i}." for i in range(2)],
+                   *[f"He sped up the speed, number {i}." for i in range(3)],
+                   "They met Atlas the Elephant at the Carve Surf & Coffee shop.",
+                   *[f"An elephant waited, number {i}." for i in range(4)],
+                   *[f"The coffee cooled, number {i}." for i in range(4)])
+    splits = {s.key: s for s in find_case_splits(paras)}
+    assert set(splits) == {"easy speed"}
+    assert dict(splits["easy speed"].counts) == {"easy speed": 6, "Easy Speed": 2}
+
+
+def test_the_default_scan_leaves_casing_splits_to_the_fixed_workflow():
+    paras = _earth_paras()
+    assert find_inconsistencies(paras).case_splits == ()
+    report = find_inconsistencies(paras, case_splits=True)
+    assert report.corrected == 3 and report.flagged == 0
+    cfg = load_config("config/default.yaml")
+    assert cfg.consistency.case_splits and cfg.consistency.case_split_dominance == 3
+    assert cfg.consistency.case_split_min_total == 5

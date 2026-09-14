@@ -388,3 +388,44 @@ def test_completion_short_phrase_recurrence_is_a_proposal(tmp_path):
     recurrence = [r for r in rows if r["source"] == "local:completion:recurrences"]
     assert len(recurrence) == 1 and recurrence[0]["replacement"] == "He slept somewhere."
     assert current["p2"] == "He slept some where."
+
+
+def test_recurrence_seeds_carry_casing_hyphenation_and_skip_sentence_capitals():
+    original = {"p1": "the god of war and a band-aid on it. he ran. yesterday he left. a grown up man.",
+                "p2": "unchanged."}
+    current = {"p1": "the God of war and a Band-Aid on it. he ran. Yesterday he left. a grown-up man.",
+               "p2": "unchanged."}
+    seeds = local._recurrence_seeds(original, current, set())
+    assert [(s.anchor.delete_text, s.anchor.insert_text) for s in seeds] == [
+        ("god", "God"), ("band-aid", "Band-Aid"), ("grown up", "grown-up")]
+    assert all(current["p1"][s.anchor.start:s.anchor.end] == s.anchor.insert_text for s in seeds)
+
+
+def test_completion_propagates_a_casing_decision_to_exact_case_sites(tmp_path):
+    source = prepared(para("p1", "She said thank god for the storm."),
+                      para("p2", "A god among men, he said. God knows."),
+                      para("p3", "GOD is great, she said."))
+    original = {p.para_id: p.text for p in source.doc.paragraphs}
+    current = {**original, "p1": "She said thank God for the storm."}
+    rows, evidence = local.collect_completion_candidates(source, original, current, tmp_path / "local",
+        identity=IDENTITY, stage="casing")
+    recurrence = [r for r in rows if r["source"] == "local:completion:recurrences"]
+    assert len(recurrence) == 1 and recurrence[0]["para_id"] == "p2" and recurrence[0]["action"] == "edit"
+    assert "A God among men" in recurrence[0]["replacement"]
+    assert 'changed to "God" at 1 other site(s)' in recurrence[0]["reason"]
+    assert packet(evidence)["casing_seed_keys"] == ["god"]
+
+
+def test_completion_seed_suppresses_the_case_split_scan_for_that_term(tmp_path):
+    lower = [para(f"l{i}", f"Sentence {i} about easy speed on the water.") for i in range(6)]
+    upper = [para(f"u{i}", f"Sentence {i} about Easy Speed on the water.") for i in range(2)]
+    source = prepared(*lower, *upper)
+    original = {p.para_id: p.text for p in source.doc.paragraphs}
+    current = {**original, "l0": "Sentence 0 about Easy Speed on the water."}
+    rows, evidence = local.collect_completion_candidates(source, original, current, tmp_path / "local",
+        identity=IDENTITY, stage="seeded")
+    assert not [r for r in rows if r["category"] == "case_split"]
+    assert packet(evidence)["casing_seed_keys"] == ["easy speed"]
+    recurrence = [r for r in rows if r["source"] == "local:completion:recurrences"]
+    assert {r["para_id"] for r in recurrence} == {f"l{i}" for i in range(1, 6)}
+    assert all("Easy Speed" in r["replacement"] for r in recurrence)

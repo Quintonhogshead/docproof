@@ -129,6 +129,16 @@ consistency:
   spelling_variants: true   # grey/gray, toward/towards (VarCon + Chicago table)
   abbreviations: true       # U.S./US, a.m./AM
   acronym_case: true        # NASA/Nasa (needs the spell dictionary)
+  # Casing splits outside sentence-initial position (earth/Earth, band-aid/
+  # Band-Aid, easy speed/Easy Speed). Fixed Galley only — its screen judges
+  # every proposal. The dominant form is proposed as a tracked edit when it
+  # leads case_split_dominance:1 over at least case_split_min_total uses;
+  # closer splits are proposed with their counts and no preference. ALLCAPS,
+  # capitalized phrases and determiner-led kinship nouns (my mom / Mom) are
+  # excluded.
+  case_splits: true
+  case_split_dominance: 3
+  case_split_min_total: 5
   # "us" also queries words the book spells the British way THROUGHOUT
   # (theatre, colour), one query per word proposing the American form —
   # regular British/American families only, so towards/grey never flag.

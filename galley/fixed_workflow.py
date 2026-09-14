@@ -17,7 +17,7 @@ from functools import partial
 
 from docproof.utils.files import write_atomic
 
-VERSION = "fixed-proofreading-v2"
+VERSION = "fixed-proofreading-v3"
 SONNET = "claude-sonnet-5"
 LUNA = "gpt-5.6-luna"
 OPUS = "claude-opus-5"
@@ -31,7 +31,11 @@ class FixedWorkflowError(ValueError):
 
 
 class RejectedModelProposal(FixedWorkflowError):
-    """A proposed correction lacks an exact anchor in its assigned text."""
+    """A proposed correction cannot be used: it lacks an exact anchor in its
+    assigned text (the default status) or its replacement is unusable."""
+    def __init__(self, message, status="rejected_no_anchor"):
+        super().__init__(message)
+        self.status = status
 
 
 def workflow_plan():
@@ -43,9 +47,10 @@ def workflow_plan():
         {"stage": "numbers", "model": f"{SONNET} + {LUNA}; disputes: {OPUS}", "description": "Review every extracted number in context against the existing house policy"},
         {"stage": "broken_repair", "model": OPUS, "description": "Repair triggered broken sentences with clear intended meaning"},
         {"stage": "checks", "model": LUNA, "description": "Meaning preservation and correction checks through the API"},
-        {"stage": "ensemble_sweep", "model": f"{OPUS} + {SOL}; disputes: {OPUS}", "description": "Independent complete reads, followed by deterministic recurrence and residual checks"},
-        {"stage": "fable", "model": FABLE, "description": "Read the corrected book and decide every proposed Galley comment"},
-        {"stage": "astra", "model": ASTRA, "description": "Read the Fable-corrected book and review every surviving comment"},
+        {"stage": "ensemble_sweep", "model": f"{OPUS} + {SOL}; disputes: {OPUS}", "description": "Independent complete reads, followed by deterministic recurrence, casing and residual checks"},
+        {"stage": "continuity", "model": f"{FABLE}; edits: {OPUS}", "description": "Whole-book continuity read with cited evidence; Opus rules on evidenced edits, unresolved contradictions become author questions"},
+        {"stage": "fable", "model": FABLE, "description": "Read the corrected book and decide every proposed Galley comment, then propagate its accepted corrections and casing decisions book-wide"},
+        {"stage": "astra", "model": ASTRA, "description": "Read the Fable-corrected book and review every surviving comment, then run the final propagation and consistency sweep"},
     ]
 
 
@@ -87,7 +92,45 @@ COMMENT_DECISION = _object(id=S, action=_enum("drop", "retain", "replace"),
 READ_SCHEMA = _object(reviewed_ids=_array(S), findings=_array(FINDING),
                       comment_decisions=_array(COMMENT_DECISION),
                       editorial_verdict=_enum("ready", "needs_human"))
-FRONTIER_SCHEMA = _object(**READ_SCHEMA["properties"], reviewed_check_ids=_array(S))
+EVIDENCE = _object(para_id=S, quote=S)
+# The final walk-through may raise what a human proofreader would mark beyond
+# clear mechanical errors; the ordinary readers keep the narrow vocabulary.
+FRONTIER_CATEGORIES = CATEGORIES + ("typesetting", "continuity", "fact_logic", "structure", "usage")
+FRONTIER_FINDING = _object(**{**FINDING["properties"], "category": _enum(*FRONTIER_CATEGORIES)},
+                           evidence=_array(EVIDENCE))
+FRONTIER_SCHEMA = _object(**{**READ_SCHEMA["properties"], "findings": _array(FRONTIER_FINDING)},
+                          reviewed_check_ids=_array(S))
+CONTINUITY_FINDING = _object(para_id=S, quote=S, occurrence=I, replacement=S,
+                             action=_enum("edit", "query"), category=_enum("continuity"),
+                             reason=S, question=S, missing_knowledge=S, evidence=_array(EVIDENCE))
+CONTINUITY_SCHEMA = _object(findings=_array(CONTINUITY_FINDING), reading_notes=S)
+CONTINUITY_WINDOW_CHARS = 1_500_000     # one request for any normal book
+CONTINUITY_RULING = (
+    "Settle EVERY continuity correction proposed by the whole-book reader. Each site names a current paragraph span; "
+    "proposals carry the reader's reasons and cited evidence; evidence_paragraphs holds the full text of every cited "
+    "paragraph, already verified verbatim; the story sheet is attached. Apply only when the evidence establishes that "
+    "the same referent is named or stated as in the replacement and the before span is an accidental departure. "
+    "replacement replaces exactly the before span and preserves all unchanged text inside it. Drop aliases, nicknames, "
+    "deliberate variation, in-world explanations, and anything the evidence does not settle. Query only a real "
+    "contradiction the book leaves unresolved; question and missing_knowledge must name the specific author decision. "
+    "Never change a number, date or age to repair arithmetic. Return one decision per site id.")
+_MARKUP = "*_`\\"
+
+
+def _replacement_problem(before, replacement, paragraph, lo, hi):
+    """Why a reader's replacement cannot be written as manuscript text, or None.
+    A reader once emitted *The Adventures of Huckleberry Finn* — Markdown
+    emphasis — into a tracked insertion; nothing between the reader and the
+    document had looked at the characters."""
+    if any(c in replacement and c not in before for c in _MARKUP):
+        return "Replacement contains markup characters"
+    if any(c in replacement and c not in paragraph for c in "\n\t"):
+        return "Replacement introduces a line break or tab the paragraph does not use"
+    if lo == 0 and replacement[:1].isspace() and not before[:1].isspace():
+        return "Replacement adds whitespace at the paragraph start"
+    if hi == len(paragraph) and replacement[-1:].isspace() and not before[-1:].isspace():
+        return "Replacement adds whitespace at the paragraph end"
+    return None
 DECISION = _object(id=S, action=_enum("apply", "drop", "query"), replacement=S,
                    reason=S, missing_knowledge=S, question=S)
 DECISIONS = _object(decisions=_array(DECISION))
@@ -200,6 +243,9 @@ def _candidate(row, texts, model, *, query_types=(), format_types=None):
         lo, hi, replacement = _minimal(quote, replacement, lo)
         if lo == hi and not replacement:
             return None
+        problem = _replacement_problem(texts[pid][lo:hi], replacement, texts[pid], lo, hi)
+        if problem:
+            raise RejectedModelProposal(problem, status="rejected_invalid_proposal")
     result = {"para_id": pid, "start": lo, "end": hi,
               "before": texts[pid][lo:hi], "replacement": replacement,
               "category": category, "action": action, "format": mark,
@@ -251,10 +297,10 @@ class FixedWorkflow:
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         from galley.fixed_intake import prepare_source
-        self.input_source = self.source
-        self.source, self.intake = prepare_source(self.input_source, self.directory)
-        self.progress = progress or (lambda *a, **k: None)
         self.cfg = configuration()
+        self.input_source = self.source
+        self.source, self.intake = prepare_source(self.input_source, self.directory, cfg=self.cfg)
+        self.progress = progress or (lambda *a, **k: None)
         self.base_policy = PROOFREADING_POLICY
         # NUMBER_POLICY already includes the shared proofreading contract.
         self.policy = NUMBER_POLICY + "\n\n" + editorial_policy()
@@ -341,7 +387,7 @@ class FixedWorkflow:
             from galley.fixed_screening import is_pair_disagreement
             if not payload.get("sites") or not all(is_pair_disagreement(s) for s in payload["sites"]):
                 raise FixedWorkflowError("Opus adjudication requires explicit Sonnet and Luna disagreement at every site")
-        policy = self.base_policy if stage in {"poetry", "poetry_sections", "story_sheet"} else self.policy
+        policy = self.base_policy if stage in {"poetry", "poetry_sections", "story_sheet", "continuity"} else self.policy
         result = self.scheduler.run(model, partial(self.calls.ask, stage, model=model, system=policy + "\n\n" + system,
                               user=_json(payload), schema=schema, schema_name="galley_fixed",
                               effort=effort, max_tokens=max_tokens, coverage=_call_coverage(payload, schema)))
@@ -471,7 +517,7 @@ class FixedWorkflow:
         try:
             candidate = _candidate(row, texts, model, **options)
         except RejectedModelProposal as exc:
-            self._reject_proposal(stage, row, texts, model, str(exc), "rejected_no_anchor")
+            self._reject_proposal(stage, row, texts, model, str(exc), exc.status)
             return None
         if candidate and candidate.get("format") and formatting is not None:
             lo, hi, pid = candidate["start"], candidate["end"], candidate["para_id"]
@@ -542,16 +588,20 @@ class FixedWorkflow:
         self._cancel()
         self.progress("local_progress", phase="typed", check="LanguageTool", completed=done, total=total)
 
-    def _local_completion(self, prepared):
+    def _local_completion(self, prepared, *, stage="completion", label="local_completion"):
+        """The deterministic propagation and consistency sweep over the current
+        book: recurrences of every accepted swap (including casing), casing
+        splits, residual house rules. Runs after each editing stage under its
+        own packet stage name, so each pass has its own receipt."""
         from galley.fixed_local import collect_completion_candidates
         self._cancel()
         snapshot = dict(self.current)
         rows, evidence = collect_completion_candidates(
             prepared, self.original, snapshot, self.directory / "local",
-            identity=self.identity, stage="completion", poetry_ids=self.poetry_ids, cfg=self.cfg)
+            identity=self.identity, stage=stage, poetry_ids=self.poetry_ids, cfg=self.cfg)
         candidates = self._local_candidates(rows, texts=snapshot, prepared=prepared)
-        self._apply("local_completion", self._adjudicate("local_completion", candidates))
-        self._checks("local_completion_checks", snapshot)
+        self._apply(label, self._adjudicate(label, candidates))
+        self._checks(label + "_checks", snapshot)
         self._cancel()
         return evidence
 
@@ -655,14 +705,144 @@ class FixedWorkflow:
             if len(site["proposals"]) > 1:
                 row["format"] = ""
             from galley.settle import xml_safe
+            paragraph = self.current[site["para_id"]]
+            problem = (None if row.get("format") else
+                       _replacement_problem(row["before"], row["replacement"], paragraph, row["start"], row["end"]))
             if (xml_safe(row["replacement"]) != row["replacement"]
                     or (row.get("format") and row["replacement"] != row["before"])):
+                problem = "Adjudicated proposal has unsafe text or changes a formatting-only span"
+            if problem:
                 self._reject_proposal(stage + "_screened", decision,
-                                      {site["para_id"]: self.current[site["para_id"]]}, "/".join(models),
-                                      "Adjudicated proposal has unsafe text or changes a formatting-only span")
+                                      {site["para_id"]: paragraph}, "/".join(models), problem)
                 continue
             accepted.append(row)
         return accepted
+
+    def _verified_evidence(self, stage, row, texts, model, book, *, required):
+        """Every cited site must exist verbatim in ANOTHER paragraph of the
+        current book; a finding whose evidence does not verify is discarded."""
+        evidence = row.get("evidence") or []
+        if required and not evidence:
+            self._reject_proposal(stage, row, texts, model, "Continuity edit lacks cited evidence")
+            return None
+        verified = []
+        for site in evidence:
+            pid = site.get("para_id") if isinstance(site, dict) else None
+            if pid not in book or pid == row.get("para_id"):
+                self._reject_proposal(stage, row, texts, model, "Evidence must cite another paragraph of the book")
+                return None
+            try:
+                lo, hi = _locate(book[pid], site.get("quote", ""), 1)
+            except FixedWorkflowError:
+                self._reject_proposal(stage, row, texts, model, "Continuity evidence does not occur verbatim in the book")
+                return None
+            verified.append({"para_id": pid, "quote": site["quote"], "start": lo, "end": hi})
+        return verified
+
+    def _continuity_candidate(self, stage, row, texts, model, book):
+        if row.get("para_id") in self.poetry_ids and row.get("action") == "edit":
+            self._reject_proposal(stage, row, texts, model, "Poetry receives spelling only")
+            return None
+        verified = self._verified_evidence(stage, row, texts, model, book, required=True)
+        if verified is None:
+            return None
+        candidate = self._reader_candidate(stage, row, texts, model, allowed_categories={"continuity"})
+        if candidate is None:
+            return None
+        candidate["evidence"] = verified
+        candidate["question"] = row.get("question", "")
+        return candidate
+
+    def _adjudicate_continuity(self, stage, candidates):
+        """Continuity edits skip the windowed pair screen — it cannot see the
+        cross-book evidence — and go to Opus with the cited paragraphs attached."""
+        from galley.settle import xml_safe
+        sites, accepted = [], []
+        for group in _groups(candidates):
+            row = group[0]
+            pid = row["para_id"]
+            lo, hi = min(x["start"] for x in group), max(x["end"] for x in group)
+            cited = sorted({e["para_id"] for x in group for e in x.get("evidence", [])})
+            sites.append({"id": "d-" + _hash([x["id"] for x in group])[:20], "para_id": pid,
+                          "start": lo, "end": hi, "before": self.current[pid][lo:hi],
+                          "paragraph": self.current[pid], "source": self.original[pid], "proposals": group,
+                          "evidence_paragraphs": {e: self.current[e] for e in cited}})
+        windows = list(_windows(sites, 20000))
+        jobs = [(OPUS, partial(self._ask, stage + "_adjudication", OPUS, CONTINUITY_RULING,
+                               {"story_sheet": self.context, "sites": window}, DECISIONS, effort="high"))
+                for window in windows]
+        for window, result in zip(windows, self.scheduler.map(jobs)):
+            decisions = self._drop_unreviewed(window) if result is None else result["decisions"]
+            _exact_ids([x["id"] for x in decisions], [x["id"] for x in window], "Continuity adjudication")
+            by_id = {x["id"]: x for x in decisions}
+            for site in window:
+                d = by_id[site["id"]]
+                pid = site["para_id"]
+                self.history.append({"stage": stage + "_adjudication", "site": site, "decision": d})
+                if d["action"] == "drop":
+                    continue
+                if d["action"] == "query":
+                    self._question(pid, self.current[pid], d["question"], d["missing_knowledge"], d["reason"], stage)
+                    continue
+                row = dict(site["proposals"][0])
+                row.update(start=site["start"], end=site["end"], before=site["before"], replacement=d["replacement"],
+                           reason=d["reason"], action="edit", format="", models=[FABLE, OPUS])
+                problem = _replacement_problem(row["before"], row["replacement"], self.current[pid], row["start"], row["end"])
+                if xml_safe(row["replacement"]) != row["replacement"]:
+                    problem = "Adjudicated correction contains unsupported control characters"
+                if problem:
+                    self._reject_proposal(stage + "_adjudication", d, {pid: self.current[pid]}, OPUS, problem)
+                    continue
+                accepted.append(row)
+        return accepted
+
+    def _continuity(self):
+        """Fable reads the whole current book once for what it contradicts
+        about itself. Evidenced edits go to Opus; unresolved contradictions
+        become author questions; nothing here proofreads."""
+        from galley.fixed_local import _paragraphs
+        from galley.press_prompt import CONTINUITY_TASK, EDITORIAL_RULES, FINAL_WALKTHROUGH_CHECK
+        snapshot = dict(self.current)
+        locations = {p.para_id: p.location for p in _paragraphs(self.prose_prepared, snapshot, set())}
+        # A list in reading order: _json sorts object keys, which would shuffle
+        # header and note ids out of the book's sequence.
+        rows = [{"id": pid, "text": text, "location": locations.get(pid, "body")}
+                for pid, text in snapshot.items() if text.strip()]
+        windows = list(_windows(rows, CONTINUITY_WINDOW_CHARS))
+        system = CONTINUITY_TASK + "\nCONSISTENCY\n" + EDITORIAL_RULES["consistency"] + "\n"
+        jobs = []
+        for index, window in enumerate(windows, 1):
+            part = ("This request holds the complete book." if len(windows) == 1 else
+                    f"This request holds part {index} of {len(windows)} in reading order; "
+                    "cite evidence only from paragraphs supplied here.")
+            payload = {"story_sheet": self.context, "book": window,
+                       "poetry_ids": sorted(self.poetry_ids & {r["id"] for r in window}),
+                       "complete_book": len(windows) == 1, "part": [index, len(windows)]}
+            jobs.append((FABLE, partial(self._ask, "continuity", FABLE, system + part, payload,
+                                        CONTINUITY_SCHEMA, effort="high", max_tokens=32000)))
+        candidates, queries, coverage = [], [], []
+        for window, result in zip(windows, self.scheduler.map(jobs)):
+            ids = [r["id"] for r in window]
+            if result is None:
+                coverage.append({"paragraph_ids": [], "assigned_paragraph_ids": ids, "status": "skipped"})
+                continue
+            texts = {r["id"]: r["text"] for r in window}
+            for row in result["findings"]:
+                candidate = self._continuity_candidate("continuity", row, texts, FABLE, snapshot)
+                if candidate:
+                    (queries if candidate["action"] == "query" else candidates).append(candidate)
+            coverage.append({"paragraph_ids": ids, "status": "completed", "findings": len(result["findings"]),
+                             "reading_notes": result.get("reading_notes", "")})
+        accepted = self._adjudicate_continuity("continuity", candidates)
+        self._apply("continuity", accepted)
+        self._checks("continuity_checks", snapshot,
+                     evidence={r["para_id"]: r["evidence"] for r in accepted}, rider=FINAL_WALKTHROUGH_CHECK)
+        for q in queries:
+            pid = q["para_id"]
+            quote = q["before"] if self.current[pid].count(q["before"]) == 1 else self.current[pid]
+            self._question(pid, quote, q["question"], q["missing_knowledge"], q["reason"], "continuity", model=FABLE)
+        self._record("continuity", coverage=coverage, requests=len(windows),
+                     candidates=len(candidates), queries=len(queries))
 
     def _question(self, pid, quote, question, missing, reason, stage, *, model=OPUS):
         row = {"para_id": pid, "quote": quote, "question": question,
@@ -729,6 +909,18 @@ class FixedWorkflow:
         self._apply("numbers", self._adjudicate("numbers", results, (SONNET, LUNA)))
         self._record("numbers", sites=sites)
 
+    def _dictionary_knows(self):
+        """The spelling dictionary as a predicate for the seam-hyphen check, or
+        None when it is unavailable (the check then reads as zero sites)."""
+        from functools import partial as _partial
+        from docproof.spellscan import dictionary_knows
+        from galley.fixed_local import FixedLocalError, _dictionary
+        try:
+            language = _dictionary(self.prose_prepared, self.cfg)
+        except (FixedLocalError, AttributeError):
+            return None
+        return _partial(dictionary_knows, dictionary=language)
+
     def _structure_context(self, snapshot):
         """Reuse local structure extraction on the reader's current text."""
         if self.prose_prepared is None:
@@ -756,15 +948,17 @@ class FixedWorkflow:
         structure, structure_ids = self._structure_context(snapshot) if stage in {"fable", "astra"} else (None, set())
         frontier = stage in {"fable", "astra"}
         focused, citations, formatting, parts = None, None, {}, {}
+        book = None
         if frontier:
-            from galley.press_prompt import FRONTIER_TASK
-            from galley.press_checks import focused_checks, citation_context, current_formatting
+            from galley.press_prompt import FRONTIER_TASK, FINAL_WALKTHROUGH
+            from galley.press_checks import focused_checks, citation_context, current_formatting, book_map
             from galley.fixed_local import _paragraphs
             paragraphs = _paragraphs(self.prose_prepared, snapshot, self.poetry_ids)
-            focused = focused_checks(paragraphs)
+            focused = focused_checks(paragraphs, knows=self._dictionary_knows())
             citations = citation_context(paragraphs)
             formatting = current_formatting(self.original, snapshot, self.source_marks, self.formats)
             parts = {p.para_id: {"part": p.part, "location": p.location} for p in paragraphs}
+            book = book_map(_paragraphs(self.prose_prepared, snapshot, set()), self.cfg.skip.is_sweep_only)
         jobs, windows = [], []
         order = list(snapshot)
         positions = {pid: i for i, pid in enumerate(order)}
@@ -784,7 +978,8 @@ class FixedWorkflow:
                        "poetry_ids": sorted(self.poetry_ids & set(owned)), "comments": questions}
             assigned = []
             if frontier:
-                scope += FRONTIER_TASK
+                scope += FRONTIER_TASK + FINAL_WALKTHROUGH
+                payload["book_map"] = book
                 assigned = [s for s in focused["sites"] if s["para_id"] in owned]
                 profile = focused["tense_profile"]
                 payload["focused_sites"] = assigned
@@ -800,7 +995,7 @@ class FixedWorkflow:
                     "formatting": formatting[pid]} for pid in owned}
             if structure is not None and structure_ids.intersection(owned):
                 payload["structure_context"] = structure
-                scope += ("The read-only structure_context is a bounded excerpt of the CURRENT book, not a complete inventory. "
+                scope += ("The read-only structure_context is a bounded opening-pages excerpt of the CURRENT book, not a complete inventory (book_map is). "
                           "Use it to compare clear contents/body wording or numbering errors only when both copies are present. "
                           "Do not infer missing entries from this excerpt; ignore page numbers, legitimate shortened titles, "
                           "and capitalization or punctuation preferences. Findings still belong only to owned paragraphs. ")
@@ -821,11 +1016,20 @@ class FixedWorkflow:
             if frontier:
                 _exact_ids(result.get("reviewed_check_ids", []), [s["id"] for s in assigned], stage + " focused-check coverage")
             for row in result["findings"]:
+                verified = []
+                if frontier:
+                    verified = self._verified_evidence(stage, row, owned, model, snapshot,
+                        required=(row.get("category") == "continuity" and row.get("action") == "edit"))
+                    if verified is None:
+                        continue
                 candidate = self._reader_candidate(stage, row, owned, model,
-                    allowed_categories={"broken_sentence", "author_question"} if stage == "broken_repair" else None,
+                    allowed_categories=({"broken_sentence", "author_question"} if stage == "broken_repair"
+                                        else set(FRONTIER_CATEGORIES) if frontier else None),
                     format_types={"format": "italic"} if frontier else None,
                     formatting=formatting if frontier else None)
                 if candidate:
+                    if frontier:
+                        candidate["evidence"] = verified
                     proposals.append(candidate)
             decisions.extend(result["comment_decisions"])
             coverage.append({"paragraph_ids": list(owned), "comment_ids": [x["id"] for x in questions],
@@ -893,11 +1097,17 @@ class FixedWorkflow:
         return [{"id": row["id"], "action": "drop", "origin": "code",
                  "reason": "Review unavailable; discard the unverified suggestion."} for row in rows]
 
-    def _checks(self, stage, before):
+    def _checks(self, stage, before, *, evidence=None, rider=""):
+        """`evidence` maps a paragraph id to the verified passages elsewhere in
+        the book that justify its change; `rider` widens the check prompts for
+        the final walk-through and continuity stages."""
         format_start = getattr(self, "_checked_format_count", 0)
         pending_formats = list(self.formats[format_start:])
+        evidence = evidence or {}
         changed = [{"id": pid, "source": self.original[pid], "before": before[pid], "after": text,
-                    "format_proposals": [f for f in pending_formats if f["para_id"] == pid]}
+                    "format_proposals": [f for f in pending_formats if f["para_id"] == pid],
+                    **({"evidence": [{**e, "text": self.current.get(e["para_id"], "")} for e in evidence[pid]]}
+                       if evidence.get(pid) else {})}
                    for pid, text in self.current.items() if pid not in self.poetry_ids
                    and (text != before[pid] or any(f["para_id"] == pid for f in pending_formats))]
         windows = list(_windows(changed, 16000))
@@ -908,7 +1118,7 @@ class FixedWorkflow:
             child.current, child.formats = dict(self.current), list(self.formats)
             child.history, child.questions = [], []
             child._check_questions = {}
-            child._check_window(stage, before, window, pending_formats)
+            child._check_window(stage, before, window, pending_formats, rider)
             return child
         with ThreadPoolExecutor(max_workers=max(1, min(len(windows), sum(self.scheduler.widths.values())))) as pool:
             futures = [_submit(pool, review, window) for window in windows]
@@ -931,7 +1141,7 @@ class FixedWorkflow:
         self._checked_format_count = len(self.formats)
         return changed
 
-    def _check_window(self, stage, before, changed, pending_formats):
+    def _check_window(self, stage, before, changed, pending_formats, rider=""):
         for kind in ("meaning", "correction"):
             question_start = len(self.questions)
             for window in _windows(changed, 16000):
@@ -944,7 +1154,7 @@ class FixedWorkflow:
                 result = self._ask(stage + "_" + kind, LUNA,
                     ("Judge whether ALL changes preserve meaning, facts, voice, deliberate fragments and dialect. " if kind == "meaning" else
                      "Judge whether ALL text AND formatting changes fix clear proofreading errors without new errors, stylistic rewriting, unnecessary changes or violations of house rules. ") +
-                    "Return one verdict per paragraph id. Approve only when the complete after paragraph is justified; otherwise reject. No new corrections or author comments.",
+                    "Return one verdict per paragraph id. Approve only when the complete after paragraph is justified; otherwise reject. No new corrections or author comments. " + rider,
                     {"story_sheet": self.context, "changes": active}, CHECK_SCHEMA)
                 if result is None:
                     for row in active:
@@ -968,7 +1178,7 @@ class FixedWorkflow:
                         "Independently judge EVERY proposed paragraph change using before, after, source and format_proposals. "
                         "Approve only when ALL changes " + ("preserve meaning, facts, voice, deliberate fragments and dialect. " if kind == "meaning" else
                         "fix clear proofreading errors without new errors, rewriting or house-rule violations. ") +
-                        "Return one verdict per id. Do not infer correctness from a preceding proofreader. No new edits or comments.",
+                        "Return one verdict per id. Do not infer correctness from a preceding proofreader. No new edits or comments. " + rider,
                         {"story_sheet": self.context, "changes": [sites[x["id"]] for x in rejected]}, CHECK_SCHEMA)
                     if confirmation is not None:
                         _exact_ids([d["id"] for d in confirmation["decisions"]], [r["id"] for r in rejected], stage + " Sonnet check")
@@ -986,7 +1196,7 @@ class FixedWorkflow:
                             automatic.append({"id": pid, "action": "drop", "origin": "code",
                                               "reason": "Both checks rejected the change or confirmation was unavailable."})
                     rulings = self._ask(stage + "_" + kind + "_disputes", OPUS,
-                        "Settle EVERY explicit disagreement between Sonnet and Luna in screening. Each id names a paragraph, before and after show the complete proposed text, and format_proposals list pending formatting edits. Apply only if the complete result is a clear proofreading correction; replacement is the COMPLETE final paragraph. Apply retains the pending formatting; drop restores before and rejects those formatting proposals. You may give a minimal corrected paragraph when that resolves the dispute. Query only an actual unresolved error needing specific author knowledge; it restores before and removes the disputed formatting. Never turn a model disagreement or operational failure into a comment. This is the single final adjudication for this check; no recursive rereads.",
+                        "Settle EVERY explicit disagreement between Sonnet and Luna in screening. Each id names a paragraph, before and after show the complete proposed text, and format_proposals list pending formatting edits. Apply only if the complete result is a clear proofreading correction; replacement is the COMPLETE final paragraph. Apply retains the pending formatting; drop restores before and rejects those formatting proposals. You may give a minimal corrected paragraph when that resolves the dispute. Query only an actual unresolved error needing specific author knowledge; it restores before and removes the disputed formatting. Never turn a model disagreement or operational failure into a comment. This is the single final adjudication for this check; no recursive rereads. " + rider,
                         {"story_sheet": self.context, "sites": disagreements}, DECISIONS, effort="high") if disagreements else {"decisions": []}
                     rulings = automatic + (self._drop_unreviewed(disagreements) if rulings is None else rulings["decisions"])
                     _exact_ids([x["id"] for x in rulings], [x["id"] for x in rejected], stage + " dispute coverage")
@@ -1014,7 +1224,7 @@ class FixedWorkflow:
         from galley.manifest import sha256_file
         if self.intake is not None:
             from galley.fixed_intake import validate_intake
-            validate_intake(self.directory, self.intake, self.source)
+            validate_intake(self.directory, self.intake, self.source, cfg=self.cfg)
             if sha256_file(self.input_source) != self.intake["original_sha256"]:
                 raise FixedWorkflowError("The incoming manuscript changed during the fixed proofread")
         if sha256_file(self.source) != self.identity["source_sha256"]:
@@ -1109,13 +1319,22 @@ class FixedWorkflow:
             self._checks("ensemble_sweep_checks", snapshot)
             completion = self._local_completion(prose_prepared)
             self._record("ensemble_sweep", readings=[x[2] for x in readings], local=completion)
+            self._stage("continuity")
+            self._continuity()
+            from galley.press_prompt import FINAL_WALKTHROUGH_CHECK
             for stage, model in (("fable", FABLE), ("astra", ASTRA)):
                 self._stage(stage)
                 snapshot = dict(self.current)
                 rows, comments, read_coverage = self._read(stage, model, comments=True)
                 # Overlapping proposals first require independent pair screening.
-                self._apply(stage, self._adjudicate(stage, rows, (model,)))
-                self._checks(stage + "_checks", snapshot)
+                accepted = self._adjudicate(stage, rows, (model,))
+                self._apply(stage, accepted)
+                self._checks(stage + "_checks", snapshot, rider=FINAL_WALKTHROUGH_CHECK,
+                             evidence={r["para_id"]: r["evidence"] for r in accepted if r.get("evidence")})
+                # Carry this reader's accepted decisions book-wide before its
+                # comment review, so questions are judged on the propagated text.
+                completion = self._local_completion(prose_prepared, stage="completion_" + stage,
+                                                    label="local_completion_" + stage)
                 self._comments(comments, stage, before=snapshot, model=model)
                 if stage == "astra":
                     self.needs_human = any(x["verdict"] == "needs_human" for x in read_coverage)
@@ -1124,9 +1343,9 @@ class FixedWorkflow:
                     audit = final_audit(prose_prepared,
                         _paragraphs(prose_prepared, self.current, self.poetry_ids), self.cfg)
                     audit["accepted_sha256"] = _hash(self.current)
-                    self._record(stage, coverage=read_coverage, press_audit=audit)
+                    self._record(stage, coverage=read_coverage, press_audit=audit, local=completion)
                 else:
-                    self._record(stage, coverage=read_coverage)
+                    self._record(stage, coverage=read_coverage, local=completion)
         self.calls.assert_complete()
         self._validate_source()
         result = {"identity": self.identity, "execution_mode": "fixed", "status": "completed",

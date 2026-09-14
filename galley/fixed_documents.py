@@ -179,6 +179,16 @@ def write_manuscripts(source, destination, accepted, questions=(), formats=()):
     return tracked, clean, details
 
 
+# Recipe versions whose stages carry deterministic local-check evidence, and
+# the packet stage each reading stage must certify. A version missing here
+# would silently skip the poetry and local-evidence checks.
+_LOCAL_EVIDENCE_VERSIONS = {
+    "fixed-proofreading-v2": {"typed": "initial", "ensemble_sweep": "completion"},
+    "fixed-proofreading-v3": {"typed": "initial", "ensemble_sweep": "completion",
+                              "fable": "completion_fable", "astra": "completion_astra"},
+}
+
+
 def _verify_result(result, directory):
     if result.get("execution_mode") != "fixed" or result.get("status") != "completed":
         raise FixedDocumentError("The fixed workflow has not completed")
@@ -208,7 +218,7 @@ def _verify_result(result, directory):
         raise FixedDocumentError("The fixed workflow checkpoint does not match its completed result")
     stages = result["stages"]
     expected = (["poetry", "typed", "poetry_complete"] if result["poetry_only"] else
-                ["poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks", "ensemble_sweep", "fable", "astra"])
+                ["poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks", "ensemble_sweep", "continuity", "fable", "astra"])
     if [s["stage"] for s in stages] != expected:
         raise FixedDocumentError("A required fixed proofreading stage is missing or out of order")
     protected_poetry = set()
@@ -219,7 +229,8 @@ def _verify_result(result, directory):
         payload = json.loads(path.read_text())
         if _hash(payload) != stage["sha256"]:
             raise FixedDocumentError("A fixed stage's reading evidence changed")
-        if stage["stage"] == "poetry" and result["identity"].get("version") == "fixed-proofreading-v2":
+        version = result["identity"].get("version")
+        if stage["stage"] == "poetry" and version in _LOCAL_EVIDENCE_VERSIONS:
             poetry_ids = payload.get("evidence", {}).get("poetry_ids")
             if (not isinstance(poetry_ids, list) or any(pid not in result["original"] for pid in poetry_ids)
                     or len(poetry_ids) != len(set(poetry_ids))):
@@ -227,11 +238,11 @@ def _verify_result(result, directory):
             protected_poetry = set(poetry_ids)
             if result["poetry_only"] != (protected_poetry == set(result["original"])):
                 raise FixedDocumentError("The fixed result disagrees with its poetry classification")
-        if (result["identity"].get("version") == "fixed-proofreading-v2"
-                and not result["poetry_only"] and stage["stage"] in {"typed", "ensemble_sweep"}):
+        if (version in _LOCAL_EVIDENCE_VERSIONS and not result["poetry_only"]
+                and stage["stage"] in _LOCAL_EVIDENCE_VERSIONS[version]):
             from galley.fixed_local import validate_local_evidence
             local = payload.get("evidence", {}).get("local")
-            expected_local_stage = "initial" if stage["stage"] == "typed" else "completion"
+            expected_local_stage = _LOCAL_EVIDENCE_VERSIONS[version][stage["stage"]]
             if not isinstance(local, dict) or local.get("stage") != expected_local_stage:
                 raise FixedDocumentError("Required deterministic proofreading evidence is missing")
             packet = validate_local_evidence(local, Path(directory) / "local", result["identity"])
@@ -259,7 +270,7 @@ def _verify_result(result, directory):
     return source
 
 
-def _report(result, details):
+def _report(result, details, receipt=None):
     edits = [x for x in details if x["applied"]]
     paragraphs = len({x["para_id"] for x in edits})
     scope = "Spelling only (poetry)" if result["poetry_only"] else "Clear proofreading errors only"
@@ -267,7 +278,8 @@ def _report(result, details):
     stage_labels = {"poetry": "Poetry classification", "story_sheet": "Story Sheet",
         "typed": "Proofreading detectors", "numbers": "Number style review",
         "broken_repair": "Broken sentence repair", "checks": "Meaning and correction checks",
-        "ensemble_sweep": "Opus and Sol complete readings", "fable": "Fable final reading and comment review",
+        "ensemble_sweep": "Opus and Sol complete readings", "continuity": "Fable whole-book continuity reading",
+        "fable": "Fable final reading and comment review",
         "astra": "Astra final reading and comment review", "poetry_complete": "Spelling-only proofread complete"}
     lines = ["# Galley proofreading report", "", f"Scope: {scope}.", "",
              f"{len(edits)} tracked corrections across {paragraphs} paragraphs; {len(result['questions'])} author questions.", "",
@@ -287,10 +299,23 @@ def _report(result, details):
         lines += ["", f"{len(rejected)} model suggestions were rejected because they failed proposal validation. "
                   "They produced no edits or author comments; "
                   "their original suggestions and reasons remain in the review evidence."]
-    if result["identity"].get("intake"):
+    receipt = receipt or {}
+    if result["identity"].get("intake") and (receipt.get("resolved_revision_elements") or not receipt):
         lines += ["", "Incoming tracked changes were accepted in a separate working baseline using Galley's intake policy. "
                   "The uploaded original is preserved with a verified receipt. Rejecting Galley's new corrections restores "
                   "that accepted baseline; it does not undo edits the manuscript arrived with."]
+    joins = receipt.get("runover_joins") or []
+    if joins:
+        continuation_lines = sum(len(j["absorbed"]) for j in joins)
+        lines += ["", "## Page-runover paragraphs joined at intake", "",
+                  f"{len(joins)} paragraphs that the typeset export had split across page boundaries "
+                  f"({continuation_lines} continuation lines) were rejoined in the working baseline before reading. "
+                  "The delivered manuscript carries them as single paragraphs; this structural join is not a tracked "
+                  "change, and rejecting Galley's corrections restores the joined baseline, not the split export.", ""]
+        for j in joins:
+            label = labels.get(j.get("baseline_para_id"), j.get("baseline_para_id"))
+            seams = ", ".join(str(o) for o in j.get("seam_offsets", []))
+            lines += [f"- {label}: joined {len(j['absorbed'])} continuation line(s) (seam at {seams})"]
     if result["identity"].get("press_prompt_sha256"):
         from collections import Counter
         stages = {s["stage"]: json.loads(Path(s["path"]).read_text())["evidence"] for s in result["stages"]}
@@ -358,7 +383,9 @@ def package_result(driver, result):
                 "execution_mode": "fixed", "findings": details}
     _save(run / "findings.json", findings)
     report = run / f"{source.stem} - Proofreading report.md"
-    write_atomic(report, _report(result, details))
+    from galley.fixed_calls import _load
+    receipt = (_load(directory / "intake/receipt.json") if "intake" in result["identity"] else None)
+    write_atomic(report, _report(result, details, receipt))
     evidence = run / f"{source.stem} - Review evidence.json"
     _save(evidence, result)
     outcome = run / f"{source.stem} - outcome.json"

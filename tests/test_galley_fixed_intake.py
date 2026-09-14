@@ -1,4 +1,5 @@
 """Real Word revision intake: originals, comments, crash recovery and tampering."""
+import json
 from zipfile import ZipFile
 
 from docx import Document
@@ -125,3 +126,86 @@ def test_deleted_paragraph_mark_uses_words_accepted_join_and_style(tmp_path):
     assert joined.style.name == "Quote"
     assert source.read_bytes() == original
     assert intake.validate_intake(tmp_path / "run", evidence) == baseline
+
+
+def runover_book(tmp_path, *, revisions=False):
+    """A typeset export: indented paragraphs, one split across a page boundary."""
+    from test_runover import INDENT, MARGIN, P, typeset_book
+    filler = [P(f"Body paragraph number {i} runs on for a while.", ind=INDENT) for i in range(12)]
+    path = typeset_book(tmp_path / "Writer - Galley.docx", *filler,
+                        P("“Fine,” he says. “I will", ind=INDENT),
+                        P("never understand the rules of this house.”", ind=MARGIN))
+    if revisions:
+        document = Document(path)
+        run = document.paragraphs[-1].runs[0]
+        run.text = "never understand the "
+        added = document.paragraphs[-1].add_run("rules of this house.”")
+        wrapper = etree.Element(qn("w:ins"), {qn("w:id"): "12", qn("w:author"): "Editor"})
+        added._r.addprevious(wrapper)
+        wrapper.append(added._r)
+        document.save(path)
+    return path
+
+
+def test_runover_book_without_revisions_gets_a_joined_baseline(tmp_path, monkeypatch):
+    source = runover_book(tmp_path)
+    before = source.read_bytes()
+    baseline, evidence = intake.prepare_source(source, tmp_path / "run")
+    assert baseline != source and source.read_bytes() == before
+    receipt = json.loads((tmp_path / "run/intake/receipt.json").read_text())
+    assert receipt["version"] == "fixed-intake-v2" == evidence["version"]
+    assert receipt["changed_parts"] == ["word/document.xml"]
+    assert receipt["resolved_revision_elements"] == {}
+    assert receipt["paragraph_id_space"] == "accepted-before-join"
+    assert receipt["indent_convention"]["applies"] is True
+    [join] = receipt["runover_joins"]
+    assert join["para_id"] == "body-0012" and join["absorbed"] == ["body-0013"]
+    assert join["seam_offsets"] == [len("“Fine,” he says. “I will") + 1]
+    views = paragraph_views(baseline)
+    assert views[join["baseline_para_id"]] == "“Fine,” he says. “I will never understand the rules of this house.”"
+    assert receipt["paragraphs"] == len(views)
+    assert intake.validate_intake(tmp_path / "run", evidence, baseline) == baseline
+    monkeypatch.setattr(intake, "join_runover_paragraphs", lambda *a, **k: pytest.fail("Baseline rebuilt on resume"))
+    assert intake.prepare_source(source, tmp_path / "run") == (baseline, evidence)
+
+
+def test_runover_receipt_ids_round_trip_between_source_and_baseline(tmp_path):
+    source = runover_book(tmp_path)
+    baseline, _ = intake.prepare_source(source, tmp_path / "run")
+    receipt = json.loads((tmp_path / "run/intake/receipt.json").read_text())
+    [join] = receipt["runover_joins"]
+    incoming, accepted = paragraph_views(source), paragraph_views(baseline)
+    head, [tail] = incoming[join["para_id"]], [incoming[pid] for pid in join["absorbed"]]
+    assert accepted[join["baseline_para_id"]] == head + join["separators"][0] + tail
+    assert len(accepted) == len(incoming) - 1
+
+
+def test_revisions_are_accepted_before_runovers_are_joined(tmp_path):
+    source = runover_book(tmp_path, revisions=True)
+    baseline, evidence = intake.prepare_source(source, tmp_path / "run")
+    receipt = json.loads((tmp_path / "run/intake/receipt.json").read_text())
+    assert receipt["changed_parts"] == ["word/document.xml"]
+    assert receipt["resolved_revision_elements"] == {"word/document.xml": 1}
+    assert len(receipt["runover_joins"]) == 1
+    assert "“Fine,” he says. “I will never understand the rules of this house.”" in paragraph_views(baseline).values()
+    assert intake.validate_intake(tmp_path / "run", evidence, baseline) == baseline
+
+
+def test_v1_intake_receipt_requires_a_fresh_workspace(tmp_path):
+    source = runover_book(tmp_path)
+    intake.prepare_source(source, tmp_path / "run")
+    path = tmp_path / "run/intake/receipt.json"
+    receipt = json.loads(path.read_text())
+    receipt["version"] = "fixed-intake-v1"
+    path.write_text(json.dumps(receipt))
+    with pytest.raises(intake.FixedIntakeError, match="fresh workspace"):
+        intake.prepare_source(source, tmp_path / "run")
+
+
+def test_unjoined_baseline_cannot_be_published(tmp_path, monkeypatch):
+    from docproof import runover
+    source = runover_book(tmp_path)
+    monkeypatch.setattr(runover, "apply_runover_joins", lambda pkg, joins: [])
+    with pytest.raises(runover.RunoverError, match="fixed point"):
+        intake.prepare_source(source, tmp_path / "run")
+    assert not (tmp_path / "run/intake").exists()

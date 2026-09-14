@@ -186,3 +186,19 @@ def test_package_tampering_prevents_delivery(completed, target):
         path.write_bytes(path.read_bytes() + b"changed")
     with pytest.raises((ValueError, FixedCallError, OSError)):
         fd.validate_delivery_package(package)
+
+
+def test_report_describes_runover_joins_and_not_revisions(manuscript):
+    original = fd.paragraph_views(manuscript)
+    first = next(iter(original))
+    result = {"identity": {"intake": {"version": "fixed-intake-v2"}}, "source": str(manuscript),
+              "poetry_only": False, "questions": [], "stages": [], "history": []}
+    receipt = {"resolved_revision_elements": {}, "runover_joins": [
+        {"para_id": "body-0000", "baseline_para_id": first, "absorbed": ["body-0001"], "seam_offsets": [70]}]}
+    report = fd._report(result, [], receipt)
+    assert "## Page-runover paragraphs joined at intake" in report
+    assert "1 paragraphs that the typeset export had split across page boundaries (1 continuation lines)" in report
+    assert "- Paragraph 1: joined 1 continuation line(s) (seam at 70)" in report
+    assert "Incoming tracked changes" not in report
+    revised = fd._report(result, [], {"resolved_revision_elements": {"word/document.xml": 2}, "runover_joins": []})
+    assert "Incoming tracked changes" in revised and "Page-runover" not in revised

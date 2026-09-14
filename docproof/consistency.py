@@ -109,6 +109,25 @@ class Occurrence:
     form: str
 
 
+# The key a casing-split finding carries: one term written lowercase in some
+# places and capitalized in others outside sentence-initial position (earth /
+# Earth, band-aid / Band-Aid). Lives outside config/error_types like the other
+# consistency keys — deterministic, no prompt.
+CASE_SPLIT_KEY = "case_split"
+
+
+@dataclass(frozen=True)
+class CaseSplit:
+    """One 1–2-word term capitalized two ways in running prose. `clear` is the
+    dominance test (the majority form leads `dominance`:1 over at least
+    `min_total` uses); the minority occurrences are `outliers`."""
+    key: str                              # case-folded term: "earth", "easy speed"
+    counts: Counter                       # exact form -> mid-sentence uses
+    dominant: str                         # exact form proposed at every outlier
+    clear: bool
+    outliers: tuple[Occurrence, ...]
+
+
 @dataclass(frozen=True)
 class Inconsistency:
     key: str
@@ -198,6 +217,7 @@ class ConsistencyReport:
     policy: tuple[VariantGroup, ...] = ()          # non-US forms, policy "us"
     deity: DeityPronounDrift | None = None         # he->He in a reverent book
     times: TimeStyleDrift | None = None            # "at 8" in an "11:00" book
+    case_splits: tuple[CaseSplit, ...] = ()        # earth/Earth outside sentence starts
 
     @property
     def _mechanical(self) -> tuple[VariantGroup, ...]:
@@ -212,11 +232,13 @@ class ConsistencyReport:
                 + sum(len(n.outliers) for n in self.names if not n.enforce)
                 + len(self._mechanical) + len(self.policy)
                 + (len(self.deity.outliers) if self.deity else 0)
-                + (len(self.times.outliers) if self.times else 0))
+                + (len(self.times.outliers) if self.times else 0)
+                + sum(len(c.outliers) for c in self.case_splits if not c.clear))
 
     @property
     def corrected(self) -> int:
-        return sum(len(n.outliers) for n in self.names if n.enforce)
+        return (sum(len(n.outliers) for n in self.names if n.enforce)
+                + sum(len(c.outliers) for c in self.case_splits if c.clear))
 
 
 def _key(form: str) -> str:
@@ -988,6 +1010,168 @@ def _compound_pos_split(structs: dict, text_by_id: dict) -> bool:
     return verbal and nominal
 
 
+_CASE_DETERMINERS = frozenset(
+    "a an the my your his her its our their this that these those".split())
+
+
+def _case_shape(word: str) -> str | None:
+    """"lower" for an all-lowercase word, "title" for a word capitalized only
+    at its start (and after an internal hyphen or apostrophe: Band-Aid,
+    O’Brien), None for anything else — ALLCAPS, camelCase, McCoy — which says
+    nothing about how the author capitalizes the word in prose."""
+    if word == word.lower():
+        return "lower"
+    if not word[0].isupper():
+        return None
+    for i in range(1, len(word)):
+        if word[i].isupper() and word[i - 1] not in "-‐‑’'":
+            return None
+    return "title"
+
+
+# Lowercase words that sit inside a capitalized name phrase without breaking
+# it: "Atlas the Elephant", "Carve Surf & Coffee", "The Little Mermaid".
+_NAME_CONNECTORS = frozenset("the of and for de la du von van".split())
+_CONNECTOR_GAP = re.compile(r"\A (?:& )?\Z")
+
+
+def _in_name_phrase(tokens, i, text) -> bool:
+    """A Capitalized token whose neighbour — directly, or across one lowercase
+    connector or an ampersand — is another Capitalized token that is not
+    itself sentence-initial reads as part of a name phrase (Easy Speed, Aunt
+    May, Atlas the Elephant, Carve Surf & Coffee). "The Earth" at a sentence
+    start still counts Earth: the preceding capital is the sentence's."""
+    form, start, end, shape, initial = tokens[i]
+
+    def adjacent(a_end, b_start):
+        return _CONNECTOR_GAP.match(text[a_end:b_start]) is not None
+
+    def title_at(j, *, initial_ok):
+        if not 0 <= j < len(tokens):
+            return False
+        jform, jstart, jend, jshape, jinitial = tokens[j]
+        return jshape == "title" and (initial_ok or not jinitial)
+
+    # Directly before / after.
+    if i > 0 and title_at(i - 1, initial_ok=False) and adjacent(tokens[i - 1][2], start):
+        return True
+    if i + 1 < len(tokens) and title_at(i + 1, initial_ok=True) and adjacent(end, tokens[i + 1][1]):
+        return True
+    # Across one connector ("the", "of", "&").
+    if i > 1:
+        cform, cstart, cend, cshape, _ = tokens[i - 1]
+        if (cform.lower() in _NAME_CONNECTORS and adjacent(cend, start)
+                and title_at(i - 2, initial_ok=False) and adjacent(tokens[i - 2][2], cstart)):
+            return True
+    if i + 2 < len(tokens):
+        cform, cstart, cend, cshape, _ = tokens[i + 1]
+        if (cform.lower() in _NAME_CONNECTORS and adjacent(end, cstart)
+                and title_at(i + 2, initial_ok=True) and adjacent(cend, tokens[i + 2][1])):
+            return True
+    return False
+
+
+def find_case_splits(paragraphs: Sequence[ParagraphRef], *,
+                     dominance: int = 3, min_total: int = 5,
+                     min_length: int = 3, max_ngram: int = 2,
+                     sentence_initial_excluded: bool = True,
+                     determiner_guard: float = 0.8,
+                     protected: Sequence[str] = (),
+                     exclude: Sequence[str] = (),
+                     max_groups: int = 40) -> tuple[CaseSplit, ...]:
+    """Terms the book capitalizes two ways outside sentence-initial position.
+
+    The term scan folds case on purpose (English capitalizes the first word of
+    every sentence); this scan looks only at the positions where casing is the
+    author's choice, and only at the two shapes that choice takes — lowercase
+    against Capitalized. ALLCAPS, camelCase and mid-word capitals are ignored
+    (`_case_shape`), so OK/okay is a spelling question, not a casing one.
+
+    Guards, in order: headings and shouted lines say nothing (`_skip_caps_context`);
+    a Capitalized word standing next to another Capitalized word is a name
+    phrase (Easy Speed, Aunt May) and is counted only as the bigram, never as
+    its parts; a possessive clitic is stripped so Earth's counts as Earth;
+    function words never split (he/He belongs to the deity-pronoun scan); and a
+    term whose lowercase uses are led by a determiner while its capitalized
+    uses stand bare (my mom / Mom, the coach / Coach) is the one legitimate
+    casing coexistence in English, and is skipped when `determiner_guard` of
+    each side agrees.
+
+    `dominance` and `min_total` decide `clear`: a clear split proposes the
+    majority form as a correction; a closer split is reported with its counts
+    for a reader to judge."""
+    protected_l = {str(p).lower() for p in protected} | {str(e).lower() for e in exclude}
+    from .function_words import FUNCTION_WORDS
+    groups: dict[str, dict] = {}
+
+    def bucket(key):
+        return groups.setdefault(key, {"lower": [], "title": [], "det_lower": 0,
+                                       "det_title": 0, "counts": Counter()})
+
+    def add(key, occurrence, shape, determined):
+        g = bucket(key)
+        g[shape].append(occurrence)
+        g["counts"][occurrence.form] += 1
+        if determined:
+            g["det_" + shape] += 1
+
+    for para in paragraphs:
+        if _skip_caps_context(para):
+            continue
+        text = para.text
+        tokens = []
+        for m in _WORD.finditer(text):
+            form, start, end = _trim_quote(m.group(0), m.start(), m.end())
+            form = _POSSESSIVE.sub("", form)
+            end = start + len(form)
+            if not form:
+                continue
+            tokens.append((form, start, end, _case_shape(form),
+                           sentence_initial_excluded and _sentence_initial(text, start)))
+        for i, (form, start, end, shape, initial) in enumerate(tokens):
+            if shape is None:
+                continue
+            determined = _word_before(text, start) in _CASE_DETERMINERS
+            # A bigram of two same-shaped words joined by one space.
+            if max_ngram >= 2 and i + 1 < len(tokens):
+                nform, nstart, nend, nshape, _ = tokens[i + 1]
+                if nshape == shape and text[end:nstart] == " " and not initial:
+                    add(form.lower() + " " + nform.lower(),
+                        Occurrence(para.para_id, start, nend, text[start:nend]), shape, determined)
+            if initial:
+                continue
+            if shape == "title" and _in_name_phrase(tokens, i, text):
+                continue              # part of a capitalized phrase, not a stray
+            add(form.lower(), Occurrence(para.para_id, start, end, form), shape, determined)
+
+    splits: list[CaseSplit] = []
+    for key in sorted(groups):
+        g = groups[key]
+        if (len(key) < min_length or key in protected_l
+                or (" " not in key and key in FUNCTION_WORDS)
+                or not g["lower"] or not g["title"]):
+            continue
+        total = len(g["lower"]) + len(g["title"])
+        if total < min_total:
+            continue
+        lo = g["det_lower"] / len(g["lower"])
+        ti = g["det_title"] / len(g["title"])
+        if lo >= determiner_guard and ti <= 1 - determiner_guard:
+            continue
+        dom_shape = "lower" if len(g["lower"]) >= len(g["title"]) else "title"
+        min_shape = "title" if dom_shape == "lower" else "lower"
+        dom_forms = Counter(o.form for o in g[dom_shape])
+        dominant = min(dom_forms, key=lambda f: (-dom_forms[f], f))
+        dom_n, min_n = len(g[dom_shape]), len(g[min_shape])
+        splits.append(CaseSplit(key, g["counts"], dominant, dom_n >= dominance * min_n,
+                                tuple(g[min_shape])))
+    if max_groups and len(splits) > max_groups:
+        log.info("Consistency case-split findings capped at %d (%d found); raise "
+                 "consistency.max_queries_per_kind to see the rest.", max_groups, len(splits))
+        splits = splits[:max_groups]
+    return tuple(splits)
+
+
 def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
                          enabled: bool = True, min_length: int = 7,
                          min_dominance: int = 2, names: bool = True,
@@ -1006,7 +1190,11 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
                          time_style: bool = True,
                          time_min_with_minutes: int = 3,
                          accent_loanwords: bool = True,
-                         max_queries_per_kind: int = 40) -> ConsistencyReport:
+                         max_queries_per_kind: int = 40,
+                         case_splits: bool = False,
+                         case_split_dominance: int = 3,
+                         case_split_min_total: int = 5,
+                         case_split_exclude: Sequence[str] = ()) -> ConsistencyReport:
     """Terms this manuscript writes more than one way.
 
     `min_length` keeps short words out — the shorter the key, the more likely
@@ -1024,6 +1212,12 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
     scan, so an enforced or author-owned form is not also asked about; `chicago_notes`
     adds the Merriam-Webster preference phrasing; `max_queries_per_kind` bounds
     each scan's output so a dialect-mixed book cannot flood the query channel.
+
+    `case_splits` runs ``find_case_splits`` — earth/Earth outside sentence
+    starts. Off by default: its findings are tracked edits meant for a caller
+    that screens every proposal (Galley's fixed workflow); the legacy pipeline
+    has no such screen and does not ask for it. `case_split_exclude` lists
+    keys the run has already decided by an accepted edit.
     """
     if not enabled:
         return ConsistencyReport(ran=False)
@@ -1122,10 +1316,14 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
     accents = (find_accent_loanwords(
         paragraphs, protected=protected,
         max_queries=max_queries_per_kind) if accent_loanwords else ())
+    splits = (find_case_splits(
+        paragraphs, dominance=case_split_dominance, min_total=case_split_min_total,
+        protected=protected, exclude=case_split_exclude,
+        max_groups=max_queries_per_kind) if case_splits else ())
     report = ConsistencyReport(ran=True, terms=tuple(terms), names=drift,
                                variants=variants, abbreviations=abbrevs,
                                casings=cases, accents=accents, policy=policy,
-                               deity=deity, times=times)
+                               deity=deity, times=times, case_splits=splits)
     log.info("Consistency scan: %d term(s), %d spelling-variant(s), "
              "%d abbreviation(s), %d acronym-case(s), %d accent(s), "
              "%d policy form(s), %d deity-pronoun stray(s), %d bare-hour "
@@ -1379,4 +1577,38 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
                 confidence="medium",
             ))
             n += 1
+    k = 1
+    for split in report.case_splits:
+        forms = " vs ".join(f"“{f}” ×{c}" for f, c in split.counts.most_common())
+        dom_n = sum(c for f, c in split.counts.items() if _case_shape(f) == _case_shape(split.dominant))
+        min_n = sum(split.counts.values()) - dom_n
+        for o in split.outliers:
+            para = by_id.get(o.para_id)
+            if para is None:
+                continue
+            window, lo, occurrence = sentence_window(para.text, o.start, o.end)
+            corrected = window[:o.start - lo] + split.dominant + window[o.end - lo:]
+            if split.clear:
+                explanation = (
+                    f"{forms} outside sentence-initial position; dominant form "
+                    f"“{split.dominant}” leads {dom_n} to {min_n}, so this “{o.form}” "
+                    f"is changed to match. Drop if this use is a different sense.")
+            else:
+                explanation = (
+                    f"{forms} outside sentence-initial position; no form clearly "
+                    f"dominates. “{split.dominant}” is the form used more and is "
+                    f"proposed for consistency only; drop if the split is deliberate.")
+            findings.append(Finding(
+                finding_id=f"k-{k:04d}",
+                chunk_id="consistency",
+                para_id=o.para_id,
+                error_type=CASE_SPLIT_KEY,
+                original_text=window,
+                occurrence=occurrence,
+                corrected_text=corrected,
+                explanation=explanation,
+                confidence="high" if split.clear else "medium",
+            ))
+            k += 1
+
     return findings

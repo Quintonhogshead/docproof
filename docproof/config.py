@@ -335,6 +335,17 @@ class ConsistencyConfig(BaseModel):
     names: bool = True
     name_dominance: int = Field(default=5, ge=2)
     name_min_count: int = Field(default=20, ge=2)
+    # Casing splits outside sentence-initial position (earth ×11 / Earth ×3,
+    # band-aid / Band-Aid, easy speed / Easy Speed). Read only by Galley's fixed
+    # workflow, where every proposal is screened before it is applied: the
+    # dominant form is proposed as a tracked edit when it leads
+    # case_split_dominance:1 over at least case_split_min_total uses, and a
+    # closer split is proposed with its counts for the screen to judge. ALLCAPS,
+    # capitalized phrases and determiner-led kinship nouns (my mom / Mom) are
+    # excluded. See docproof/consistency.py:find_case_splits.
+    case_splits: bool = True
+    case_split_dominance: int = Field(default=3, ge=2)
+    case_split_min_total: int = Field(default=5, ge=2)
     # The three mechanical scans a compound-word key scan structurally cannot do,
     # each a whole-document query pass that changes nothing:
     #   spelling_variants — different-letter spellings of one word via the VarCon

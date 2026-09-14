@@ -44,6 +44,8 @@ class ScriptedReaders:
     def answer(self, model, user, schema):
         self.requests.append((model, user))
         fields = schema["properties"]
+        if "reading_notes" in fields:
+            return {"findings": [], "reading_notes": "Fixture continuity read."}
         if "classification" in fields:
             return {"classification": "poetry" if self.poetry else "prose", "reason": "Fixture classification."}
         if "narration" in fields:
@@ -151,7 +153,10 @@ def test_interrupted_stage_resumes_from_paid_read_receipts(tmp_path, monkeypatch
     stopped = worker.run()
     assert stopped.outcome == "blocked" and "Simulated local interruption" in stopped.reason
     count = len(readers.requests)
-    assert count > 0 and FABLE not in {model for model, _ in readers.requests}
+    # Fable's whole-book continuity read precedes the interrupted stage; its
+    # final windowed read (the one with focused_sites) must not have started.
+    assert count > 0 and not any(model == FABLE and "focused_sites" in user for model, user in readers.requests)
+    assert sum(model == FABLE for model, _ in readers.requests) == 1
     monkeypatch.setattr(FixedWorkflow, "_stage", stage_start)
     resumed = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode=None).run()
     assert resumed.outcome == "done", resumed.reason
@@ -363,17 +368,18 @@ def _rehash_stage_and_result(directory, result, name, payload):
     _write_json(directory / "workflow.json", marker)
 
 
-def test_valid_initial_local_receipt_cannot_certify_the_completion_stage(completed_prose_review):
+@pytest.mark.parametrize("donor,target", [("typed", "ensemble_sweep"), ("ensemble_sweep", "fable"), ("fable", "astra")])
+def test_a_local_receipt_cannot_certify_another_stage(completed_prose_review, donor, target):
     from galley.fixed_documents import FixedDocumentError, _verify_result
     from galley.fixed_local import validate_local_evidence
 
     directory, result = completed_prose_review
-    typed = json.loads((directory / "stages/typed.json").read_text())
-    ensemble = json.loads((directory / "stages/ensemble_sweep.json").read_text())
-    initial = copy.deepcopy(typed["evidence"]["local"])
-    assert validate_local_evidence(initial, directory / "local", result["identity"])["request"]["stage"] == "initial"
-    ensemble["evidence"]["local"] = initial
-    _rehash_stage_and_result(directory, result, "ensemble_sweep", ensemble)
+    source = json.loads((directory / f"stages/{donor}.json").read_text())
+    stage = json.loads((directory / f"stages/{target}.json").read_text())
+    borrowed = copy.deepcopy(source["evidence"]["local"])
+    assert validate_local_evidence(borrowed, directory / "local", result["identity"])["request"]["stage"] == borrowed["stage"]
+    stage["evidence"]["local"] = borrowed
+    _rehash_stage_and_result(directory, result, target, stage)
     with pytest.raises(FixedDocumentError, match="(?i)(local|deterministic|completion)"):
         _verify_result(result, directory)
 
@@ -502,6 +508,8 @@ def test_invalid_suggestions_across_all_reader_stages_preserve_valid_edits_and_r
                     bad["category"] = "grammar"
                 elif model != FABLE:
                     bad["replacement"] = "Unsafe\x00text"
+            if "reviewed_check_ids" in result:
+                bad["evidence"] = []
             return {**result, "findings": [bad]}
         return result
     readers.answer = suggestions
@@ -598,7 +606,7 @@ def test_nested_dispute_ids_reach_certified_book_and_resume_without_new_calls(tm
     assert len(readers.requests) == count and all(p.read_bytes() == data for p, data in raw.items())
 
 
-@pytest.mark.parametrize("failure", ["poetry", "story", "typed", "numbers", "dispute", "check", "opus", "sol", "fable", "astra"])
+@pytest.mark.parametrize("failure", ["poetry", "story", "typed", "numbers", "dispute", "check", "opus", "sol", "continuity", "fable", "astra"])
 def test_unattended_default_finishes_and_resumes_after_exhausted_reads(tmp_path, monkeypatch, failure):
     source = tmp_path / "Writer.docx"
     doc = Document()
@@ -620,7 +628,9 @@ def test_unattended_default_finishes_and_resumes_after_exhausted_reads(tmp_path,
                 failure == "dispute" and "decisions" in fields and "sites" in payload or
                 failure == "check" and "changes" in payload or
                 failure == "opus" and model == OPUS and "reviewed_ids" in fields or
-                failure == "sol" and model == SOL or failure == "fable" and model == FABLE or
+                failure == "sol" and model == SOL or
+                failure == "continuity" and "reading_notes" in fields or
+                failure == "fable" and model == FABLE and "reading_notes" not in fields or
                 failure == "astra" and model == ASTRA)
         return {} if fail else body
     readers.answer = failing
@@ -644,3 +654,37 @@ def test_unattended_default_finishes_and_resumes_after_exhausted_reads(tmp_path,
     count = len(readers.requests)
     assert worker.run().outcome == "done"
     assert len(readers.requests) == count
+
+
+@pytest.mark.parametrize("indented", [True, False])
+def test_page_runover_book_yields_no_seam_quote_or_period_candidates(tmp_path, monkeypatch, indented):
+    from test_runover import INDENT, MARGIN, P, typeset_book
+    geometry = INDENT if indented else MARGIN
+    source = typeset_book(tmp_path / "Writer - Galley.docx",
+                          *[P(f"Body paragraph number {i} runs on for a while.", ind=geometry) for i in range(12)],
+                          P("“Fine,” he says. “I will", ind=geometry),
+                          P("never understand the rules of this house.”", ind=MARGIN))
+    readers = ScriptedReaders(False)
+    monkeypatch.setattr(fc, "_default_provider", lambda *a, **k: readers)
+    monkeypatch.setattr(codex_runner, "run_structured", readers.subscription)
+    worker = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode="fixed")
+    result = worker.run()
+    assert result.outcome == "done", result.reason
+    final = json.loads((worker.workspace / "runs/fixed/result.json").read_text())
+    typed = next(s for s in final["stages"] if s["stage"] == "typed")
+    candidates = json.loads(Path(typed["path"]).read_text())["evidence"]["candidates"]
+    seam = [c for c in candidates if "quote" in c["category"] or "terminal" in c["category"]]
+    joined = "“Fine,” he says. “I will never understand the rules of this house.”"
+    package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
+    report = next(Path(x["path"]) for x in package["artifacts"] if x["role"] == "report").read_text()
+    tracked = next(Path(x["path"]) for x in package["artifacts"] if x["role"] == "tracked")
+    if indented:
+        assert seam == []
+        assert joined in final["original"].values()
+        assert final["identity"]["intake"]["version"] == "fixed-intake-v2"
+        assert "Page-runover paragraphs joined at intake" in report
+        baseline = worker.workspace / "runs/fixed/intake/accepted" / source.name
+        assert paragraph_views(tracked, "reject") == paragraph_views(baseline)
+    else:
+        assert seam and joined not in final["original"].values()
+        assert "intake" not in final["identity"] and "Page-runover" not in report
