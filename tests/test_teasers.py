@@ -207,6 +207,33 @@ def test_failed_review_revises_automatically_and_refreshes_brief(queued, story, 
     assert queue.get(task["id"])["state"] == "queued"
 
 
+def test_revision_preserves_passing_qwen_options_but_requires_fresh_review(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    prior_hash = task["drafts"][-1]["sha256"]
+    review = approved(draft)
+    review.approved = False
+    review.guidance_approved = False
+    for option in review.options:
+        option.accurate = option.number == 2
+    task = accept_review(queue, task, review.model_dump())
+    changed = draft.model_copy(deep=True)
+    for option in changed.teasers:
+        option.paragraphs[0] = "New wording. " + option.paragraphs[0]
+    class Revision:
+        def complete_structured(self, **kw):
+            assert "APPROVED OPTIONS TO PRESERVE:\n[2]" in kw["user"]
+            return ProviderResult(parsed=changed.model_dump())
+    result = generate_draft(queue, task, provider=Revision())
+    content = Draft.model_validate(result["drafts"][-1]["content"])
+    assert content.teasers[1] == draft.teasers[1]
+    assert content.teasers[0] == changed.teasers[0]
+    assert result["drafts"][-1]["retained_from"]["options"] == [2]
+    assert result["drafts"][-1]["sha256"] != prior_hash
+    assert result["state"] == "drafted"
+    with pytest.raises(TeaserError, match="different draft"):
+        accept_review(queue, result, approved(draft).model_dump())
+
+
 def test_generation_daily_ceiling_resumes_without_editor(queued, story, draft):
     queue, _, task = queued
     task = accept_story(queue, task, story.model_dump())

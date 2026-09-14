@@ -16,13 +16,16 @@ editorial approval step.
    `gpt-5.6-sol` at `high`, using the existing cloud ChatGPT subscription login.
    This produces coverage-checked reading notes, then a storysheet and five-angle
    brief. Large paragraphs and long books are partitioned, never silently cut off.
-3. The Fly web server calls `Qwen/Qwen3.6-35B-A3B` through DeepInfra, using the
+3. The Fly web server calls `Qwen/Qwen3.6-27B` through DeepInfra, using the
    key already stored in DocProof settings. Qwen writes every author-facing field.
 4. Sol checks the exact Qwen draft against every source portion, then reviews all
    five options and the author guide. Approval is bound to the saved draft hash
    and the complete list of manuscript portions. Sol returns feedback, never
    replacement teaser wording.
-5. Failed reviews automatically return to Qwen. After five unsuccessful drafts,
+5. Failed reviews automatically return to Qwen. Previously passing Qwen options
+   retain their exact text while failed copy is revised. The complete assembled
+   package still receives a fresh, source-bound review; retained prose has an
+   internal provenance link to its original draft. After five unsuccessful drafts,
    Sol refreshes the brief. Temporary failures retry with increasing delays, up
    to six hours; completed, validated Sol answers are reused. At most twelve Qwen
    submissions per book per rolling day are allowed; work resumes automatically

@@ -54,7 +54,7 @@ READINGS:
 conservative, truthful angles that resolve these issues):\n""" + data(feedback)
 
 
-def writer_prompt(story, evidence, previous=None, feedback=None):
+def writer_prompt(story, evidence, previous=None, feedback=None, retained=None):
     return (SOURCE_RULE + standard(), """
 You are the final prose writer. Write every piece of author-facing wording yourself
 from the verified storysheet and original manuscript evidence below. Return exactly
@@ -71,8 +71,13 @@ internal storysheet, model details, scores, and protected revelations out of ALL
 author-facing fields. These are original editorial drafts; do not claim human
 authorship or promise any detector or watermark outcome.
 On revision, return the complete replacement package, correcting every review issue.
+Make targeted repairs to failed copy. Do not introduce new concrete story details
+while fixing an error. Preserve any approved options listed below verbatim; the
+server retains their exact Qwen wording. Every part of the resulting package will
+still receive a fresh review against the manuscript.
 STORYSHEET:\n""" + data(story) + "\nORIGINAL EVIDENCE:\n" + data(evidence)
-        + "\nPREVIOUS DRAFT:\n" + data(previous) + "\nEDITORIAL FEEDBACK:\n" + data(feedback))
+        + "\nPREVIOUS DRAFT:\n" + data(previous) + "\nEDITORIAL FEEDBACK:\n" + data(feedback)
+        + "\nAPPROVED OPTIONS TO PRESERVE:\n" + data(retained or []))
 
 
 def source_review_prompt(chunk, draft, draft_hash):
