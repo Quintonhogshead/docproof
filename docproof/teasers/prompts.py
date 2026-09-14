@@ -122,6 +122,26 @@ be given to Qwen. Approve only a brief safe for a prospective reader.
 """ + data({"private_storysheet": story, "original_evidence": evidence, "brief_sha256": brief_hash})
 
 
+def revise_brief_prompt(story, previous, feedback, evidence):
+    return SOURCE_RULE + """
+Revise the PUBLIC-ONLY writing brief for Qwen using the PRIVATE editorial findings
+below. Correct any misleading facts or wording in the brief that caused the draft
+to fail. Make the next writing instructions specific enough to fix the observed
+problems, with accurate public facts and clear preferred phrasing. Preserve five
+distinct angles and the actual book's voice. Keep instructions concise and usable.
+The manuscript evidence outranks both the previous brief and reviewer assertions;
+resolve disagreements carefully. Avoid copying a dubious phrase just because it
+appeared in the previous brief. Do not turn a request or intention into a deadline,
+completed action or committed outcome. Give positive, precise directions.
+Every field of your result will go to Qwen. Include no ending details, later
+developments, actual protected revelations, rejected teaser passages, or private
+feedback. Do not name a spoiler while instructing Qwen to remove it. Translate such
+findings into general instructions to leave the relevant outcome unresolved.
+Return a complete corrected WriterBrief, not a teaser or a private analysis.
+""" + data({"private_storysheet": story, "previous_public_brief": previous,
+            "private_feedback": feedback, "original_evidence": evidence})
+
+
 def source_review_prompt(chunk, draft, draft_hash):
     return SOURCE_RULE + """
 Independently check the attached five teasers AND author editing guidance against

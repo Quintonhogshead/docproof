@@ -7,7 +7,7 @@ import json
 from docproof.providers import strict_json_schema
 from docproof.providers.base import inlined_json_schema
 from . import SOL_MODEL, SOL_EFFORT
-from .models import (Reading, Storysheet, SourceReview, Review, Draft, BriefReview,
+from .models import (Reading, Storysheet, SourceReview, Review, Draft, BriefReview, WriterBrief,
                      digest, draft_issues)
 from . import prompts
 
@@ -123,12 +123,35 @@ def validate_story(story, source_chunks):
     evidence_for(story.public_facts, source_chunks)
     if not story.writer_brief.public_setup:
         raise ValueError("Sol must prepare a separate public-only writing brief.")
-    brief = story.writer_brief
+    validate_writer_brief(story.writer_brief)
+
+
+def validate_writer_brief(brief):
     if (len(brief.five_angles) != 5 or len(set(brief.five_angles)) != 5 or not brief.public_facts or
             any(not fact.strip() for fact in brief.public_facts) or
             any(not getattr(brief, name).strip() for name in ("public_setup", "reader_promise",
                 "central_pressure", "stakes", "genre_and_audience", "voice", "writing_instructions"))):
         raise ValueError("The public-only writing brief is incomplete.")
+
+
+def revise_writer_brief(story, previous, feedback, source_chunks, work, *, runner=None,
+                        progress=lambda stage: None, attempt=0):
+    evidence = evidence_for(story.public_facts, source_chunks)
+    prompt = prompts.revise_brief_prompt(story.model_dump(), previous.model_dump(), feedback, evidence)
+    progress("Updating Qwen's public writing brief from the review")
+    def validate(brief):
+        validate_writer_brief(brief)
+        progress("Checking the revised public brief for accuracy and spoilers")
+        revised = story.model_copy(update={"writer_brief": brief})
+        brief_hash = digest(brief)
+        check_prompt = prompts.brief_review_prompt(revised.model_dump(), evidence, brief_hash)
+        check = sol(check_prompt, BriefReview, work, "brief-review-" + brief_hash,
+                    runner=runner, attempt=attempt)
+        if check.brief_sha256 != brief_hash or not check.accurate or not check.spoiler_safe:
+            raise ValueError("The revised public brief needs correction before Qwen receives it: " +
+                             "; ".join(check.feedback))
+    return sol(prompt, WriterBrief, work, "revise-brief-" + digest(prompt), runner=runner,
+               attempt=attempt, validate=validate)
 
 
 def review(story, draft, source_chunks, work, *, runner=None,

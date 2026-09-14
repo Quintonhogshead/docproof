@@ -18,9 +18,9 @@ from docproof import platform_io
 from docproof.promo.ingest import read_manuscript
 from docproof.providers import strict_json_schema
 from docproof.teasers import QWEN_MODEL, SOL_MODEL, VERSION
-from docproof.teasers.models import (Draft, Review, Storysheet, approval_issues,
+from docproof.teasers.models import (Draft, Review, Storysheet, WriterBrief, approval_issues,
                                     apply_small_edits, draft_issues, teaser_issues, digest)
-from docproof.teasers.pipeline import chunks, validate_story
+from docproof.teasers.pipeline import chunks, validate_story, validate_writer_brief
 from docproof.teasers.prompts import writer_prompt
 
 log = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ MAX_DRAFTS_PER_DAY = 12
 INITIAL_WRITER_TOKENS = 16_000
 MAX_WRITER_TOKENS = 32_000
 LEASE_SECONDS = 240
-STATES = ("queued", "story_ready", "drafted", "approved")
+STATES = ("queued", "brief_ready", "story_ready", "drafted", "approved")
 
 
 class TeaserError(ValueError):
@@ -118,7 +118,7 @@ class Queue:
             return None
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT id FROM tasks WHERE state IN (?,?,?,?) "
+            row = conn.execute("SELECT id FROM tasks WHERE state IN (?,?,?,?,?) "
                                "AND (worker=? OR lease<?) ORDER BY created LIMIT 1",
                                (*STATES, worker, time.time())).fetchone()
             if not row:
@@ -274,14 +274,15 @@ def generate_draft(queue, task, *, provider=None):
     approved_copy = {"teasers": [retained[n].model_dump() for n in sorted(retained)]}
     if retain_guidance:
         approved_copy.update({k: v for k, v in previous.items() if k != "teasers"})
-    system, user = writer_prompt(story.writer_brief.model_dump(), approved_copy,
+    brief = current_writer_brief(task)
+    system, user = writer_prompt(brief.model_dump(), approved_copy,
                                 public_feedback, sorted(retained))
     task["progress"] = "Qwen is writing five teasers and author guidance"
     # If the process dies during generation, require reconciliation rather than
     # submitting a duplicate paid request on the next poll.
     task["generation_times"] = recent + [time.time()]
     task.setdefault("writer_handoffs", []).append({"at": time.time(),
-        "public_brief": story.writer_brief.model_dump(), "approved_copy": approved_copy,
+        "public_brief": brief.model_dump(), "approved_copy": approved_copy,
         "public_feedback": public_feedback, "prompt_sha256": digest({"system": system, "user": user})})
     queue.save(task, "generating")
     token_limit = min(MAX_WRITER_TOKENS, max(INITIAL_WRITER_TOKENS,
@@ -372,7 +373,7 @@ def accept_review(queue, task, raw):
         except ValueError as exc:
             task["feedback"].append(str(exc))
     task["progress"] = "Approved; waiting for Google Docs upload" if not issues else "Qwen revisions needed"
-    state = "approved" if not issues else "story_ready"
+    state = "approved" if not issues else "brief_ready"
     generations = sum(d.get("operation") != "bounded_correction" for d in task["drafts"])
     if issues and generations and generations % MAX_DRAFTS_PER_CYCLE == 0:
         # Sol revisits the angle and premise after a stalled revision cycle;
@@ -382,4 +383,29 @@ def accept_review(queue, task, raw):
                     delay=300, resume="queued")
         return queue.get(task["id"])
     queue.save(task, state)
+    return queue.get(task["id"])
+
+
+def current_writer_brief(task):
+    if task.get("writer_brief_story") == digest(task["storysheet"]):
+        return WriterBrief.model_validate(task["writer_brief"])
+    return Storysheet.model_validate(task["storysheet"]).writer_brief
+
+
+def accept_writer_brief(queue, task, raw):
+    if (not task["drafts"] or not task["reviews"] or
+            raw.get("draft_sha256") != task["drafts"][-1]["sha256"] or
+            raw.get("review_sha256") != digest(Review.model_validate(task["reviews"][-1]))):
+        raise TeaserError("The revised public brief does not match the current draft and review.")
+    brief = WriterBrief.model_validate(raw.get("brief"))
+    validate_writer_brief(brief)
+    if task["state"] == "story_ready" and digest(brief) == digest(current_writer_brief(task)):
+        return task
+    if task["state"] != "brief_ready":
+        raise TeaserError("This task is not waiting for a revised public brief.")
+    task["writer_brief"] = brief.model_dump()
+    task["writer_brief_story"] = digest(task["storysheet"])
+    task["writer_brief_review"] = raw["review_sha256"]
+    task["progress"] = "The revised public brief is ready for Qwen"
+    queue.save(task, "story_ready")
     return queue.get(task["id"])

@@ -14,7 +14,7 @@ from app.jobs import Job, JobRunner, JobStore
 from app.main import create_app
 from app.settings import Paths, Settings
 from app.teasers import (Queue, accept_story, generate_draft, accept_review,
-                         MAX_DRAFTS_PER_CYCLE, MAX_DRAFTS_PER_DAY, TeaserError)
+                         MAX_DRAFTS_PER_CYCLE, MAX_DRAFTS_PER_DAY, TeaserError, accept_writer_brief)
 from app.teaser_delivery import deliver, ensure_folder, verify_document
 from docproof.providers.base import ProviderResult
 from docproof.teasers import QWEN_MODEL, SOL_MODEL
@@ -104,6 +104,12 @@ def drafted(queued, story, draft):
     return queue, generate_draft(queue, task, provider=Provider())
 
 
+def next_brief(queue, task, story):
+    return accept_writer_brief(queue, task, {"brief": story.writer_brief.model_dump(),
+        "draft_sha256": task["drafts"][-1]["sha256"],
+        "review_sha256": digest(Review.model_validate(task["reviews"][-1]))})
+
+
 def test_five_options_and_gate(draft):
     assert draft_issues(draft) == []
     review = approved(draft)
@@ -159,6 +165,7 @@ def test_qwen_never_receives_private_ending_or_rejected_copy(queued, story, draf
             assert "Rewrite option 1 from the public brief to improve spoiler safety" in kw["user"]
             assert "APPROVED OPTIONS TO PRESERVE:\n[2, 3, 4, 5]" in kw["user"]
             return ProviderResult(parsed=draft.model_dump())
+    task = next_brief(queue, task, story)
     result = generate_draft(queue, task, provider=Revision())
     assert secret not in json.dumps(result["writer_handoffs"])
 
@@ -184,8 +191,35 @@ def test_revised_spoiler_boundary_does_not_reuse_old_approved_copy(queued, story
         def complete_structured(self, **kw):
             assert 'APPROVED COPY ONLY:\n{"teasers": []}' in kw["user"]
             return ProviderResult(parsed=draft.model_dump())
+    task = next_brief(queue, task, story)
     result = generate_draft(queue, task, provider=Revision())
     assert result["drafts"][-1]["retained_from"] is None
+
+
+def test_broader_revision_waits_for_bound_public_brief(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    review = approved(draft)
+    review.approved = False
+    review.options[0].accurate = False
+    task = accept_review(queue, task, review.model_dump())
+    assert task["state"] == "brief_ready"
+    with pytest.raises(TeaserError, match="cannot generate"):
+        generate_draft(queue, task, provider=object())
+    brief = story.writer_brief.model_copy(deep=True)
+    brief.writing_instructions = "Describe the ferry as temporarily out of service for inspection."
+    payload = {"brief": brief.model_dump(), "draft_sha256": digest(draft), "review_sha256": "wrong"}
+    with pytest.raises(TeaserError, match="does not match"):
+        accept_writer_brief(queue, task, payload)
+    payload["review_sha256"] = digest(review)
+    task = accept_writer_brief(queue, task, payload)
+    assert task["state"] == "story_ready"
+    assert accept_writer_brief(queue, task, payload)["writer_brief"] == brief.model_dump()
+    class Revision:
+        def complete_structured(self, **kw):
+            assert brief.writing_instructions in kw["user"]
+            return ProviderResult(parsed=draft.model_dump())
+    result = generate_draft(queue, task, provider=Revision())
+    assert result["writer_handoffs"][-1]["public_brief"] == brief.model_dump()
 
 
 def test_count_structure_and_guidance_cannot_be_omitted(draft):
@@ -261,7 +295,7 @@ def test_failed_review_revises_automatically_and_refreshes_brief(queued, story, 
     review.approved = False
     review.feedback = ["Make the relationship pressure more specific."]
     task = accept_review(queue, task, review.model_dump())
-    assert task["state"] == "story_ready"
+    assert task["state"] == "brief_ready"
     task["drafts"] *= MAX_DRAFTS_PER_CYCLE
     task["state"] = "drafted"
     queue.save(task)
@@ -291,6 +325,7 @@ def test_revision_preserves_passing_qwen_options_but_requires_fresh_review(queue
         def complete_structured(self, **kw):
             assert "APPROVED OPTIONS TO PRESERVE:\n[2]" in kw["user"]
             return ProviderResult(parsed=changed.model_dump())
+    task = next_brief(queue, task, story)
     result = generate_draft(queue, task, provider=Revision())
     content = Draft.model_validate(result["drafts"][-1]["content"])
     assert content.teasers[1] == draft.teasers[1]
@@ -351,7 +386,7 @@ def test_invalid_small_edit_falls_back_to_qwen_without_changing_copy(queued, sto
     review = correction(draft)
     review.edits[0] = SmallEdit.model_validate({**review.edits[0].model_dump(), **change})
     result = accept_review(queue, task, review.model_dump())
-    assert result["state"] == "story_ready"
+    assert result["state"] == "brief_ready"
     assert len(result["drafts"]) == 1
     assert result["drafts"][-1]["content"] == draft.model_dump()
 
@@ -377,7 +412,7 @@ def test_small_edit_loop_returns_to_qwen_and_does_not_count_as_generation(queued
     task["small_edit_rounds"] = 2
     task["drafts"] += [{**task["drafts"][0], "operation": "bounded_correction"}] * 4
     result = accept_review(queue, task, correction(draft).model_dump())
-    assert result["state"] == "story_ready" and "storysheet" in result
+    assert result["state"] == "brief_ready" and "storysheet" in result
     assert len(result["drafts"]) == 5
 
 
@@ -386,7 +421,7 @@ def test_small_edit_cannot_skip_manuscript_coverage(queued, story, draft):
     review = correction(draft)
     review.covered_chunk_ids = []
     result = accept_review(queue, task, review.model_dump())
-    assert result["state"] == "story_ready" and len(result["drafts"]) == 1
+    assert result["state"] == "brief_ready" and len(result["drafts"]) == 1
 
 
 def test_valid_option_survives_unrelated_length_errors(queued, story, draft):
@@ -404,6 +439,7 @@ def test_valid_option_survives_unrelated_length_errors(queued, story, draft):
             replacement = draft.model_copy(deep=True)
             replacement.teasers[1].paragraphs[0] += " Changed."
             return ProviderResult(parsed=replacement.model_dump())
+    task = next_brief(queue, task, story)
     result = generate_draft(queue, task, provider=Revision())
     assert result["drafts"][-1]["content"]["teasers"][1:] == draft.model_dump()["teasers"][1:]
 
@@ -431,6 +467,7 @@ def test_truncated_package_retries_with_more_room_and_keeps_prior_draft(queued, 
         def complete_structured(self, **kw):
             assert kw["max_tokens"] == INITIAL_WRITER_TOKENS
             return ProviderResult(stop_reason="max_tokens", error="truncated")
+    task = next_brief(queue, task, story)
     result = generate_draft(queue, task, provider=Truncated())
     assert result["state"] == "retry_wait"
     assert result["writer_token_limit"] == MAX_WRITER_TOKENS
@@ -582,6 +619,22 @@ def test_public_brief_must_pass_sol_check_before_leaving_analysis(tmp_path, stor
         pipeline.analyze(pipeline.chunks("Mara returns."), tmp_path, runner=runner)
     saved = [json.loads(p.read_text())["answer"] for p in (tmp_path / "answers").glob("*.json")]
     assert not any("writer_brief" in answer for answer in saved)
+
+
+def test_revision_translates_private_findings_and_rechecks_public_brief(tmp_path, story):
+    revised = story.writer_brief.model_copy(deep=True)
+    revised.writing_instructions = "Describe the service pause precisely and leave outcomes open."
+    seen = []
+    def runner(prompt, schema, work, **kw):
+        seen.append(schema)
+        if "public_setup" in schema["properties"]:
+            assert "PRIVATE_FINDING" in prompt
+            return revised.model_dump()
+        return dict(brief_sha256=digest(revised), accurate=True, spoiler_safe=True, feedback=[])
+    result = pipeline.revise_writer_brief(story, story.writer_brief, ["PRIVATE_FINDING"],
+        pipeline.chunks("Mara returns to the ferry."), tmp_path, runner=runner)
+    assert result == revised and len(seen) == 2
+    assert "PRIVATE_FINDING" not in result.model_dump_json()
 
 
 def test_completion_hook_queues_before_archiving(queued, tmp_path, monkeypatch):

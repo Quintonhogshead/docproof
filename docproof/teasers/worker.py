@@ -13,9 +13,9 @@ import urllib.request
 from urllib.parse import urlparse
 import uuid
 
-from app.teasers import lock
+from app.teasers import lock, current_writer_brief
 from . import pipeline
-from .models import Draft, Storysheet
+from .models import Draft, Storysheet, Review, digest
 
 log = logging.getLogger(__name__)
 
@@ -77,12 +77,20 @@ def process(task, client, home, *, runner=None):
             story = pipeline.analyze(task["chunks"], work, runner=runner, progress=progress,
                                      feedback=task.get("feedback"), attempt=task.get("failures", 0))
             task = client.call("story", task["id"], story.model_dump())["task"]
-        while task["state"] in ("story_ready", "drafted", "approved"):
-            if task["state"] == "story_ready":
+        while task["state"] in ("brief_ready", "story_ready", "drafted", "approved"):
+            if task["state"] == "brief_ready":
+                story = Storysheet.model_validate(task["storysheet"])
+                brief = pipeline.revise_writer_brief(story, current_writer_brief(task), task.get("feedback", []),
+                    task["chunks"], work, runner=runner, progress=progress, attempt=task.get("failures", 0))
+                task = client.call("brief", task["id"], {"brief": brief.model_dump(),
+                    "draft_sha256": task["drafts"][-1]["sha256"],
+                    "review_sha256": digest(Review.model_validate(task["reviews"][-1]))})["task"]
+            elif task["state"] == "story_ready":
                 progress("Qwen is writing five teasers and author guidance")
                 task = client.call("draft", task["id"])["task"]
             elif task["state"] == "drafted":
                 story = Storysheet.model_validate(task["storysheet"])
+                story.writer_brief = current_writer_brief(task)
                 draft = Draft.model_validate(task["drafts"][-1]["content"])
                 review = pipeline.review(story, draft, task["chunks"], work,
                                          runner=runner, progress=progress, attempt=task.get("failures", 0))

@@ -35,7 +35,10 @@ editorial approval step.
    with its edit history and receives a complete fresh source check and approval.
    Proposed edits cannot approve their own output. After two correction rounds,
    remaining issues automatically return to Qwen.
-5. Larger revisions automatically return to Qwen. Previously passing options
+5. For larger revisions, Sol turns its private editorial findings into a corrected
+   public writing brief, then independently checks that brief for accuracy and
+   spoilers before Qwen receives it. This lets Qwen fix specific problems without
+   receiving the ending or private review text. Previously passing options
    retain their exact text while failed copy is revised. The complete assembled
    package still receives a fresh, source-bound review; retained prose has an
    internal provenance link to its original draft. After five unsuccessful Qwen drafts,
