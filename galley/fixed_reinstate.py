@@ -9,10 +9,12 @@ told the readers to raise exactly such questions never reached it.
 
 This extends the completed workspace under its own identity, with new
 receipts: the dropped fact/logic, continuity and structure questions are
-screened again with the rider (Opus on disagreement), Astra reviews every
-surviving question, a `walkthrough_questions` stage is recorded, and the
-result and checkpoint are rewritten so the driver can package and deliver
-again. Nothing is re-read; no correction is added or removed.
+put to Astra's comment review directly, as the recipe now does during a run
+(the paragraph-level pair screen cannot see the whole-book evidence such a
+question rests on), a `walkthrough_questions` stage is recorded (a later pass
+is `walkthrough_questions_2`, and so on), and the result and checkpoint are
+rewritten so the driver can package and deliver again. Nothing is re-read; no
+correction is added or removed.
 """
 from __future__ import annotations
 
@@ -65,8 +67,8 @@ def reinstate_walkthrough_questions(book, workspace, *, progress=None, max_api_u
     result = json.loads(result_path.read_text("utf-8"))
     if result.get("status") != "completed" or result.get("execution_mode") != "fixed":
         raise FixedReinstateError("The fixed proofread has not completed")
-    if any(s["stage"] == STAGE for s in result["stages"]):
-        raise FixedReinstateError("This run's questions were already re-screened")
+    passes = sum(1 for s in result["stages"] if s["stage"].startswith(STAGE))
+    stage = STAGE if passes == 0 else f"{STAGE}_{passes + 1}"
     if result.get("poetry_only"):
         raise FixedReinstateError("A spelling-only run has no walk-through questions")
     flow = FixedWorkflow(book, directory, calls=calls, progress=progress, max_api_usd=max_api_usd)
@@ -83,23 +85,23 @@ def reinstate_walkthrough_questions(book, workspace, *, progress=None, max_api_u
     if sheet:
         from docproof.storysheet import StorySheet, prompt_section
         flow.context = prompt_section(StorySheet.model_validate(sheet))
-    flow._stage(STAGE)
+    flow._stage(stage)
     candidates, unanchored = dropped_question_candidates(result, flow.current)
     before_ids = {q["id"] for q in flow.questions}
     snapshot = dict(flow.current)
-    accepted = flow._adjudicate(STAGE, candidates, ())
+    accepted = flow._adjudicate(stage, candidates, ())
     # Only questions are reinstated. A screener may answer a question with an
     # edit; that edit was not checked by the run's meaning and correction
     # gates, so it is recorded and left unapplied.
     for row in accepted:
-        flow.history.append({"stage": STAGE, "unapplied_edit": row,
+        flow.history.append({"stage": stage, "unapplied_edit": row,
                              "reason": "Reinstatement adds author questions only; edits need the run's checks"})
     if flow.current != snapshot:
         raise FixedReinstateError("Reinstatement must not change the delivered text")
     # Astra reviews every question, as it does at the end of its own read.
-    flow._comments([], STAGE, before=snapshot, model=ASTRA)
+    flow._comments([], stage, before=snapshot, model=ASTRA)
     reinstated = [q for q in flow.questions if q["id"] not in before_ids]
-    flow._record(STAGE, candidates=len(candidates), unanchored=unanchored,
+    flow._record(stage, candidates=len(candidates), unanchored=unanchored,
                  reinstated=[q["id"] for q in reinstated], questions=len(flow.questions))
     for stale in ("runs/driver/package.json", "runs/driver/delivery.json"):
         (workspace / stale).unlink(missing_ok=True)
@@ -107,7 +109,7 @@ def reinstate_walkthrough_questions(book, workspace, *, progress=None, max_api_u
         shutil.rmtree(workspace / stale, ignore_errors=True)
     new = flow._write_result(False)
     return {"result": new, "reinstated": reinstated, "candidates": len(candidates),
-            "unanchored": len(unanchored), "workspace": str(workspace)}
+            "unanchored": len(unanchored), "workspace": str(workspace), "stage": stage}
 
 
 __all__ = ["STAGE", "dropped_question_candidates", "reinstate_walkthrough_questions", "FixedReinstateError"]
