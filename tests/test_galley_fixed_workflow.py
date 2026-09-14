@@ -146,6 +146,8 @@ def test_real_docx_full_fixed_sequence_and_successive_corrected_versions(make_bo
         return result
 
     def handler(stage, model, payload, kwargs):
+        if stage == "typed_screen":
+            return {"decisions": [ruling(x, replacement="aw" if model == SONNET else "e") for x in payload["sites"]]}
         if stage == "typed_disputes":
             return {"decisions": [ruling(x, replacement="aw") for x in payload["sites"]]}
         if stage == "numbers":
@@ -472,7 +474,7 @@ def test_luna_rejection_is_settled_by_opus_instead_of_becoming_comment(make_book
     flow._checks("check", before)
     assert flow.current["p"] == "He waited for somebody."
     assert flow.questions == []
-    assert [x["model"] for x in flow.calls.events] == [LUNA, OPUS, LUNA]
+    assert [x["model"] for x in flow.calls.events] == [LUNA, SONNET, OPUS, LUNA]
 
 
 def test_formatting_enters_correction_check_and_rejected_format_is_removed(make_book, tmp_path):
@@ -486,7 +488,7 @@ def test_formatting_enters_correction_check_and_rejected_format_is_removed(make_
     before = flow._apply("fable", [row])
     flow._checks("check", before)
     assert flow.formats == []
-    assert [x["stage"] for x in flow.calls.events] == ["check_correction", "check_correction_disputes"]
+    assert [x["stage"] for x in flow.calls.events] == ["check_correction", "check_correction_sonnet", "check_correction_disputes"]
 
 
 def test_comment_resolved_by_rejected_edit_is_reviewed_on_restored_text(make_book, tmp_path):
@@ -558,7 +560,7 @@ def test_new_astra_question_gets_explicit_final_astra_comment_review(make_book, 
             return {"reviewed_ids": [row["id"]],
                     "findings": [finding(row["id"], "someone", "", "author_question", action="query", missing="The intended identity")],
                     "comment_decisions": [], "editorial_verdict": "ready"}
-        if stage == "astra_disputes":
+        if stage == "astra_screen":
             return {"decisions": [{**ruling(x, "query"), "missing_knowledge": "The intended identity", "question": "Who was he waiting for?"}
                                   for x in payload["sites"]]}
     readers = Readers(handler=handler)
@@ -623,7 +625,7 @@ def test_replay_rejects_tampered_stage_evidence(make_book, tmp_path):
 
 
 @pytest.mark.parametrize("decision", ["apply", "drop"])
-def test_local_grammar_missed_by_both_readers_requires_opus_then_luna(
+def test_local_grammar_missed_by_both_readers_requires_pair_screen_then_luna(
         make_book, tmp_path, monkeypatch, local_scans, decision):
     from types import SimpleNamespace
     scanned = []
@@ -641,8 +643,8 @@ def test_local_grammar_missed_by_both_readers_requires_opus_then_luna(
             pass
 
     def handler(stage, model, payload, kwargs):
-        if stage == "typed_disputes":
-            assert model == OPUS
+        if stage == "typed_screen":
+            assert model in {SONNET, LUNA}
             assert len(payload["sites"]) == 1
             proposal = payload["sites"][0]["proposals"][0]
             assert proposal["models"] == ["local:languagetool"]
@@ -661,7 +663,8 @@ def test_local_grammar_missed_by_both_readers_requires_opus_then_luna(
     events = readers.events
     typed = [row for row in events if row["stage"] == "typed"]
     assert {row["model"] for row in typed} == {SONNET, LUNA}
-    assert any(row["stage"] == "typed_disputes" for row in events)
+    assert {row["model"] for row in events if row["stage"] == "typed_screen"} == {SONNET, LUNA}
+    assert not any(row["stage"] == "typed_disputes" for row in events)
     checks = [row for row in events if row["stage"] in {"checks_meaning", "checks_correction"}]
     assert len(checks) == (2 if decision == "apply" else 0)
     assert all(row["model"] == LUNA for row in checks)
@@ -683,8 +686,8 @@ def test_local_completion_is_checked_once_before_fable_reads_corrected_book(
         return [_local_row(pid, "teh", "the", source="recurrence", category="spelling")], {"recurrence_candidates": 1}
 
     def handler(stage, model, payload, kwargs):
-        if stage == "local_completion_disputes":
-            assert model == OPUS
+        if stage == "local_completion_screen":
+            assert model in {SONNET, LUNA}
             return {"decisions": [ruling(site, replacement=site["proposals"][0]["replacement"])
                                   for site in payload["sites"]]}
 
@@ -696,8 +699,8 @@ def test_local_completion_is_checked_once_before_fable_reads_corrected_book(
     assert len(completion_calls) == 1
     events = readers.events
     stages = [row["stage"] for row in events]
-    assert max(stages.index("ensemble_sweep_opus"), stages.index("ensemble_sweep_sol")) < stages.index("local_completion_disputes")
-    assert stages.index("local_completion_disputes") < stages.index("local_completion_checks_meaning")
+    assert max(stages.index("ensemble_sweep_opus"), stages.index("ensemble_sweep_sol")) < stages.index("local_completion_screen")
+    assert stages.index("local_completion_screen") < stages.index("local_completion_checks_meaning")
     assert stages.index("local_completion_checks_meaning") < stages.index("local_completion_checks_correction") < stages.index("fable")
     assert [row for row in events if row["stage"] == "fable"][0]["payload"]["paragraphs"][0]["text"] == "She found the letter."
     assert result["questions"] == []
@@ -808,11 +811,12 @@ def test_unchanged_rejected_local_site_is_not_paid_for_again_at_completion(
 
     monkeypatch.setattr("galley.fixed_local.collect_local_candidates", initial)
     monkeypatch.setattr("galley.fixed_local.collect_completion_candidates", completion)
-    readers = Readers()  # Opus rejects the stylistic suggestion.
+    readers = Readers()  # Both screeners reject the stylistic suggestion.
     result = FixedWorkflow(make_book("A quiet paragraph."), tmp_path / "dedup-local", calls=readers).run()
     assert result["accepted"] == result["original"] and result["questions"] == []
-    assert sum(row["stage"] == "typed_disputes" for row in readers.events) == 1
-    assert not any(row["stage"] == "local_completion_disputes" for row in readers.events)
+    assert sum(row["stage"] == "typed_screen" for row in readers.events) == 2
+    assert not any(row["stage"] in {"typed_disputes", "local_completion_screen", "local_completion_disputes"}
+                   for row in readers.events)
 
 
 def test_call_coverage_freezes_all_assigned_inventories_and_only_known_read_context():
@@ -940,6 +944,10 @@ def test_invalid_comment_drops_while_valid_comment_survives(make_book, tmp_path,
 @pytest.mark.parametrize("action", ["apply", "query"])
 def test_invalid_opus_disposition_drops_site_without_losing_good_edit(make_book, tmp_path, action):
     def handler(stage, model, payload, kwargs):
+        if stage == "typed_screen":
+            return {"decisions": [ruling(site, "apply" if model == SONNET else "drop", site["proposals"][0]["replacement"])
+                                  for site in payload["sites"]]}
+        assert stage == "typed_disputes"
         return {"decisions": [ruling(site, action, "bad\x00text") if site["before"] == "someone"
                               else ruling(site, "apply", site["proposals"][0]["replacement"]) for site in payload["sites"]]}
     flow = _flow(make_book, tmp_path, Readers(handler=handler))
