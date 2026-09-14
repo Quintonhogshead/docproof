@@ -166,6 +166,15 @@ def test_solicited_story_cannot_cite_unavailable_source(queued, story):
         accept_story(queue, task, story.model_dump())
 
 
+def test_complete_source_can_have_qualified_character_perspectives(queued, story):
+    queue, _, task = queued
+    story.source_limitations = ["The father's motives appear through the siblings' differing memories."]
+    assert accept_story(queue, task, story.model_dump())["state"] == "story_ready"
+    story.source_complete = False
+    with pytest.raises(ValueError, match="source limitation"):
+        pipeline.validate_story(story, task["chunks"])
+
+
 def test_qwen_result_reused_and_wrong_review_blocked(queued, story, draft):
     queue, task = drafted(queued, story, draft)
     assert generate_draft(queue, task, provider=object())["drafts"] == task["drafts"]

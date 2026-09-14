@@ -53,7 +53,8 @@ def sol(prompt, model, work: Path, request_id, *, runner=None, attempt=0, valida
     if runner is None:
         from galley.codex_runner import run_structured
         runner = run_structured
-    result = runner(prompt, schema, Path(work) / f"attempt-{attempt}", request_id=request_id,
+    result = runner(prompt, schema, Path(work) / f"attempt-{attempt}",
+                    request_id=request_id + "-" + key[:24],
                     timeout_seconds=1800, model=SOL_MODEL,
                     reasoning_effort=SOL_EFFORT, no_tools=True)
     result = model.model_validate(result)
@@ -99,7 +100,7 @@ def analyze(source_chunks, work, *, runner=None, progress=lambda stage: None, fe
 
 
 def validate_story(story, source_chunks):
-    if not story.source_complete or story.source_limitations:
+    if not story.source_complete:
         raise ValueError("The storysheet reports a source limitation: " +
                          "; ".join(story.source_limitations or ["incomplete source"]))
     if (len(story.five_angles) != 5 or

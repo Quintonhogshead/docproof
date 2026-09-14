@@ -41,7 +41,11 @@ Do not write polished teaser sentences, opening hooks, or other publishable copy
 Supply exactly five genuinely different, supportable angles and a concise task
 brief for Qwen. Do not force genres or premises the book does not contain.
 If material coverage is missing or inconsistent, set source_complete=false and
-explain it. Preserve exact paragraph IDs. Title and author may be empty when not
+explain it. Ordinary literary ambiguity, character viewpoints, lack of outside
+publication context, and the fact that only the supplied manuscript is available
+are not missing source coverage. Keep source_limitations empty unless there is a
+material limitation; handle perspective and ambiguity in factual qualifications.
+Preserve exact paragraph IDs. Title and author may be empty when not
 identified in the source; never infer the title from an operational filename.
 The original passages cited by the readings are included to check their accuracy.
 READINGS:
