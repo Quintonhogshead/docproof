@@ -25,6 +25,8 @@ from docproof.teasers.prompts import writer_prompt
 log = logging.getLogger(__name__)
 MAX_DRAFTS_PER_CYCLE = 5
 MAX_DRAFTS_PER_DAY = 12
+INITIAL_WRITER_TOKENS = 16_000
+MAX_WRITER_TOKENS = 32_000
 LEASE_SECONDS = 240
 STATES = ("queued", "story_ready", "drafted", "approved")
 
@@ -227,6 +229,7 @@ def generate_draft(queue, task, *, provider=None):
         if not key:
             raise TeaserError("Add the DeepInfra key to DocProof's cloud settings.")
         provider = DeepInfraProvider(api_key=key, max_retries=0, effort=None)
+        provider.client = provider.client.with_options(timeout=840)
     story = Storysheet.model_validate(task["storysheet"])
     previous = task["drafts"][-1]["content"] if task["drafts"] else None
     system, user = writer_prompt(story.model_dump(), evidence_for(story.public_facts, task["chunks"]),
@@ -236,9 +239,19 @@ def generate_draft(queue, task, *, provider=None):
     # submitting a duplicate paid request on the next poll.
     task["generation_times"] = recent + [time.time()]
     queue.save(task, "generating")
+    token_limit = min(MAX_WRITER_TOKENS, max(INITIAL_WRITER_TOKENS,
+                                          task.get("writer_token_limit", INITIAL_WRITER_TOKENS)))
     try:
         result = provider.complete_structured(model=QWEN_MODEL, system=system, user=user,
-                    schema=strict_json_schema(Draft), schema_name="author_teasers", max_tokens=10000)
+                    schema=strict_json_schema(Draft), schema_name="author_teasers", max_tokens=token_limit)
+        task.setdefault("generation_receipts", []).append({"at": time.time(),
+            "max_tokens": token_limit, "stop_reason": result.stop_reason, "usage": vars(result.usage)})
+        if result.stop_reason == "max_tokens":
+            task["writer_token_limit"] = min(MAX_WRITER_TOKENS, token_limit * 2)
+            queue.retry({**task, "state": "generating"},
+                        "Qwen's package was incomplete; retrying with a larger output allowance.",
+                        resume="story_ready", delay=30)
+            return queue.get(task["id"])
         if result.stop_reason != "ok" or result.parsed is None:
             raise TeaserError("Qwen did not complete the teaser package: " +
                               (result.error or result.stop_reason))

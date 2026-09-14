@@ -70,7 +70,7 @@ def dispatch(app, message):
         elif message.action == "deliver":
             task = deliver(queue, task, home)
         elif message.action == "error":
-            if task["state"] != "complete":
+            if task["state"] not in ("complete", "retry_wait"):
                 queue.retry(task, str(message.payload.get("error", "Worker failed")))
                 task = queue.get(task["id"])
         return {"task": task}

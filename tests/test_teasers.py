@@ -221,11 +221,43 @@ def test_provider_failure_retries_and_does_not_publish(queued, story):
     task = accept_story(queue, task, story.model_dump())
     class Failure:
         def complete_structured(self, **kw):
-            return ProviderResult(stop_reason="max_tokens", error="truncated")
+            return ProviderResult(stop_reason="error", error="provider unavailable")
     with pytest.raises(TeaserError):
         generate_draft(queue, task, provider=Failure())
     assert queue.get(task["id"])["state"] == "retry_wait"
     assert not queue.get(task["id"])["drafts"]
+
+
+def test_truncated_package_retries_with_more_room_and_keeps_prior_draft(queued, story, draft):
+    from app.teasers import INITIAL_WRITER_TOKENS, MAX_WRITER_TOKENS
+    queue, task = drafted(queued, story, draft)
+    review = approved(draft)
+    review.approved = False
+    review.feedback = ["Correct the ferry repair chronology."]
+    task = accept_review(queue, task, review.model_dump())
+    class Truncated:
+        def complete_structured(self, **kw):
+            assert kw["max_tokens"] == INITIAL_WRITER_TOKENS
+            return ProviderResult(stop_reason="max_tokens", error="truncated")
+    result = generate_draft(queue, task, provider=Truncated())
+    assert result["state"] == "retry_wait"
+    assert result["writer_token_limit"] == MAX_WRITER_TOKENS
+    assert result["retry_at"] < time.time() + 31
+    assert result["drafts"] == task["drafts"]
+    assert result["generation_receipts"][-1]["stop_reason"] == "max_tokens"
+
+
+def test_duplicate_worker_error_does_not_extend_saved_retry(queued):
+    from types import SimpleNamespace
+    from app.routes.teasers import dispatch, WorkerMessage
+    queue, _, task = queued
+    queue.retry(task, "Temporary provider failure", delay=30)
+    before = queue.get(task["id"])
+    app = SimpleNamespace(state=SimpleNamespace(watch=SimpleNamespace(home=queue.root.parent)))
+    result = dispatch(app, WorkerMessage(action="error", worker="worker", task_id=task["id"],
+                                        payload={"error": "Duplicate transport report"}))["task"]
+    assert result["failures"] == before["failures"]
+    assert result["retry_at"] == before["retry_at"]
 
 
 def test_document_contains_all_options_guide_and_no_internal_evidence(tmp_path, story, draft):

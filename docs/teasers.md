@@ -29,6 +29,9 @@ editorial approval step.
    when that allowance becomes available. There is no editor queue or paid OpenAI
    API fallback. A service credential that expires still needs normal account
    maintenance; the job keeps retrying rather than publishing unverified copy.
+   Qwen receives a 16,000-token output allowance, automatically increasing to
+   32,000 after truncation. Incomplete packages never replace a valid draft;
+   generation receipts include usage for unsuccessful responses too.
 6. Only a passing package is formatted as DOCX, converted to a native Google Doc,
    and read back to verify all five options and every guidance section. Delivery
    uses the formatting workflow's Google OAuth connection. The upload session and
