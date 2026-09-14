@@ -7764,6 +7764,10 @@ function renderWatch(body, quiet) {
   renderNativeWorker(w);
   renderNativeIntake(w);
   renderInteriorComputer(w);
+  // Read-only, like the readouts above: safe on the five-second poll, and it
+  // is how "Running…" turns into a finished rehearsal without a reload.
+  renderCorrectionsWaiting(w);
+  renderCorrectionsRehearsal(w);
   // The workflow registry reads the watch status too (the Format and Proofread
   // rows), so it has to follow a change here. Only when something it shows
   // actually moved, though: rebuilding the table every five seconds would take
@@ -7819,6 +7823,16 @@ function renderWatch(body, quiet) {
   $('corrections-text-prop').value = w.hubspot_corrections_text_property ?? '';
   $('corrections-folder').value = w.corrections_folder_name ?? '';
   $('corrections-model-passes').checked = w.corrections_model_passes !== false;
+  // Seconds on the wire, hours on the screen — a person thinks in hours for a
+  // wait this long.
+  $('corrections-quiet-hours').value = w.corrections_quiet_seconds != null
+    ? w.corrections_quiet_seconds / 3600 : '';
+  $('corrections-book-prop').value = w.hubspot_corrections_book_property ?? '';
+  $('corrections-form-poll').checked = !!w.corrections_form_poll;
+  $('corrections-form-id').value = w.corrections_form_id ?? '';
+  $('corrections-form-file-field').value = w.corrections_form_file_property ?? '';
+  $('corrections-form-notes-field').value = w.corrections_form_notes_property ?? '';
+  $('corrections-form-start-after').value = w.corrections_form_start_after ?? '';
   $('corrections-engine').value = w.corrections_engine || 'idml';
   $('corrections-native-upload').checked = !!w.corrections_native_auto_upload;
   $('corrections-native-partial').checked = w.corrections_native_partial_upload === true;
@@ -8417,6 +8431,131 @@ function renderProofReadout(w) {
     tr.append(book, verdict, why, when);
     vt.append(tr);
   });
+}
+
+function correctionsWhen(iso) {
+  if (!iso) return '—';
+  const t = new Date(iso);
+  if (isNaN(t)) return '—';
+  return t.toLocaleString([], { month: 'short', day: 'numeric',
+                                hour: '2-digit', minute: '2-digit' });
+}
+
+function correctionsHoldingFor(readyAt) {
+  if (!readyAt) return 'holding';
+  const t = new Date(readyAt);
+  if (isNaN(t)) return 'holding';
+  const seconds = Math.max(0, Math.round((t.getTime() - Date.now()) / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return `holding for ${hours}h ${minutes}m`;
+}
+
+// The IDML corrections stage's own readout: every record currently held for
+// its quiet period (`corrections.pending_summary`), with a "Dry run" / "Run
+// now" pair on each row — the panel's equivalent of `docproof-watch
+// corrections rehearse --record <id>`.
+function renderCorrectionsWaiting(w) {
+  const table = $('corrections-waiting');
+  const empty = $('corrections-waiting-empty');
+  if (!table || !empty) return;
+  const rows = w.corrections_pending || [];
+  table.innerHTML = '';
+  empty.hidden = rows.length > 0;
+  if (!rows.length) return;
+  table.append(headRow(['Author', 'Record', 'Forms', 'First seen', 'Ready at',
+                        'State', '']));
+  rows.forEach((row) => {
+    const tr = bodyRow([
+      row.author || '— unnamed', row.record_id || '—',
+      String(row.submissions ?? 0),
+      correctionsWhen(row.first_seen), correctionsWhen(row.ready_at),
+      row.ready ? 'ready' : correctionsHoldingFor(row.ready_at),
+    ]);
+    const td = document.createElement('td');
+    const dry = document.createElement('button');
+    dry.type = 'button';
+    dry.className = 'ghost small';
+    dry.textContent = 'Dry run';
+    dry.addEventListener('click', () => rehearseCorrections(row.record_id, true, dry));
+    const run = document.createElement('button');
+    run.type = 'button';
+    run.className = 'ghost small';
+    run.style.marginLeft = '0.4em';
+    run.textContent = 'Run now';
+    run.addEventListener('click', () => {
+      if (!confirm('Apply corrections to this record now, before its quiet '
+          + 'period ends?')) return;
+      rehearseCorrections(row.record_id, false, run);
+    });
+    td.append(dry, run);
+    tr.append(td);
+    table.append(tr);
+  });
+}
+
+// The last rehearsal a person asked for, whichever record it was — read back
+// off `WatchRunner.last_rehearsal` the same five-second poll draws everything
+// else on this screen, so "Running…" turns into a finished result on its own.
+function renderCorrectionsRehearsal(w) {
+  const block = $('corrections-rehearsal');
+  if (!block) return;
+  const r = w.corrections_rehearsal;
+  if (!r) { block.hidden = true; return; }
+  block.hidden = false;
+  const running = !!r.started_at && !r.finished_at;
+  const when = correctionsWhen(r.finished_at || r.started_at);
+  $('corrections-rehearsal-heading').textContent =
+    `Last rehearsal — ${r.record_id} (${r.dry_run ? 'dry run' : 'run'}) at ${when}`;
+  $('corrections-rehearsal-running').hidden = !running;
+  const lines = $('corrections-rehearsal-lines');
+  lines.innerHTML = '';
+  const groups = [
+    ['corrected', 'Corrected'], ['uploaded', 'Uploaded'],
+    ['needs_human', 'Needs a person'],
+    ['missing_source', 'No source IDML'],
+    ['stuck_ready', 'Ready but already applied'],
+    ['failed', 'Could not apply corrections'],
+  ];
+  for (const [key, label] of groups) {
+    for (const item of r[key] || []) {
+      const li = document.createElement('li');
+      li.textContent = Array.isArray(item)
+        ? `${label} — ${item[0]}: ${item[1]}` : `${label}: ${item}`;
+      lines.append(li);
+    }
+  }
+  if (r.waiting) {
+    const li = document.createElement('li');
+    li.textContent = `Record ${r.record_id} is not ready yet — nothing to `
+      + 'rehearse.';
+    lines.append(li);
+  }
+  const errorEl = $('corrections-rehearsal-error');
+  errorEl.hidden = !r.error;
+  if (r.error) errorEl.textContent = r.error;
+}
+
+async function rehearseCorrections(recordId, dryRun, button) {
+  recordId = (recordId || '').trim();
+  const note = $('wf-corrections-note');
+  note.hidden = true;
+  if (!recordId) {
+    watchNote(note, 'Enter a HubSpot record ID to rehearse.', 'error');
+    return;
+  }
+  if (button) button.disabled = true;
+  try {
+    const body = await api('/api/watch/corrections/rehearse', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ record_id: recordId, dry_run: dryRun, now: true }),
+    });
+    renderWatch(body, true);
+  } catch (err) {
+    watchNote(note, err.message, 'error');
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 async function releaseProof(f, btn) {
@@ -9973,8 +10112,20 @@ function automationWorkflows() {
       id: 'corrections', name: 'Interior corrections',
       sub: nativeCorrections ? 'Author form → InDesign correction and review' : 'Author form → Book N.5 IDML + spreadsheet',
       trigger: {
-        text: nativeCorrections && (w.interior_computer || w.corrections_native_form_poll) ? 'Pre-Proof correction form' : w.hubspot_corrections_ready_value
-          ? 'HubSpot: ' + w.hubspot_corrections_ready_value : 'HubSpot status',
+        text: (() => {
+          const hubspotText = w.hubspot_corrections_ready_value
+            ? 'HubSpot: ' + w.hubspot_corrections_ready_value : 'HubSpot status';
+          if (nativeCorrections && (w.interior_computer || w.corrections_native_form_poll)) {
+            return 'Pre-Proof correction form';
+          }
+          // The IDML engine's own form-poll mode: every submission of the form
+          // is folded in, not only the properties the workflow copied — worth
+          // saying, since it changes what counts as "one more round".
+          if (!nativeCorrections && w.corrections_form_poll) {
+            return 'Pre-Proof correction form + ' + hubspotText;
+          }
+          return hubspotText;
+        })(),
         hs: true,
       },
       effect: nativeCorrections ? 'Book N.5 INDD + PDF + corrections spreadsheet' : 'Book N.5 + Applied / Not applied sheet',
@@ -10547,6 +10698,14 @@ $('wf-corrections-save').addEventListener('click', async () => {
         hubspot_corrections_text_property: $('corrections-text-prop').value,
         corrections_folder_name: $('corrections-folder').value,
         corrections_model_passes: $('corrections-model-passes').checked,
+        corrections_quiet_seconds: Math.round(
+          (parseFloat($('corrections-quiet-hours').value) || 0) * 3600),
+        hubspot_corrections_book_property: $('corrections-book-prop').value,
+        corrections_form_poll: $('corrections-form-poll').checked,
+        corrections_form_id: $('corrections-form-id').value,
+        corrections_form_file_property: $('corrections-form-file-field').value,
+        corrections_form_notes_property: $('corrections-form-notes-field').value,
+        corrections_form_start_after: $('corrections-form-start-after').value,
         corrections_engine: $('corrections-engine').value,
         corrections_native_auto_upload: $('corrections-native-upload').checked,
         corrections_native_partial_upload: $('corrections-native-partial').checked,
@@ -10559,6 +10718,23 @@ $('wf-corrections-save').addEventListener('click', async () => {
   } catch (err) {
     watchNote(note, err.message, 'error');
   } finally { button.disabled = false; }
+});
+
+// Rehearsing a record not yet in the waiting table — the same call the
+// table's own "Dry run" / "Run now" buttons make, for a book that has not
+// been discovered yet (or whose quiet period already elapsed).
+$('corrections-rehearse-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+});
+$('corrections-rehearse-dry').addEventListener('click', () => {
+  rehearseCorrections($('corrections-rehearse-id').value, true,
+                      $('corrections-rehearse-dry'));
+});
+$('corrections-rehearse-run').addEventListener('click', () => {
+  const id = $('corrections-rehearse-id').value;
+  if (!confirm('Apply corrections to this record now, before its quiet '
+      + 'period ends?')) return;
+  rehearseCorrections(id, false, $('corrections-rehearse-run'));
 });
 
 $('native-book-form').addEventListener('submit', async (event) => {

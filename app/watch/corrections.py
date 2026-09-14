@@ -69,9 +69,9 @@ EXTRACT_MODEL = "gpt-5.6-luna"
 
 __all__ = ["Work", "Submission", "CorrectionsFailed", "discover",
            "gather_submissions", "hold_or_release", "ready_at",
-           "pending_summary", "run_stage", "pick_source", "proof_pdf_for",
-           "hand_off_names", "artifacts", "make_job", "run_job",
-           "upload_outputs", "verify_uploads", "mark_source",
+           "pending_summary", "run_stage", "rehearse", "pick_source",
+           "proof_pdf_for", "hand_off_names", "artifacts", "make_job",
+           "run_job", "upload_outputs", "verify_uploads", "mark_source",
            "extract_provider", "fetch_submission", "fetch_submissions"]
 
 
@@ -773,6 +773,63 @@ def run_stage(token: str, home: Path, ws: WatchSettings, state: WatchState,
             rec.name = work.idml.name
             rec.corrections_attempts += 1
             state.record(rec)
+
+
+def rehearse(home: Path, ws: WatchSettings, record_id: str, *,
+            ignore_timer: bool, dry_run: bool, get_key=None,
+            opener=drive._open_url):
+    """The same token, state file, runner and job store a real pass builds,
+    handed to `run_stage` scoped to one record — so a rehearsal counts as a
+    pass for that record (its attempts, its state, its HubSpot write) exactly
+    the way a tick's would.
+
+    Shared by the CLI's `docproof-watch corrections rehearse` and the web
+    panel's per-record rehearsal button, so trying one book means the same
+    thing everywhere it can be tried. `tick` is imported lazily: `tick.py`
+    imports this module at load time, so importing it back here at module
+    scope would be a cycle."""
+    from app.jobs import JobRunner, JobStore
+    from app.settings import Paths
+    from . import tick
+    from .settings import GOOGLE_KEY, HUBSPOT_KEY
+    from .state import STATE_FILE, WatchState
+
+    read = get_key or get_api_key
+    if not ws.folder_id:
+        raise tick.NotConfigured(
+            "No folder is being watched yet. Run `docproof-watch init` to "
+            "say which one.")
+    if not ws.client_id or not ws.client_secret:
+        raise tick.NotConfigured(
+            "There is no Google sign-in set up yet. Run `docproof-watch "
+            "auth` — docs/watch.md walks through making the OAuth client it "
+            "asks for.")
+    refresh = read(GOOGLE_KEY)
+    if not refresh:
+        raise tick.NotConfigured(
+            "DocProof is not signed in to Google. Run `docproof-watch "
+            "auth`.")
+    hs_token = read(HUBSPOT_KEY)
+    if not hs_token:
+        raise tick.NotConfigured(
+            "HubSpot is switched on but there is no token. Run "
+            "`docproof-watch hubspot-token` on the desktop, or set the "
+            "HUBSPOT_TOKEN secret on the server.")
+
+    token = drive.refresh_access_token(ws.client_id, ws.client_secret,
+                                       refresh, opener=opener)
+    state = WatchState.load(home / STATE_FILE)
+    paths = Paths(home).ensure()
+    store = JobStore(paths)
+    runner = JobRunner(store, ws.app_settings(home),
+                       config_path=tick.config_path(), notify_home=home)
+
+    report = tick.TickReport()
+    run_stage(token, home, ws, state, runner, store, mock=False,
+             opener=opener, hs_token=hs_token, report=report,
+             only_record=record_id, ignore_timer=ignore_timer,
+             dry_run=dry_run)
+    return report
 
 
 def _one(token: str, home: Path, ws: WatchSettings, work: Work,

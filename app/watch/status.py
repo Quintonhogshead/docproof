@@ -20,6 +20,7 @@ from app.jobs import JobStore
 from app.settings import Paths, get_api_key
 
 from . import auth as authlib
+from . import corrections
 from . import daily
 from . import schedule as schedulelib
 from .schedule import ScheduleError
@@ -94,6 +95,7 @@ def status(home: str | Path, *, get_key=None,
     signed = authlib.token_source(read, bool(ws.client_id))
     times = schedulelib.current(path=agent_path) if _agent_readable() else None
     stamp = last_tick(root)
+    state = WatchState.load(root / STATE_FILE)
 
     return {
         "home": str(root),
@@ -134,6 +136,17 @@ def status(home: str | Path, *, get_key=None,
         "hubspot_corrections_text_property": ws.hubspot_corrections_text_property,
         "corrections_folder_name": ws.corrections_folder_name,
         "corrections_model_passes": ws.corrections_model_passes,
+        # The IDML engine's own quiet-period and form-poll settings, and the
+        # readout of who is currently held for it — read from `state.json`
+        # rather than Drive, so asking costs nothing and works even signed out.
+        "corrections_quiet_seconds": ws.corrections_quiet_seconds,
+        "corrections_form_poll": ws.corrections_form_poll,
+        "corrections_form_id": ws.corrections_form_id,
+        "corrections_form_file_property": ws.corrections_form_file_property,
+        "corrections_form_notes_property": ws.corrections_form_notes_property,
+        "corrections_form_start_after": ws.corrections_form_start_after,
+        "hubspot_corrections_book_property": ws.hubspot_corrections_book_property,
+        "corrections_pending": corrections.pending_summary(state, ws),
         "max_files_per_tick": ws.max_files_per_tick,
         "auto_ticks": ws.auto_ticks,
         "tick_every_minutes": ws.tick_every_minutes,

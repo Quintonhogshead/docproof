@@ -56,6 +56,9 @@ def configured(home, **over) -> WatchSettings:
 def signed_in(monkeypatch, token="refresh-1"):
     monkeypatch.setattr("app.watch.cli.get_api_key", lambda name: token)
     monkeypatch.setattr("app.watch.tick.get_api_key", lambda name: token)
+    # `corrections.rehearse` (the CLI's rehearsal delegates to it) reads
+    # through its own imported name, same as every other module here.
+    monkeypatch.setattr("app.watch.corrections.get_api_key", lambda name: token)
 
 
 def run(home, *argv) -> int:

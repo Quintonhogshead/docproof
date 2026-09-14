@@ -1310,11 +1310,77 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                   <small class="muted">— the panel's defaults; off applies
                     deterministically and flags more for the designer</small>
                 </label>
+                <label class="field">
+                  <span>Quiet period after the last form (hours)</span>
+                  <input type="number" id="corrections-quiet-hours" step="0.5" min="0">
+                  <small class="muted">Every new submission restarts it. 0 runs
+                    on the next pass.</small>
+                </label>
+                <label class="field">
+                  <span>Record property naming the book (authors with several
+                    books)</span>
+                  <input type="text" id="corrections-book-prop"
+                         placeholder="book_title">
+                </label>
+                <details id="corrections-form-poll-details">
+                  <summary>Read the form's own submissions</summary>
+                  <label class="checkbox">
+                    <input type="checkbox" id="corrections-form-poll">
+                    Fold every submission of the corrections form for the
+                    record, not only the properties the workflow copied
+                    <small class="muted">— needs the HubSpot forms read
+                      scope</small>
+                  </label>
+                  <label class="field">
+                    <span>Form ID</span>
+                    <input type="text" id="corrections-form-id">
+                  </label>
+                  <label class="field">
+                    <span>Form field holding the uploaded file</span>
+                    <input type="text" id="corrections-form-file-field"
+                           placeholder="interior_design_corrections_documents">
+                  </label>
+                  <label class="field">
+                    <span>Form field holding the typed notes</span>
+                    <input type="text" id="corrections-form-notes-field"
+                           placeholder="anything_else_">
+                  </label>
+                  <label class="field">
+                    <span>Only fold submissions after</span>
+                    <input type="text" id="corrections-form-start-after"
+                           placeholder="2026-09-15">
+                    <small class="muted">Set to today when switching this on
+                      so earlier rounds stay out.</small>
+                  </label>
+                </details>
 
                 <div class="job-actions">
                   <button id="wf-corrections-save" class="primary">Save correction settings</button>
                 </div>
                 <p id="wf-corrections-note" class="action-note" hidden></p>
+
+                <div class="wf-readout" id="corrections-waiting-block" aria-live="polite">
+                  <h4>Waiting for corrections</h4>
+                  <p id="corrections-waiting-empty" class="muted small" hidden>
+                    Nothing is waiting for corrections.</p>
+                  <table class="table" id="corrections-waiting"></table>
+                  <form id="corrections-rehearse-form" class="wf-inline-form">
+                    <label class="field">
+                      <span>Rehearse a record not yet listed</span>
+                      <input type="text" id="corrections-rehearse-id"
+                             placeholder="HubSpot record ID">
+                    </label>
+                    <button type="button" id="corrections-rehearse-dry">Dry run</button>
+                    <button type="button" id="corrections-rehearse-run">Run now</button>
+                  </form>
+                </div>
+
+                <div class="wf-readout" id="corrections-rehearsal" aria-live="polite" hidden>
+                  <h4 id="corrections-rehearsal-heading">Last rehearsal</h4>
+                  <p id="corrections-rehearsal-running" class="muted small" hidden>Running…</p>
+                  <ul id="corrections-rehearsal-lines"></ul>
+                  <p id="corrections-rehearsal-error" class="small wf-agent-error" hidden></p>
+                </div>
                 </div>
                 <div class="wf-readout" id="native-worker-readout" aria-live="polite">
                   <h4>InDesign worker</h4>

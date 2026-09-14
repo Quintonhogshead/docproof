@@ -26,7 +26,7 @@ from app.settings import Paths
 from app.watch import tick as ticklib
 from app.watch.drive import AuthExpired, DriveError
 from app.watch.settings import WatchSettings
-from app.watch.state import FileRecord, WatchState
+from app.watch.state import STATE_FILE, FileRecord, PendingCorrections, WatchState
 from app.watch.tick import TickReport
 
 FOLDER = "1AbCdEfGhIjKlMnOp"
@@ -869,3 +869,176 @@ def test_an_empty_preview_is_zeros_rather_than_missing_keys(client):
     assert body["new"] == 0 and body["proof"] == 0
     assert body["promo"] == 0 and body["plan_docs"] == 0
     assert body["plan"] == []
+
+
+# --- interior corrections: settings, the waiting readout, rehearsal -----------
+
+def corrections_configured(client, **over) -> WatchSettings:
+    return configured(client, corrections_enabled=True, hubspot_enabled=True,
+                      **over)
+
+
+def test_the_status_carries_the_corrections_quiet_period_and_form_settings(
+        client):
+    corrections_configured(
+        client, corrections_quiet_seconds=1800, corrections_form_poll=True,
+        corrections_form_id="form-9", corrections_form_file_property="docs",
+        corrections_form_notes_property="notes",
+        corrections_form_start_after="2026-09-15",
+        hubspot_corrections_book_property="book_title")
+
+    w = watch_of(client)["watch"]
+
+    assert w["corrections_quiet_seconds"] == 1800
+    assert w["corrections_form_poll"] is True
+    assert w["corrections_form_id"] == "form-9"
+    assert w["corrections_form_file_property"] == "docs"
+    assert w["corrections_form_notes_property"] == "notes"
+    assert w["corrections_form_start_after"] == "2026-09-15"
+    assert w["hubspot_corrections_book_property"] == "book_title"
+    assert w["corrections_pending"] == []
+    assert w["corrections_rehearsal"] is None
+
+
+def test_the_status_lists_records_waiting_for_corrections(client):
+    corrections_configured(client)
+    state = WatchState.load(client.home / STATE_FILE)
+    state.corrections_pending["rec-1"] = PendingCorrections(
+        record_id="rec-1", author="Jane Smith",
+        first_seen="2026-09-14T12:00:00+00:00",
+        submissions=[{"marker": "m1", "urls": [], "text": "fix p9"}])
+    state.save()
+
+    rows = watch_of(client)["watch"]["corrections_pending"]
+
+    assert len(rows) == 1
+    assert rows[0]["record_id"] == "rec-1"
+    assert rows[0]["author"] == "Jane Smith"
+    assert rows[0]["submissions"] == 1
+
+
+def test_put_round_trips_quiet_seconds_and_form_poll(client):
+    corrections_configured(client)
+
+    body = client.put("/api/watch", json={
+        "corrections_quiet_seconds": 0,
+        "corrections_form_poll": True,
+    }).json()
+
+    ws = WatchSettings.load(client.home)
+    assert ws.corrections_quiet_seconds == 0
+    assert ws.corrections_form_poll is True
+    assert body["watch"]["corrections_quiet_seconds"] == 0
+    assert body["watch"]["corrections_form_poll"] is True
+
+
+def test_rehearse_refuses_when_corrections_are_off(client):
+    configured(client, hubspot_enabled=True)      # corrections left off
+
+    resp = client.post("/api/watch/corrections/rehearse",
+                       json={"record_id": "rec-1"})
+
+    assert resp.status_code == 409
+    assert "corrections are off" in resp.json()["detail"]
+
+
+def test_rehearse_refuses_when_hubspot_is_off(client):
+    configured(client, corrections_enabled=True)  # hubspot left off
+
+    resp = client.post("/api/watch/corrections/rehearse",
+                       json={"record_id": "rec-1"})
+
+    assert resp.status_code == 409
+    assert "HubSpot is off" in resp.json()["detail"]
+
+
+def test_rehearse_refuses_the_native_engine(client):
+    corrections_configured(client, corrections_engine="native")
+
+    resp = client.post("/api/watch/corrections/rehearse",
+                       json={"record_id": "rec-1"})
+
+    assert resp.status_code == 409
+    assert "native" in resp.json()["detail"]
+
+
+def test_rehearse_refuses_when_a_pass_is_already_running(client):
+    corrections_configured(client)
+    client.app_state.watch.rehearse_corrections = lambda *a, **k: False
+
+    resp = client.post("/api/watch/corrections/rehearse",
+                       json={"record_id": "rec-1"})
+
+    assert resp.status_code == 409
+    assert "already running" in resp.json()["detail"]
+
+
+def test_rehearse_calls_the_runner_with_the_flags(client):
+    corrections_configured(client)
+    calls = {}
+
+    def fake(record_id, *, dry_run, ignore_timer):
+        calls.update(record_id=record_id, dry_run=dry_run,
+                     ignore_timer=ignore_timer)
+        return True
+    client.app_state.watch.rehearse_corrections = fake
+
+    body = client.post("/api/watch/corrections/rehearse",
+                       json={"record_id": "rec-1", "dry_run": False,
+                             "now": True}).json()
+
+    assert calls == {"record_id": "rec-1", "dry_run": False,
+                     "ignore_timer": True}
+    assert body["started"] is True
+    assert "watch" in body
+
+
+def test_rehearse_defaults_to_a_dry_run_that_waits_for_the_quiet_period(
+        client):
+    corrections_configured(client)
+    calls = {}
+
+    def fake(record_id, *, dry_run, ignore_timer):
+        calls.update(dry_run=dry_run, ignore_timer=ignore_timer)
+        return True
+    client.app_state.watch.rehearse_corrections = fake
+
+    client.post("/api/watch/corrections/rehearse", json={"record_id": "rec-1"})
+
+    assert calls == {"dry_run": True, "ignore_timer": False}
+
+
+def test_rehearse_refuses_an_invalid_record_id(client):
+    corrections_configured(client)
+
+    resp = client.post("/api/watch/corrections/rehearse",
+                       json={"record_id": "not/a valid id!"})
+
+    assert resp.status_code == 422
+
+
+def test_rehearse_refuses_an_unknown_field(client):
+    corrections_configured(client)
+
+    resp = client.post("/api/watch/corrections/rehearse",
+                       json={"record_id": "rec-1", "extra": "nope"})
+
+    assert resp.status_code == 422
+
+
+def test_the_status_carries_a_finished_rehearsal(client):
+    corrections_configured(client)
+    client.app_state.watch.last_rehearsal = {
+        "record_id": "rec-1", "dry_run": True, "ignore_timer": False,
+        "started_at": "2026-09-14T12:00:00+00:00",
+        "finished_at": "2026-09-14T12:00:05+00:00", "error": None,
+        "corrected": ["Johnson - Book 3.idml: 41 of 58 applied"],
+        "uploaded": ["Johnson - Book 3.5.idml"], "needs_human": [],
+        "missing_source": [], "stuck_ready": [], "failed": [], "waiting": 0,
+    }
+
+    w = watch_of(client)["watch"]
+
+    assert w["corrections_rehearsal"]["record_id"] == "rec-1"
+    assert w["corrections_rehearsal"]["corrected"] == \
+        ["Johnson - Book 3.idml: 41 of 58 applied"]

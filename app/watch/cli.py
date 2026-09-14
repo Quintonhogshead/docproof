@@ -1106,48 +1106,10 @@ def _corrections_rehearsal(home: Path, ws: WatchSettings, record: str, *,
     """The same token, state file, runner and job store `once` builds for a
     real pass, handed to `corrections.run_stage` scoped to one record — so a
     rehearsal counts as a pass for that record (its attempts, its state, its
-    HubSpot write) exactly the way a tick's would."""
-    from app.jobs import JobRunner, JobStore
-    from app.settings import Paths
-    from . import drive as drivelib
-    from .settings import GOOGLE_KEY
-    from .state import STATE_FILE, WatchState
-
-    if not ws.folder_id:
-        raise ticklib.NotConfigured(
-            "No folder is being watched yet. Run `docproof-watch init` to "
-            "say which one.")
-    if not ws.client_id or not ws.client_secret:
-        raise ticklib.NotConfigured(
-            "There is no Google sign-in set up yet. Run `docproof-watch "
-            "auth` — docs/watch.md walks through making the OAuth client it "
-            "asks for.")
-    refresh = get_api_key(GOOGLE_KEY)
-    if not refresh:
-        raise ticklib.NotConfigured(
-            "DocProof is not signed in to Google. Run `docproof-watch "
-            "auth`.")
-    hs_token = get_api_key(HUBSPOT_KEY)
-    if not hs_token:
-        raise ticklib.NotConfigured(
-            "HubSpot is switched on but there is no token. Run "
-            "`docproof-watch hubspot-token` on the desktop, or set the "
-            "HUBSPOT_TOKEN secret on the server.")
-
-    token = drivelib.refresh_access_token(ws.client_id, ws.client_secret,
-                                          refresh, opener=drivelib._open_url)
-    state = WatchState.load(home / STATE_FILE)
-    paths = Paths(home).ensure()
-    store = JobStore(paths)
-    runner = JobRunner(store, ws.app_settings(home),
-                       config_path=ticklib.config_path(), notify_home=home)
-
-    report = ticklib.TickReport()
-    correctionslib.run_stage(
-        token, home, ws, state, runner, store, mock=False,
-        opener=drivelib._open_url, hs_token=hs_token, report=report,
-        only_record=record, ignore_timer=ignore_timer, dry_run=dry_run)
-    return report
+    HubSpot write) exactly the way a tick's would. The web panel's own
+    rehearsal button calls the same `corrections.rehearse` this delegates to."""
+    return correctionslib.rehearse(home, ws, record, ignore_timer=ignore_timer,
+                                   dry_run=dry_run)
 
 
 def _report_corrections_rehearsal(report: ticklib.TickReport,

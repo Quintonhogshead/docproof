@@ -62,6 +62,17 @@ Google sign-in) and asks for anything required it was not given, the same as
 running it interactively — see DEPLOY.md for the shape of these `fly ssh
 console -C "..."` one-liners generally.
 
+The same settings are also reachable from the app itself, for anyone without
+shell access to the server: **Automations → Workflows → Interior
+corrections** opens the workflow's drawer, where the switch, the two HubSpot
+values, the two form properties, the designer's subfolder name, the quiet
+period (in hours) and the "Read the form's own submissions" details all live
+next to each other. Fill them in and click **Save correction settings** —
+that is the `docproof-watch init --enable-corrections ...` flags, written the
+same way, without a terminal. Turning the switch on is the last step, same as
+on the command line: it is worth saving the rest first so the stage's first
+pass already has somewhere to read from.
+
 When form-poll mode goes live, pass `--corrections-form-start-after
 <ISO date>` with that day's date: submissions older than it are rounds the
 press already handled by hand, and they must not be folded into the next job.
@@ -160,6 +171,18 @@ A rehearsal exits `0` when the record came through clean, `1` when it ended in
 it could not run at all — corrections switched off, HubSpot switched off, or
 the install running the native InDesign engine, which this rehearsal does not
 drive.
+
+The same rehearsal is one click in the app, no terminal needed. The Interior
+corrections drawer's **Waiting for corrections** readout lists every record
+currently held for its quiet period — the same account `corrections status`
+prints — each row with its own **Dry run** and **Run now** buttons: Dry run is
+the equivalent of `--dry-run`, Run now of `--now` (it asks you to confirm
+first, since it applies for real before the quiet period is up). A record that
+has not shown up in that table yet can still be rehearsed by typing its
+HubSpot record id into the small form underneath and using the same two
+buttons there. Either way, the drawer's **Last rehearsal** readout shows what
+happened — corrected, uploaded, needs a person, or failed, in the same words
+the command line prints — and keeps polling while one is still running.
 
 ## Recovery
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from dataclasses import asdict
@@ -21,7 +22,8 @@ from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import RedirectResponse, FileResponse
-from pydantic import BaseModel, Field, SecretStr, StrictFloat, StrictInt, StrictStr, field_validator
+from pydantic import (BaseModel, ConfigDict, Field, SecretStr, StrictFloat,
+                      StrictInt, StrictStr, field_validator)
 
 from docproof.providers import lookup
 
@@ -197,6 +199,25 @@ class ClearMarker(BaseModel):
 class ResetFlag(ClearMarker):
     stage: Literal["format", "proof", "promo", "plan", "corrections"]
     updated_at: str = Field(min_length=1, max_length=100)
+
+
+class CorrectionsRehearse(BaseModel):
+    """Try the corrections stage on one HubSpot record, from the panel's
+    "Waiting for corrections" table or its own inline form."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    record_id: str = Field(min_length=1, max_length=40)
+    dry_run: bool = True
+    now: bool = False
+
+    @field_validator("record_id")
+    @classmethod
+    def _record_id(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", value):
+            raise ValueError("record_id must be 1-40 characters of letters, "
+                             "digits, underscores or hyphens.")
+        return value
 
 
 class NativeBook(BaseModel):
@@ -431,6 +452,10 @@ def register(app: FastAPI) -> None:
             status.update(interior_computer=computer,
                           corrections_enabled=computer['desired']['enabled'],
                           corrections_engine='native')
+        # The last per-record rehearsal (see `WatchRunner.rehearse_corrections`)
+        # rides here rather than in `watchlib.status`, which has no runner to
+        # read it off — it lives on the one `WatchRunner` this server holds.
+        status["corrections_rehearsal"] = watch.last_rehearsal
         return {
             "watch": status,
             "run": watch.state(),
@@ -823,6 +848,34 @@ def register(app: FastAPI) -> None:
         # pass runs, so this is only ever a double click, and answering "it is
         # already doing what you asked" in red would be the wrong noise.
         return {"started": started, **watch_payload()}
+
+    @app.post("/api/watch/corrections/rehearse", dependencies=[Depends(may_manage)])
+    def rehearse_corrections(body: CorrectionsRehearse) -> dict:
+        """Try the corrections stage on one HubSpot record, in the background —
+        the panel's equivalent of `docproof-watch corrections rehearse`. Refused
+        the same three ways a CLI rehearsal is (`_corrections_refusal`), in the
+        app's own words, plus the one thing only a live app can hit: a pass —
+        a real one or another rehearsal — already using the folder lock."""
+        watch: WatchRunner = app.state.watch
+        ws = WatchSettings.load(watch.home)
+        watch_needs(ws)
+        if not ws.corrections_enabled:
+            raise HTTPException(
+                409, "Interior corrections are off. Turn them on in the "
+                     "Interior corrections workflow card first.")
+        if not ws.hubspot_enabled:
+            raise HTTPException(
+                409, "HubSpot is off, and corrections are gated on a HubSpot "
+                     "record. Turn it on first.")
+        if ws.corrections_engine == "native":
+            raise HTTPException(
+                409, "Corrections are running on the native InDesign engine; "
+                     "this rehearsal only drives the IDML engine's own stage.")
+        started = watch.rehearse_corrections(
+            body.record_id, dry_run=body.dry_run, ignore_timer=body.now)
+        if not started:
+            raise HTTPException(409, "A pass is already running.")
+        return {"started": True, **watch_payload()}
 
     @app.post("/api/watch/test-email", dependencies=[Depends(may_manage)])
     def test_watch_email() -> dict:
