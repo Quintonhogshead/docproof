@@ -15,6 +15,7 @@ import getpass
 import logging
 import sys
 import webbrowser
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.lock import FolderInUse, FolderLock
@@ -22,6 +23,7 @@ from app.settings import get_api_key, set_api_key
 from docproof.providers.catalog import BY_ID, MODELS
 
 from . import auth as authlib
+from . import corrections as correctionslib
 from . import daily as dailylib
 from . import schedule as schedulelib
 from . import status as statuslib
@@ -38,6 +40,12 @@ LOG_FILE = "watch.log"
 # happened and some of it did not work. Same vocabulary as `docproof prep`,
 # where 3 also means "it ran, and the output is not what you wanted".
 OK, UNUSABLE, PARTIAL = 0, 2, 3
+
+# `corrections rehearse` alone uses 1: the one record it ran ended in
+# needs_human or failed — a verdict worth a nonzero exit so a script can tell
+# "ran clean" from "ran and flagged something", without it meaning the
+# rehearsal itself could not run (that is still 2).
+REHEARSAL_FLAGGED = 1
 
 
 def main(argv=None) -> int:
@@ -201,6 +209,37 @@ def main(argv=None) -> int:
                      default=None,
                      help="apply deterministically only: skip the sanity gate, "
                           "second look and escalation the panel runs by default")
+    ini.add_argument("--corrections-quiet-hours", type=float,
+                     help="hold a ready record this many hours after it was "
+                          "first seen (or its latest new submission, "
+                          "whichever is later) before applying it — one job "
+                          "per book rather than one per submission (default 3)")
+    ini.add_argument("--corrections-form-poll", dest="corrections_form_poll",
+                     action="store_true", default=None,
+                     help="read every submission of the corrections form "
+                          "itself and fold them into one job, instead of "
+                          "the record's own properties (needs HubSpot's "
+                          "forms read scope)")
+    ini.add_argument("--no-corrections-form-poll", dest="corrections_form_poll",
+                     action="store_false", default=None,
+                     help="(default) read the record's own file/text "
+                          "properties, one submission per record")
+    ini.add_argument("--corrections-form-id",
+                     help="the HubSpot form form-poll mode reads (default "
+                          "the Pre-Proof Interior Design Corrections Form)")
+    ini.add_argument("--corrections-form-file-property",
+                     help="the form field (not the CRM property) carrying "
+                          "the uploaded file, in form-poll mode")
+    ini.add_argument("--corrections-form-notes-property",
+                     help="the form field (not the CRM property) carrying "
+                          "the typed notes, in form-poll mode")
+    ini.add_argument("--corrections-form-start-after",
+                     help="ignore form submissions older than this ISO date "
+                          "(set it the day form-poll mode goes live, so rounds "
+                          "already handled by hand stay out)")
+    ini.add_argument("--hubspot-corrections-book-property",
+                     help="the Projects property naming the book, read for a "
+                          "multi-book author to pick the book folder")
     ini.add_argument("--hubspot-read-only", dest="hubspot_write_back",
                      action="store_false", default=None,
                      help="gate on HubSpot but never write back to it (a book "
@@ -239,13 +278,34 @@ def main(argv=None) -> int:
 
     sub.add_parser("unschedule", help="stop running passes automatically")
 
+    co = sub.add_parser("corrections",
+                        help="check on, or rehearse, interior corrections")
+    co_sub = co.add_subparsers(dest="corrections_cmd", required=True)
+
+    co_sub.add_parser("status",
+                      help="the records currently waiting for corrections")
+
+    core = co_sub.add_parser(
+        "rehearse",
+        help="run the corrections stage for one HubSpot record — the same "
+             "code a tick runs, scoped to that record")
+    core.add_argument("--record", required=True, metavar="HUBSPOT-ID",
+                      help="the HubSpot record id to rehearse")
+    core.add_argument("--dry-run", action="store_true",
+                      help="resolve the record and say what would happen, "
+                           "without running the job")
+    core.add_argument("--now", action="store_true",
+                      help="ignore the three-hour quiet period and rehearse "
+                           "immediately")
+
     args = ap.parse_args(argv)
     home = Path(args.home).expanduser() if args.home else default_watch_home()
     _logging(home, verbose=args.verbose)
     return {"auth": cmd_auth, "init": cmd_init, "once": cmd_once,
             "status": cmd_status, "clear": cmd_clear,
             "schedule": cmd_schedule, "unschedule": cmd_unschedule,
-            "hubspot-token": cmd_hubspot_token}[args.cmd](args, home)
+            "hubspot-token": cmd_hubspot_token,
+            "corrections": cmd_corrections}[args.cmd](args, home)
 
 
 def _logging(home: Path, *, verbose: bool) -> None:
@@ -442,6 +502,14 @@ def cmd_init(args, home: Path) -> int:
               f"property: {ws.hubspot_corrections_text_property or '— not set'}"
               + ("" if ws.corrections_model_passes
                  else "  (deterministic only: no model passes)"))
+        hours = ws.corrections_quiet_seconds / 3600
+        print(f"  held {hours:g}h after first seen or the latest new "
+              f"submission, whichever is later")
+        if ws.corrections_form_poll:
+            print(f"  reading every submission of form {ws.corrections_form_id} "
+                  f"(file field: {ws.corrections_form_file_property or '— not set'}; "
+                  f"notes field: {ws.corrections_form_notes_property or '— not set'}; "
+                  f"since: {ws.corrections_form_start_after or 'the beginning'})")
     print(f"Keeping its things in {home}")
     missing = _missing(ws)
     if missing:
@@ -556,6 +624,12 @@ _CORRECTIONS_FLAGS = (
     ("hubspot_corrections_text_property", "hubspot_corrections_text_property"),
     ("corrections_folder_name", "corrections_folder_name"),
     ("corrections_model_passes", "corrections_model_passes"),
+    ("corrections_form_poll", "corrections_form_poll"),
+    ("corrections_form_id", "corrections_form_id"),
+    ("corrections_form_file_property", "corrections_form_file_property"),
+    ("corrections_form_notes_property", "corrections_form_notes_property"),
+    ("corrections_form_start_after", "corrections_form_start_after"),
+    ("hubspot_corrections_book_property", "hubspot_corrections_book_property"),
 )
 
 # What the stage cannot run without. The two values ship with defaults; the form
@@ -577,6 +651,13 @@ def _apply_corrections(args, ws: WatchSettings) -> None:
         value = getattr(args, flag, None)
         if value is not None:
             setattr(ws, attr, value)
+    if getattr(args, "corrections_quiet_hours", None) is not None:
+        if args.corrections_quiet_hours < 0:
+            print("note: --corrections-quiet-hours cannot be negative; "
+                  "leaving it alone.")
+        else:
+            ws.corrections_quiet_seconds = round(
+                args.corrections_quiet_hours * 3600)
     if getattr(args, "enable_corrections", False):
         ws.corrections_enabled = True
     if not ws.corrections_enabled:
@@ -912,3 +993,184 @@ def cmd_status(args, home: Path) -> int:
         for name in row["uploaded"]:
             print(f"               → {name}")
     return OK
+
+
+
+def cmd_corrections(args, home: Path) -> int:
+    return {"status": cmd_corrections_status,
+            "rehearse": cmd_corrections_rehearse}[args.corrections_cmd](args, home)
+
+
+def cmd_corrections_status(args, home: Path) -> int:
+    """The records currently waiting for corrections — the same account
+    `pending_summary` gives the panel, printed as a small table. Read-only, so
+    it takes no lock and needs no sign-in: it reads `state.json`, not Drive."""
+    from .state import STATE_FILE, WatchState
+
+    ws = WatchSettings.load(home)
+    state = WatchState.load(home / STATE_FILE)
+    rows = correctionslib.pending_summary(state, ws)
+    if not rows:
+        print("Nothing is waiting for corrections.")
+        return OK
+
+    now = datetime.now(timezone.utc)
+    print(f"{len(rows)} record(s) waiting for corrections:\n")
+    for row in rows:
+        when = ("ready" if row.get("ready")
+                else _holding_for(row.get("ready_at"), now))
+        submissions = row.get("submissions", 0)
+        print(f"  {row.get('author') or '— unnamed':<24} "
+              f"{row.get('record_id') or '—':<16} "
+              f"{submissions} submission(s)   "
+              f"first seen {row.get('first_seen') or '—'}   "
+              f"ready at {row.get('ready_at') or '—'}   {when}")
+    return OK
+
+
+def _holding_for(ready_at, now: datetime) -> str:
+    """"holding for 1h 42m" — how much of the quiet period a record has left,
+    counting down to `ready_at`. "holding", plain, when the timestamp is
+    missing or cannot be read — still true, just not down to the minute."""
+    if not ready_at:
+        return "holding"
+    try:
+        target = datetime.fromisoformat(ready_at)
+    except (TypeError, ValueError):
+        return "holding"
+    if target.tzinfo is None:
+        target = target.replace(tzinfo=timezone.utc)
+    seconds = max(0, int((target - now).total_seconds()))
+    hours, minutes = divmod(seconds // 60, 60)
+    return f"holding for {hours}h {minutes}m"
+
+
+def cmd_corrections_rehearse(args, home: Path) -> int:
+    """Run the corrections stage for one HubSpot record — the same stage code
+    a tick runs, built the same way `once` builds it, scoped to a single
+    record so trying one book never touches the others HubSpot has flagged.
+
+    Exits 1 (distinct from 2, "could not run at all") when the record itself
+    came through as `needs_human` or `failed`: a rehearsal that ran clean but
+    found something worth a person's attention should look different in a
+    script from one that never got to run."""
+    ws = WatchSettings.load(home)
+    refusal = _corrections_refusal(ws)
+    if refusal:
+        print(f"error: {refusal}", file=sys.stderr)
+        return UNUSABLE
+
+    try:
+        with FolderLock(home):
+            report = _corrections_rehearsal(
+                home, ws, args.record, ignore_timer=args.now,
+                dry_run=args.dry_run)
+    except FolderInUse as e:
+        print(f"A previous run is still working on this folder, so this one "
+              f"stopped. ({e})")
+        return OK
+    except AuthExpired as e:
+        print(f"error: {e}", file=sys.stderr)
+        return UNUSABLE
+    except (ticklib.NotConfigured, DriveError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return UNUSABLE
+
+    _report_corrections_rehearsal(report, args.record)
+    return (REHEARSAL_FLAGGED if (report.needs_human or report.failed)
+            else OK)
+
+
+def _corrections_refusal(ws: WatchSettings) -> str:
+    """Why a rehearsal cannot run, in one sentence — or "" when it can. The
+    same three gates a real pass would hit, checked up front so a rehearsal
+    never gets partway into discovery only to hit a wall the tick's own
+    preflight would have hit too."""
+    if not ws.corrections_enabled:
+        return ("interior corrections are off. Turn them on with "
+                "`docproof-watch init --enable-corrections`.")
+    if not ws.hubspot_enabled:
+        return ("HubSpot is off, and corrections are gated on a HubSpot "
+                "record. Turn it on with `docproof-watch init "
+                "--enable-hubspot`.")
+    if getattr(ws, "corrections_engine", "idml") == "native":
+        return ("corrections are running on the native InDesign engine; "
+                "this rehearsal only drives the IDML engine's own stage "
+                "code. See docs/corrections-runbook.md.")
+    return ""
+
+
+def _corrections_rehearsal(home: Path, ws: WatchSettings, record: str, *,
+                           ignore_timer: bool, dry_run: bool
+                           ) -> ticklib.TickReport:
+    """The same token, state file, runner and job store `once` builds for a
+    real pass, handed to `corrections.run_stage` scoped to one record — so a
+    rehearsal counts as a pass for that record (its attempts, its state, its
+    HubSpot write) exactly the way a tick's would."""
+    from app.jobs import JobRunner, JobStore
+    from app.settings import Paths
+    from . import drive as drivelib
+    from .settings import GOOGLE_KEY
+    from .state import STATE_FILE, WatchState
+
+    if not ws.folder_id:
+        raise ticklib.NotConfigured(
+            "No folder is being watched yet. Run `docproof-watch init` to "
+            "say which one.")
+    if not ws.client_id or not ws.client_secret:
+        raise ticklib.NotConfigured(
+            "There is no Google sign-in set up yet. Run `docproof-watch "
+            "auth` — docs/watch.md walks through making the OAuth client it "
+            "asks for.")
+    refresh = get_api_key(GOOGLE_KEY)
+    if not refresh:
+        raise ticklib.NotConfigured(
+            "DocProof is not signed in to Google. Run `docproof-watch "
+            "auth`.")
+    hs_token = get_api_key(HUBSPOT_KEY)
+    if not hs_token:
+        raise ticklib.NotConfigured(
+            "HubSpot is switched on but there is no token. Run "
+            "`docproof-watch hubspot-token` on the desktop, or set the "
+            "HUBSPOT_TOKEN secret on the server.")
+
+    token = drivelib.refresh_access_token(ws.client_id, ws.client_secret,
+                                          refresh, opener=drivelib._open_url)
+    state = WatchState.load(home / STATE_FILE)
+    paths = Paths(home).ensure()
+    store = JobStore(paths)
+    runner = JobRunner(store, ws.app_settings(home),
+                       config_path=ticklib.config_path(), notify_home=home)
+
+    report = ticklib.TickReport()
+    correctionslib.run_stage(
+        token, home, ws, state, runner, store, mock=False,
+        opener=drivelib._open_url, hs_token=hs_token, report=report,
+        only_record=record, ignore_timer=ignore_timer, dry_run=dry_run)
+    return report
+
+
+def _report_corrections_rehearsal(report: ticklib.TickReport,
+                                  record: str) -> None:
+    """What happened to the one record, in plain words — the corrections slice
+    of what `_report` says after a real tick, plus a line for the case a
+    rehearsal exists to catch: nothing to do yet."""
+    if report.corrected:
+        print(f"Corrected: {', '.join(report.corrected)}")
+        for name in report.uploaded:
+            print(f"  → {name}")
+    for name, reason in report.needs_human:
+        print(f"Needs a person — {name}: {reason}", file=sys.stderr)
+    for name, reason in report.missing_source:
+        print(f"No source IDML — {name}: {reason}", file=sys.stderr)
+    for name, reason in report.stuck_ready:
+        print(f"Ready but already applied — {name}: {reason}", file=sys.stderr)
+    for name, reason in report.failed:
+        print(f"Could not apply corrections to {name}: {reason}",
+              file=sys.stderr)
+    if not (report.corrected or report.needs_human or report.missing_source
+            or report.stuck_ready or report.failed):
+        if report.waiting:
+            print(f"Record {record} is not ready yet — nothing to rehearse.")
+        else:
+            print(f"Nothing happened for record {record}.")

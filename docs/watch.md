@@ -428,6 +428,13 @@ at the same highest number is nobody's to guess and stops the book. A
 `Book N.5` already in the folder that DocProof did not write is **never
 overwritten**: the book stops and you are told.
 
+**The quiet period.** A ready record is not corrected the moment it is seen —
+it is held until three hours after DocWatch first saw it ready, or three hours
+after its latest new submission, whichever is later (`--corrections-quiet-
+hours`). An author who submits the form twice in an afternoon gets one job
+over everything they sent, not two half-corrected exports; `docproof-watch
+corrections status` lists what is waiting and when its hold ends.
+
 **What it reads.** The form's uploaded file is fetched from the URL HubSpot
 stores on the record — a PDF proof with comments is read deterministically
 (every mark becomes a row, page and all), a Word file with tracked changes the
@@ -436,6 +443,11 @@ same; a Word *list* or the form's typed text goes through the house reader
 the same stem (`Johnson - Book 3.pdf`) lends its page texts so a typed "page 47"
 narrows to the text page 47 actually set. A form that reached the record with
 neither a file nor text stops the book and tells you to check the workflow.
+Every submission folded into the job — whether read off the record's own
+properties (the default, one submission) or, with `--corrections-form-poll`,
+every event the form itself recorded for that record — lands in the one job
+and the one spreadsheet, each row's **Submission** column naming which round
+it came from once there was more than one.
 
 **What comes back.** The app's own corrections job runs — anchored, verified,
 with the panel's default model passes unless `--corrections-no-model-passes` —
@@ -455,12 +467,40 @@ moves to `Corrections Applied`, which is the designer's cue to open the
 Exactly one CRM write per book; the export is marked `done` in Drive last, so a
 pass that dies halfway re-uploads what never landed and never re-applies.
 
+Every upload is read back from Drive — name, size and checksum — before the
+status moves; a mismatch gets one reupload, and a book that still does not
+verify is left ready rather than announced done.
+
 A submission that cannot be read at all (a flattened PDF with no comment layer,
 a typed list with no key for the reader) marks the export `failed` with the
 reason and emails you, rather than retrying a fixed input three mornings
 running. Clear the marker to try again once the form is fixed.
 
 Turn it back off with `docproof-watch init --disable-corrections`.
+
+**Only IDML is read.** The engine never opens the InDesign document itself —
+only its exported `.idml`. If the folder holds a `.indd` and no matching
+`.idml`, the book is reported missing its source with the exact fix spelled
+out: open the `.indd` in InDesign and choose **File → Export → InDesign
+Markup (IDML)**, saved beside it as `<surname> - Book N.idml`. A `.idml`
+behind the newest `.indd` gets the same message naming which book to export.
+
+**Authors with several books.** A multi-book author keeps each book in its
+own subfolder one level below the author folder, each with its own `Interior
+Design` — DocWatch tries the flat layout first, and only descends into the
+book subfolders when the author folder itself has none. Which book folder a
+ready record belongs to is read off the form's own title
+(`ws.hubspot_corrections_book_property`, `book_title` by default): a title
+that matches none, or more than one, of the author's book folders is a
+`needs_human` verdict rather than a guess at the newest export.
+
+For the full operational walkthrough — the HubSpot workflow's property
+mapping, the three-hour quiet period, the `.indd`/`.idml` rule, and how to
+rehearse one record before trusting a tick with it — see
+[corrections-runbook.md](corrections-runbook.md). `docproof-watch corrections
+status` lists what is waiting and `docproof-watch corrections rehearse
+--record <id>` runs (or, with `--dry-run`, previews) a single record's round
+by hand.
 
 ## Per-author subfolders (optional)
 

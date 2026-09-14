@@ -66,6 +66,29 @@ def test_completion_for_job_speaks_each_pipeline():
     assert "deterministic — no model, no cost" in corr
 
 
+def test_a_corrections_email_names_the_four_hand_off_files():
+    """The job record itself has no Drive listing to draw on — a corrections
+    job's names are a fixed function of the source it corrected, so the email
+    names them rather than leaving a person to guess what should have landed."""
+    _, body, html = notify.completion_for_job(_job(
+        kind="corrections", filename="Shams - Book 7.idml",
+        applied=548, flags=7, discrepancies=0, verified=True))
+    assert "Delivered:" in body
+    assert "Corrected IDML: Shams - Book 7.5.idml" in body
+    assert "Corrections spreadsheet: Shams - Book 7.5 - corrections.xlsx" in body
+    assert "Notes: Shams - Book 7.5 - notes.md" in body
+    assert "InDesign check tour: Shams - Book 7.5 - checks.jsx" in body
+    assert "Delivered" in html
+
+    # Not printed for any other pipeline, nor for a corrections filename the
+    # naming rules cannot base a hand-off name on.
+    _, promo, _ = notify.completion_for_job(_job(kind="promo"))
+    assert "Delivered:" not in promo
+    _, odd, _ = notify.completion_for_job(_job(
+        kind="corrections", filename="Shams - a thousand touches.idml"))
+    assert "Delivered:" not in odd
+
+
 def test_a_format_job_reads_its_prep_json_for_what_it_accepted(tmp_path):
     """An app-dropped format has no Drive routing, but it has the same prep.json
     — so the email says what a watched one says: revisions accepted before

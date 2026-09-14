@@ -72,6 +72,19 @@ class WatchUpdate(BaseModel):
     hubspot_corrections_text_property: str | None = None
     corrections_folder_name: str | None = None
     corrections_model_passes: bool | None = None
+    # The quiet period a ready record is held for, and form-poll mode — the
+    # plain IDML stage's own pair, not the native adapter's (below): how long
+    # to hold a ready record after it was first seen or its latest new
+    # submission, and whether to read the form's own events instead of the
+    # record's properties. `hubspot_corrections_book_property` is unused until
+    # a later phase; accepted now so it saves with the rest of this block.
+    corrections_quiet_seconds: int | None = Field(default=None, ge=0, le=604800)
+    corrections_form_poll: bool | None = None
+    corrections_form_id: str | None = None
+    corrections_form_file_property: str | None = None
+    corrections_form_notes_property: str | None = None
+    corrections_form_start_after: str | None = None
+    hubspot_corrections_book_property: str | None = None
     corrections_engine: str | None = None
     corrections_native_auto_upload: bool | None = None
     corrections_native_partial_upload: bool | None = None
@@ -528,13 +541,18 @@ def register(app: FastAPI) -> None:
                      "hubspot_corrections_done_value",
                      "hubspot_corrections_file_property",
                      "hubspot_corrections_text_property",
-                     "corrections_folder_name"):
+                     "corrections_folder_name",
+                     "corrections_form_id", "corrections_form_file_property",
+                     "corrections_form_notes_property",
+                     "corrections_form_start_after",
+                     "hubspot_corrections_book_property"):
             value = getattr(update, name)
             if value is not None:
                 setattr(ws, name, value.strip())
         for name in ("upload_failure_note",
                      "require_source_label", "proofing_enabled",
                      "corrections_enabled", "corrections_model_passes",
+                     "corrections_quiet_seconds", "corrections_form_poll",
                      "max_files_per_tick", "auto_ticks", "tick_every_minutes",
                      "archive_enabled", "archive_include_source"):
             value = getattr(update, name)

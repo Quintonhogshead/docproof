@@ -17,6 +17,7 @@ import pytest
 
 from app.lock import FolderLock
 from app.watch import cli
+from app.watch import corrections
 from app.watch import schedule as schedulelib
 from app.watch import tick as ticklib
 from app.watch.settings import WatchSettings
@@ -536,6 +537,196 @@ def test_status_says_when_nothing_is_scheduled(home, capsys, agent):
     run(home, "status")
 
     assert "only when you say so" in capsys.readouterr().out
+
+
+# --- interior corrections: status and rehearsal --------------------------------
+
+def test_corrections_status_with_nothing_waiting(home, capsys, monkeypatch):
+    configured(home)
+    monkeypatch.setattr(corrections, "pending_summary",
+                        lambda state, ws, **kw: [], raising=False)
+
+    assert run(home, "corrections", "status") == cli.OK
+    assert "Nothing is waiting for corrections." in capsys.readouterr().out
+
+
+def test_corrections_status_lists_a_holding_record(home, capsys, monkeypatch):
+    configured(home)
+    rows = [{
+        "record_id": "rec-1",
+        "author": "Quinton Johnson",
+        "first_seen": "2026-09-14T10:00:00+00:00",
+        "last_submission_at": "2026-09-14T10:00:00+00:00",
+        "ready_at": "2026-09-14T13:00:00+00:00",
+        "ready": False,
+        "submissions": 1,
+        "source_name": "Johnson - Book 3.idml",
+    }]
+    monkeypatch.setattr(corrections, "pending_summary",
+                        lambda state, ws, **kw: rows, raising=False)
+
+    assert run(home, "corrections", "status") == cli.OK
+    out = capsys.readouterr().out
+    assert "Quinton Johnson" in out
+    assert "rec-1" in out
+    assert "1 submission(s)" in out
+    assert "holding for" in out
+
+
+def test_corrections_status_says_a_record_is_ready(home, capsys, monkeypatch):
+    configured(home)
+    rows = [{
+        "record_id": "rec-2",
+        "author": "Jane Smith",
+        "first_seen": "2026-09-14T10:00:00+00:00",
+        "last_submission_at": "2026-09-14T10:00:00+00:00",
+        "ready_at": "2026-09-14T13:00:00+00:00",
+        "ready": True,
+        "submissions": 2,
+        "source_name": "Smith - Book 1.idml",
+    }]
+    monkeypatch.setattr(corrections, "pending_summary",
+                        lambda state, ws, **kw: rows, raising=False)
+
+    assert run(home, "corrections", "status") == cli.OK
+    out = capsys.readouterr().out
+    assert "Jane Smith" in out
+    assert "ready" in out
+    assert "holding for" not in out
+
+
+def corrections_configured(home, **over):
+    """A watcher ready for a corrections rehearsal: HubSpot and corrections
+    both on, signed in, everything `_corrections_refusal` checks for."""
+    return configured(home, corrections_enabled=True, hubspot_enabled=True,
+                      **over)
+
+
+def fake_stage(monkeypatch, effect=None):
+    """Stand in for `corrections.run_stage`, capturing exactly what the CLI
+    passed it and, optionally, mutating the report the way a real stage
+    would. Also stubs the Drive token refresh so no network is reached."""
+    calls = {}
+    monkeypatch.setattr("app.watch.drive.refresh_access_token",
+                        lambda *a, **k: "tok-1")
+
+    def fake(token, home_, ws, state, runner, store, *, mock, opener, hs_token,
+             report, only_record=None, ignore_timer=False, dry_run=False):
+        calls.update(token=token, mock=mock, hs_token=hs_token,
+                     only_record=only_record, ignore_timer=ignore_timer,
+                     dry_run=dry_run)
+        if effect is not None:
+            effect(report)
+
+    monkeypatch.setattr(corrections, "run_stage", fake, raising=False)
+    return calls
+
+
+def test_corrections_rehearse_passes_the_flags_through(home, capsys,
+                                                        monkeypatch):
+    corrections_configured(home)
+    signed_in(monkeypatch)
+    calls = fake_stage(monkeypatch)
+
+    code = run(home, "corrections", "rehearse", "--record", "rec-1",
+              "--now", "--dry-run")
+
+    assert code == cli.OK
+    assert calls["only_record"] == "rec-1"
+    assert calls["ignore_timer"] is True
+    assert calls["dry_run"] is True
+    assert calls["mock"] is False
+    assert calls["hs_token"] == "refresh-1"
+
+
+def test_corrections_rehearse_defaults_the_flags_off(home, capsys,
+                                                      monkeypatch):
+    corrections_configured(home)
+    signed_in(monkeypatch)
+    calls = fake_stage(monkeypatch)
+
+    assert run(home, "corrections", "rehearse", "--record", "rec-1") == cli.OK
+
+    assert calls["only_record"] == "rec-1"
+    assert calls["ignore_timer"] is False
+    assert calls["dry_run"] is False
+
+
+def test_corrections_rehearse_exits_one_on_needs_human(home, capsys,
+                                                        monkeypatch):
+    corrections_configured(home)
+    signed_in(monkeypatch)
+    fake_stage(monkeypatch, effect=lambda report: report.needs_human.append(
+        ("Johnson - Book 3.idml", "no 'Interior Design' subfolder")))
+
+    code = run(home, "corrections", "rehearse", "--record", "rec-1")
+
+    assert code == cli.REHEARSAL_FLAGGED
+    assert "Needs a person" in capsys.readouterr().err
+
+
+def test_corrections_rehearse_exits_one_on_failed(home, capsys, monkeypatch):
+    corrections_configured(home)
+    signed_in(monkeypatch)
+    fake_stage(monkeypatch, effect=lambda report: report.failed.append(
+        ("Johnson - Book 3.idml", "the model call errored")))
+
+    code = run(home, "corrections", "rehearse", "--record", "rec-1")
+
+    assert code == cli.REHEARSAL_FLAGGED
+    assert "Could not apply corrections" in capsys.readouterr().err
+
+
+def test_corrections_rehearse_prints_what_it_corrected(home, capsys,
+                                                        monkeypatch):
+    corrections_configured(home)
+    signed_in(monkeypatch)
+
+    def effect(report):
+        report.corrected.append("Johnson - Book 3.idml: 41 of 58 applied")
+        report.uploaded.append("Johnson - Book 3.5.idml")
+    fake_stage(monkeypatch, effect=effect)
+
+    assert run(home, "corrections", "rehearse", "--record", "rec-1") == cli.OK
+
+    out = capsys.readouterr().out
+    assert "41 of 58 applied" in out
+    assert "Johnson - Book 3.5.idml" in out
+
+
+def test_corrections_rehearse_refuses_when_corrections_are_off(home, capsys,
+                                                                monkeypatch):
+    configured(home, hubspot_enabled=True)          # corrections left off
+    signed_in(monkeypatch)
+
+    code = run(home, "corrections", "rehearse", "--record", "rec-1")
+
+    assert code == cli.UNUSABLE
+    err = capsys.readouterr().err
+    assert "corrections are off" in err
+    assert "--enable-corrections" in err
+
+
+def test_corrections_rehearse_refuses_when_hubspot_is_off(home, capsys,
+                                                           monkeypatch):
+    configured(home, corrections_enabled=True)       # hubspot left off
+    signed_in(monkeypatch)
+
+    code = run(home, "corrections", "rehearse", "--record", "rec-1")
+
+    assert code == cli.UNUSABLE
+    assert "HubSpot is off" in capsys.readouterr().err
+
+
+def test_corrections_rehearse_refuses_the_native_engine(home, capsys,
+                                                         monkeypatch):
+    corrections_configured(home, corrections_engine="native")
+    signed_in(monkeypatch)
+
+    code = run(home, "corrections", "rehearse", "--record", "rec-1")
+
+    assert code == cli.UNUSABLE
+    assert "native" in capsys.readouterr().err
 
 
 # --- the home -----------------------------------------------------------------

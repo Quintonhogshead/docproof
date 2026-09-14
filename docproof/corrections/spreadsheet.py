@@ -25,13 +25,17 @@ SHEET_NOT_APPLIED = "Not applied"
 
 HEADER = ("#", "Page (as marked)", "Page in IDML", "Page confirmed",
           "Correction (as written)", "Marked text", "Find", "Replace",
-          "Status", "Reason / detail", "Edit id(s)", "Comment id")
+          "Status", "Reason / detail", "Edit id(s)", "Comment id",
+          "Submission")
 
 # Column widths, in Excel character units, in HEADER order.
-_WIDTHS = (6, 14, 14, 14, 50, 40, 50, 50, 34, 60, 16, 16)
+_WIDTHS = (6, 14, 14, 14, 50, 40, 50, 50, 34, 60, 16, 16, 16)
 
-# The header row sits below the summary block (rows 1-7) and one blank row.
-SUMMARY_ROWS = 7
+# The header row sits below the summary block and one blank row. Fixed at
+# eight rows regardless of whether a run folded more than one submission, so
+# the header always lands on the same row: the eighth line just reads blank
+# when `payload` carries no `submissions` list (see `write_spreadsheet`).
+SUMMARY_ROWS = 8
 HEADER_ROW = SUMMARY_ROWS + 2
 
 STATUS_APPLIED_EXACTLY = "Applied exactly"
@@ -61,6 +65,11 @@ def write_spreadsheet(payload: dict, out_path: Path, *,
     after = payload.get("after") or ""
     corrected = corrected_name or (Path(after).name if after else "")
     pages = payload.get("pages") or {}
+    # Optional: the DocWatch corrections stage folds several form submissions
+    # into one job and says how many here; a payload without one (a run
+    # through the panel, still one submission per job) leaves it blank rather
+    # than claiming "1".
+    submissions = payload.get("submissions")
     summary = (
         ("Source file", payload.get("source_name") or ""),
         ("Corrected file", corrected),
@@ -71,6 +80,8 @@ def write_spreadsheet(payload: dict, out_path: Path, *,
         ("Not applied", len(not_applied)),
         ("Pages placed / total",
          f"{pages.get('placed', 0)} / {pages.get('total', 0)}"),
+        ("Submissions folded",
+         len(submissions) if isinstance(submissions, list) else ""),
     )
     assert len(summary) == SUMMARY_ROWS
 
@@ -197,13 +208,19 @@ def _comment_rows(items: list[dict], edits: dict[str, dict],
         ids = [e for e in (c.get("edit_ids") or []) if e]
         covered.update(ids)
         its = [edits[e] for e in ids if e in edits]
+        # An edit's `source` normally just echoes the comment it came from
+        # (the id right above) — only worth repeating here when it names
+        # something else, a folded submission's own marker or file name.
+        submission = _join(e.get("source", "") for e in its
+                           if e.get("source") and e.get("source") != c.get("id"))
         row = {**_page_cells(c),
                "Correction (as written)": c.get("instruction") or "",
                "Marked text": c.get("anchor") or "",
                "Find": _join(e.get("find", "") for e in its),
                "Replace": _join(e.get("replace", "") for e in its),
                "Edit id(s)": ", ".join(ids),
-               "Comment id": c.get("id") or ""}
+               "Comment id": c.get("id") or "",
+               "Submission": submission}
         disp = c.get("disposition")
         detail = c.get("detail") or ""
         if c.get("dismissed"):
@@ -249,7 +266,8 @@ def _edit_rows(outcomes: list[dict],
                "Find": o.get("find") or "",
                "Replace": o.get("replace") or "",
                "Edit id(s)": eid,
-               "Comment id": o.get("source") or ""}
+               "Comment id": o.get("source") or "",
+               "Submission": o.get("source") or ""}
         if o.get("format"):
             row["Replace"] = (row["Replace"] + f"  [set {o['format']}]").strip()
         status = o.get("status") or ""

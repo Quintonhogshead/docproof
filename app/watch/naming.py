@@ -378,6 +378,43 @@ def is_idml_source_name(name: str, last: str) -> bool:
             and _surname_key(author) == _surname_key(last))
 
 
+# The designer's other export, which the engine never reads directly. A
+# "<surname> - Book N.indd" beside the IDML (or in place of it) is the same
+# series, spotted only so a missing IDML can be explained rather than left as
+# a bare "holds no IDML" — see `pick_source` in `app/watch/corrections.py`.
+INDD_SUFFIX = ".indd"
+_INDD_VERSION_RE = re.compile(
+    rf"^(?P<author>.+?){_STAGE_SEP}(?P<word>book)(?P<gap>\s*)"
+    rf"(?P<version>\d+(?:\.\d+)?)\s*$", re.IGNORECASE)
+
+
+def indd_version(name: str) -> tuple[str, float] | None:
+    """`(author, version)` for a "<surname> - Book N.indd", or None. The same
+    recogniser as `idml_version`, for the InDesign document itself rather than
+    its IDML export."""
+    path = Path(name)
+    if path.suffix.lower() != INDD_SUFFIX:
+        return None
+    m = _INDD_VERSION_RE.match(_fold(path.stem))
+    if not m:
+        return None
+    try:
+        return m.group("author").strip(), float(m.group("version"))
+    except ValueError:
+        return None
+
+
+def is_indd_source_name(name: str, last: str) -> bool:
+    """Whether this is one of the author's designer `.indd` files — an integer
+    "<surname> - Book N.indd" whose surname is the record's."""
+    parsed = indd_version(name)
+    if parsed is None:
+        return False
+    author, version = parsed
+    return (version == int(version)
+            and _surname_key(author) == _surname_key(last))
+
+
 def is_idml_output_name(name: str) -> bool:
     """Whether this is a corrections hand-off — a fractional "Book N.5.idml",
     or one of its companions under the same base."""
@@ -446,8 +483,9 @@ def is_output_name(name: str) -> bool:
 
 
 __all__ = ["CHECKS_SUFFIX", "CLEAN_SUFFIX", "CORRECTIONS_SHEET_SUFFIX",
-           "CORRECTIONS_STEP", "IDML_SUFFIX",
+           "CORRECTIONS_STEP", "IDML_SUFFIX", "INDD_SUFFIX",
            "corrections_base", "corrections_hand_off_names", "idml_version",
+           "indd_version", "is_indd_source_name",
            "is_idml_output_name", "is_idml_source_name",
            "DECISION_LOG_SUFFIX", "INDESIGN_SUFFIX",
            "LETTER_SUFFIX",

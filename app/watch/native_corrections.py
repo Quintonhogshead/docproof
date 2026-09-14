@@ -203,70 +203,19 @@ def _submission_properties(ws, record) -> tuple[list[str], str, str]:
     return urls, text, marker
 
 
-def form_submissions(token: str, form_id: str, *, opener=hubspot._open_url,
-                     limit: int = 10000) -> list[dict]:
-    """Read the exact HubSpot form's submission events.
-
-    The watcher uses these events only when no durable CRM submission marker is
-    configured.  A 403 is intentionally surfaced as a HubSpot error so a
-    missing ``forms`` read scope cannot silently reuse the last submission.
-    """
-    if not form_id:
-        return []
-    rows: list[dict] = []
-    after = ""
-    while True:
-        # HubSpot's submissions endpoint accepts at most 50 per page even
-        # though other CRM APIs permit 100.
-        query = {"limit": str(min(limit, 50))}
-        if after:
-            query["after"] = after
-        params = urllib.parse.urlencode(query)
-        request = hubspot._request(
-            f"{hubspot.API}/form-integrations/v1/submissions/forms/{form_id}?{params}",
-            token)
-        answer = hubspot._json_call(request, opener=opener,
-                                    what=f"read submissions for form {form_id}")
-        page = answer.get("results") or answer.get("submissions") or []
-        rows.extend(row for row in page if isinstance(row, dict))
-        after = str((answer.get("paging") or {}).get("next", {}).get("after")
-                    or answer.get("after") or "")
-        if not after or not page:
-            return rows
-        if len(rows) >= limit:
-            raise NativeCorrectionError(
-                f"the corrections form has more than {limit} submissions; raise the cap before running")
-
-
-def _timestamp_value(value: str) -> float:
-    """Normalize HubSpot ISO or millisecond submission timestamps."""
-    text = str(value or "").strip()
-    if not text:
-        return 0.0
-    try:
-        number = float(text)
-        # HubSpot's form API returns submittedAt in epoch milliseconds. Keep
-        # accepting seconds for settings and older captured intake manifests.
-        return number / 1000.0 if number > 10_000_000_000 else number
-    except (TypeError, ValueError):
-        pass
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.timestamp()
-    except (TypeError, ValueError):
-        return 0.0
+# These three used to be defined here; they moved to `hubspot.py` once the
+# plain IDML corrections stage needed them too (see `corrections.py`). Thin
+# re-exports so every existing native caller and test keeps working under its
+# old name — including the cap-exceeded case, which now raises `HubSpotError`
+# rather than `NativeCorrectionError` (nothing here ever caught the narrower
+# type, so the change is invisible to this module's own control flow).
+form_submissions = hubspot.form_submissions
+_timestamp_value = hubspot.timestamp_value
+_row_marker = hubspot.row_marker
 
 
 def _event_key(event: tuple[list[str], str, str]) -> str:
     return json.dumps({"urls": event[0], "text": event[1], "marker": event[2]}, sort_keys=True)
-
-
-def _row_marker(row: dict) -> str:
-    stamp = str(row.get("submittedAt") or "")
-    event_id = str(row.get("conversionId") or row.get("id") or "")
-    return f"{stamp}|{event_id}" if stamp and event_id else stamp or event_id
 
 
 def _project_name_properties(ws) -> tuple[str, str]:
