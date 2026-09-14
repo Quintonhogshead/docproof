@@ -125,11 +125,46 @@ CONTINUITY_RULING = (
     "proposals carry the reader's reasons and cited evidence; evidence_paragraphs holds the full text of every cited "
     "paragraph, already verified verbatim; the story sheet is attached. Apply only when the evidence establishes that "
     "the same referent is named or stated as in the replacement and the before span is an accidental departure. "
-    "replacement replaces exactly the before span and preserves all unchanged text inside it. Drop aliases, nicknames, "
-    "deliberate variation, in-world explanations, and anything the evidence does not settle. Query only a real "
-    "contradiction the book leaves unresolved; question and missing_knowledge must name the specific author decision. "
-    "Never change a number, date or age to repair arithmetic. Return one decision per site id.")
+    "replacement replaces exactly the before span and preserves all unchanged text inside it. Drop only aliases, "
+    "nicknames, deliberate variation and in-world explanations: cases where the book does not contradict itself. "
+    "A real contradiction the evidence does not settle is query, never drop: question and missing_knowledge must name "
+    "the specific author decision. Never change a number, date or age to repair arithmetic. Return one decision per "
+    "site id.")
+# A dropped continuity edit still rests on verified evidence that the book
+# names one referent two ways (Wilder 2026-09-14: "Mad Crabber" for the Rusty
+# Hook Tavern was dropped as "not settled by the evidence" and the author never
+# heard of it). Unsettled is the author's to settle: the drop becomes a question.
+DEMOTED_MISSING_KNOWLEDGE = "Whether the two forms name the same referent, and which form is intended."
 _MARKUP = "*_`\\"
+
+
+def _demoted_question(row, reason="", text=None):
+    """The author question a reader's evidenced-but-unapplied correction
+    becomes: what the text says, what the reader proposed, and where the book
+    disagrees. Returns (question, missing_knowledge, quote). A stored edit is
+    the minimal differing span ("ea" -> "we"), so with the paragraph `text` the
+    span is widened to whole words for the author's eyes and for the comment
+    anchor; `reason` is the ruling that declined the edit."""
+    before, after = row["before"], row["replacement"]
+    quote = before
+    lo, hi = row.get("start"), row.get("end")
+    if text is not None and type(lo) is int and type(hi) is int and text[lo:hi] == before:
+        word = lambda c: c.isalnum() or c in "'’-"
+        wlo, whi = lo, hi
+        while wlo > 0 and word(text[wlo - 1]):
+            wlo -= 1
+        while whi < len(text) and word(text[whi]):
+            whi += 1
+        before, after = text[wlo:whi], text[wlo:lo] + row["replacement"] + text[hi:whi]
+        quote = before if text.count(before) == 1 else text
+    proposed = f"“{before}” here; the reader proposed “{after}”"
+    cited = [e for e in row.get("evidence") or [] if e.get("quote")]
+    if cited:
+        proposed += ", matching “" + cited[0]["quote"] + "” elsewhere in the book"
+    why = (row.get("reason") or "").strip()
+    question = proposed + ". Is the change intended?" + (" " + why if why else "")
+    missing = (row.get("missing_knowledge") or "").strip() or DEMOTED_MISSING_KNOWLEDGE
+    return question, missing, quote
 
 
 def _replacement_problem(before, replacement, paragraph, lo, hi):
@@ -371,6 +406,7 @@ class FixedWorkflow:
         self.source_marks = {}
         # Categories of the corrections applied to each paragraph since its
         # last check, so a check request can carry the policy they need.
+        self.pending_frontier = {}
         self.pending_categories = {}
 
     @staticmethod
@@ -713,6 +749,21 @@ class FixedWorkflow:
                     disputed.append({**site, "screening": pair})
         return agreed, disputed
 
+    @staticmethod
+    def _frontier_demotion(stage, site, text=None):
+        """A final reader's edit in a category that rests on the whole book
+        (fact/logic, continuity, structure), when the paragraph-level screen
+        drops it, is not discarded: it becomes the author question Astra's
+        comment review judges in the reader's own scope, as the readers'
+        questions already are. Returns (question, missing_knowledge, quote) or None."""
+        if not (stage in {"fable", "astra"} or stage.startswith("walkthrough_questions")):
+            return None
+        rows = [p for p in site["proposals"]
+                if p.get("action") == "edit" and p.get("category") in FRONTIER_QUESTION_CATEGORIES]
+        if not rows:
+            return None
+        return _demoted_question(rows[0], text=text)
+
     def _adjudicate(self, stage, candidates, expected_models=(), *, force=False):
         accepted, disputed = [], []
         if stage in {"fable", "astra"} or stage.startswith("walkthrough_questions"):
@@ -764,6 +815,13 @@ class FixedWorkflow:
             models = [OPUS] if site["id"] in disputed_ids else [SONNET, LUNA]
             self.history.append({"stage": stage + ("_disputes" if site["id"] in disputed_ids else "_screened"), "site": site, "decision": decision})
             if decision["action"] == "drop":
+                demoted = self._frontier_demotion(stage, site, self.current[site["para_id"]])
+                if demoted is not None:
+                    question, missing, quote = demoted
+                    self.history.append({"stage": stage + "_demoted", "site": site["id"], "question": question,
+                                         "reason": "A final reader's dropped fact, continuity or structure edit is put to the author"})
+                    self._question(site["para_id"], quote, question, missing, decision.get("reason", ""), stage,
+                                   model="/".join(models))
                 continue
             if decision["action"] == "query":
                 self._question(site["para_id"], self.current[site["para_id"]], decision["question"],
@@ -791,15 +849,20 @@ class FixedWorkflow:
 
     def _verified_evidence(self, stage, row, texts, model, book, *, required):
         """Every cited site must exist verbatim in ANOTHER paragraph of the
-        current book; a finding whose evidence does not verify is discarded."""
-        evidence = row.get("evidence") or []
+        current book; a finding whose evidence does not verify is discarded.
+        A citation of the finding's own paragraph is context the reader already
+        holds, not evidence: it is ignored rather than fatal (Wilder 2026-09-14
+        lost sixteen walk-through findings, twelve of them page-split queries,
+        because each cited its own paragraph alongside the next one)."""
+        evidence = [site for site in row.get("evidence") or []
+                    if not (isinstance(site, dict) and site.get("para_id") == row.get("para_id"))]
         if required and not evidence:
             self._reject_proposal(stage, row, texts, model, "Continuity edit lacks cited evidence")
             return None
         verified = []
         for site in evidence:
             pid = site.get("para_id") if isinstance(site, dict) else None
-            if pid not in book or pid == row.get("para_id"):
+            if pid not in book:
                 self._reject_proposal(stage, row, texts, model, "Evidence must cite another paragraph of the book")
                 return None
             try:
@@ -850,10 +913,16 @@ class FixedWorkflow:
                 d = by_id[site["id"]]
                 pid = site["para_id"]
                 self.history.append({"stage": stage + "_adjudication", "site": site, "decision": d})
-                if d["action"] == "drop":
-                    continue
-                if d["action"] == "query":
-                    self._question(pid, self.current[pid], d["question"], d["missing_knowledge"], d["reason"], stage)
+                if d["action"] in {"drop", "query"}:
+                    question, missing = d.get("question", "").strip(), d.get("missing_knowledge", "").strip()
+                    quote = site["before"] if self.current[pid].count(site["before"]) == 1 else self.current[pid]
+                    if not (question and missing):
+                        question, missing, quote = _demoted_question(site["proposals"][0], d.get("reason", ""),
+                                                                     self.current[pid])
+                    if d["action"] == "drop":
+                        self.history.append({"stage": stage + "_demoted", "site": site["id"], "question": question,
+                                             "reason": "A dropped continuity edit is put to the author"})
+                    self._question(pid, quote, question, missing, d["reason"], stage)
                     continue
                 row = dict(site["proposals"][0])
                 row.update(start=site["start"], end=site["end"], before=site["before"], replacement=d["replacement"],
@@ -954,6 +1023,8 @@ class FixedWorkflow:
                     raise FixedWorkflowError("Correction contains unsupported control characters")
                 self.current[pid] = self.current[pid][:lo] + row["replacement"] + self.current[pid][hi:]
             self.pending_categories.setdefault(pid, set()).add(row["category"])
+            if row["category"] in FRONTIER_QUESTION_CATEGORIES and not row.get("format"):
+                self.pending_frontier.setdefault(pid, []).append(row)
             self.history.append({"stage": stage, "applied": row})
         return before
 
@@ -1226,6 +1297,7 @@ class FixedWorkflow:
                    for pid, text in self.current.items() if pid not in self.poetry_ids
                    and (text != before[pid] or any(f["para_id"] == pid for f in pending_formats))]
         self.pending_categories = {}
+        frontier, self.pending_frontier = self.pending_frontier, {}
         windows = list(_windows(changed, 16000))
         def review(window):
             # Check chains depend on their own paragraph's adjudication, not
@@ -1234,6 +1306,7 @@ class FixedWorkflow:
             child.current, child.formats = dict(self.current), list(self.formats)
             child.history, child.questions = [], []
             child._check_questions = {}
+            child._frontier_rows = frontier
             child._check_window(stage, before, window, pending_formats, rider)
             return child
         with ThreadPoolExecutor(max_workers=max(1, min(len(windows), sum(self.scheduler.widths.values())))) as pool:
@@ -1256,6 +1329,18 @@ class FixedWorkflow:
                 self.history.extend(h for h in child.history if h["stage"].startswith(stage + "_" + kind))
         self._checked_format_count = len(self.formats)
         return changed
+
+    def _demote_frontier_edits(self, stage, pid, restored, reason):
+        """A final reader's fact/logic, continuity or structure edit that the
+        checks rejected is not silently gone: the paragraph is restored and the
+        edit is put to the author as a question, judged later in the reader's
+        own scope by the comment reviews. `stage` names the rejecting check so
+        the record is committed with that check's history."""
+        for row in getattr(self, "_frontier_rows", {}).get(pid, []):
+            question, missing, quote = _demoted_question(row, reason, restored)
+            self.history.append({"stage": stage + "_demoted", "site": row["id"], "question": question,
+                                 "reason": "A final reader's rejected fact, continuity or structure edit is put to the author"})
+            self._question(pid, quote, question, missing, reason, stage)
 
     def _check_window(self, stage, before, changed, pending_formats, rider=""):
         for kind in ("meaning", "correction"):
@@ -1333,6 +1418,9 @@ class FixedWorkflow:
                             self.formats = [f for f in self.formats if not (f in pending_formats and f["para_id"] == pid)]
                             if d["action"] == "query":
                                 self._question(pid, self.current[pid], d["question"], d["missing_knowledge"], d["reason"], stage)
+                            else:
+                                self._demote_frontier_edits(stage + "_" + kind, pid, before[pid],
+                                                            d.get("reason") or luna[pid].get("reason", ""))
             self._check_questions[kind] = self.questions[question_start:]
         self._checked_format_count = len(self.formats)
         return changed

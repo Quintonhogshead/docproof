@@ -1187,7 +1187,9 @@ def test_continuity_reads_the_whole_book_once_and_opus_rules_with_the_cited_evid
 
 @pytest.mark.parametrize("evidence, reason", [
     ([], "lacks cited evidence"),
-    ([{"para_id": "body-0001", "quote": "Beckham"}], "another paragraph"),
+    # A citation of the finding's own paragraph is ignored, so it is no evidence.
+    ([{"para_id": "body-0001", "quote": "Beckham"}], "lacks cited evidence"),
+    ([{"para_id": "body-9999", "quote": "Beckham"}], "another paragraph"),
     ([{"para_id": "body-0000", "quote": "Kai Brooks frowned."}], "does not occur verbatim"),
 ])
 def test_continuity_edits_without_verified_evidence_are_rejected(make_book, tmp_path, evidence, reason):
@@ -1227,11 +1229,84 @@ def test_continuity_drop_and_query_paths(make_book, tmp_path, path):
                            tmp_path / path, calls=readers).run()
     assert result["accepted"] == result["original"]
     if path == "opus_drop":
-        assert result["questions"] == []
+        # Wilder 2026-09-14: Opus dropped "Mad Crabber" -> "Rusty Hook Tavern" as
+        # "not settled by the evidence" and nothing reached the author. A dropped
+        # continuity edit is now the author's question.
+        from galley.fixed_workflow import DEMOTED_MISSING_KNOWLEDGE
+        [q] = result["questions"]
+        assert q["quote"] == "Mad Crabber" and q["stage"] == "continuity"
+        assert q["question"].startswith("“Mad Crabber” here; the reader proposed “Rusty Hook Tavern”, matching "
+                                        "“the Rusty Hook Tavern” elsewhere in the book. Is the change intended?")
+        assert q["missing_knowledge"] == DEMOTED_MISSING_KNOWLEDGE
+        assert [h["question"] for h in result["history"] if h.get("stage") == "continuity_demoted"] == [q["question"]]
     else:
         assert [q["question"] for q in result["questions"]] == ["Which name is the restaurant's?"]
         assert result["questions"][0]["stage"] == "continuity"
     assert any(row["stage"] == "continuity_adjudication" for row in readers.events) == (path != "reader_query")
+
+
+def test_a_final_readers_self_citation_is_ignored_and_a_dropped_fact_edit_becomes_a_question(make_book, tmp_path):
+    """Wilder 2026-09-14: Fable's "eastern horizon" fix cited its own paragraph
+    beside the next one and the evidence gate discarded it; had it reached the
+    screen, a drop there would have ended it. Now the self-citation is ignored
+    and a dropped fact/logic edit goes to Astra's comment review as a question."""
+    from galley.fixed_workflow import DEMOTED_MISSING_KNOWLEDGE
+    book = make_book("The sun sinks on the eastern horizon.", "We watch the sunset from the Atlantic shore.")
+    seen = {}
+
+    def handler(stage, model, payload, kwargs):
+        if stage == "fable":
+            rows = payload["paragraphs"]
+            return {"reviewed_ids": [x["id"] for x in rows],
+                    "findings": [{**finding(rows[0]["id"], "eastern horizon", "western horizon", "fact_logic"),
+                                  "reason": "The sun sets in the west.",
+                                  "evidence": [{"para_id": rows[0]["id"], "quote": "The sun sinks"},
+                                               {"para_id": rows[1]["id"], "quote": "watch the sunset"}]}],
+                    "comment_decisions": [comment_decision(q) for q in payload.get("comments", [])],
+                    "editorial_verdict": "ready"}
+        if stage in {"fable_checks_meaning", "fable_checks_meaning_sonnet"}:
+            seen.setdefault("checked", []).append(payload["changes"])
+            return {"decisions": [{"id": x["id"], "verdict": "reject", "reason": "Poetic license, not an error."}
+                                  for x in payload["changes"]]}
+        if stage == "fable_comment_review":
+            seen["reviewed"] = payload["comments"]
+
+    readers = Readers(handler=handler)
+    result = FixedWorkflow(book, tmp_path / "demote", calls=readers).run()
+    assert result["accepted"] == result["original"]
+    assert not any(h.get("rejected_proposal") for h in result["history"] if h["stage"] == "fable")
+    [applied] = [h["applied"] for h in result["history"] if h["stage"] == "fable" and h.get("applied")]
+    assert [e["para_id"] for e in applied["evidence"]] == ["body-0001"], "the self-citation is ignored, the other kept"
+    assert seen["checked"][0][0]["after"] == "The sun sinks on the western horizon."
+    [q] = result["questions"]
+    assert q["quote"] == "eastern" and q["stage"] == "fable_checks_meaning"
+    assert q["question"] == ("“eastern” here; the reader proposed “western”, matching "
+                             "“watch the sunset” elsewhere in the book. Is the change intended? The sun sets in the west.")
+    assert q["missing_knowledge"] == DEMOTED_MISSING_KNOWLEDGE
+    assert [h["site"] for h in result["history"] if h.get("stage") == "fable_checks_meaning_demoted"] == [applied["id"]]
+    assert [c["id"] for c in seen["reviewed"]] == [q["id"]], "Fable's comment review judged the demoted question"
+    site = {"proposals": [applied]}
+    text = result["original"]["body-0000"]
+    assert FixedWorkflow._frontier_demotion("fable", site, text) == (q["question"], q["missing_knowledge"], q["quote"])
+    assert FixedWorkflow._frontier_demotion("typed", site) is None
+    assert FixedWorkflow._frontier_demotion("fable", {"proposals": [{**applied, "category": "grammar"}]}) is None
+
+
+def test_reinstatement_reads_dropped_frontier_edits_as_questions():
+    from galley.fixed_reinstate import dropped_question_candidates
+    current = {"body-0000": "The sun sinks on the eastern horizon."}
+    edit = {"id": "f-1", "para_id": "body-0000", "start": 21, "end": 36, "before": "eastern horizon",
+            "replacement": "western horizon", "category": "fact_logic", "action": "edit",
+            "reason": "The sun sets in the west.", "missing_knowledge": "", "models": [FABLE], "evidence": []}
+    usage = {**edit, "id": "f-2", "category": "usage"}
+    result = {"history": [{"stage": "fable_screened", "decision": {"action": "drop", "reason": "Poetic."},
+                           "site": {"proposals": [edit, usage]}}]}
+    candidates, unanchored = dropped_question_candidates(result, current)
+    assert unanchored == [] and [c["id"] for c in candidates] == ["f-1"]
+    [row] = candidates
+    assert row["action"] == "query" and row["category"] == "fact_logic"
+    assert row["reason"].startswith("“eastern horizon” here; the reader proposed “western horizon”. Is the change intended?")
+    assert row["missing_knowledge"]
 
 
 def test_a_skipped_continuity_read_still_delivers(make_book, tmp_path):
