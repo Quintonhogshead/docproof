@@ -153,7 +153,7 @@ def test_runover_book_without_revisions_gets_a_joined_baseline(tmp_path, monkeyp
     baseline, evidence = intake.prepare_source(source, tmp_path / "run")
     assert baseline != source and source.read_bytes() == before
     receipt = json.loads((tmp_path / "run/intake/receipt.json").read_text())
-    assert receipt["version"] == "fixed-intake-v2" == evidence["version"]
+    assert receipt["version"] == "fixed-intake-v3" == evidence["version"]
     assert receipt["changed_parts"] == ["word/document.xml"]
     assert receipt["resolved_revision_elements"] == {}
     assert receipt["paragraph_id_space"] == "accepted-before-join"
@@ -209,3 +209,76 @@ def test_unjoined_baseline_cannot_be_published(tmp_path, monkeypatch):
     with pytest.raises(runover.RunoverError, match="fixed point"):
         intake.prepare_source(source, tmp_path / "run")
     assert not (tmp_path / "run/intake").exists()
+
+
+def test_silent_normalization_produces_a_curly_nbsp_baseline_with_a_receipt(tmp_path, monkeypatch):
+    """Quote curling, space collapsing and the house ellipsis are conventions,
+    not corrections: they land in the working baseline with no revision
+    markup, so the tracked copy and the report carry only editorial edits."""
+    document = Document()
+    document.add_paragraph('"Wait," she said.  "It\'s late..."')
+    document.add_paragraph("Plain text with no marks.")
+    document.sections[0].footer.paragraphs[0].text = 'Running "foot"'
+    source = tmp_path / "Writer - Book 1.docx"
+    document.save(source)
+    before = source.read_bytes()
+    baseline, evidence = intake.prepare_source(source, tmp_path / "run")
+    assert baseline != source and source.read_bytes() == before
+    views = paragraph_views(baseline)
+    assert views["body-0000"] == "“Wait,” she said. “It’s late …”"
+    assert views["body-0001"] == "Plain text with no marks."
+    assert "Running “foot”" in views.values()
+    receipt = json.loads((tmp_path / "run/intake/receipt.json").read_text())
+    assert receipt["version"] == "fixed-intake-v3" == evidence["version"]
+    normalization = receipt["normalization"]
+    assert normalization["policy"] == "silent-quotes-spaces-house-ellipsis-v1"
+    assert normalization["quotes"] == 7 and normalization["spaces"] == 1 and normalization["ellipses"] == 1
+    assert normalization["ellipsis_style"] == "nbsp" and normalization["variant"] == "us"
+    assert set(normalization["parts"]) == {"word/document.xml", "word/footer1.xml"}
+    assert set(receipt["changed_parts"]) == {"word/document.xml", "word/footer1.xml"}
+    assert receipt["resolved_revision_elements"] == {} and receipt["runover_joins"] == []
+    # No revision markup anywhere in the baseline: rejecting all changes keeps the curl.
+    with ZipFile(baseline) as z:
+        assert b"<w:ins" not in z.read("word/document.xml") and b"<w:del" not in z.read("word/document.xml")
+    assert intake.validate_intake(tmp_path / "run", evidence, baseline) == baseline
+    monkeypatch.setattr(intake, "normalize_package", lambda *a, **k: pytest.fail("Baseline rebuilt on resume"))
+    assert intake.prepare_source(source, tmp_path / "run") == (baseline, evidence)
+
+
+def test_already_normalized_manuscript_keeps_its_source(tmp_path):
+    document = Document()
+    document.add_paragraph("“Fine,” he said. “Later … maybe.”")
+    source = tmp_path / "Writer - Book 1.docx"
+    document.save(source)
+    assert intake.prepare_source(source, tmp_path / "run") == (source, None)
+    assert not (tmp_path / "run/intake").exists()
+
+
+def test_baseline_with_a_straight_quote_cannot_be_certified(tmp_path):
+    document = Document()
+    document.add_paragraph('"Wait," she said.')
+    source = tmp_path / "Writer - Book 1.docx"
+    document.save(source)
+    baseline, evidence = intake.prepare_source(source, tmp_path / "run")
+    receipt_path = tmp_path / "run/intake/receipt.json"
+    receipt = json.loads(receipt_path.read_text())
+    # A receipt that claims the old policy, or none, is refused.
+    receipt["normalization"]["policy"] = "none"
+    receipt_path.write_text(json.dumps(receipt))
+    tampered = dict(evidence, receipt_sha256=intake.sha256_file(receipt_path))
+    with pytest.raises(intake.FixedIntakeError, match="normalization"):
+        intake.validate_intake(tmp_path / "run", tampered, baseline)
+
+
+def test_v2_intake_receipt_requires_a_fresh_workspace(tmp_path):
+    document = Document()
+    document.add_paragraph('"Wait," she said.')
+    source = tmp_path / "Writer - Book 1.docx"
+    document.save(source)
+    intake.prepare_source(source, tmp_path / "run")
+    receipt_path = tmp_path / "run/intake/receipt.json"
+    receipt = json.loads(receipt_path.read_text())
+    receipt["version"] = "fixed-intake-v2"
+    receipt_path.write_text(json.dumps(receipt))
+    with pytest.raises(intake.FixedIntakeError, match="fixed-intake-v3"):
+        intake.prepare_source(source, tmp_path / "run")

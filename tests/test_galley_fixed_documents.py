@@ -191,7 +191,7 @@ def test_package_tampering_prevents_delivery(completed, target):
 def test_report_describes_runover_joins_and_not_revisions(manuscript):
     original = fd.paragraph_views(manuscript)
     first = next(iter(original))
-    result = {"identity": {"intake": {"version": "fixed-intake-v2"}}, "source": str(manuscript),
+    result = {"identity": {"intake": {"version": "fixed-intake-v3"}}, "source": str(manuscript),
               "poetry_only": False, "questions": [], "stages": [], "history": []}
     receipt = {"resolved_revision_elements": {}, "runover_joins": [
         {"para_id": "body-0000", "baseline_para_id": first, "absorbed": ["body-0001"], "seam_offsets": [70]}]}

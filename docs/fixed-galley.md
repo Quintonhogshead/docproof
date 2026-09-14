@@ -14,6 +14,20 @@ comments and untouched package members are preserved. Rejecting Galley's new
 corrections restores this baseline, including the edits the book arrived with.
 Unsupported revision types stop before paid reads with a specific intake error.
 
+Intake then applies the house conventions silently: straight quotation marks
+are curled, runs of spaces collapsed, and every ellipsis set to the house form
+(… with a non-breaking space before it, `style.ellipsis`), in every part that
+holds paragraphs, with no revision markup. These are conventions, not
+corrections: they belong in the working baseline, and the tracked copy and the
+report list only editorial corrections (the report states the counts once).
+Rejecting Galley's corrections restores the normalized baseline. The receipt
+records the policy (`silent-quotes-spaces-house-ellipsis-v1`), the variant
+that chose the primary quotation mark, the ellipsis style, counts and touched
+parts; a baseline that still holds a straight quote, a double space or an
+off-house ellipsis cannot be certified. This is `fixed-intake-v3`; a v2
+baseline requires a fresh workspace. The local normalization scan still runs
+and now reports what remains, which should be nothing.
+
 Intake also rejoins page-runover paragraphs. A typeset export (an InDesign or
 PDF-derived .docx) stores a paragraph that spills across a page as two
 consecutive paragraphs, and every reader then "repairs" the seam: a period on
@@ -33,9 +47,8 @@ on both halves, a flush head) are counted in the receipt. The join is recorded
 in `intake/receipt.json` (`runover_joins`: ids, seam offsets, separators,
 hyphen decisions) and in the proofreading report; it is not a tracked change,
 so rejecting Galley's corrections restores the joined baseline. This is
-`fixed-intake-v2`; a v1 baseline requires a fresh workspace. Clean files that
-need neither transformation keep their existing source identity; no baseline
-is created.
+`fixed-intake-v2`. Clean files that need none of the three transformations
+keep their existing source identity; no baseline is created.
 
 The agreed sequence is:
 
@@ -131,8 +144,16 @@ entry means main-document body text whose formatting is entirely known roman.
 On the first production book the focused sites were the largest part of every
 final-read window, larger than the text being read.
 
-Screening windows hold at most 25 sites, and screening requests may answer
-with up to 16,000 output tokens and are asked for one-sentence reasons: at
+Screening and number sites are presented under short per-request names
+(`s01`…`s25`, `n01`…) that code maps back to their durable ids; the ids
+stay in the stage evidence, and the stage history records each site's label.
+A site's durable id is a 22-character hash, and asked to copy 25 of them a
+reader sometimes returns one with a character added or dropped — Luna did so
+three times running on the Gull Point book — and the coverage check then
+rightly refuses the whole window. Nothing is matched approximately: a mistyped
+label still fails coverage. Screening windows hold at most 25 sites, and
+screening requests may answer with up to 16,000 output tokens and are asked
+for one-sentence reasons: at
 43-50 sites per window Sonnet's answers ran to about 11,000 tokens against a
 12,000 ceiling and Luna dropped IDs from its coverage, and the resulting
 skipped reviews were the only reason that book finished `needs_human`.
@@ -410,7 +431,9 @@ The compulsory local checks belong to fixed recipe version 2; the continuity
 lane, the final walk-through scope, the post-Fable and post-Astra propagation
 passes and the casing sweep belong to version 3; the stage-specific contracts,
 shared window context, focused-site and metadata diet, screening caps and the
-removal of the comma-boundary generator belong to version 4. A workspace
+removal of the comma-boundary generator belong to version 4; silent
+normalization at intake and per-request site labels belong to version 5. A
+workspace
 created by an earlier fixed version cannot resume under the new recipe: start a
 fresh workspace so the added checks cover the original manuscript and become
 part of its certification. Existing checkpoints are not silently relabeled as

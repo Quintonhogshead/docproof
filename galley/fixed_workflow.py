@@ -17,7 +17,7 @@ from functools import partial
 
 from docproof.utils.files import write_atomic
 
-VERSION = "fixed-proofreading-v4"
+VERSION = "fixed-proofreading-v5"
 SONNET = "claude-sonnet-5"
 LUNA = "gpt-5.6-luna"
 OPUS = "claude-opus-5"
@@ -646,7 +646,7 @@ class FixedWorkflow:
         return evidence
 
     def _screen_candidates(self, stage, sites):
-        from galley.fixed_screening import PAIR, decision_key, packet, windows
+        from galley.fixed_screening import PAIR, aliases, decision_key, packet, windows
         from galley.settle import xml_safe
         batches = list(windows(sites))
         jobs = [(model, partial(self._ask, stage + "_screen", model,
@@ -658,20 +658,25 @@ class FixedWorkflow:
             "For a sole formatting proposal, apply retains that proposed formatting and must leave before unchanged. "
             "Query only a real proofreading problem requiring specific missing author knowledge. "
             "Judge the text independently; another reader or a local flag is not proof of an error. "
-            "reason is one short sentence of at most 25 words; leave replacement, question and missing_knowledge empty unless the action needs them.",
+            "reason is one short sentence of at most 25 words; leave replacement, question and missing_knowledge empty unless the action needs them. "
+            "Sites are named s01, s02, ... within this request; return each decision under exactly that name.",
             {"story_sheet": self.context, **packet(batch)}, DECISIONS, max_tokens=16000))
             for batch in batches for model in PAIR]
         answers = iter(self.scheduler.map(jobs))
         agreed, disputed = {}, []
         for batch in batches:
             reviews = {}
+            labels = aliases(batch)
             for model in PAIR:
                 result = next(answers)
                 if result is None:
                     reviews[model] = None
                     continue
-                _exact_ids([d["id"] for d in result["decisions"]], [s["id"] for s in batch], stage + " screen")
-                reviews[model] = {d["id"]: d for d in result["decisions"]}
+                _exact_ids([d["id"] for d in result["decisions"]], list(labels), stage + " screen")
+                # Decisions return under their request labels; from here on
+                # they carry the durable site id the disagreement gate expects.
+                reviews[model] = {labels[d["id"]]: {**d, "id": labels[d["id"]]} for d in result["decisions"]}
+            names = {site_id: name for name, site_id in labels.items()}
             for site in batch:
                 pair = {m: reviews[m][site["id"]] for m in PAIR if reviews[m] is not None}
                 valid = len(pair) == 2
@@ -685,6 +690,7 @@ class FixedWorkflow:
                             {site["para_id"]: site["paragraph"]}, model,
                             "Screening decision has unsafe text or lacks specific author knowledge")
                 self.history.append({"stage": stage + "_screen", "site": site, "screening": pair,
+                                     "label": names[site["id"]],
                                      "complete": len(pair) == 2, "usable": bool(valid)})
                 if not valid:
                     agreed[site["id"]] = self._drop_unreviewed([site])[0]
@@ -932,14 +938,20 @@ class FixedWorkflow:
         sites = extract_numbers({k: v for k, v in self.current.items() if k not in self.poetry_ids})
         results = []
         work = [(model, window) for model in (SONNET, LUNA) for window in _windows(sites, 16000)]
+        # Sites are read under short per-request names (n01, n02, ...) for the
+        # same reason screening sites are (fixed_screening.label); the durable
+        # ids stay in the stage evidence. Findings are anchored by quotation,
+        # never by site id.
+        def named(window):
+            return [{**x, "id": f"n{i + 1:02d}"} for i, x in enumerate(window)]
         jobs = [(model, partial(self._ask,"numbers", model,
-                    "Check EVERY numbered site against the supplied existing number and currency policy. reviewed_ids must contain every site id, even when correct. Findings quote the paragraph verbatim and specify para_id. Never change numerical values or invent AM/PM. Preserve all policy exceptions. Only report clear errors or evidence-backed author questions. No comment decisions are needed.",
-                    {"story_sheet": self.context, "sites": window,
+                    "Check EVERY numbered site against the supplied existing number and currency policy. reviewed_ids must contain every site id (n01, n02, ...), even when correct. Findings quote the paragraph verbatim and specify para_id. Never change numerical values or invent AM/PM. Preserve all policy exceptions. Only report clear errors or evidence-backed author questions. No comment decisions are needed.",
+                    {"story_sheet": self.context, "sites": named(window),
                      "paragraphs": {x["para_id"]: self.current[x["para_id"]] for x in window}}, READ_SCHEMA)) for model, window in work]
         for (model, window), answer in zip(work, self.scheduler.map(jobs)):
             if answer is None:
                 continue
-            _exact_ids(answer["reviewed_ids"], [x["id"] for x in window], "Number coverage")
+            _exact_ids(answer["reviewed_ids"], [x["id"] for x in named(window)], "Number coverage")
             if answer["comment_decisions"]:
                 raise FixedWorkflowError("Number sweep returned unassigned comment decisions")
             allowed = {x["para_id"]: self.current[x["para_id"]] for x in window}

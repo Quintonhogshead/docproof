@@ -1,11 +1,17 @@
 """Preserve the incoming manuscript and freeze a working baseline.
 
-Two transformations produce the baseline, in this order:
+Three transformations produce the baseline, in this order:
 
 1. Incoming Word revisions are accepted (the same accepted-view policy as
    Galley's established prep intake). Only revision-bearing parts change.
 2. Page-runover paragraphs — one paragraph a typeset export split across a page
    boundary — are rejoined (`docproof.runover`). Only word/document.xml changes.
+3. Silent normalization (`docproof.normalize`): straight quotation marks are
+   curled, runs of spaces collapsed, and every ellipsis set to the house form
+   (… with a non-breaking space before it). These are house conventions, not
+   corrections; they change text elements in place with no revision markup, in
+   any part that holds paragraphs, so the tracked copy and the report carry
+   only editorial corrections.
 
 Comments and every other package member survive. The original, baseline and
 receipt are published together before any model call; a manuscript needing
@@ -20,12 +26,16 @@ import tempfile
 from zipfile import ZipFile
 
 from docproof.ingest import accept_all_revisions, find_revisions, preflight
+from docproof.normalize import (house_ellipsis_edits, house_ellipsis_package, normalize_package,
+                                normalize_text)
 from docproof.runover import POLICY as RUNOVER_POLICY, find_runover_joins, join_runover_paragraphs
+from docproof.variants import detect_variant, load_variant
 from docproof.utils.xml_helpers import paragraph_text, walk_package
 from galley.fixed_calls import _atomic, _hash, _load, _locked
 from galley.manifest import sha256_file
 
-VERSION = "fixed-intake-v2"
+VERSION = "fixed-intake-v3"
+NORMALIZATION_POLICY = "silent-quotes-spaces-house-ellipsis-v1"
 
 
 class FixedIntakeError(ValueError):
@@ -45,6 +55,20 @@ def _configuration(cfg):
 
 def _dictionary_name(cfg):
     return cfg.spellcheck.dictionary or "en_US"
+
+
+def _variant(cfg, texts):
+    """The same rule prepare applies: an explicit variant, else the spelling
+    evidence, else US. Only the primary quotation mark matters here."""
+    key = cfg.variant if cfg.variant != "auto" else (detect_variant(list(texts.values())) or "us")
+    return key, load_variant(key)
+
+
+def _normalization_pending(texts, cfg, variant):
+    """Paragraph ids whose text silent normalization would still change."""
+    return [pid for pid, text in texts.items() if text and (
+        normalize_text(text, quotes=True, spaces=True, variant=variant) != text
+        or house_ellipsis_edits(text, style=cfg.style.ellipsis, variant=variant))]
 
 
 def validate_intake(directory, evidence, source=None, cfg=None):
@@ -79,6 +103,12 @@ def validate_intake(directory, evidence, source=None, cfg=None):
         raise FixedIntakeError("The intake receipt lacks its page-runover accounting")
     if find_runover_joins(pkg, cfg, dictionary=_dictionary_name(cfg))[0]:
         raise FixedIntakeError("The accepted baseline still contains unjoined page runovers")
+    normalization = receipt.get("normalization")
+    if (not isinstance(normalization, dict) or normalization.get("policy") != NORMALIZATION_POLICY
+            or normalization.get("ellipsis_style") != cfg.style.ellipsis):
+        raise FixedIntakeError("The intake receipt lacks its silent-normalization accounting")
+    if _normalization_pending(texts, cfg, load_variant(normalization.get("variant", "us"))):
+        raise FixedIntakeError("The accepted baseline still contains unnormalized quotes, spaces or ellipses")
     return baseline
 
 
@@ -98,7 +128,7 @@ def prepare_source(source, directory, cfg=None):
         if destination.exists():
             receipt = _load(destination / "receipt.json")
             if receipt.get("version") != VERSION:
-                raise FixedIntakeError("The intake baseline predates fixed-intake-v2 (page-runover joining); use a fresh workspace")
+                raise FixedIntakeError("The intake baseline predates fixed-intake-v3 (silent normalization); use a fresh workspace")
             evidence = {"version": VERSION,
                         "receipt_sha256": sha256_file(destination / "receipt.json"),
                         "original_sha256": receipt["original_sha256"],
@@ -107,7 +137,9 @@ def prepare_source(source, directory, cfg=None):
                 raise FixedIntakeError("The incoming manuscript changed; use a fresh workspace")
             return validate_intake(directory, evidence, cfg=cfg), evidence
         pkg = preflight(source, "ignore")
-        if not find_revisions(pkg) and not find_runover_joins(pkg, cfg, dictionary=_dictionary_name(cfg))[0]:
+        variant_key, variant = _variant(cfg, _texts(pkg))
+        if (not find_revisions(pkg) and not find_runover_joins(pkg, cfg, dictionary=_dictionary_name(cfg))[0]
+                and not _normalization_pending(_texts(pkg), cfg, variant)):
             return source, None
         if (directory / "workflow.json").exists():
             raise FixedIntakeError("Existing review evidence predates revision intake; use a fresh workspace")
@@ -122,7 +154,13 @@ def prepare_source(source, directory, cfg=None):
             pkg = preflight(original, "ignore")
             resolved = accept_all_revisions(pkg)
             joins, runover = join_runover_paragraphs(pkg, cfg, dictionary=_dictionary_name(cfg))
+            # Quotes and spaces first, then the ellipsis lead: the two passes
+            # both touch the spaces around an ellipsis and must not overlap.
+            curled = normalize_package(pkg, quotes=True, spaces=True, variant=variant)
+            ellipses = house_ellipsis_package(pkg, style=cfg.style.ellipsis, variant=variant)
             texts = _texts(pkg)
+            if _normalization_pending(texts, cfg, variant):
+                raise FixedIntakeError("Silent normalization did not converge on the accepted baseline")
             pkg.save(baseline)
             if _texts(preflight(baseline, "abort")) != texts:
                 raise FixedIntakeError("Saving the accepted baseline changed paragraph text or identities")
@@ -130,7 +168,8 @@ def prepare_source(source, directory, cfg=None):
                 if before.namelist() != after.namelist():
                     raise FixedIntakeError("Revision intake changed the Word package inventory")
                 changed = [n for n in before.namelist() if before.read(n) != after.read(n)]
-                allowed = set(resolved) | ({"word/document.xml"} if joins else set())
+                allowed = (set(resolved) | ({"word/document.xml"} if joins else set())
+                           | set(curled.parts) | set(ellipses.parts))
                 if not set(changed) <= allowed:
                     raise FixedIntakeError("Intake changed a protected Word package member")
             if sha256_file(source) != original_sha:
@@ -141,7 +180,13 @@ def prepare_source(source, directory, cfg=None):
                        "resolved_revision_elements": resolved, "changed_parts": changed,
                        "runover_policy": RUNOVER_POLICY, "runover_joins": joins,
                        "runover_refusals": runover["refusals"], "indent_convention": runover["convention"],
-                       "paragraph_id_space": "accepted-before-join"}
+                       "paragraph_id_space": "accepted-before-join",
+                       "normalization": {"policy": NORMALIZATION_POLICY, "variant": variant_key,
+                                         "ellipsis_style": cfg.style.ellipsis,
+                                         "quotes": curled.quotes, "spaces": curled.spaces,
+                                         "ambiguous_quotes": curled.ambiguous, "ellipses": ellipses.ellipses,
+                                         "paragraphs": curled.paragraphs + ellipses.paragraphs,
+                                         "parts": sorted(set(curled.parts) | set(ellipses.parts))}}
             _atomic(staging / "receipt.json", receipt)
             for path in (original, baseline):
                 with path.open("rb") as stream:

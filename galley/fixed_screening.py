@@ -36,20 +36,38 @@ def is_pair_disagreement(site):
         return False
 
 
+def label(index):
+    """The short per-request name a site is screened under: s01, s02, ...
+
+    A site's durable id is a 22-character hash. Asked to copy 25 of them back,
+    a reader sometimes returns one with a character added or dropped, and the
+    coverage check then rightly refuses the whole window; on the first two
+    production books that was the only cause of an incomplete review. The
+    reader answers with the label; code maps it back to the hash. Nothing is
+    matched approximately."""
+    return f"s{index + 1:02d}"
+
+
+def aliases(sites):
+    """label -> durable site id, in request order."""
+    return {label(i): site["id"] for i, site in enumerate(sites)}
+
+
 def packet(sites):
     """Share each paragraph once, retaining every anchor and explanation.
 
     Generator internals remain in the local evidence, not repeated in every
     review prompt. Relevant neighbouring paragraphs are retained as context.
     Nested proposal IDs are omitted: only the containing site needs a ruling.
+    Sites are presented under their per-request labels (see `label`).
     """
     paragraphs, related, compact = {}, {}, []
-    for site in sites:
+    for index, site in enumerate(sites):
         pid = site["para_id"]
         paragraphs[pid] = {"text": site["paragraph"]}
         if site["source"] != site["paragraph"]:
             paragraphs[pid]["source"] = site["source"]
-        row = {k: site[k] for k in ("id", "para_id", "start", "end", "before")}
+        row = {"id": label(index), **{k: site[k] for k in ("para_id", "start", "end", "before")}}
         row["proposals"] = []
         for proposal in site["proposals"]:
             row["proposals"].append({k: proposal[k] for k in (
