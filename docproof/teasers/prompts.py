@@ -48,16 +48,25 @@ material limitation; handle perspective and ambiguity in factual qualifications.
 Preserve exact paragraph IDs. Title and author may be empty when not
 identified in the source; never infer the title from an operational filename.
 The original passages cited by the readings are included to check their accuracy.
+Create writer_brief as a SEPARATE PUBLIC-ONLY handoff. Qwen will never see your
+private storysheet, manuscript, ending, protected_revelations, reading notes or
+source passages. Give it enough accurate public setup, facts, tone, five angles
+and writing instructions to write the teasers. Every field of writer_brief must
+itself be safe for a prospective reader. Do not include actual resolutions, late
+developments, concealed identities, or lists of what happens later. Even 'do not
+reveal [actual ending]' reveals that ending and must never appear in writer_brief.
+Use only general guardrails such as 'leave the final decision unresolved'. Keep
+full-book knowledge and actual withheld details in the PRIVATE storysheet fields.
 READINGS:
 """ + data(readings) + "\nORIGINAL EVIDENCE:\n" + data(evidence) + """
 \nPRIOR EDITORIAL FEEDBACK (when present, correct the brief and select more
 conservative, truthful angles that resolve these issues):\n""" + data(feedback)
 
 
-def writer_prompt(story, evidence, previous=None, feedback=None, retained=None):
+def writer_prompt(brief, approved_copy=None, feedback=None, retained=None):
     return (SOURCE_RULE + standard(), """
 You are the final prose writer. Write every piece of author-facing wording yourself
-from the verified storysheet and original manuscript evidence below. Return exactly
+from the verified PUBLIC-ONLY writing brief below. Return exactly
 five distinct teasers, numbered 1–5, plus three optional hooks, one editorial note,
 teaser elements, best practices, and an author modification checklist. The schema
 is the output contract. Each teaser is 140–190 words in 2–4 paragraphs. Do not count
@@ -75,23 +84,42 @@ Preserve the book's truth, register, complexity, and reader promise. Keep source
 internal storysheet, model details, scores, and protected revelations out of ALL
 author-facing fields. These are original editorial drafts; do not claim human
 authorship or promise any detector or watermark outcome.
-On revision, return the complete replacement package, correcting every review issue.
+On revision, return the complete replacement package, correcting the public revision notes.
 Make targeted repairs to failed copy. Do not introduce new concrete story details
 while fixing an error. Preserve any approved options listed below verbatim; the
 server retains their exact approved wording. Every part of the resulting package will
 still receive a fresh review against the manuscript.
-STORYSHEET:\n""" + data(story) + "\nORIGINAL EVIDENCE:\n" + data(evidence)
-        + "\nPREVIOUS DRAFT:\n" + data(previous) + "\nEDITORIAL FEEDBACK:\n" + data(feedback)
+The full manuscript and its ending are deliberately unavailable to you. Do not
+guess later events or add story facts beyond the public brief. Previous rejected
+copy is also withheld because it may contain spoilers. You may see only copy that
+has already passed source and spoiler review.
+PUBLIC WRITING BRIEF:\n""" + data(brief)
+        + "\nAPPROVED COPY ONLY:\n" + data(approved_copy) + "\nPUBLIC REVISION NOTES:\n" + data(feedback)
         + "\nAPPROVED OPTIONS TO PRESERVE:\n" + data(retained or []) + """
 \nFINAL OUTPUT CHECK: The author guide and editorial note must not list the actual
 ending details, even in phrases such as 'withhold X' or 'do not reveal X'. Those
 phrases reveal X. Refer only to general categories ('the final decision', 'the
 relationship outcome') without naming what happens. Do not echo the protected
-revelations from the storysheet or feedback. Keep the editorial note to 60–100
+revelations or invent an ending. Keep the editorial note to 60–100
 words about the reader promise and differences between the five approaches.
 Use 155–170 words per revised teaser and 8–12 words per hook as drafting targets;
 the hard limits remain 140–190 and 5–18. Preserve listed approved options verbatim.
 """)
+
+
+def brief_review_prompt(story, evidence, brief_hash):
+    return SOURCE_RULE + """
+Check the PUBLIC writer_brief inside this private storysheet before it leaves Sol.
+Compare it with the source evidence and private full-book account. It must give
+Qwen accurate, sufficient setup without any ending details, protected revelations,
+late developments, or lists of what is withheld. 'Do not reveal [actual ending]'
+is a spoiler too. General guardrails like 'leave the final decision unresolved'
+are safe. Check every field, including facts, angles and instructions. Do not
+weaken actual facts into unsupported uncertainty or confuse an offer with its
+acceptance. Return the supplied brief hash, accuracy and spoiler-safety verdicts,
+and actionable private feedback. Neither your review nor the private account will
+be given to Qwen. Approve only a brief safe for a prospective reader.
+""" + data({"private_storysheet": story, "original_evidence": evidence, "brief_sha256": brief_hash})
 
 
 def source_review_prompt(chunk, draft, draft_hash):
@@ -131,5 +159,9 @@ and requires a complete fresh manuscript review before upload. Return edits=[] w
 the saved copy is ready. Return the supplied draft hash exactly and list every
 source-review chunk ID exactly once. Set approved=false for any unresolved concern.
 A malformed or missing review is not approval.
+Your detailed feedback and edits remain private to Sol. Qwen receives neither the
+manuscript nor its ending, nor rejected copy or private review feedback. It receives
+only the independently checked public brief, already approved copy, and generic
+revision categories derived from the review flags and deterministic length checks.
 """ + data({"storysheet": story, "draft": draft, "draft_sha256": draft_hash,
                 "source_reviews": source_reviews, "required_fixes": issues})

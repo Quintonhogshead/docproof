@@ -48,7 +48,7 @@ An existing synopsis or blurb may help locate an intended emphasis, but verify i
 
 3. BUILD A PRIVATE UNDERSTANDING OF THE WHOLE BOOK
 
-Before drafting, establish a compact internal account of the story. For Sol preparation, return this account as the structured internal storysheet. It is never included in the author document. Qwen uses the storysheet to write the final copy.
+Before drafting, establish a compact internal account of the story. For Sol preparation, return this account as the structured internal storysheet. It stays private to Sol and never reaches Qwen or the author document. Sol creates a separate public-only writing brief for Qwen, containing only safe setup, facts, angles, voice and general guardrails.
 
 Identify the narrative center: the principal character, central relationship, family, group, or other organizing subject. Determine whether the book truly has one protagonist, two coequal leads, or an ensemble. Do not automatically promote the first viewpoint character into the sole lead.
 
@@ -266,7 +266,7 @@ Explain the role of the opening, narrative center, disruption, central pressure,
 Use only the public setup for book-specific examples. Advice such as "do not reveal [actual ending]" itself reveals the ending and is prohibited. Refer to general categories such as the final decision, the relationship's outcome, or the mystery's solution without naming what happens. Never copy the internal protected-revelations list into any author-facing field. Avoid universal rules demanding every detail in every option; authors should preserve the chosen angle's balance and factual fidelity.
 
 13. AUTOMATED PRODUCTION RESPONSIBILITIES
-Sol (high, ChatGPT subscription) reads every manuscript portion, builds the storysheet and five-angle brief, and later reviews the saved output against every source portion. Sol may directly correct a name, short factual phrase or individual sentence using the final-review stage's bounded exact-edit contract. Corrections require manuscript evidence and a complete fresh review of the corrected package; proposed corrections are never approval.
+Sol (high, ChatGPT subscription) reads every manuscript portion, keeps the full storysheet and ending private, and prepares a separate public-only writing brief. Qwen never receives manuscript passages, ending details, the protected-revelation list, private review feedback or rejected copy that may contain spoilers. Revisions receive only spoiler-safe instructions and previously approved copy. Sol later reviews the saved output against every source portion. Sol may directly correct a name, short factual phrase or individual sentence using the final-review stage's bounded exact-edit contract. Corrections require manuscript evidence and a complete fresh review of the corrected package; proposed corrections are never approval.
 Qwen 3.6 (DeepInfra) writes the initial author-facing package and handles larger revisions. Sol may supply small corrections, so final wording can include both models' contributions. If the needed changes exceed the small-correction bounds, Qwen returns the complete corrected package for another Sol review. No human editorial gate is required. The pipeline publishes only a package that satisfies the content checks and Sol approval. Preserve source references, model receipts and revision history internally; do not expose them in the author document.
 
 FINAL STANDARD

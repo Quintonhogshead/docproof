@@ -26,6 +26,27 @@ class Reading(Record):
     source_limitations: list[str]
 
 
+class WriterBrief(Record):
+    title: str = ""
+    author: str = ""
+    public_setup: str = ""
+    reader_promise: str = ""
+    central_pressure: str = ""
+    stakes: str = ""
+    genre_and_audience: str = ""
+    voice: str = ""
+    public_facts: list[str] = Field(default_factory=list)
+    five_angles: list[str] = Field(default_factory=list)
+    writing_instructions: str = ""
+
+
+class BriefReview(Record):
+    brief_sha256: str
+    accurate: bool
+    spoiler_safe: bool
+    feedback: list[str]
+
+
 class Storysheet(Record):
     title: str
     author: str
@@ -43,6 +64,8 @@ class Storysheet(Record):
     protected_revelations: list[str]
     five_angles: list[str]
     qwen_instructions: str
+    # An empty legacy default requires regeneration before any writer call.
+    writer_brief: WriterBrief = Field(default_factory=WriterBrief)
 
 
 class Teaser(Record):

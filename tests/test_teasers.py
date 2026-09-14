@@ -21,7 +21,7 @@ from docproof.teasers import QWEN_MODEL, SOL_MODEL
 from docproof.teasers import pipeline
 from docproof.teasers.document import write_document
 from docproof.teasers.models import (Draft, Teaser, Element, Fact, Storysheet,
-    Review, OptionCheck, SmallEdit, apply_small_edits, digest, draft_issues, approval_issues)
+    Review, OptionCheck, SmallEdit, WriterBrief, apply_small_edits, digest, draft_issues, approval_issues)
 
 
 @pytest.fixture
@@ -34,7 +34,14 @@ def story():
         public_facts=[Fact(claim="Mara returns to repair the ferry.", paragraph_ids=[1])],
         conditional_disclosures=[], protected_revelations=["The final decision about the boat."],
         five_angles=["Return", "Siblings", "Island", "Inheritance", "Repair"],
-        qwen_instructions="Ground all five options in Mara's return and the siblings' dilemma.")
+        qwen_instructions="Ground all five options in Mara's return and the siblings' dilemma.",
+        writer_brief=WriterBrief(title="The Ferry Ledger", author="",
+            public_setup="Mara returns to repair the ferry; her brother wants to sell it.",
+            reader_promise="A restrained family story.", central_pressure="A disputed inheritance.",
+            stakes="Their relationship and the ferry's future.", genre_and_audience="Adult family fiction",
+            voice="Restrained and concrete", public_facts=["Mara returns; her brother wants to sell the ferry."],
+            five_angles=["Return", "Siblings", "Island", "Inheritance", "Repair"],
+            writing_instructions="Leave the final decision unresolved."))
 
 
 @pytest.fixture
@@ -118,6 +125,67 @@ def test_wire_schema_preserves_book_title(story):
     assert "title" in schema["required"]
     assert schema["properties"]["title"] == {"type": "string"}
     _check_schema(schema)
+
+
+def test_qwen_never_receives_private_ending_or_rejected_copy(queued, story, draft):
+    secret = "PRIVATE_ENDING_SENTINEL"
+    for name, value in story.model_dump().items():
+        if isinstance(value, str):
+            setattr(story, name, secret)
+    story.protected_revelations = [secret]
+    story.public_facts = [Fact(claim="A safe setup fact.", paragraph_ids=[1])]
+    queue, _, task = queued
+    task["chunks"][0]["paragraphs"][0]["text"] += " " + secret
+    queue.save(task)
+    task = accept_story(queue, task, story.model_dump())
+    bad = draft.model_copy(deep=True)
+    bad.teasers[0].paragraphs[0] += " " + secret
+    class Initial:
+        def complete_structured(self, **kw):
+            assert secret not in kw["user"] and secret not in kw["system"]
+            assert "PUBLIC WRITING BRIEF" in kw["user"]
+            return ProviderResult(parsed=bad.model_dump())
+    task = generate_draft(queue, task, provider=Initial())
+    review = approved(bad)
+    review.approved = False
+    review.options[0].spoiler_safe = False
+    review.guidance_approved = False
+    review.feedback = ["Remove " + secret]
+    task = accept_review(queue, task, review.model_dump())
+    task["feedback"].append(secret)
+    class Revision:
+        def complete_structured(self, **kw):
+            assert secret not in kw["user"] and secret not in kw["system"]
+            assert "Rewrite option 1 from the public brief to improve spoiler safety" in kw["user"]
+            assert "APPROVED OPTIONS TO PRESERVE:\n[2, 3, 4, 5]" in kw["user"]
+            return ProviderResult(parsed=draft.model_dump())
+    result = generate_draft(queue, task, provider=Revision())
+    assert secret not in json.dumps(result["writer_handoffs"])
+
+
+def test_legacy_task_refreshes_private_brief_before_any_writer_call(queued, story):
+    queue, _, task = queued
+    task["storysheet"] = story.model_dump(exclude={"writer_brief"})
+    task["state"] = "story_ready"
+    queue.save(task)
+    result = generate_draft(queue, task, provider=object())
+    assert result["state"] == "queued"
+    assert "storysheet" not in result and "generation_times" not in result
+    assert result["prior_storysheets"]
+
+
+def test_revised_spoiler_boundary_does_not_reuse_old_approved_copy(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    review = approved(draft)
+    review.approved = False
+    task = accept_review(queue, task, review.model_dump())
+    task["storysheet"]["protected_revelations"].append("A newly protected development.")
+    class Revision:
+        def complete_structured(self, **kw):
+            assert 'APPROVED COPY ONLY:\n{"teasers": []}' in kw["user"]
+            return ProviderResult(parsed=draft.model_dump())
+    result = generate_draft(queue, task, provider=Revision())
+    assert result["drafts"][-1]["retained_from"] is None
 
 
 def test_count_structure_and_guidance_cannot_be_omitted(draft):
@@ -491,12 +559,29 @@ def test_sol_is_subscription_high_and_validated_answers_resume(tmp_path, story):
         if "narrative" in schema["properties"]:
             return dict(chunk_id=1, first_paragraph=1, last_paragraph=1, narrative="Mara returns.",
                         facts=[dict(claim="Mara returns.", paragraph_ids=[1])], revelations=[], source_limitations=[])
+        if "brief_sha256" in schema["properties"]:
+            return dict(brief_sha256=digest(story.writer_brief), accurate=True, spoiler_safe=True, feedback=[])
         return story.model_dump()
     source = pipeline.chunks("Mara returns to repair the ferry.")
     assert pipeline.analyze(source, tmp_path, runner=runner) == story
-    assert len(calls) == 2
+    assert len(calls) == 3
     pipeline.analyze(source, tmp_path, runner=runner, attempt=1)
-    assert len(calls) == 2
+    assert len(calls) == 3
+
+
+def test_public_brief_must_pass_sol_check_before_leaving_analysis(tmp_path, story):
+    def runner(prompt, schema, work, **kw):
+        if "narrative" in schema["properties"]:
+            return dict(chunk_id=1, first_paragraph=1, last_paragraph=1, narrative="Mara returns.",
+                facts=[dict(claim="Mara returns.", paragraph_ids=[1])], revelations=[], source_limitations=[])
+        if "brief_sha256" in schema["properties"]:
+            return dict(brief_sha256=digest(story.writer_brief), accurate=True, spoiler_safe=False,
+                        feedback=["The public brief reveals a late decision."])
+        return story.model_dump()
+    with pytest.raises(ValueError, match="before Qwen can receive it"):
+        pipeline.analyze(pipeline.chunks("Mara returns."), tmp_path, runner=runner)
+    saved = [json.loads(p.read_text())["answer"] for p in (tmp_path / "answers").glob("*.json")]
+    assert not any("writer_brief" in answer for answer in saved)
 
 
 def test_completion_hook_queues_before_archiving(queued, tmp_path, monkeypatch):

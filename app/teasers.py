@@ -20,7 +20,7 @@ from docproof.providers import strict_json_schema
 from docproof.teasers import QWEN_MODEL, SOL_MODEL, VERSION
 from docproof.teasers.models import (Draft, Review, Storysheet, approval_issues,
                                     apply_small_edits, draft_issues, teaser_issues, digest)
-from docproof.teasers.pipeline import chunks, evidence_for, validate_story
+from docproof.teasers.pipeline import chunks, validate_story
 from docproof.teasers.prompts import writer_prompt
 
 log = logging.getLogger(__name__)
@@ -218,6 +218,12 @@ def generate_draft(queue, task, *, provider=None):
         return task
     if task["state"] != "story_ready":
         raise TeaserError("This task cannot generate another draft.")
+    story = Storysheet.model_validate(task["storysheet"])
+    if not story.writer_brief.public_setup:
+        task.setdefault("prior_storysheets", []).append(task.pop("storysheet"))
+        task["progress"] = "Preparing a public-only writing brief for Qwen"
+        queue.save(task, "queued")
+        return queue.get(task["id"])
     recent = [t for t in task.get("generation_times", []) if t > time.time() - 86400]
     if len(recent) >= MAX_DRAFTS_PER_DAY:
         queue.retry(task, "The daily generation allowance has been used; retries resume automatically.",
@@ -231,14 +237,15 @@ def generate_draft(queue, task, *, provider=None):
             raise TeaserError("Add the DeepInfra key to DocProof's cloud settings.")
         provider = DeepInfraProvider(api_key=key, max_retries=0, effort=None)
         provider.client = provider.client.with_options(timeout=840)
-    story = Storysheet.model_validate(task["storysheet"])
     previous = task["drafts"][-1]["content"] if task["drafts"] else None
     retained = {}
     retain_guidance = False
+    public_feedback = []
     if previous and task["reviews"]:
         prior = Draft.model_validate(previous)
         review = Review.model_validate(task["reviews"][-1])
         if (review.draft_sha256 == digest(prior) and
+                task.get("review_story_hashes", {}).get(digest(review)) == digest(task["storysheet"]) and
                 sorted(t.number for t in prior.teasers) == [1, 2, 3, 4, 5] and
                 sorted(review.covered_chunk_ids) == [c["id"] for c in task["chunks"]] and
                 sorted(o.number for o in review.options) == [1, 2, 3, 4, 5]):
@@ -250,12 +257,32 @@ def generate_draft(queue, task, *, provider=None):
                 e.field not in ("teaser", "angle") for e in review.edits)
             retain_guidance = retain_guidance and not any(
                 not issue.startswith("Option ") for issue in draft_issues(prior))
-    system, user = writer_prompt(story.model_dump(), evidence_for(story.public_facts, task["chunks"]),
-                                previous, task.get("feedback"), sorted(retained))
+            public_feedback = draft_issues(prior)
+            for option in review.options:
+                failed = [label for key, label in (
+                    ("accurate", "factual accuracy"), ("spoiler_safe", "spoiler safety"),
+                    ("clear", "clarity"), ("faithful_voice", "faithful voice"),
+                    ("distinct_angle", "a distinct angle")) if not getattr(option, key)]
+                if failed:
+                    public_feedback.append(f"Rewrite option {option.number} from the public brief to improve " +
+                                           ", ".join(failed) + ". Do not add facts beyond that brief.")
+            if not review.guidance_approved:
+                public_feedback.append("Rewrite the hooks and author guide using only the public setup; "
+                                       "keep endings unresolved and meet every length requirement.")
+    # The provider receives a strict allowlist: no manuscript passages, private
+    # storysheet fields, internal feedback, or rejected copy (which may spoil it).
+    approved_copy = {"teasers": [retained[n].model_dump() for n in sorted(retained)]}
+    if retain_guidance:
+        approved_copy.update({k: v for k, v in previous.items() if k != "teasers"})
+    system, user = writer_prompt(story.writer_brief.model_dump(), approved_copy,
+                                public_feedback, sorted(retained))
     task["progress"] = "Qwen is writing five teasers and author guidance"
     # If the process dies during generation, require reconciliation rather than
     # submitting a duplicate paid request on the next poll.
     task["generation_times"] = recent + [time.time()]
+    task.setdefault("writer_handoffs", []).append({"at": time.time(),
+        "public_brief": story.writer_brief.model_dump(), "approved_copy": approved_copy,
+        "public_feedback": public_feedback, "prompt_sha256": digest({"system": system, "user": user})})
     queue.save(task, "generating")
     token_limit = min(MAX_WRITER_TOKENS, max(INITIAL_WRITER_TOKENS,
                                           task.get("writer_token_limit", INITIAL_WRITER_TOKENS)))
@@ -323,6 +350,7 @@ def accept_review(queue, task, raw):
         raise TeaserError("This task is not waiting for editorial review.")
     issues = approval_issues(draft, review, [c["id"] for c in task["chunks"]])
     task["reviews"].append(review.model_dump())
+    task.setdefault("review_story_hashes", {})[digest(review)] = digest(task["storysheet"])
     task["feedback"] = issues + review.feedback + [o.feedback for o in review.options if o.feedback]
     if review.edits:
         try:

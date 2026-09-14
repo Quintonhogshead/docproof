@@ -7,7 +7,7 @@ import json
 from docproof.providers import strict_json_schema
 from docproof.providers.base import inlined_json_schema
 from . import SOL_MODEL, SOL_EFFORT
-from .models import (Reading, Storysheet, SourceReview, Review, Draft,
+from .models import (Reading, Storysheet, SourceReview, Review, Draft, BriefReview,
                      digest, draft_issues)
 from . import prompts
 
@@ -94,8 +94,18 @@ def analyze(source_chunks, work, *, runner=None, progress=lambda stage: None, fe
     evidence = evidence_for([f for r in readings for f in r.facts], source_chunks)
     progress("Preparing five teaser angles")
     prompt = prompts.story_prompt([r.model_dump() for r in readings], evidence, feedback)
+    def validate_prepared(story):
+        validate_story(story, source_chunks)
+        progress("Checking that Qwen's writing brief is accurate and spoiler-safe")
+        brief_hash = digest(story.writer_brief)
+        check_prompt = prompts.brief_review_prompt(story.model_dump(), evidence, brief_hash)
+        check = sol(check_prompt, BriefReview, work, "brief-review-" + brief_hash,
+                    runner=runner, attempt=attempt)
+        if check.brief_sha256 != brief_hash or not check.accurate or not check.spoiler_safe:
+            raise ValueError("The public writing brief needs revision before Qwen can receive it: " +
+                             "; ".join(check.feedback))
     story = sol(prompt, Storysheet, work, "story-" + digest(prompt), runner=runner,
-                attempt=attempt, validate=lambda s: validate_story(s, source_chunks))
+                attempt=attempt, validate=validate_prepared)
     return story
 
 
@@ -111,6 +121,14 @@ def validate_story(story, source_chunks):
              "stakes", "genre_and_audience", "voice", "qwen_instructions")):
         raise ValueError("The storysheet is missing an essential editorial field.")
     evidence_for(story.public_facts, source_chunks)
+    if not story.writer_brief.public_setup:
+        raise ValueError("Sol must prepare a separate public-only writing brief.")
+    brief = story.writer_brief
+    if (len(brief.five_angles) != 5 or len(set(brief.five_angles)) != 5 or not brief.public_facts or
+            any(not fact.strip() for fact in brief.public_facts) or
+            any(not getattr(brief, name).strip() for name in ("public_setup", "reader_promise",
+                "central_pressure", "stakes", "genre_and_audience", "voice", "writing_instructions"))):
+        raise ValueError("The public-only writing brief is incomplete.")
 
 
 def review(story, draft, source_chunks, work, *, runner=None,

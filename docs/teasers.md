@@ -14,10 +14,18 @@ editorial approval step.
    before archiving. The queue freezes its complete text and source identity.
 2. The Fly agent sidecar reads every contiguous manuscript portion through
    `gpt-5.6-sol` at `high`, using the existing cloud ChatGPT subscription login.
-   This produces coverage-checked reading notes, then a storysheet and five-angle
-   brief. Large paragraphs and long books are partitioned, never silently cut off.
+   This produces coverage-checked reading notes and a private storysheet. Sol
+   separately prepares a public-only writing brief with safe facts, five angles,
+   tone and general guardrails. Large paragraphs and long books are partitioned,
+   never silently cut off.
 3. The Fly web server calls `Qwen/Qwen3.6-27B` through DeepInfra, using the
    key already stored in DocProof settings. Qwen writes the initial package.
+   Its input is explicitly allowlisted: the public brief, spoiler-safe revision
+   instructions and previously approved copy only. It receives no manuscript
+   passages, private storysheet, ending details, protected-revelation list, raw
+   review feedback or rejected draft. The actual public handoff is recorded for
+   audit. Older tasks without a public brief rebuild it automatically before any
+   further writer call.
 4. Sol checks the exact saved draft against every source portion, then reviews all
    five options and the author guide. Approval is bound to the saved draft hash
    and the complete list of manuscript portions. Sol can directly correct names,
