@@ -125,3 +125,14 @@ def test_old_adjudication_receipts_cannot_resume_under_new_policy(make_book, tmp
     flow.manifest.write_text(json.dumps({"identity": identity, "execution_mode": "fixed", "status": "pending"}))
     with pytest.raises(FixedWorkflowError):
         FixedWorkflow(source, directory, calls=Readers())
+
+
+def test_windows_hold_at_most_max_sites_even_when_the_packet_is_small():
+    from galley.fixed_screening import MAX_SITES
+    sites = [{"id": f"d-{i}", "para_id": "p", "paragraph": "Short.", "source": "Short.",
+              "start": 0, "end": 1, "before": "S", "proposals": []} for i in range(60)]
+    batches = list(windows(sites))
+    assert [len(b) for b in batches] == [MAX_SITES, MAX_SITES, 10]
+    assert [len(b) for b in windows(sites, max_sites=40)] == [40, 20]
+    with pytest.raises(ValueError):
+        list(windows(sites, max_sites=0))

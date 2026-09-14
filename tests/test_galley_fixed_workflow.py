@@ -13,6 +13,12 @@ from galley.fixed_workflow import (ASTRA, FABLE, LUNA, OPUS, SOL, SONNET,
                                    FixedWorkflow, FixedWorkflowError, _candidate)
 
 
+def shared_context(request):
+    """The JSON block every window of a read shares through its system prompt."""
+    from galley.fixed_workflow import SHARED_CONTEXT_MARKER
+    return json.loads(request["system"].split(SHARED_CONTEXT_MARKER, 1)[1])
+
+
 def finding(pid, quote, replacement, category="grammar", *, action="edit", missing=""):
     return {"para_id": pid, "quote": quote, "occurrence": 1,
             "replacement": replacement, "category": category, "action": action,
@@ -221,10 +227,12 @@ def test_frontier_structure_context_uses_each_readers_current_book(make_book, tm
     FixedWorkflow(book, tmp_path / "run", calls=readers).run()
     fable = next(x for x in readers.events if x["stage"] == "fable")
     astra = next(x for x in readers.events if x["stage"] == "astra")
-    assert "The Harbr" in fable["payload"]["structure_context"]["excerpt"]
-    assert "The Harbor" in astra["payload"]["structure_context"]["excerpt"]
-    assert "The Harbr" not in astra["payload"]["structure_context"]["excerpt"]
-    assert astra["payload"]["structure_context"]["complete_inventory"] is False
+    # The excerpt is shared by every window of a read, so it travels in the
+    # system prompt (one cached prefix), never in the per-window payload.
+    assert "structure_context" not in fable["payload"]
+    assert "The Harbr" in fable["system"]
+    assert "The Harbor" in astra["system"] and "The Harbr" not in astra["system"]
+    assert '"structure_context":{' in astra["system"] and '"complete_inventory":false' in astra["system"]
     assert "Do not infer missing entries" in astra["system"]
 
 
@@ -240,7 +248,13 @@ def test_press_prompts_and_focused_evidence_reach_both_final_readers(make_book, 
         assert all(text in request["system"] for text in EDITORIAL_RULES.values())
         assert {s["check"] for s in request["payload"]["focused_sites"]} >= {
             "dialogue_matrix", "serial_comma", "narrative_tense"}
-        assert request["payload"]["paragraph_metadata"]
+        # Constant per-check guidance travels once, in the shared legend; a
+        # plain roman body paragraph has no metadata entry, by the stated rule.
+        assert all("detail" not in s for s in request["payload"]["focused_sites"] if s["check"] == "serial_comma")
+        assert request["payload"]["paragraph_metadata"] == {}
+        assert "entirely known roman" in shared_context(request)["notes"]["paragraph_metadata"]
+        assert shared_context(request)["focused_check_legend"]["serial_comma"]
+        assert "story_sheet" not in request["payload"] and "story_sheet" in shared_context(request)
         assert "reviewed_check_ids" in request["schema"]["required"]
     story = next(r for r in readers.events if r["stage"] == "story_sheet")
     assert "first/last\nparagraph IDs" in story["system"]
@@ -1058,7 +1072,8 @@ def test_walkthrough_prompts_reach_only_the_final_readers_and_their_checks(make_
     assert FINAL_WALKTHROUGH_CHECK in systems["fable_checks_meaning"]
     assert FINAL_WALKTHROUGH_CHECK not in systems.get("typed_screen", "")
     fable = [row for row in readers.events if row["stage"] == "fable"]
-    assert all(row["payload"]["book_map"]["complete_inventory"] is True for row in fable)
+    assert all(shared_context(row)["book_map"]["complete_inventory"] is True for row in fable)
+    assert all("book_map" not in row["payload"] for row in fable)
     assert "usage" in fable[0]["schema"]["properties"]["findings"]["items"]["properties"]["category"]["enum"]
     from galley.fixed_workflow import READ_SCHEMA
     assert "usage" not in READ_SCHEMA["properties"]["findings"]["items"]["properties"]["category"]["enum"]
@@ -1090,7 +1105,7 @@ def test_book_map_lists_headings_and_running_heads_and_header_edits_round_trip(t
     readers = Readers(handler=handler)
     result = FixedWorkflow(source, tmp_path / "map", calls=readers).run()
     assert result["accepted"][header_id] == "CHAPTER 1"
-    book_map = next(row for row in readers.events if row["stage"] == "fable")["payload"]["book_map"]
+    book_map = shared_context(next(row for row in readers.events if row["stage"] == "fable"))["book_map"]
     assert [(h["text"], h["signal"], h["body_paragraphs"]) for h in book_map["headings"]] == [
         ("CHAPTER 2", "style", 2), ("TOP TEN", "caps_line", 1)]
     assert [(h["location"], h["text"]) for h in book_map["headers_footers"]] == [("header", "CHAPTER ONE")]
@@ -1240,3 +1255,106 @@ def test_a_version_2_workspace_requires_a_fresh_run(make_book, tmp_path):
     flow.manifest.write_text(json.dumps(marker))
     with pytest.raises(FixedWorkflowError, match="fresh workspace"):
         FixedWorkflow(source, tmp_path / "v2", calls=object())
+
+
+def test_number_policy_travels_only_with_number_work(make_book, tmp_path):
+    """The 3,500-token number policy heads the number stage, the whole-book
+    readers, and any request that carries a number proposal; screening,
+    checks and comment reviews without one get the editorial brief alone."""
+    from galley.fixed_policy import NUMBER_POLICY
+    from galley.press_prompt import EDITORIAL_RULES
+    book = make_book("We seen teh 20 birds. It are warm.")
+
+    def typed(stage, model, paragraphs, keys):
+        pid, text = next(iter(paragraphs.items()))
+        rows = []
+        if "spelling" in keys:
+            rows.append(_typed_row(pid, text, "teh", "the", "spelling"))
+        if "subject_verb_agreement" in keys and model == SONNET:
+            rows.append(_typed_row(pid, text, "seen", "saw", "subject_verb_agreement"))
+        return rows
+
+    readers = Readers(typed=typed)
+    flow = FixedWorkflow(book, tmp_path / "run", calls=readers)
+    flow.run()
+    systems = {}
+    for row in readers.events:
+        if "system" in row and "user" in row:
+            systems.setdefault(row["stage"], row["system"])
+    assert systems["story_sheet"].startswith(flow.base_policy)
+    assert NUMBER_POLICY not in systems["story_sheet"]
+    assert systems["numbers"].startswith(NUMBER_POLICY)
+    for stage in ("typed_screen", "checks_meaning", "checks_correction"):
+        assert stage in systems, stage
+        assert NUMBER_POLICY not in systems[stage]
+        assert systems[stage].startswith(flow.editorial_policy)
+        assert all(text in systems[stage] for text in EDITORIAL_RULES.values())
+    for stage in ("ensemble_sweep_opus", "ensemble_sweep_sol", "fable", "astra"):
+        assert systems[stage].startswith(NUMBER_POLICY)
+    # A screening or check request that carries a number proposal gets it back.
+    user = json.dumps({"sites": [{"proposals": [{"category": "number_style"}]}]})
+    assert flow._policy_for("typed_screen", user) == flow.policy
+    assert flow._policy_for("checks_correction", json.dumps({"changes": [{"categories": ["currency_style"]}]})) == flow.policy
+    assert flow._policy_for("checks_correction", json.dumps({"changes": [{"categories": ["spelling"]}]})) == flow.editorial_policy
+    assert flow._policy_for("continuity", "{}") == flow.base_policy
+    assert flow.identity["policy_sha256"] == flow.identity["policy_sha256"]
+    # The identity covers every contract, so a change to any of them starts a fresh workspace.
+    assert flow.identity["version"] == "fixed-proofreading-v4"
+
+
+def test_checks_carry_the_categories_of_accepted_corrections(make_book, tmp_path):
+    book = make_book("We seen teh birds.")
+
+    def typed(stage, model, paragraphs, keys):
+        pid, text = next(iter(paragraphs.items()))
+        return [_typed_row(pid, text, "teh", "the", "spelling")] if "spelling" in keys else []
+
+    readers = Readers(typed=typed)
+    FixedWorkflow(book, tmp_path / "run", calls=readers).run()
+    check = next(r for r in readers.events if r["stage"] == "checks_meaning")
+    assert check["payload"]["changes"][0]["categories"] == ["spelling"]
+    assert "categories names the proofreading categories" in check["system"]
+    later = [r for r in readers.events if r["stage"].endswith("_checks_meaning") and r["stage"] != "checks_meaning"]
+    assert not later or all(c["categories"] == [] for r in later for c in r["payload"]["changes"])
+
+
+def test_screening_requests_are_short_windows_with_room_to_answer(make_book, tmp_path):
+    """43-50 sites per window pushed Sonnet past its 12k output ceiling and
+    Luna past complete coverage on the first production book."""
+    book = make_book("He waited, watching the door. " * 3)
+
+    def typed(stage, model, paragraphs, keys):
+        pid, text = next(iter(paragraphs.items()))
+        if model != SONNET or "unnecessary_comma" not in keys:
+            return []
+        # Thirty distinct single-model proposals: every one must be screened.
+        return [{"para_id": pid, "error_type": "unnecessary_comma", "original_text": text,
+                 "corrected_text": text[:i] + "." + text[i + 1:], "occurrence": 1,
+                 "confidence": "high", "explanation": "Site %d" % i}
+                for i, c in enumerate(text) if c in ",." ][:30]
+
+    readers = Readers(typed=typed)
+    FixedWorkflow(book, tmp_path / "run", calls=readers).run()
+    screens = [r for r in readers.events if r["stage"] == "typed_screen"]
+    assert screens
+    assert all(r["max_tokens"] == 16000 for r in screens)
+    assert all(len(r["payload"]["sites"]) <= 25 for r in screens)
+    assert all("at most 25 words" in r["system"] for r in screens)
+
+
+def test_final_readers_see_only_tense_sites_that_read_against_the_baseline(make_book, tmp_path):
+    past = ["She walked to the harbour, waited on the pier, and watched the boats."] * 22
+    book = make_book(*past, "He walks and waits and watches.")
+    readers = Readers()
+    result = FixedWorkflow(book, tmp_path / "run", calls=readers).run()
+    for stage in ("fable", "astra"):
+        rows = [r for r in readers.events if r["stage"] == stage]
+        tense = [s for r in rows for s in r["payload"]["focused_sites"] if s["check"] == "narrative_tense"]
+        assert len(tense) == 1 and tense[0]["quote"].startswith("He walks")
+        assert "past signals=0, present=3" in tense[0]["detail"]
+        assert all("sample" not in p for r in rows for p in r["payload"]["narrative_profile"]["paragraphs"])
+        assert sum(len(r["payload"]["narrative_profile"]["paragraphs"]) for r in rows) == 23
+        assert "(baseline past)" in shared_context(rows[0])["notes"]["focused_sites"]
+    stage = json.loads(Path(next(s["path"] for s in result["stages"] if s["stage"] == "fable")).read_text())
+    assert sum(c["tense_sites_omitted"] for c in stage["evidence"]["coverage"]) == 22
+    assert sum(c["focused_counts"]["narrative_tense"] for c in stage["evidence"]["coverage"]) == 1

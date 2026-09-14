@@ -99,6 +99,49 @@ rejected as `rejected_invalid_proposal`. The Luna meaning and correction checks
 for these stages receive the same widened scope and the verified evidence, so
 an evidenced name reconciliation is not bounced as a fact change.
 
+## What each request is sent
+
+Every request is headed by a contract. The poetry, Story Sheet and continuity
+requests get the bare proofreading contract. The number stage, the whole-book
+readers (Opus, Sol, Fable and Astra, who may raise number errors themselves)
+and any screening, adjudication or check request whose payload carries a
+`number_style` or `currency_style` proposal get the complete number policy.
+Every other request gets the editorial brief alone: on the first production
+book the 3,500-token number policy rode on about 700 screening, check and
+comment-review requests that had no number in question. A check request lists
+the `categories` of the corrections accepted in each changed paragraph, which
+is how a number correction brings its policy along. The workflow identity
+hashes all four contracts.
+
+Everything identical across the windows of one whole-book read — the Story
+Sheet, the `book_map`, the opening-pages `structure_context`, the focused-check
+legend and the notes below — travels once in that read's system prompt, so the
+transport serves it from its prompt cache instead of writing it once per
+window. The per-window payload holds only the owned and context paragraphs,
+comments, focused sites, the narrative profile, citation context and paragraph
+metadata. Focused sites of a check whose guidance is the same everywhere carry
+no per-site `detail`; the legend states it once. `narrative_tense` sites are
+sent only for paragraphs that read against the book's tense baseline or mixed
+(every site is sent when the book has no baseline or fewer than 20 classified
+narration paragraphs); the narrative profile still lists every owned paragraph,
+without its sample text, and each window's coverage records
+`tense_sites_omitted`. `paragraph_metadata` lists only owned paragraphs outside
+the main document body or carrying italic or unknown formatting; an absent
+entry means main-document body text whose formatting is entirely known roman.
+On the first production book the focused sites were the largest part of every
+final-read window, larger than the text being read.
+
+Screening windows hold at most 25 sites, and screening requests may answer
+with up to 16,000 output tokens and are asked for one-sentence reasons: at
+43-50 sites per window Sonnet's answers ran to about 11,000 tokens against a
+12,000 ceiling and Luna dropped IDs from its coverage, and the resulting
+skipped reviews were the only reason that book finished `needs_human`.
+
+The exhaustive `comma_boundary` generator, which the base recipe also leaves
+opted out, is not part of the fixed local checks: on the first production book
+it produced 6,961 screening sites of which 33 were applied, and screening them
+took 48 of the run's 103 minutes.
+
 ## Explicit disagreement gate
 
 Every Opus adjudication request must contain actual, conflicting decisions from
@@ -365,15 +408,35 @@ first driver result is written.
 
 The compulsory local checks belong to fixed recipe version 2; the continuity
 lane, the final walk-through scope, the post-Fable and post-Astra propagation
-passes and the casing sweep belong to version 3. A workspace created by an
-earlier fixed version cannot resume under the new recipe: start a fresh
-workspace so the added checks cover the original manuscript and become part
-of its certification. Existing checkpoints are not silently relabeled as having
-completed checks that were absent from their recipe.
+passes and the casing sweep belong to version 3; the stage-specific contracts,
+shared window context, focused-site and metadata diet, screening caps and the
+removal of the comma-boundary generator belong to version 4. A workspace
+created by an earlier fixed version cannot resume under the new recipe: start a
+fresh workspace so the added checks cover the original manuscript and become
+part of its certification. Existing checkpoints are not silently relabeled as
+having completed checks that were absent from their recipe.
+
+## Measuring a run
+
+```sh
+docproof galley fixed-timeline /path/to/workspace
+```
+
+prints one row per stage, model and effort — attempts, failed attempts, the
+stage's wall-clock span, median and slowest call, input and cached tokens,
+output and thinking tokens, and API spend — in order of first start, with run
+totals, all read from the durable call receipts, budget ledger and transport
+ledgers the run already keeps. `--json` prints the report; `--write` also saves
+`runs/fixed/timeline.json`, which the fixed driver writes after every certified
+delivery. Nothing is written inside `calls/`. The first production book
+(2026-09-14, recipe v2) is the baseline: 1,534 calls in 103 minutes, of which
+Sonnet screening took 48; 24.8 million input-side tokens, 4.25 million output
+tokens, $2.16 of API spend.
 
 The fixed sequence removes supervisory sessions and duplicate number checking.
 Total time, usage, comment counts, and proofreading quality still need a
-same-manuscript comparison before claiming a measured efficiency gain.
+same-manuscript comparison before claiming a measured efficiency gain;
+`galley fixed-timeline` is how the comparison is read.
 
 Grouped dispute responses may be adapted from a complete inventory of nested
 proposal decisions. This requires every exact assigned proposal ID once, no

@@ -458,6 +458,16 @@ def _galley_parser(sub) -> None:
     gv.add_argument("--json", action="store_true",
                     help="also print the machine-readable result to stdout")
 
+    gt = gsub.add_parser(
+        "fixed-timeline",
+        help="per-stage wall-clock, tokens, failures and API spend of a fixed "
+             "proofread, read from its durable call receipts; $0, reads only")
+    gt.add_argument("run", help="a Galley workspace, or its runs/fixed directory")
+    gt.add_argument("--json", action="store_true",
+                    help="print the machine-readable report instead of the table")
+    gt.add_argument("--write", action="store_true",
+                    help="also save timeline.json beside the run's result.json")
+
     gl = gsub.add_parser(
         "letter", help="render the editorial letter and style sheet from a case "
                        "file — a report on the run, no API, no new decisions")

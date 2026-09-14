@@ -61,12 +61,22 @@ def packet(sites):
             "context": {pid: text for pid, text in related.items() if pid not in paragraphs}}
 
 
-def windows(sites, limit=20000):
+# A screening decision is written per site, and the reader thinks per site: at
+# 43-50 sites per window Sonnet's output ran to ~11k tokens against a 12k
+# ceiling and Luna dropped IDs from its coverage. Both readers stayed complete
+# on shorter windows.
+MAX_SITES = 25
+
+
+def windows(sites, limit=20000, max_sites=MAX_SITES):
     """Size actual compact packets; never truncate a long singleton site."""
+    if max_sites < 1:
+        raise ValueError("a screening window holds at least one site")
     batch = []
     for site in sites:
         proposed = batch + [site]
-        if batch and len(json.dumps(packet(proposed), ensure_ascii=False, separators=(",", ":"))) > limit:
+        if batch and (len(proposed) > max_sites or
+                      len(json.dumps(packet(proposed), ensure_ascii=False, separators=(",", ":"))) > limit):
             yield batch
             batch = []
         batch.append(site)

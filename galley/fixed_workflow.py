@@ -17,13 +17,23 @@ from functools import partial
 
 from docproof.utils.files import write_atomic
 
-VERSION = "fixed-proofreading-v3"
+VERSION = "fixed-proofreading-v4"
 SONNET = "claude-sonnet-5"
 LUNA = "gpt-5.6-luna"
 OPUS = "claude-opus-5"
 SOL = "gpt-5.6-sol"
 FABLE = "claude-fable-5-1"
 ASTRA = "gpt-6-astra"
+# Readers of whole windows of the book may raise number errors themselves, so
+# they keep the complete number policy; screening, checks and comment reviews
+# see it only when a number proposal is actually in front of them.
+WHOLE_BOOK_STAGES = frozenset({"ensemble_sweep_opus", "ensemble_sweep_sol", "fable", "astra"})
+# Below this many classified narration paragraphs a tense baseline is noise, and
+# every narrative-tense site is sent rather than only the deviating ones.
+TENSE_BASELINE_FLOOR = 20
+# Introduces the JSON block of context shared by every window of one read,
+# appended to that read's system prompt.
+SHARED_CONTEXT_MARKER = "\n\nSHARED CONTEXT, identical for every window of this read (JSON): "
 
 
 class FixedWorkflowError(ValueError):
@@ -260,6 +270,13 @@ def _candidate(row, texts, model, *, query_types=(), format_types=None):
     return result
 
 
+def _plain_body(meta):
+    """Main-document body text whose formatting is entirely known roman: the
+    default the final readers may assume when a paragraph has no metadata."""
+    return (meta.get("location") == "body" and str(meta.get("part", "")).endswith("document.xml")
+            and all(r["italic"] is False for r in meta["formatting"]))
+
+
 def _overlaps(a, b):
     if a["para_id"] != b["para_id"]:
         return False
@@ -304,13 +321,18 @@ class FixedWorkflow:
         self.base_policy = PROOFREADING_POLICY
         # NUMBER_POLICY already includes the shared proofreading contract.
         self.policy = NUMBER_POLICY + "\n\n" + editorial_policy()
+        # The same brief without the 3,500-token number policy, for requests
+        # with no number in question (see _policy_for).
+        self.editorial_policy = PROOFREADING_POLICY + "\n\n" + editorial_policy()
         # Typed readers already receive their own detailed category prompts.
         # Share only the cross-cutting guards here, not the whole final-read or
         # bespoke number instructions on every narrow detector request.
         self.typed_policy = PROOFREADING_POLICY + "\n\n" + "\n\n".join(
             EDITORIAL_RULES[key] for key in ("scope", "authority", "punctuation"))
         self.identity = {"version": VERSION, "source_sha256": sha256_file(self.source),
-                         "policy_sha256": _hash(self.policy), "recipe": workflow_plan(),
+                         "policy_sha256": _hash({"base": self.base_policy, "typed": self.typed_policy,
+                                                 "editorial": self.editorial_policy, "numbers": self.policy}),
+                         "recipe": workflow_plan(),
                          "configuration": self.cfg.model_dump(mode="json")}
         self.identity["press_prompt_sha256"] = policy_identity()
         self.identity["adjudication_policy"] = "explicit-sonnet-luna-disagreements-v1"
@@ -342,6 +364,9 @@ class FixedWorkflow:
         self.local_seen = set()
         self.prose_prepared = None
         self.source_marks = {}
+        # Categories of the corrections applied to each paragraph since its
+        # last check, so a check request can carry the policy they need.
+        self.pending_categories = {}
 
     @staticmethod
     def _save(path, value):
@@ -387,14 +412,29 @@ class FixedWorkflow:
             from galley.fixed_screening import is_pair_disagreement
             if not payload.get("sites") or not all(is_pair_disagreement(s) for s in payload["sites"]):
                 raise FixedWorkflowError("Opus adjudication requires explicit Sonnet and Luna disagreement at every site")
-        policy = self.base_policy if stage in {"poetry", "poetry_sections", "story_sheet", "continuity"} else self.policy
+        user = _json(payload)
+        policy = self._policy_for(stage, user)
         result = self.scheduler.run(model, partial(self.calls.ask, stage, model=model, system=policy + "\n\n" + system,
-                              user=_json(payload), schema=schema, schema_name="galley_fixed",
+                              user=user, schema=schema, schema_name="galley_fixed",
                               effort=effort, max_tokens=max_tokens, coverage=_call_coverage(payload, schema)))
         if "_skipped_read" in result:
             self.history.append({"stage": stage, "skipped_read": result["_skipped_read"]})
             return None
         return result
+
+    def _policy_for(self, stage, user):
+        """Which contract heads a request. The story-sheet stages get the bare
+        proofreading contract. The number stage, the whole-book readers and any
+        request whose payload carries a number or currency proposal get the
+        complete number policy. Everything else gets the editorial brief alone:
+        on the first production book the number policy rode on about 700
+        screening, check and review requests that had no number in question."""
+        if stage in {"poetry", "poetry_sections", "story_sheet", "continuity"}:
+            return self.base_policy
+        if (stage.startswith("numbers") or stage in WHOLE_BOOK_STAGES
+                or '"number_style"' in user or '"currency_style"' in user):
+            return self.policy
+        return self.editorial_policy
 
     def _classify(self):
         from galley.fixed_policy import poetry_samples
@@ -617,8 +657,9 @@ class FixedWorkflow:
             "the site's before span and preserves all unchanged text within it. Never include text outside that span. "
             "For a sole formatting proposal, apply retains that proposed formatting and must leave before unchanged. "
             "Query only a real proofreading problem requiring specific missing author knowledge. "
-            "Judge the text independently; another reader or a local flag is not proof of an error.",
-            {"story_sheet": self.context, **packet(batch)}, DECISIONS))
+            "Judge the text independently; another reader or a local flag is not proof of an error. "
+            "reason is one short sentence of at most 25 words; leave replacement, question and missing_knowledge empty unless the action needs them.",
+            {"story_sheet": self.context, **packet(batch)}, DECISIONS, max_tokens=16000))
             for batch in batches for model in PAIR]
         answers = iter(self.scheduler.map(jobs))
         agreed, disputed = {}, []
@@ -882,6 +923,7 @@ class FixedWorkflow:
                 if xml_safe(row["replacement"]) != row["replacement"]:
                     raise FixedWorkflowError("Correction contains unsupported control characters")
                 self.current[pid] = self.current[pid][:lo] + row["replacement"] + self.current[pid][hi:]
+            self.pending_categories.setdefault(pid, set()).add(row["category"])
             self.history.append({"stage": stage, "applied": row})
         return before
 
@@ -945,7 +987,7 @@ class FixedWorkflow:
         snapshot = dict(self.current if texts is None else texts)
         keys = list(snapshot) if ids is None else list(ids)
         proposals, decisions, coverage = [], [], []
-        structure, structure_ids = self._structure_context(snapshot) if stage in {"fable", "astra"} else (None, set())
+        structure = self._structure_context(snapshot)[0] if stage in {"fable", "astra"} else None
         frontier = stage in {"fable", "astra"}
         focused, citations, formatting, parts = None, None, {}, {}
         book = None
@@ -959,6 +1001,30 @@ class FixedWorkflow:
             formatting = current_formatting(self.original, snapshot, self.source_marks, self.formats)
             parts = {p.para_id: {"part": p.part, "location": p.location} for p in paragraphs}
             book = book_map(_paragraphs(self.prose_prepared, snapshot, set()), self.cfg.skip.is_sweep_only)
+        # Everything identical across the windows of one read goes into the
+        # system prompt, so the transport can serve it from its prompt cache
+        # instead of writing it once per window; the per-window payload holds
+        # only the owned text and the evidence that belongs to it.
+        shared = {"story_sheet": self.context}
+        deviating = None
+        if frontier:
+            from galley.press_checks import CHECK_LEGEND
+            profile = focused["tense_profile"]
+            if profile["baseline"] != "unclear" and profile["narration_paragraphs"] >= TENSE_BASELINE_FLOOR:
+                deviating = {r["para_id"] for r in profile["paragraphs"]
+                             if r["verdict"] not in {"none", profile["baseline"]}}
+            shared.update(book_map=book, focused_check_legend=CHECK_LEGEND, notes={
+                "focused_sites": ("Every assigned site must be acknowledged in reviewed_check_ids. A site without "
+                                  "detail follows focused_check_legend for its check. narrative_tense sites are "
+                                  "sent only for paragraphs reading against the book's baseline or mixed"
+                                  + ("" if deviating is None else
+                                     f" (baseline {profile['baseline']}); narrative_profile still profiles every owned paragraph.")),
+                "paragraph_metadata": ("Lists only owned paragraphs outside the main document body or carrying "
+                                       "italic or unknown formatting. An absent entry is main-document body text "
+                                       "whose formatting is entirely known roman.")})
+            if structure is not None:
+                shared["structure_context"] = structure
+        shared_text = SHARED_CONTEXT_MARKER + _json(shared)
         jobs, windows = [], []
         order = list(snapshot)
         positions = {pid: i for i, pid in enumerate(order)}
@@ -973,38 +1039,45 @@ class FixedWorkflow:
             scope = ("Inspect ONLY genuinely broken sentences in the owned paragraphs. Repair a missing, garbled, or syntactically broken sentence only when its intended meaning is clear. Do not perform general spelling, punctuation, number styling, copyediting, or a fresh error sweep. Every edit must have category broken_sentence; only an actual unrepairable broken sentence may yield an author_question. "
                      if stage == "broken_repair" else
                      "Read EVERY owned paragraph, including headings and short passages, for clear proofreading errors only. ")
-            payload = {"story_sheet": self.context, "paragraphs": window,
+            payload = {"paragraphs": window,
                        "context": {k: snapshot[k] for k in order if k in context_ids},
                        "poetry_ids": sorted(self.poetry_ids & set(owned)), "comments": questions}
-            assigned = []
+            assigned, omitted = [], 0
             if frontier:
                 scope += FRONTIER_TASK + FINAL_WALKTHROUGH
-                payload["book_map"] = book
-                assigned = [s for s in focused["sites"] if s["para_id"] in owned]
-                profile = focused["tense_profile"]
+                for s in focused["sites"]:
+                    if s["para_id"] not in owned:
+                        continue
+                    if s["check"] == "narrative_tense" and deviating is not None and s["para_id"] not in deviating:
+                        omitted += 1
+                        continue
+                    assigned.append(s)
                 payload["focused_sites"] = assigned
                 payload["narrative_profile"] = {
                     **{k: v for k, v in profile.items() if k not in {"paragraphs", "runs"}},
-                    "paragraphs": [p for p in profile["paragraphs"] if p["para_id"] in owned],
+                    "paragraphs": [{k: v for k, v in p.items() if k != "sample"}
+                                   for p in profile["paragraphs"] if p["para_id"] in owned],
                     "runs": [r for r in profile["runs"] if set(r["para_ids"]) & set(owned)],
                     "status": "heuristic_evidence_only"}
                 if any(p["id"] in owned and (p["reference_section"] or p["citation_or_pointer"])
                        for p in citations["paragraphs"]):
                     payload["citation_context"] = citations
-                payload["paragraph_metadata"] = {pid: {**parts.get(pid, {}),
-                    "formatting": formatting[pid]} for pid in owned}
-            if structure is not None and structure_ids.intersection(owned):
-                payload["structure_context"] = structure
+                payload["paragraph_metadata"] = {}
+                for pid in owned:
+                    meta = {**parts.get(pid, {}), "formatting": formatting[pid]}
+                    if not _plain_body(meta):
+                        payload["paragraph_metadata"][pid] = meta
+            if structure is not None:
                 scope += ("The read-only structure_context is a bounded opening-pages excerpt of the CURRENT book, not a complete inventory (book_map is). "
                           "Use it to compare clear contents/body wording or numbering errors only when both copies are present. "
                           "Do not infer missing entries from this excerpt; ignore page numbers, legitimate shortened titles, "
                           "and capitalization or punctuation preferences. Findings still belong only to owned paragraphs. ")
-            windows.append((owned, questions, assigned))
+            windows.append((owned, questions, assigned, omitted))
             jobs.append((model, partial(self._ask, stage, model,
-                scope + "Context paragraphs are read-only. Preserve poetry except demonstrable misspellings. Return reviewed_ids for all owned paragraphs. For EVERY assigned comment explicitly drop, retain, or replace it: answer from the book where possible, remove false/stale/duplicate/style concerns, and retain only specific questions requiring author knowledge. Retained comments must use an exact contextual quote that occurs only once in its paragraph. To resolve with an edit return the edit plus a drop decision. Do not invent or omit comment IDs. New questions require missing_knowledge. needs_human means substantive unresolved damage/meaning beyond a proofread, never an operational failure. Findings must quote their exact current paragraph. Never retype clean paragraphs.",
+                scope + "Context paragraphs are read-only. Preserve poetry except demonstrable misspellings. Return reviewed_ids for all owned paragraphs. For EVERY assigned comment explicitly drop, retain, or replace it: answer from the book where possible, remove false/stale/duplicate/style concerns, and retain only specific questions requiring author knowledge. Retained comments must use an exact contextual quote that occurs only once in its paragraph. To resolve with an edit return the edit plus a drop decision. Do not invent or omit comment IDs. New questions require missing_knowledge. needs_human means substantive unresolved damage/meaning beyond a proofread, never an operational failure. Findings must quote their exact current paragraph. Never retype clean paragraphs." + shared_text,
                 payload,
                 FRONTIER_SCHEMA if frontier else READ_SCHEMA, effort="high", max_tokens=16000)))
-        for (owned, questions, assigned), result in zip(windows, self.scheduler.map(jobs)):
+        for (owned, questions, assigned, omitted), result in zip(windows, self.scheduler.map(jobs)):
             if result is None:
                 decisions.extend(self._drop_unreviewed(questions))
                 coverage.append({"paragraph_ids": [], "comment_ids": [], "status": "skipped",
@@ -1038,6 +1111,7 @@ class FixedWorkflow:
                 coverage[-1]["focused_check_ids"] = [s["id"] for s in assigned]
                 coverage[-1]["focused_counts"] = {key: sum(s["check"] == key for s in assigned)
                                                   for key in focused["counts"]}
+                coverage[-1]["tense_sites_omitted"] = omitted
         return proposals, decisions, coverage
 
     def _comments(self, decisions, stage, *, before=None, model=None):
@@ -1105,11 +1179,13 @@ class FixedWorkflow:
         pending_formats = list(self.formats[format_start:])
         evidence = evidence or {}
         changed = [{"id": pid, "source": self.original[pid], "before": before[pid], "after": text,
+                    "categories": sorted(self.pending_categories.get(pid, ())),
                     "format_proposals": [f for f in pending_formats if f["para_id"] == pid],
                     **({"evidence": [{**e, "text": self.current.get(e["para_id"], "")} for e in evidence[pid]]}
                        if evidence.get(pid) else {})}
                    for pid, text in self.current.items() if pid not in self.poetry_ids
                    and (text != before[pid] or any(f["para_id"] == pid for f in pending_formats))]
+        self.pending_categories = {}
         windows = list(_windows(changed, 16000))
         def review(window):
             # Check chains depend on their own paragraph's adjudication, not
@@ -1154,7 +1230,8 @@ class FixedWorkflow:
                 result = self._ask(stage + "_" + kind, LUNA,
                     ("Judge whether ALL changes preserve meaning, facts, voice, deliberate fragments and dialect. " if kind == "meaning" else
                      "Judge whether ALL text AND formatting changes fix clear proofreading errors without new errors, stylistic rewriting, unnecessary changes or violations of house rules. ") +
-                    "Return one verdict per paragraph id. Approve only when the complete after paragraph is justified; otherwise reject. No new corrections or author comments. " + rider,
+                    "Return one verdict per paragraph id. Approve only when the complete after paragraph is justified; otherwise reject. No new corrections or author comments. "
+                    "categories names the proofreading categories of the corrections accepted in that paragraph. " + rider,
                     {"story_sheet": self.context, "changes": active}, CHECK_SCHEMA)
                 if result is None:
                     for row in active:
@@ -1399,6 +1476,12 @@ def run_fixed_driver(driver):
                     completed = flow.run()
                 package = package_result(driver, completed)
                 validate_delivery_package(package)
+                try:
+                    from galley.fixed_timeline import write_timeline
+                    write_timeline(directory)
+                except Exception as exc:                          # noqa: BLE001
+                    # A diagnostic never blocks a certified delivery.
+                    driver._progress("timeline_failed", reason=str(exc))
                 result.phases = [PhaseResult(row["stage"], 0, Path(row["path"])) for row in completed["stages"]]
                 result.handoff = [Path(x["path"]) for x in package["artifacts"]]
                 state = RunStateMachine.load(driver.workspace / "state.json")

@@ -1471,7 +1471,21 @@ def cmd_galley(args) -> int:
             "agent": _galley_agent,
             "journal": _galley_journal,
             "plan-line": _galley_plan_line,
+            "fixed-timeline": _galley_fixed_timeline,
             "outcome": _galley_outcome}[args.galley_cmd](args)
+
+
+def _galley_fixed_timeline(args) -> int:
+    from galley.fixed_timeline import render, summarize, write_timeline
+    try:
+        report = summarize(args.run)
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if args.write:
+        write_timeline(args.run)
+    print(json.dumps(report, indent=2, sort_keys=True) if args.json else render(report))
+    return 0
 
 
 def _galley_astra_review(args) -> int:
