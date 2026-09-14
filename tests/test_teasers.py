@@ -237,6 +237,59 @@ def test_delivery_requires_review_and_is_idempotent(queued, story, draft, monkey
     assert calls == ["upload"]
 
 
+def test_google_upload_recovers_lost_completion_without_second_document(queued, tmp_path):
+    from app.teaser_delivery import resume_import
+    queue, _, task = queued
+    path = tmp_path / "upload.docx"
+    path.write_bytes(b"document bytes")
+    requests = []
+    session = "https://www.googleapis.com/upload/drive/v3/files?upload_id=test"
+
+    def opener(request):
+        requests.append(request)
+        if request.method == "POST":
+            response = io.BytesIO(b"")
+            response.headers = {"Location": session}
+            return response
+        # The session must be durable before sending any document bytes.
+        assert queue.get(task["id"])["upload_session"] == session
+        if request.data:
+            raise TimeoutError("Google accepted the bytes but the reply was lost")
+        return io.BytesIO(b'{"id":"one-native-doc"}')
+
+    with pytest.raises(Exception, match="reply was lost"):
+        resume_import(queue, task, "google", "folder", path, opener=opener)
+    restored = queue.get(task["id"])
+    assert resume_import(queue, restored, "google", "folder", path, opener=opener) == "one-native-doc"
+    assert [request.method for request in requests] == ["POST", "PUT", "PUT"]
+    assert requests[-1].get_header("Content-range") == "bytes */14"
+
+
+def test_google_upload_resumes_remaining_bytes(queued, tmp_path):
+    from email.message import Message
+    from urllib.error import HTTPError
+    from app.teaser_delivery import resume_import
+    queue, _, task = queued
+    path = tmp_path / "upload.docx"
+    path.write_bytes(b"abcdefghij")
+    task["upload_session"] = "https://www.googleapis.com/upload/drive/v3/files?upload_id=test"
+    queue.save(task)
+    requests = []
+
+    def opener(request):
+        requests.append(request)
+        if not request.data:
+            headers = Message()
+            headers["Range"] = "bytes=0-3"
+            raise HTTPError(request.full_url, 308, "Resume Incomplete", headers, io.BytesIO())
+        assert request.data == b"efghij"
+        assert request.get_header("Content-range") == "bytes 4-9/10"
+        return io.BytesIO(b'{"id":"one-native-doc"}')
+
+    assert resume_import(queue, task, "google", "folder", path, opener=opener) == "one-native-doc"
+    assert len(requests) == 2
+
+
 def test_worker_path_authenticates_and_settings_stay_private(tmp_path, monkeypatch):
     monkeypatch.setenv("DOCPROOF_AGENT_TOKEN", "secret-long-enough-for-the-agent-gate")
     app = create_app(tmp_path, start_runner=False, web=True, session_secret="a-session-secret", https_only=False)
