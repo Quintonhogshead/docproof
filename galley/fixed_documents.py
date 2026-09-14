@@ -186,6 +186,11 @@ _LOCAL_EVIDENCE_VERSIONS = {
     "fixed-proofreading-v2": {"typed": "initial", "ensemble_sweep": "completion"},
     "fixed-proofreading-v3": {"typed": "initial", "ensemble_sweep": "completion",
                               "fable": "completion_fable", "astra": "completion_astra"},
+    # v4 changes what the readers are sent (stage-specific policy, shared
+    # window context, focused-site and metadata diet, no comma_boundary
+    # generator); its local evidence is v3's.
+    "fixed-proofreading-v4": {"typed": "initial", "ensemble_sweep": "completion",
+                              "fable": "completion_fable", "astra": "completion_astra"},
 }
 
 

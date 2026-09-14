@@ -42,11 +42,14 @@ clear accidental duplication, not because the author's diction repeats.
 """
 
 # The dedicated number stage inventories these two categories more broadly
-# than the older local generators. Every other available local generator runs;
-# stylistic measurements are recorded separately from proofreading candidates.
+# than the older local generators. Every other available local generator runs
+# except the exhaustive comma-boundary sweep, which the base recipe also leaves
+# opted out: on the first production book it produced 6,961 screening sites of
+# which 33 were applied (0.5%), and that screening alone took 48 of the run's
+# 103 minutes. Stylistic measurements are recorded separately from candidates.
+EXCLUDED_LOCAL_TYPES = frozenset({"number_style", "currency_style", "comma_boundary"})
 LOCAL_CANDIDATE_TYPES = tuple(
-    key for key in INITIAL_CANDIDATE_TYPES
-    if key not in {"number_style", "currency_style"})
+    key for key in INITIAL_CANDIDATE_TYPES if key not in EXCLUDED_LOCAL_TYPES)
 DIAGNOSTIC_ONLY_TYPES = frozenset({"word_echo", "reading_level"})
 
 
@@ -344,5 +347,6 @@ def poetry_samples(paragraphs: Mapping[str, str], count: int = 6,
     return result
 
 
-__all__ = ["configuration", "NUMBER_POLICY", "PROOFREADING_POLICY",
+__all__ = ["configuration", "EXCLUDED_LOCAL_TYPES", "LOCAL_CANDIDATE_TYPES",
+           "NUMBER_POLICY", "PROOFREADING_POLICY",
            "extract_numbers", "poetry_samples"]

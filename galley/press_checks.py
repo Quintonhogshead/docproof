@@ -13,18 +13,32 @@ import re
 _SEAM = re.compile(r"(?<![\w-])([A-Za-z][a-z]+)-([a-z]{2,})(?![\w-])")
 
 
+# Instructions that are the same for every site of a check are sent once, in
+# the readers' shared system prompt, instead of once per site: on a novel the
+# focused sites were the largest part of every final-read window.
+CHECK_LEGEND = {
+    "serial_comma": "A comma precedes this conjunction in the clause; judge true list versus non-list.",
+    "quotation_integrity": "Check neighbouring paragraphs and multi-paragraph speech before changing quotes.",
+    "narrative_tense": ("Narration-only heuristic on a paragraph whose tense reads against the book's "
+                        "baseline or mixed; detail gives its signal counts. Not a verdict on authorial intent."),
+}
+
+
 def focused_checks(paragraphs, *, knows=None):
     """`knows(word) -> bool | None` is the spelling dictionary; without it the
-    seam-hyphen check is skipped and its count reads 0."""
+    seam-hyphen check is skipped and its count reads 0. Sites of a check listed
+    in CHECK_LEGEND carry no per-site `detail` unless it varies by site."""
     from docproof.tensecheck import profile
     from docproof.candidate_generators import _quote_candidates
     from docproof.sweeps import _dialogue_tag_re, REPORTING_VERBS
 
     sites, matrix = [], Counter()
     words = Counter(w.casefold() for p in paragraphs for w in re.findall(r"[A-Za-z]+", p.text))
-    def site(kind, p, start, end, detail):
+    def site(kind, p, start, end, detail=None):
         body = {"check": kind, "para_id": p.para_id, "start": start, "end": end,
-                "quote": p.text[start:end], "detail": detail}
+                "quote": p.text[start:end]}
+        if detail is not None:
+            body["detail"] = detail
         body["id"] = "press-" + hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:20]
         sites.append(body)
 
@@ -45,13 +59,11 @@ def focused_checks(paragraphs, *, knows=None):
         for m in re.finditer(r"\b(?:and|or|nor)\b", p.text, re.I):
             boundary = max(p.text.rfind(mark, 0, m.start()) for mark in ".!?;\n") + 1
             if "," in p.text[boundary:m.start()]:
-                site("serial_comma", p, m.start(), m.end(),
-                     "A comma precedes this conjunction in the clause; judge true list versus non-list.")
+                site("serial_comma", p, m.start(), m.end())
         for c in _quote_candidates(p):
             a = c.anchors[0]
             if a.start_offset is not None and a.end_offset is not None:
-                site("quotation_integrity", p, a.start_offset, a.end_offset,
-                     "Check neighbouring paragraphs and multi-paragraph speech before changing quotes.")
+                site("quotation_integrity", p, a.start_offset, a.end_offset)
         if knows is not None:
             for m in _SEAM.finditer(p.text):
                 left, right = m.group(1), m.group(2)
@@ -77,7 +89,7 @@ def focused_checks(paragraphs, *, knows=None):
     for row in tense["paragraphs"]:
         p = by_id[row["para_id"]]
         site("narrative_tense", p, 0, min(120, len(p.text)),
-             f"Narration-only heuristic: {row['verdict']}; past signals={row['past']}, present={row['present']}. Not a verdict on authorial intent.")
+             f"{row['verdict']}; past signals={row['past']}, present={row['present']}")
     counts = dict(Counter(s["check"] for s in sites))
     for name in ("dialogue_matrix", "serial_comma", "quotation_integrity", "narrative_tense", "seam_hyphen"):
         counts.setdefault(name, 0)

@@ -73,7 +73,10 @@ def test_local_inventory_includes_grammar_and_comma_floor_but_separates_style():
     cfg = configuration()
     assert cfg.languagetool.enabled and cfg.consistency.enabled
     assert cfg.candidate_screening.candidate_types == LOCAL_CANDIDATE_TYPES
-    assert {"grammar", "comma_boundary", "compound_sentence_comma", "homophone",
+    # The exhaustive comma sweep stays out: 33 applied of 6,961 screened sites
+    # on the first production book, at half the run's wall-clock.
+    assert "comma_boundary" not in LOCAL_CANDIDATE_TYPES
+    assert {"grammar", "compound_sentence_comma", "homophone",
             "heading_sequence", "list_punctuation", "term_consistency",
             "word_echo"} <= set(LOCAL_CANDIDATE_TYPES)
     assert not {"number_style", "currency_style"} & set(LOCAL_CANDIDATE_TYPES)
