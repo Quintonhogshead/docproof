@@ -19,6 +19,20 @@ do not expose private deliberation. Do not invent evidence or claim unavailable 
 """
 
 
+ORIENTATION_RULE = """
+Treat EACH teaser as the only copy a new reader will see, without its angle label,
+book title, optional hook, other options or guide. Naturally introduce each person,
+place, object, institution or title the copy uses: enough role, relationship or
+meaning on first mention, and enough connection to understand why it matters to
+this conflict. A name or title alone is not an introduction. Keep antecedents and
+causal transitions clear; the closing pressure must grow from established elements.
+This applies to elements used in that option, not every detail in the manuscript.
+Use a short role or description, or omit an unnecessary name, instead of adding a
+cast list or glossary. Supply only source-supported, spoiler-safe context; if a
+connection is protected, use a public description or omit it rather than reveal it.
+"""
+
+
 def reading_prompt(chunk):
     return SOURCE_RULE + """
 Read this contiguous portion of a manuscript. Later a separate synthesis sees ALL
@@ -32,7 +46,7 @@ Return this chunk's actual ID and first/last paragraph IDs.
 
 
 def story_prompt(readings, evidence, feedback=None):
-    return SOURCE_RULE + standard() + """
+    return SOURCE_RULE + standard() + ORIENTATION_RULE + """
 YOUR ROLE IN THIS STAGE: senior copywriter with full editorial authority. The
 entire manuscript is supplied below, either directly as ORIGINAL EVIDENCE for
 a single portion, or through ordered readings with original cited passages.
@@ -79,6 +93,10 @@ Do not add, omit, infer, intensify, explain, embellish or correct any story clai
 Preserve every name and its spelling, number, duration, age, relationship, goal,
 qualification, uncertainty, negation, causal link and unresolved outcome. Preserve
 each option's angle, emphasis, progression, paragraph count and paragraph order.
+Preserve first-mention introductions and the phrases explaining who or what an
+element is, its relationship to the central person and why it matters. Do not
+shorten an introduced role or object to a bare name or title, or remove connective
+context. Each option must retain its own introductions and clear antecedents.
 Never turn an offer into acceptance, a request into a deadline, a possibility into
 a fact, an intention into an event, or a distance into an object's length.
 Keep a phrase unchanged when rephrasing it would risk changing its meaning.
@@ -100,13 +118,15 @@ SOL'S FINISHED COPY:\n""" + data(author_copy)
 
 
 def brief_review_prompt(story, evidence, brief_hash):
-    return SOURCE_RULE + """
+    return SOURCE_RULE + ORIENTATION_RULE + """
 Check writer_brief.author_copy, the COMPLETE finished public package, before it leaves Sol.
-You are its final copy editor: directly fix localized factual and spoiler errors
+You are its final copy editor: directly fix localized factual, spoiler and clarity errors
 with exact replacements in edits. Do not send a whole package back for rewriting
 when a few specific corrections will resolve the problems. Preserve sound copy.
 Only author_copy goes to Qwen. Treat all other storysheet fields as private context,
 and ground corrections in the supplied original evidence.
+Read each option independently and repair missing introductions or connections
+through the same exact edits, using brief, natural, source-supported context.
 Compare it with the source evidence and private full-book account. It must give
 Qwen accurate, publication-ready copy without any ending details, protected revelations,
 late developments, or lists of what is withheld. 'Do not reveal [actual ending]'
@@ -129,7 +149,7 @@ receive a separate final review against the whole source before publication.
 
 
 def revise_brief_prompt(story, previous, feedback, evidence):
-    return SOURCE_RULE + """
+    return SOURCE_RULE + ORIENTATION_RULE + """
 Correct the COMPLETE finished copy in writer_brief.author_copy using the PRIVATE
 editorial findings below. Resolve the content problems yourself, sentence by
 sentence; do not delegate any editorial or factual choices to Qwen. Return a full
@@ -139,8 +159,8 @@ The manuscript evidence outranks both the previous brief and reviewer assertions
 resolve disagreements carefully. Avoid copying a dubious phrase just because it
 appeared in the previous brief. Do not turn a request or intention into a deadline,
 completed action or committed outcome. Give positive, precise directions.
-Every field of your result will go to Qwen. Include no ending details, later
-developments, actual protected revelations, rejected teaser passages, or private
+Only author_copy goes to Qwen; keep every WriterBrief field public-safe. Include no
+ending details, later developments, actual protected revelations, rejected teaser passages, or private
 feedback. Do not name a spoiler while instructing Qwen to remove it. Translate such
 findings into general instructions to leave the relevant outcome unresolved.
 The author_copy must be ready for publication before it is rephrased.
@@ -161,7 +181,7 @@ Do not rewrite any copy. Return the supplied draft hash and chunk ID exactly.
 
 
 def review_prompt(story, draft, source_reviews, issues, draft_hash, source_chunks=None):
-    return SOURCE_RULE + standard() + """
+    return SOURCE_RULE + standard() + ORIENTATION_RULE + """
 FINAL APPROVAL STAGE. Review the exact saved package below. Every original manuscript
 portion is covered below: a single-portion manuscript is supplied directly in
 original_source; for longer books, reconcile ALL source reviews. Use that source
@@ -174,6 +194,10 @@ Check all five teasers separately for accuracy, spoiler safety, clarity, faithfu
 voice, and a meaningfully distinct angle. Compare each to the actual whole-book
 reader promise. Check optional hooks, editorial note, elements, best practices and
 modification checklist for factual fidelity, usefulness and spoiler safety too.
+Check first mentions and connections even when the same gap exists in Sol's
+baseline. A reader should wonder what happens next, not who a named person is or
+what an unexplained title means. Repair localized gaps in this same editing pass;
+set an option's clear=false only if a material clarity problem remains after edits.
 All deterministic issues below must be resolved before approval. Recommend the
 strongest option by number. For a small localized error, directly propose an exact
 replacement in edits: a name, short factual phrase, or one sentence. Do not rewrite

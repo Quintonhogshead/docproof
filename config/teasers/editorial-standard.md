@@ -147,6 +147,10 @@ THE CENTRAL PRESSURE
 
 Establish enough character and circumstance to make the main problem meaningful. A biography is unnecessary. Select the trait, role, desire, or vulnerability that changes how the reader understands the conflict.
 
+Introduce the elements used in EACH teaser as though the reader will see that option alone, without its angle label, book title, optional hook, other options, or guide. On first mention, make each necessary person, place, object, institution, or title intelligible through a short role, relationship, or description. Connect it naturally to the central situation so the reader understands why it matters. A bare name or impressive title does not establish that connection. For example, when supported by the manuscript, “her brother Finn wants to sell the family's passenger ferry, Lark” introduces both the relationship and the boat's place in the conflict.
+
+Do this for the elements the option actually uses, not every character or detail in the book. Prefer an ordinary role or description when the name adds no value. Avoid repeated explanatory labels, a cast list, a glossary, or a background dump. Use only source-supported, spoiler-safe context; when an identity or connection is protected, use a public description or omit the element. Never invent an explanation to make the copy flow.
+
 Connect the disruption to what the character does next. Favor cause and consequence over a catalog of events. “This happens, forcing this response, which creates this difficulty” is usually more useful than listing several exciting ingredients.
 
 Keep the narrative center clear. Introducing a second important person should deepen the central situation, not require the reader to start understanding a different book halfway through the copy.
@@ -220,7 +224,7 @@ First evaluate truthfulness, spoiler safety, and whether each draft promises the
 
 Then compare the viable drafts for clarity, specificity, emotional interest, tonal fit, causal progression, and strength of the final unresolved pressure. Choose the strongest overall version, not the one with the most dramatic individual sentence.
 
-Revise the chosen draft for a reader who has never encountered the manuscript. Remove references that make sense only because you already know the story. Make pronouns, motivations, relationships, and cause-and-effect connections unambiguous where they need to be.
+Revise every option for a reader who has never encountered the manuscript. Remove references that make sense only because you already know the story. Make pronouns, motivations, relationships, and cause-and-effect connections unambiguous where they need to be.
 
 Revise for compression. Cut sentences that only repeat the premise, explain background without increasing interest, praise the book, or describe a theme already embodied in the situation. Do not remove the connective information that makes the copy understandable.
 
@@ -240,6 +244,8 @@ Check implications, not just literal claims. Copy can be technically true while 
 Run two distinct reader tests. For a first-time reader, is the premise understandable and the unresolved attraction specific? For someone who has finished the manuscript, does this feel like an honest invitation to the same book?
 
 Ask whether the reader's remaining questions concern what happens next and how the central pressure will be resolved, rather than basic confusion about who these people are or what the sentences mean.
+
+Read each option independently. At every first mention, verify that the reader can tell who or what the element is and understand its connection when it drives the conflict. Check that pronouns have clear antecedents and the closing pressure does not depend on an unexplained new name, title, object, or force. Repair missing context in the existing editing pass, preserving sound copy.
 
 Ask whether the ending is compelling without depending on exaggerated stakes, an invented choice, or a spoiler. A final question is optional. “Will they succeed?” is not automatically an effective ending.
 
@@ -262,7 +268,7 @@ C. EDITORIAL NOTE
 Aim for 60–100 words (180 maximum): explain the reader promise and how the options differ. Discuss only setup already present in the teasers. Do not enumerate withheld events or describe the actual resolution, even to explain why it is withheld. State real source limitations without inventing facts. Do not include scores, internal model workflow, private deliberation, or sales claims.
 
 D. TEASER ELEMENTS & BEST PRACTICES
-Explain the role of the opening, narrative center, disruption, central pressure, concrete stakes, and unresolved ending, adapting the terms to the book's actual shape. For each element, give its purpose and actionable advice specific to this manuscript. Add at least five practical best practices and a checklist of at least five checks an author can apply after modifying the copy. Explain how to retain the book's voice, preserve clarity and causal progression, avoid manufactured stakes, protect the spoiler boundary, and keep the word count and paragraph structure. This guide is optional reading for the author, not a required approval task.
+Explain the role of the opening, narrative center, disruption, central pressure, concrete stakes, and unresolved ending, adapting the terms to the book's actual shape. For each element, give its purpose and actionable advice specific to this manuscript. Add at least five practical best practices and a checklist of at least five checks an author can apply after modifying the copy. Explain how to retain the book's voice, preserve clarity and causal progression, avoid manufactured stakes, protect the spoiler boundary, and keep the word count and paragraph structure. Include practical advice and a checklist check for reading the chosen teaser on its own: introduce the people and things it uses naturally, preserve their connections to the conflict, and leave no unexplained names or titles. This guide is optional reading for the author, not a required approval task.
 Use only the public setup for book-specific examples. Advice such as "do not reveal [actual ending]" itself reveals the ending and is prohibited. Refer to general categories such as the final decision, the relationship's outcome, or the mystery's solution without naming what happens. Never copy the internal protected-revelations list into any author-facing field. Avoid universal rules demanding every detail in every option; authors should preserve the chosen angle's balance and factual fidelity.
 
 13. AUTOMATED PRODUCTION RESPONSIBILITIES
