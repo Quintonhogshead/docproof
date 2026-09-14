@@ -156,7 +156,12 @@ def _normalize(node: Any) -> Any:
     if not isinstance(node, dict):
         return node
 
-    out = {k: _normalize(v) for k, v in node.items() if k not in _STRIP}
+    # Keys inside these maps name fields/types, rather than schema keywords.
+    # A real field named "title" or "format" must survive annotation removal.
+    out = {k: ({name: _normalize(value) for name, value in v.items()}
+               if k in ("properties", "$defs") and isinstance(v, dict)
+               else _normalize(v))
+           for k, v in node.items() if k not in _STRIP}
     if "properties" in out:
         out["additionalProperties"] = False
         out["required"] = list(out["properties"].keys())

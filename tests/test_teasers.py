@@ -109,6 +109,17 @@ def test_five_options_and_gate(draft):
     assert approval_issues(draft, approved(draft), [1, 2])
 
 
+def test_wire_schema_preserves_book_title(story):
+    from docproof.providers import strict_json_schema
+    from docproof.providers.base import inlined_json_schema
+    from galley.codex_runner import _check_schema
+    schema = inlined_json_schema(strict_json_schema(Storysheet))
+    assert "title" in schema["properties"]
+    assert "title" in schema["required"]
+    assert schema["properties"]["title"] == {"type": "string"}
+    _check_schema(schema)
+
+
 def test_count_structure_and_guidance_cannot_be_omitted(draft):
     draft.teasers.pop()
     draft.elements = []
