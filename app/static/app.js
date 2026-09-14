@@ -8234,7 +8234,7 @@ async function retryFailed(f, btn) {
 
 const PROOF_VERDICT_ROWS = 6;
 const PROOF_VERDICT_LABEL = { done: 'Clean', needs_human: 'Needs a human',
-  held: 'Held, untouched' };
+  held: 'Held, untouched', blocked: 'Stopped' };
 
 function applyProofRunnerHint() {
   const hint = $('proof-runner-hint');
@@ -8283,6 +8283,37 @@ function proofWhen(iso) {
   return stamp;
 }
 
+// Every number on this readout is an elapsed time between two clocks: a
+// timestamp another machine wrote, and now. Subtracting them from the
+// browser's own clock made all of them wrong by however far the two clocks
+// disagreed — which on a laptop back from sleep is minutes, and was the
+// readout showing a phase that "started in 4 minutes". The server measures
+// the heartbeat's age itself, so that one number gives the offset for every
+// other timestamp in the payload. The anchor is taken at the fetch and then
+// advanced locally, which is also what keeps the numbers moving between
+// five-second polls and, more importantly, while the polls are failing.
+const agentClock = { server: 0, client: 0 };
+
+function anchorAgentClock(a) {
+  const received = a && a.received_at ? Date.parse(a.received_at) : NaN;
+  agentClock.client = Date.now();
+  agentClock.server = (!isNaN(received) && typeof a.age_s === 'number')
+    ? received + a.age_s * 1000 : agentClock.client;
+}
+
+function agentNow() {
+  if (!agentClock.client) return Date.now();
+  return agentClock.server + (Date.now() - agentClock.client);
+}
+
+// Seconds between an ISO timestamp the machine wrote and the server's now.
+function agentSince(iso) {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (isNaN(t)) return null;
+  return Math.max(0, (agentNow() - t) / 1000);
+}
+
 function agentAgo(seconds) {
   if (seconds == null) return 'never';
   if (seconds < 90) return `${Math.round(seconds)}s ago`;
@@ -8291,86 +8322,255 @@ function agentAgo(seconds) {
   return `${Math.round(seconds / 86400)} days ago`;
 }
 
-function agentElapsed(iso) {
-  if (!iso) return '';
-  const t = new Date(iso);
-  if (isNaN(t)) return '';
-  const mins = Math.max(0, Math.round((Date.now() - t.getTime()) / 60000));
+function agentFor(seconds) {
+  if (seconds == null) return '';
+  if (seconds < 90) return `${Math.round(seconds)}s`;
+  const mins = Math.round(seconds / 60);
   if (mins < 60) return `${mins} min`;
   return `${Math.floor(mins / 60)} h ${mins % 60} min`;
 }
 
+function agentElapsed(iso) {
+  const seconds = agentSince(iso);
+  return seconds == null ? '' : agentFor(seconds);
+}
+
+function agentBooks(n) {
+  return `${n} book${n === 1 ? '' : 's'}`;
+}
+
+function agentModel(name) {
+  return String(name || '').replace(/claude-/g, '').replace(/-\d{8}$/, '');
+}
+
+function agentMoney(usd) {
+  if (typeof usd !== 'number' || !isFinite(usd)) return '';
+  return usd >= 10 ? `$${usd.toFixed(0)}` : `$${usd.toFixed(2)}`;
+}
+
+//: A machine mid-book that has written nothing for this long is worth a
+//: second look — long enough that a slow whole-book read is not accused of
+//: being stuck, short enough to notice a wedged one.
+const AGENT_QUIET_S = 900;
+//: The browser's own health: if `/api/watch` has not answered in this long,
+//: everything below is a photograph, not a live reading, and says so.
+const AGENT_FETCH_STALE_S = 30;
+
+const AGENT_STATE_WORD = {
+  running: 'Reading', stopping: 'Wrapping up', finishing: 'Finishing',
+};
+
+function agentFact(list, label, value) {
+  if (value === '' || value == null) return;
+  const cell = document.createElement('div');
+  const dt = document.createElement('dt');
+  dt.textContent = label;
+  const dd = document.createElement('dd');
+  dd.textContent = String(value);
+  cell.append(dt, dd);
+  list.append(cell);
+}
+
 // What the practitioner machine is doing right now, off its last heartbeat.
-// Redrawn on the five-second poll; the machine itself reports once a minute
-// while a book runs, and at every phase boundary.
+// Redrawn on the five-second poll and ticked locally in between; the machine
+// itself reports once a minute while a book runs, and at every phase
+// boundary, gate, recovery and local sweep.
 function renderAgentReadout(w) {
   const block = $('proof-agent-block');
   if (!block) return;
-  const a = w.agent;
+  const a = w && w.agent;
   // Only meaningful when a machine is supposed to be reporting.
-  block.hidden = !(a || w.proof_runner === 'external');
+  block.hidden = !(a || (w && w.proof_runner === 'external'));
   if (block.hidden) return;
   const line = $('proof-agent-line');
+  const headline = $('proof-agent-headline');
+  const progress = $('proof-agent-progress');
+  const bar = progress && progress.querySelector('.wf-agent-bar');
+  const fill = $('proof-agent-bar-fill');
+  const stage = $('proof-agent-stage');
+  const facts = $('proof-agent-facts');
   const detail = $('proof-agent-detail');
+  const note = $('proof-agent-note');
   const error = $('proof-agent-error');
   line.innerHTML = '';
+  headline.innerHTML = '';
+  facts.innerHTML = '';
+  facts.hidden = true;
+  progress.hidden = true;
   detail.hidden = true;
+  note.hidden = true;
   error.hidden = true;
   if (!a) {
-    line.textContent = 'No machine has reported yet. When the agent starts it '
-      + 'shows up here within a minute.';
+    headline.textContent = 'No machine has reported yet. When the agent '
+      + 'starts it shows up here within a minute.';
     return;
   }
+
+  // ── line 1: is this machine talking to us, and is this page listening ──
+  const running = a.state === 'running' || a.state === 'stopping'
+    || a.state === 'finishing';
+  const age = agentSince(a.received_at);
+  const heard = age == null ? a.age_s : age;
   const seen = document.createElement('span');
-  seen.className = a.stale ? 'wf-agent-stale' : 'wf-agent-live';
-  seen.textContent = a.stale
-    ? `Not heard from for ${agentAgo(a.age_s).replace(' ago', '')}`
-    : `Reporting (${agentAgo(a.age_s)})`;
+  const stale = heard == null || a.stale
+    || (typeof a.poll_interval_s === 'number'
+        && heard > Math.max(1200, a.poll_interval_s * 3));
+  seen.className = stale ? 'wf-agent-stale'
+    : running ? 'wf-agent-live' : 'wf-agent-idle';
+  seen.textContent = heard == null ? 'Never heard from'
+    : stale ? `Silent for ${agentFor(heard)}` : `Reporting ${agentAgo(heard)}`;
   line.append(seen, document.createTextNode(
     ` · ${a.agent || 'unknown machine'}${a.version ? ' · v' + a.version : ''}`));
-
-  const bits = [];
-  if (a.state === 'running' || a.state === 'stopping' || a.state === 'finishing') {
-    bits.push(`Reading ${a.book || 'a book'}`);
-    if (a.phase) {
-      let phase = `phase ${a.phase}`;
-      if (a.model) phase += ` on ${a.model.replace('claude-', '')}`;
-      if (a.phase_started_at) phase += ` for ${agentElapsed(a.phase_started_at)}`;
-      bits.push(phase);
-    } else if (a.gate) {
-      bits.push(`plan gate ${a.gate}`);
-    }
-    if (a.turns) bits.push(`${a.turns} turn${a.turns === 1 ? '' : 's'}`);
-    if (a.settle_rounds) bits.push(`settle round ${a.settle_rounds}`);
-    if (a.run_started_at) bits.push(`${agentElapsed(a.run_started_at)} since claim`);
-    if (a.last_activity_at) {
-      const idle = (Date.now() - new Date(a.last_activity_at).getTime()) / 1000;
-      if (idle > 600) bits.push(`no session output for ${agentAgo(idle).replace(' ago', '')}`);
-    }
-  } else if (a.state === 'starting') {
-    bits.push('Just started; first poll pending');
-  } else if (a.state === 'halted') {
-    bits.push(`Halted · subscription token rejected · ${a.awaiting || 0} book(s) waiting`);
-    if (a.held_book) bits.push(`holding ${a.held_book} claimed and untouched`);
-    else if (a.last_book) {
-      const verdict = PROOF_VERDICT_LABEL[a.last_outcome] || a.last_outcome || '';
-      bits.push(`last: ${a.last_book}${verdict ? ' — ' + verdict : ''}`);
-    }
-  } else {
-    bits.push(a.awaiting ? `Idle · ${a.awaiting} book(s) awaiting`
-                         : 'Idle · nothing awaiting');
-    if (a.last_book) {
-      const verdict = PROOF_VERDICT_LABEL[a.last_outcome] || a.last_outcome || '';
-      bits.push(`last: ${a.last_book}${verdict ? ' — ' + verdict : ''}`);
-    }
-    if (a.pending_deliveries) bits.push(`${a.pending_deliveries} delivery retry pending`);
+  const fetched = agentClock.client
+    ? (Date.now() - agentClock.client) / 1000 : null;
+  if (fetched != null && fetched > AGENT_FETCH_STALE_S) {
+    // Without this the whole readout simply freezes when the browser loses
+    // the server, showing minutes-old numbers as though they were current.
+    const gap = document.createElement('span');
+    gap.className = 'wf-agent-stale';
+    gap.textContent = ` · this page last reached DocProof ${agentAgo(fetched)}`;
+    line.append(gap);
   }
-  if (a.last_poll_at) bits.push(`polled ${agentAgo((Date.now() - new Date(a.last_poll_at).getTime()) / 1000)}`);
+
+  // ── line 2: what it is doing, in a sentence ───────────────────────────
+  const book = document.createElement('span');
+  book.className = 'wf-agent-book';
+  if (running && stale) {
+    // The last thing it said was that it was reading. That is not the same as
+    // reading now, and a live-looking line here is the difference between
+    // waiting patiently and losing an afternoon.
+    headline.append(document.createTextNode('Stopped reporting while reading '));
+    book.textContent = a.book || 'a book';
+    headline.append(book, document.createTextNode(
+      '. Check the machine is up; a claimed book resumes from the same phase.'));
+  } else if (running) {
+    headline.append(
+      document.createTextNode(`${AGENT_STATE_WORD[a.state]} `));
+    book.textContent = a.book || 'a book';
+    headline.append(book);
+    if (a.author) headline.append(document.createTextNode(` (${a.author})`));
+    if (a.resumed) headline.append(document.createTextNode(' · resumed'));
+  } else if (a.state === 'starting') {
+    headline.textContent = 'Starting up; its first look is pending.';
+  } else if (a.state === 'halted' && a.usage_limit) {
+    const until = a.usage_resets_at ? new Date(a.usage_resets_at) : null;
+    headline.textContent = 'Paused on the Claude usage limit'
+      + (until && !isNaN(until) ? `, until ${until.toLocaleString([],
+          { month: 'short', day: 'numeric', hour: '2-digit',
+            minute: '2-digit' })}` : '')
+      + '. Claimed work is checkpointed, not lost.';
+  } else if (a.state === 'halted') {
+    headline.textContent = 'Held: the subscription token is rejected, so no '
+      + 'book is claimed'
+      + (a.held_book ? `. ${a.held_book} stays claimed and untouched.` : '.');
+  } else if (a.awaiting && a.handled_here >= a.awaiting) {
+    // The commonest confusing state: books still on the server's list that
+    // this machine has already finished. "Idle · 1 awaiting" read as a stuck
+    // queue; it is the opposite.
+    headline.textContent = `Idle. The ${agentBooks(a.awaiting)} still on the `
+      + 'list here are already finished on this machine — DocWatch picks the '
+      + 'verdict up on its next pass.';
+  } else if (a.awaiting) {
+    headline.textContent = `Idle with ${agentBooks(a.awaiting)} waiting; the `
+      + 'next look starts one.';
+  } else {
+    headline.textContent = 'Idle. Nothing is waiting to be read.';
+  }
+
+  // ── the bar: which stage of how many, and whether it is moving ────────
+  const quiet = running ? agentSince(a.last_activity_at) : null;
+  if (running && a.phase && bar && fill) {
+    const total = Number(a.phase_total) || 0;
+    const index = Number(a.phase_index) || 0;
+    const within = (Number(a.step_total) > 0)
+      ? Math.min(1, Number(a.step_done || 0) / Number(a.step_total)) : 0;
+    if (total && index) {
+      progress.hidden = false;
+      const done = Math.max(0, Math.min(1, (index - 1 + within) / total));
+      fill.style.width = `${(done * 100).toFixed(1)}%`;
+      bar.classList.toggle('stalled',
+                           stale || (quiet != null && quiet > AGENT_QUIET_S));
+      stage.textContent = `Stage ${index} of ${total} — ${a.phase}`
+        + (a.phase_note ? `: ${a.phase_note}` : '');
+    } else {
+      progress.hidden = false;
+      fill.style.width = '0%';
+      stage.textContent = a.phase + (a.phase_note ? ` — ${a.phase_note}` : '');
+    }
+  }
+
+  // ── the measured facts ────────────────────────────────────────────────
+  if (running) {
+    agentFact(facts, 'On', agentModel(a.model));
+    agentFact(facts, 'This stage', agentElapsed(a.phase_started_at));
+    agentFact(facts, 'Since claim', agentElapsed(a.run_started_at));
+    if (a.turns) agentFact(facts, 'Turns', a.turns);
+    if (a.settle_rounds) agentFact(facts, 'Settle round', a.settle_rounds);
+    const usage = a.fixed_usage || null;
+    if (usage) {
+      if (usage.calls) agentFact(facts, 'Reads', usage.calls);
+      const spent = agentMoney(usage.charged_api_usd);
+      const cap = usage.limits && agentMoney(usage.limits.max_api_usd);
+      if (spent) agentFact(facts, 'Spend', cap ? `${spent} of ${cap}` : spent);
+    }
+    if (quiet != null) agentFact(facts, 'Last output', agentFor(quiet));
+  } else {
+    if (a.awaiting) agentFact(facts, 'Awaiting', a.awaiting);
+    if (a.pending_deliveries) {
+      agentFact(facts, 'Deliveries due', a.pending_deliveries);
+    }
+    if (a.last_book) {
+      agentFact(facts, 'Last book', a.last_book);
+      agentFact(facts, 'Verdict',
+                PROOF_VERDICT_LABEL[a.last_outcome] || a.last_outcome || '—');
+      const ended = agentElapsed(a.finished_at);
+      if (ended) agentFact(facts, 'Finished', `${ended} ago`);
+    }
+    const poll = agentSince(a.last_poll_at);
+    if (poll != null) agentFact(facts, 'Looked', agentAgo(poll));
+  }
+  facts.hidden = !facts.children.length;
+
+  // ── the quieter running commentary ────────────────────────────────────
+  const bits = [];
+  if (running) {
+    if (a.step && Number(a.step_total)) {
+      bits.push(`${a.step}: ${a.step_done} of ${a.step_total}`);
+    } else if (a.step) {
+      bits.push(a.step);
+    }
+    if (a.gate) bits.push(`plan gate ${a.gate}`);
+    if (a.continuation) bits.push(`continuation grant ${a.continuation}`);
+    if (a.stages_done) bits.push(`${a.stages_done} stage(s) recorded`);
+  } else if (a.handled_why && a.handled_why.length) {
+    bits.push(`passed over: ${a.handled_why.join(', ')}`);
+  }
+  if (a.state === 'idle' && a.delivery === 'pending') {
+    bits.push('the hand-off upload is still owed');
+  }
   detail.textContent = bits.join(' · ');
   detail.hidden = !bits.length;
 
-  const problem = a.last_poll_error || a.credentials_error || a.last_error
-    || (a.state !== 'running' && a.last_outcome === 'needs_human' ? a.last_reason : '');
+  // ── advisories: true, and not a fault ─────────────────────────────────
+  const notes = [];
+  if (running && quiet != null && quiet > AGENT_QUIET_S) {
+    notes.push(`No session output for ${agentFor(quiet)}.`);
+  }
+  if (a.recovery) notes.push(`Recovering: ${a.recovery}`);
+  if (a.delivery_error) notes.push(a.delivery_error);
+  if (!running && a.last_reason
+      && ['needs_human', 'blocked', 'held'].includes(a.last_outcome)) {
+    // A verdict, not a failure. It used to print in the error colour, which
+    // made "every required reading and output check passed" look like a
+    // crash.
+    notes.push(`Last verdict (${PROOF_VERDICT_LABEL[a.last_outcome]
+      || a.last_outcome}): ${a.last_reason}`);
+  }
+  note.textContent = notes.join(' ');
+  note.hidden = !notes.length;
+
+  // ── faults: the machine itself is not working ─────────────────────────
+  const problem = a.last_poll_error || a.credentials_error || a.last_error;
   if (problem) {
     error.textContent = problem;
     error.hidden = false;
@@ -8378,6 +8578,9 @@ function renderAgentReadout(w) {
 }
 
 function renderProofReadout(w) {
+  // Only here, on a real fetch — the local tick below redraws from the same
+  // payload and must not re-anchor to its own clock.
+  anchorAgentClock(w && w.agent);
   renderAgentReadout(w);
   const files = w.files || [];
   const awaiting = files.filter((f) => f.proof_marked === 'awaiting');
@@ -9604,6 +9807,18 @@ function startApp() {
     if (!$('screen-watch').hidden) loadWatch({ quiet: true }).catch(() => {});
     else if (watchAvailable()) refreshWatchBanner();
   }, 5000);
+  // The practitioner readout is nothing but elapsed times, so it ticks on its
+  // own second rather than waiting for the five-second poll. It is also the
+  // only thing that keeps moving when the poll starts failing — a frozen
+  // readout and a healthy idle machine used to look identical.
+  state.agentTimer = setInterval(() => {
+    if ($('screen-watch').hidden) return;
+    const drawer = $('wf-config-proof');
+    const block = $('proof-agent-block');
+    if (!drawer || drawer.hidden) return;
+    if (!block || block.hidden || !state.watchStatus) return;
+    renderAgentReadout(state.watchStatus);
+  }, 1000);
 }
 
 function resumeWatchReturn() {

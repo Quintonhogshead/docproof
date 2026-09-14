@@ -666,7 +666,9 @@ def test_a_long_delivery_outage_alerts_once_and_stays_pending(env, tmp_path):
     subject, body = obs.alerts[0]
     assert "Nine - Book 1.docx" in subject
     assert "folder-Z" in body and "Drive said no" in body
-    assert obs.beats[-1]["last_error"].startswith("Nine - Book 1.docx")
+    # Its own field, not last_error: a stuck delivery is not a machine fault,
+    # and the poll that clears last_error must not clear this with it.
+    assert obs.beats[-1]["delivery_error"].startswith("Nine - Book 1.docx")
     assert "keep retrying" in body
     agent.retry_deliveries(ledger, report, now=1e12)
     assert len(obs.alerts) == 1
@@ -1091,3 +1093,93 @@ def test_a_legacy_question_flag_alone_cannot_hold_the_unattended_queue(env, tmp_
     assert agent.ledger().claimed("drive-1")["operational_status"] != ga.HELD_FOR_CODE
     agent.poll_once()
     assert len(ran) == 2
+
+
+# --- what the heartbeat is allowed to still be saying ---------------------------
+
+
+def test_a_finished_run_leaves_nothing_of_itself_in_the_idle_beat(env, tmp_path):
+    """The status dict is cumulative. That is right inside a run and wrong the
+    moment one ends: a phase name or a spend left behind reads, in the drawer,
+    exactly like a book being read right now."""
+    obs = Observed()
+
+    def run_driver(**kwargs):
+        progress = kwargs["progress"]
+        progress({"event": "phase_start", "phase": "settle",
+                  "model": "claude-fable-5-1", "effort": "high"})
+        progress({"event": "finished", "outcome": "done", "reason": ""})
+        return FakeResult(uploaded=["up-1"])
+
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([BOOK]),
+                            download=_downloader(tmp_path),
+                            run_driver=run_driver)
+    agent.poll_once()
+    last = obs.beats[-1]
+    assert last["state"] == "idle"
+    for stale in ("phase", "phase_started_at", "model", "book", "turns",
+                  "fixed_usage", "run_started_at", "gate"):
+        assert stale not in last, f"{stale} outlived the run it described"
+    assert last["last_book"] == "Test - Book 1.docx"
+    assert last["last_outcome"] == "done"
+
+
+def test_a_phase_carries_its_place_in_the_plan_and_what_it_is_doing(env, tmp_path):
+    obs = Observed()
+
+    def run_driver(**kwargs):
+        kwargs["progress"]({"event": "phase_start", "phase": "settle",
+                            "model": "claude-fable-5-1", "effort": "high"})
+        # A local sweep writes no session output for many minutes; the count
+        # is the only thing that separates it from a wedged machine.
+        kwargs["progress"]({"event": "local_progress", "phase": "typed",
+                            "check": "LanguageTool", "completed": 812,
+                            "total": 2140})
+        return FakeResult(uploaded=["up-1"])
+
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([BOOK]),
+                            download=_downloader(tmp_path),
+                            run_driver=run_driver)
+    agent.poll_once()
+    from galley.phases import ALL_PHASES
+    settle = next(b for b in obs.beats if b.get("phase") == "settle")
+    assert settle["phase_index"] == ALL_PHASES.index("settle") + 1
+    assert settle["phase_total"] == len(ALL_PHASES)
+    assert "Settling the residual items" in settle["phase_note"]
+    sweep = next(b for b in obs.beats if b.get("step"))
+    assert (sweep["step"], sweep["step_done"], sweep["step_total"]) \
+        == ("LanguageTool", 812, 2140)
+
+
+def test_the_fixed_lanes_own_stages_are_placed_too():
+    # The production lane's stage names are not driver phases; both plans have
+    # to answer or the bar never appears for a fixed run.
+    index, total, note = ga.phase_position("numbers")
+    assert index and total >= index
+    assert "number" in note.lower()
+    assert ga.phase_position("nothing-like-this") == (0, 0, "")
+
+
+def test_an_idle_beat_separates_a_waiting_queue_from_a_finished_one(env, tmp_path):
+    """"Idle · 1 book awaiting" reads as a stuck queue. Usually the book is
+    finished here and DocWatch has not picked the verdict up yet."""
+    obs = Observed()
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([BOOK]),
+                            download=_downloader(tmp_path),
+                            run_driver=lambda **kw: FakeResult(uploaded=["u"]))
+    agent.poll_once()                     # reads it
+    agent.poll_once()                     # the server still lists it
+    last = obs.beats[-1]
+    assert last["state"] == "idle"
+    assert last["awaiting"] == 1
+    assert last["handled_here"] == 1
+    assert last["handled_why"] == ["Test - Book 1.docx (finished)"]
+
+
+def test_a_poll_that_works_retires_the_last_polls_complaint(env, tmp_path):
+    obs = Observed()
+    agent = _observed_agent(env, tmp_path, obs, opener=FakeApp([]))
+    agent._beat(last_error="poll crashed: boom")
+    agent.poll_once()
+    assert obs.beats[-1]["last_error"] == "", \
+        "one crashed poll must not leave a red line up for the life of the process"

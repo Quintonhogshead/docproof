@@ -1648,13 +1648,65 @@ button.pill.setup.actionable:hover { background: color-mix(in srgb, var(--warn) 
   overflow: hidden; cursor: pointer;
 }
 /* The verdict word itself, coloured the way the status pills are: a clean book
-   reads as done, a book needing a person reads as something to act on. */
-.wf-verdict { font-weight: 600; white-space: nowrap; }
+   reads as done, a book needing a person reads as something to act on.
+   It wraps: the column is a fifth of a 384px drawer and "Needs a human" does
+   not fit on one line there. Holding it on one line did not widen the column —
+   fixed table layout does not grow — it printed the word straight over the
+   reason beside it. */
+.wf-verdict { font-weight: 600; white-space: normal;
+  /* break-word, not anywhere: the cell inherits `anywhere` from the
+     readout table, which would split "Needs a human" mid-punctuation. */
+  overflow-wrap: break-word; }
+/* Two lines that must not be mistaken for each other: a fault (the machine is
+   not working) and an advisory (it is working, and here is something true
+   about it). `--warn` and the error red are neighbours at this size, so they
+   are told apart by structure — a ruled aside in body ink, against plain red
+   text — rather than by hue alone. A clean verdict reading as a crash was the
+   whole complaint. */
 .wf-agent-error { color: var(--danger, #b42318); }
+.wf-agent-note {
+  color: var(--ink); border-left: 2px solid var(--warn);
+  padding-left: 0.5rem; margin-top: 0.4rem;
+}
 .wf-agent-stale { color: var(--danger, #b42318); font-weight: 600; }
 .wf-agent-live { color: var(--ok, #067647); font-weight: 600; }
+.wf-agent-idle { color: var(--muted); font-weight: 600; }
 .wf-verdict.done { color: var(--ok); }
 .wf-verdict.needs_human { color: var(--warn); }
+.wf-verdict.blocked, .wf-verdict.held { color: var(--muted); }
+
+/* What the machine is doing, in one sentence, above the numbers. */
+.wf-agent-headline { margin: 0.25rem 0 0.35rem; font-size: 0.92rem; }
+.wf-agent-headline .wf-agent-book { font-weight: 600; }
+/* Stage N of M. Deliberately not an indeterminate spinner: a bar that has not
+   moved since the last look is the answer to "is it stuck?", and a spinner is
+   not. */
+.wf-agent-bar {
+  height: 5px; border-radius: 3px; background: var(--line);
+  overflow: hidden; margin: 0.35rem 0 0.3rem;
+}
+.wf-agent-bar > span {
+  display: block; height: 100%; width: 0; border-radius: 3px;
+  background: var(--ok, #067647); transition: width 0.4s ease;
+}
+.wf-agent-bar.stalled > span { background: var(--warn, #b54708); }
+@media (prefers-reduced-motion: reduce) {
+  .wf-agent-bar > span { transition: none; }
+}
+/* The measured facts — elapsed, turns, spend — as label-over-value pairs that
+   wrap into as many columns as the drawer has room for. */
+.wf-agent-facts {
+  display: flex; flex-wrap: wrap; gap: 0.3rem 1.1rem;
+  margin: 0.45rem 0 0.2rem;
+}
+.wf-agent-facts > div { min-width: 4.5rem; }
+.wf-agent-facts dt {
+  font-size: 0.68rem; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--muted);
+}
+.wf-agent-facts dd {
+  margin: 0; font-size: 0.85rem; font-variant-numeric: tabular-nums;
+}
 /* The reason behind a verdict: long, and the least important thing in the row,
    so it wraps and stays quiet instead of stretching the drawer. */
 .wf-reason { color: var(--muted); }

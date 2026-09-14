@@ -251,3 +251,201 @@ def test_clear_flag_sends_only_the_selected_book_and_workflow():
       assert.deepEqual(notes, ['ok']);
       assert.equal(renders.length, 1);
     """)
+
+
+# --- the practitioner machine readout ------------------------------------------
+#
+# Everything on this readout is either an elapsed time between two clocks or a
+# claim about whether a machine is working. Both have been wrong in ways that
+# are invisible from the code alone, so they are pinned here against a DOM stub.
+
+AGENT_DOM = """
+  const AGENT_QUIET_S = 900, AGENT_FETCH_STALE_S = 30;
+  const AGENT_STATE_WORD = {running: 'Reading', stopping: 'Wrapping up',
+                            finishing: 'Finishing'};
+  const PROOF_VERDICT_LABEL = {done: 'Clean', needs_human: 'Needs a human',
+    held: 'Held, untouched', blocked: 'Stopped, still claimed'};
+  const agentClock = {server: 0, client: 0};
+  const nodes = new Map();
+  function node(id) {
+    if (!nodes.has(id)) nodes.set(id, {
+      id, hidden: false, textContent: '', innerHTML: '', children: [],
+      style: {}, classList: {values: new Set(),
+        add(v) { this.values.add(v); }, remove(v) { this.values.delete(v); },
+        toggle(v, on) { on ? this.values.add(v) : this.values.delete(v); },
+        contains(v) { return this.values.has(v); }},
+      append(...kids) {
+        for (const kid of kids) {
+          this.children.push(kid);
+          this.textContent += (kid.textContent === undefined ? kid : kid.textContent);
+        }
+      },
+      querySelector(sel) { return node(this.id + sel); },
+    });
+    const found = nodes.get(id);
+    if (found.innerHTML === '' && found.__cleared) { found.__cleared = false; }
+    return found;
+  }
+  function make(tag) {
+    const el = {tag, textContent: '', children: [], style: {}, className: '',
+      classList: {values: new Set(), add(v) {this.values.add(v);},
+                  toggle(v, on) {on ? this.values.add(v) : this.values.delete(v);},
+                  contains(v) {return this.values.has(v);}},
+      append(...kids) { for (const k of kids) { this.children.push(k);
+        this.textContent += (k.textContent === undefined ? k : k.textContent); } },
+      querySelector: () => null};
+    return el;
+  }
+  const document = {createElement: make,
+                    createTextNode: text => ({textContent: String(text)})};
+  const $ = id => {
+    const el = node(id);
+    // Assigning innerHTML = '' is how the renderer empties a block.
+    Object.defineProperty(el, 'innerHTML', {configurable: true,
+      get: () => el.__html || '',
+      set: v => { el.__html = v; if (v === '') { el.textContent = '';
+                                                 el.children.length = 0; } }});
+    return el;
+  };
+"""
+
+
+def _agent_node(script: str) -> None:
+    _node(["anchorAgentClock", "agentNow", "agentSince", "agentAgo", "agentFor",
+           "agentElapsed", "agentBooks", "agentModel", "agentMoney",
+           "agentFact", "renderAgentReadout"], AGENT_DOM + script)
+
+
+def test_elapsed_times_follow_the_servers_clock_not_the_browsers():
+    _agent_node("""
+      const context = vm.createContext({document, $, agentClock,
+        AGENT_QUIET_S, AGENT_FETCH_STALE_S, AGENT_STATE_WORD,
+        PROOF_VERDICT_LABEL, console});
+      vm.runInContext(source, context);
+      // The browser's clock is five minutes behind the server's. A phase that
+      // started one minute ago must read as one minute, not as the future.
+      const serverNow = Date.now() + 5 * 60000;
+      const agent = {received_at: new Date(serverNow - 10000).toISOString(),
+                     age_s: 10, state: 'running', book: 'A Book',
+                     phase: 'typed', phase_index: 4, phase_total: 11,
+                     phase_started_at: new Date(serverNow - 60000).toISOString()};
+      context.anchorAgentClock(agent);
+      context.renderAgentReadout({agent, proof_runner: 'external'});
+      const facts = nodes.get('proof-agent-facts');
+      const values = facts.children.map(c => c.children[1].textContent);
+      assert.ok(values.includes('60s'),
+                'the phase clock must be read against the server: ' + values);
+      assert.match(nodes.get('proof-agent-line').textContent, /Reporting 10s ago/);
+    """)
+
+
+def test_a_finished_verdict_is_a_note_not_an_error():
+    _agent_node("""
+      const context = vm.createContext({document, $, agentClock,
+        AGENT_QUIET_S, AGENT_FETCH_STALE_S, AGENT_STATE_WORD,
+        PROOF_VERDICT_LABEL, console});
+      vm.runInContext(source, context);
+      const agent = {received_at: new Date().toISOString(), age_s: 4,
+                     state: 'idle', awaiting: 1, handled_here: 1,
+                     last_book: 'Wilder - Book 1.docx',
+                     last_outcome: 'needs_human',
+                     last_reason: 'Fixed proofreading complete; every required '
+                                + 'reading and output check passed.'};
+      context.anchorAgentClock(agent);
+      context.renderAgentReadout({agent, proof_runner: 'external'});
+      assert.equal(nodes.get('proof-agent-error').hidden, true,
+                   'a clean verdict must never print as a machine fault');
+      assert.equal(nodes.get('proof-agent-note').hidden, false);
+      assert.match(nodes.get('proof-agent-note').textContent,
+                   /Last verdict \\(Needs a human\\)/);
+      // And the confusing "Idle + 1 awaiting" is explained rather than shown raw.
+      assert.match(nodes.get('proof-agent-headline').textContent,
+                   /already finished on this machine/);
+    """)
+
+
+def test_a_real_fault_still_prints_as_one():
+    _agent_node("""
+      const context = vm.createContext({document, $, agentClock,
+        AGENT_QUIET_S, AGENT_FETCH_STALE_S, AGENT_STATE_WORD,
+        PROOF_VERDICT_LABEL, console});
+      vm.runInContext(source, context);
+      const agent = {received_at: new Date().toISOString(), age_s: 2,
+                     state: 'halted', credentials_error: 'the token was rejected',
+                     held_book: 'Wilder - Book 1.docx'};
+      context.anchorAgentClock(agent);
+      context.renderAgentReadout({agent, proof_runner: 'external'});
+      assert.equal(nodes.get('proof-agent-error').hidden, false);
+      assert.equal(nodes.get('proof-agent-error').textContent,
+                   'the token was rejected');
+      assert.match(nodes.get('proof-agent-headline').textContent,
+                   /claimed and untouched/);
+    """)
+
+
+def test_a_page_that_lost_the_server_says_so_instead_of_freezing():
+    _agent_node("""
+      const context = vm.createContext({document, $, agentClock,
+        AGENT_QUIET_S, AGENT_FETCH_STALE_S, AGENT_STATE_WORD,
+        PROOF_VERDICT_LABEL, console});
+      vm.runInContext(source, context);
+      const agent = {received_at: new Date().toISOString(), age_s: 5,
+                     state: 'running', book: 'A Book', phase: 'typed'};
+      context.anchorAgentClock(agent);
+      // No further fetch has landed for two minutes; the tick redraws anyway.
+      agentClock.client -= 120000;
+      context.renderAgentReadout({agent, proof_runner: 'external'});
+      assert.match(nodes.get('proof-agent-line').textContent,
+                   /this page last reached DocProof/);
+    """)
+
+
+def test_a_stage_bar_reports_position_and_stall():
+    _agent_node("""
+      const context = vm.createContext({document, $, agentClock,
+        AGENT_QUIET_S, AGENT_FETCH_STALE_S, AGENT_STATE_WORD,
+        PROOF_VERDICT_LABEL, console});
+      vm.runInContext(source, context);
+      const now = Date.now();
+      const agent = {received_at: new Date(now).toISOString(), age_s: 1,
+                     state: 'running', book: 'A Book', phase: 'typed',
+                     phase_index: 4, phase_total: 11, phase_note: 'Local checks',
+                     step: 'LanguageTool', step_done: 500, step_total: 1000,
+                     last_activity_at: new Date(now - 3600000).toISOString()};
+      context.anchorAgentClock(agent);
+      context.renderAgentReadout({agent, proof_runner: 'external'});
+      assert.equal(nodes.get('proof-agent-progress').hidden, false);
+      // Three whole stages plus half of the fourth, out of eleven.
+      assert.equal(nodes.get('proof-agent-bar-fill').style.width, '31.8%');
+      assert.match(nodes.get('proof-agent-stage').textContent,
+                   /Stage 4 of 11 — typed: Local checks/);
+      assert.equal(nodes.get('proof-agent-progress.wf-agent-bar')
+                        .classList.contains('stalled'), true);
+      assert.match(nodes.get('proof-agent-note').textContent,
+                   /No session output for 1 h 0 min/);
+      assert.match(nodes.get('proof-agent-detail').textContent,
+                   /LanguageTool: 500 of 1000/);
+    """)
+
+
+def test_a_machine_that_stopped_reporting_is_not_narrated_as_running():
+    _agent_node("""
+      const context = vm.createContext({document, $, agentClock,
+        AGENT_QUIET_S, AGENT_FETCH_STALE_S, AGENT_STATE_WORD,
+        PROOF_VERDICT_LABEL, console});
+      vm.runInContext(source, context);
+      const now = Date.now();
+      const agent = {received_at: new Date(now - 95 * 60000).toISOString(),
+                     age_s: 5700, stale: true, poll_interval_s: 300,
+                     state: 'running', book: 'Wilder - Book 2.docx',
+                     phase: 'astra_review', phase_index: 11, phase_total: 13};
+      context.anchorAgentClock(agent);
+      context.renderAgentReadout({agent, proof_runner: 'external'});
+      const headline = nodes.get('proof-agent-headline').textContent;
+      assert.match(headline, /Stopped reporting while reading/);
+      assert.doesNotMatch(headline, /^Reading/,
+                          'the last thing it said is not what it is doing now');
+      assert.match(nodes.get('proof-agent-line').textContent, /Silent for 1 h 35 min/);
+      assert.equal(nodes.get('proof-agent-progress.wf-agent-bar')
+                        .classList.contains('stalled'), true);
+    """)

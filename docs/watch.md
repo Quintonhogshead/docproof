@@ -258,11 +258,39 @@ docproof-watch init --enable-proofing
 ```
 
 Or in the app: **Automations → Workflows → Proofread**. That drawer has the
-switch, who reads the book, and all three HubSpot values — plus two read-only
-lists the CLI has no equivalent for: which books are out with the practitioner
-and how long they have been, and the last few verdicts with the reason behind
-each. It is the only place a `needs_human` reason is visible outside the alert
-email.
+switch, who reads the book, and all three HubSpot values — plus three read-only
+readouts the CLI has no equivalent for: what the practitioner machine is doing
+right now, which books are out with it and how long they have been, and the
+last few verdicts with the reason behind each. It is the only place a
+`needs_human` reason is visible outside the alert email.
+
+**The practitioner machine readout.** The agent reports at every phase
+boundary, gate, recovery and local sweep, and once a minute in between while a
+book runs; the drawer redraws on the panel's five-second poll and ticks its own
+clocks every second between polls. It answers, in this order:
+
+- **Is the machine talking to us** — `Reporting 8s ago`, or `Silent for 1 h 35
+  min` in red once the heartbeat is older than three poll intervals. If the
+  *browser* has lost the server, the same line says so rather than leaving a
+  frozen readout looking live.
+- **What it is doing** — one sentence. A machine that has gone silent mid-book
+  says it *stopped reporting while reading* that book, never that it is reading
+  it now.
+- **How far in** — a bar and `Stage 4 of 11 — typed`, with what that stage
+  does. The bar turns amber when the session has written nothing for fifteen
+  minutes, which is the honest answer to "is it stuck?".
+- **The measured facts** — model, time in this stage, time since the claim,
+  turns, settle round, reads, and spend against the job's cap.
+- **Advisories**, in a ruled aside: a long silence, a recovery in progress, or
+  the last verdict and its reason. A verdict is not a fault, and does not print
+  as one.
+- **Faults**, in red: a poll that will not complete, a rejected token, a crash.
+
+Two states read as stuck and are not. `Idle` beside books still awaiting
+usually means this machine has already finished them and DocWatch has not
+picked the verdict up yet; the readout says so in words. `Held` means the
+subscription token is rejected — no book is claimed, and a claimed book stays
+untouched and resumes from the same phase.
 
 **The book it reads.** The house stage series has four names, and each stage
 reads the file the one before it left:
