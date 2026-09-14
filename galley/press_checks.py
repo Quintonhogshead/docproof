@@ -7,12 +7,21 @@ import json
 import re
 
 
-def focused_checks(paragraphs):
+# A hyphen between a capitalized-or-lowercase left part and a lowercase right
+# part, standing alone: the shape of a line-break hyphen the export left
+# inside a word (Cala-veras) and, equally, of an ordinary compound (well-known).
+_SEAM = re.compile(r"(?<![\w-])([A-Za-z][a-z]+)-([a-z]{2,})(?![\w-])")
+
+
+def focused_checks(paragraphs, *, knows=None):
+    """`knows(word) -> bool | None` is the spelling dictionary; without it the
+    seam-hyphen check is skipped and its count reads 0."""
     from docproof.tensecheck import profile
     from docproof.candidate_generators import _quote_candidates
     from docproof.sweeps import _dialogue_tag_re, REPORTING_VERBS
 
     sites, matrix = [], Counter()
+    words = Counter(w.casefold() for p in paragraphs for w in re.findall(r"[A-Za-z]+", p.text))
     def site(kind, p, start, end, detail):
         body = {"check": kind, "para_id": p.para_id, "start": start, "end": end,
                 "quote": p.text[start:end], "detail": detail}
@@ -43,6 +52,25 @@ def focused_checks(paragraphs):
             if a.start_offset is not None and a.end_offset is not None:
                 site("quotation_integrity", p, a.start_offset, a.end_offset,
                      "Check neighbouring paragraphs and multi-paragraph speech before changing quotes.")
+        if knows is not None:
+            for m in _SEAM.finditer(p.text):
+                left, right = m.group(1), m.group(2)
+                left_known, right_known = knows(left), knows(right)
+                if left_known and right_known:
+                    continue                  # an ordinary compound of real words
+                joined = left + right
+                unhyphenated = words[joined.casefold()]
+                if knows(joined) or unhyphenated:
+                    why = (f"'{joined}' occurs {unhyphenated} time(s) unhyphenated in the book" if unhyphenated
+                           else f"'{joined}' is a dictionary word") + f"; '{left if not left_known else right}' is not"
+                elif not left_known and not right_known:
+                    # Neither half is a word: the shape of a proper noun broken
+                    # at a line end (Cala-veras), which no dictionary can vouch for.
+                    why = f"neither '{left}' nor '{right}' is a dictionary word"
+                else:
+                    continue
+                site("seam_hyphen", p, m.start(), m.end(),
+                     f"Possible line-break hyphen: {why}. Judge against deliberate hyphenation, dialect and variant.")
 
     tense = profile(paragraphs).to_json()
     by_id = {p.para_id: p for p in paragraphs}
@@ -51,7 +79,7 @@ def focused_checks(paragraphs):
         site("narrative_tense", p, 0, min(120, len(p.text)),
              f"Narration-only heuristic: {row['verdict']}; past signals={row['past']}, present={row['present']}. Not a verdict on authorial intent.")
     counts = dict(Counter(s["check"] for s in sites))
-    for name in ("dialogue_matrix", "serial_comma", "quotation_integrity", "narrative_tense"):
+    for name in ("dialogue_matrix", "serial_comma", "quotation_integrity", "narrative_tense", "seam_hyphen"):
         counts.setdefault(name, 0)
     # Explicit zero cells make an omitted punctuation/case combination visible.
     cells = {f"{order}/{mark}/{case}": matrix[f"{order}/{mark}/{case}"]
@@ -60,6 +88,45 @@ def focused_checks(paragraphs):
              for case in ("lowercase", "capitalized")}
     return {"paragraph_ids": [p.para_id for p in paragraphs], "sites": sites,
             "counts": counts, "dialogue_matrix": cells, "tense_profile": tense}
+
+
+def book_map(paragraphs, is_heading_style):
+    """A COMPLETE inventory of the current book's structure for the final
+    readers: every heading (by style, by chapter-title shape, or a short
+    all-capitals line) with the count of body paragraphs it governs, and every
+    non-empty header/footer paragraph (running heads), so a running head
+    CHAPTER ONE can be compared with body headings CHAPTER 2 to 18, and a
+    TOP TEN heading with the nine paragraphs under it."""
+    from docproof.continuity import looks_like_chapter_heading
+    from docproof.headings import is_structural_heading
+
+    def caps_line(p):
+        t = p.text.strip()
+        return (0 < len(t) <= 60 and t.upper() == t and any(c.isalpha() for c in t)
+                and not t.endswith((".", "?", "!")))
+
+    headings, before_first, total = [], 0, 0
+    for p in paragraphs:
+        if p.location != "body" or not p.text.strip():
+            continue
+        signal = ("style" if is_structural_heading(p, is_heading_style) else
+                  "chapter_title" if looks_like_chapter_heading(p) else
+                  "caps_line" if caps_line(p) else None)
+        if signal:
+            headings.append({"id": p.para_id, "text": p.text.strip(), "style": p.style,
+                             "signal": signal, "body_paragraphs": 0})
+        else:
+            total += 1
+            if headings:
+                headings[-1]["body_paragraphs"] += 1
+            else:
+                before_first += 1
+    running = [{"id": p.para_id, "part": p.part, "location": p.location, "text": p.text.strip()}
+               for p in paragraphs if p.location in {"header", "footer"} and p.text.strip()]
+    return {"complete_inventory": True, "headings": headings, "headers_footers": running,
+            "body_paragraphs_before_first_heading": before_first, "total_body_paragraphs": total,
+            "note": ("Every current heading and every non-empty header/footer paragraph, in order. "
+                     "A caps_line heading is a shape guess; style and chapter_title are established.")}
 
 
 def citation_context(paragraphs):
@@ -165,11 +232,11 @@ def current_formatting(original, current, source_marks, approved_formats):
     return result
 
 
-def final_audit(prepared, paragraphs, cfg):
+def final_audit(prepared, paragraphs, cfg, *, knows=None):
     """Raw signals on the actual final text, never virtual post-fix zeroes."""
     from galley.fixed_local import _house_findings, _normalize_and_structure
     from galley.fixed_policy import extract_numbers
-    focused = focused_checks(paragraphs)
+    focused = focused_checks(paragraphs, knows=knows)
     findings, reports = _house_findings(paragraphs, prepared, cfg)
     counts = Counter(f.error_type for f in findings)
     for key in cfg.sweeps:

@@ -52,6 +52,8 @@ class Readers:
         if stage == "story_sheet":
             return {"narration": "Third person past tense", "characters": [], "notes": []}
         properties = kwargs["schema"]["properties"]
+        if "reading_notes" in properties:
+            return {"findings": [], "reading_notes": "Fixture continuity read."}
         if "reviewed_ids" in properties:
             owned = payload.get("sites", payload.get("paragraphs", []))
             return {"reviewed_ids": [row["id"] for row in owned], "findings": [],
@@ -178,9 +180,9 @@ def test_real_docx_full_fixed_sequence_and_successive_corrected_versions(make_bo
         "We saw the twenty birds beside an apple. They were bright. It is warm. He walks home."]
     assert result["questions"] == []
     assert [row["stage"] for row in result["stages"]] == [
-        "poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks", "ensemble_sweep", "fable", "astra"]
+        "poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks", "ensemble_sweep", "continuity", "fable", "astra"]
     assert [data["phase"] for event, data in progress if event == "phase_start"] == [
-        "poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks", "ensemble_sweep", "fable", "astra"]
+        "poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks", "ensemble_sweep", "continuity", "fable", "astra"]
     assert all(data["ok"] for event, data in progress if event == "phase_end")
     events = readers.events
     assert len([x for x in events if x["stage"] == "typed"]) == 18
@@ -676,14 +678,14 @@ def test_local_grammar_missed_by_both_readers_requires_pair_screen_then_luna(
     assert next(check for check in local["checks"] if check["check"] == "languagetool")["proposal_count"] == 1
 
 
-def test_local_completion_is_checked_once_before_fable_reads_corrected_book(
-        make_book, tmp_path, monkeypatch):
+def test_local_completion_runs_after_ensemble_fable_and_astra(make_book, tmp_path, monkeypatch):
     completion_calls = []
 
     def complete(prepared, original, texts, *args, **kwargs):
-        completion_calls.append(dict(texts))
+        completion_calls.append((kwargs["stage"], dict(texts)))
         pid = next(iter(texts))
-        return [_local_row(pid, "teh", "the", source="recurrence", category="spelling")], {"recurrence_candidates": 1}
+        rows = [_local_row(pid, "teh", "the", source="recurrence", category="spelling")] if "teh" in texts[pid] else []
+        return rows, {"recurrence_candidates": len(rows)}
 
     def handler(stage, model, payload, kwargs):
         if stage == "local_completion_screen":
@@ -696,7 +698,8 @@ def test_local_completion_is_checked_once_before_fable_reads_corrected_book(
     result = FixedWorkflow(make_book("She found teh letter."), tmp_path / "completion", calls=readers).run()
 
     assert list(result["accepted"].values()) == ["She found the letter."]
-    assert len(completion_calls) == 1
+    assert [stage for stage, _ in completion_calls] == ["completion", "completion_fable", "completion_astra"]
+    assert all(texts == result["accepted"] for stage, texts in completion_calls[1:])
     events = readers.events
     stages = [row["stage"] for row in events]
     assert max(stages.index("ensemble_sweep_opus"), stages.index("ensemble_sweep_sol")) < stages.index("local_completion_screen")
@@ -704,6 +707,34 @@ def test_local_completion_is_checked_once_before_fable_reads_corrected_book(
     assert stages.index("local_completion_checks_meaning") < stages.index("local_completion_checks_correction") < stages.index("fable")
     assert [row for row in events if row["stage"] == "fable"][0]["payload"]["paragraphs"][0]["text"] == "She found the letter."
     assert result["questions"] == []
+    for stage in ("fable", "astra"):
+        saved = json.loads((tmp_path / f"completion/stages/{stage}.json").read_text())
+        assert saved["evidence"]["local"] == {"recurrence_candidates": 0}
+
+
+def test_fable_edit_is_propagated_by_the_post_fable_completion_pass(make_book, tmp_path, monkeypatch):
+    def complete(prepared, original, texts, *args, **kwargs):
+        if kwargs["stage"] == "completion_fable" and texts["body-0000"] != original["body-0000"]:
+            return [_local_row("body-0001", "Beckham", "Brooks", source="recurrence", category="spelling")], {"seeded": 1}
+        return [], {"seeded": 0}
+
+    def handler(stage, model, payload, kwargs):
+        if stage == "fable":
+            row = payload["paragraphs"][0]
+            return {"reviewed_ids": [x["id"] for x in payload["paragraphs"]],
+                    "findings": [finding(row["id"], "Beckham", "Brooks", "spelling")] if row["id"] == "body-0000" else [],
+                    "comment_decisions": [], "editorial_verdict": "ready"}
+        if stage == "local_completion_fable_screen":
+            return {"decisions": [ruling(site, replacement=site["proposals"][0]["replacement"])
+                                  for site in payload["sites"]]}
+
+    monkeypatch.setattr("galley.fixed_local.collect_completion_candidates", complete)
+    readers = Readers(handler=handler)
+    result = FixedWorkflow(make_book("Beckham smiled.", "Then Beckham left."), tmp_path / "propagate", calls=readers).run()
+    assert list(result["accepted"].values()) == ["Brooks smiled.", "Then Brooks left."]
+    astra = [row for row in readers.events if row["stage"] == "astra"]
+    assert astra and [p["text"] for p in astra[0]["payload"]["paragraphs"]] == ["Brooks smiled.", "Then Brooks left."]
+    assert json.loads((tmp_path / "propagate/stages/fable.json").read_text())["evidence"]["local"] == {"seeded": 1}
 
 
 def test_poetry_never_invokes_local_collectors(make_book, tmp_path, monkeypatch):
@@ -767,9 +798,11 @@ def test_real_local_generators_exclude_embedded_poetry_at_both_checkpoints(
     assert scanned == ["A quiet paragraph."]
     assert result["accepted"] == result["original"]
     assert result["questions"] == []
-    for stage in ("typed", "ensemble_sweep"):
+    for stage, expected in (("typed", "initial"), ("ensemble_sweep", "completion"),
+                            ("fable", "completion_fable"), ("astra", "completion_astra")):
         saved = json.loads((tmp_path / f"real-mixed-local/stages/{stage}.json").read_text())
         local = saved["evidence"]["local"]
+        assert local["stage"] == expected
         assert local["paragraph_ids"] == ["body-0001"]
         assert local["excluded_poetry_ids"] == ["body-0000"]
         assert all(check["paragraph_ids"] == ["body-0001"] for check in local["checks"])
@@ -815,7 +848,8 @@ def test_unchanged_rejected_local_site_is_not_paid_for_again_at_completion(
     result = FixedWorkflow(make_book("A quiet paragraph."), tmp_path / "dedup-local", calls=readers).run()
     assert result["accepted"] == result["original"] and result["questions"] == []
     assert sum(row["stage"] == "typed_screen" for row in readers.events) == 2
-    assert not any(row["stage"] in {"typed_disputes", "local_completion_screen", "local_completion_disputes"}
+    assert not any(row["stage"] in {"typed_disputes", "local_completion_screen", "local_completion_disputes",
+                                    "local_completion_fable_screen", "local_completion_astra_screen"}
                    for row in readers.events)
 
 
@@ -997,3 +1031,212 @@ def test_comment_resolution_cannot_depend_on_discarded_reader_proposal(make_book
     assert len(flow.questions) == 1
     assert flow.calls.events[-1]["stage"] == "fable_comment_review"
     assert flow.current == before
+
+
+# --- final walk-through scope, book map, reader guards ------------------------
+
+def test_walkthrough_prompts_reach_only_the_final_readers_and_their_checks(make_book, tmp_path):
+    from galley.press_prompt import CONTINUITY_TASK, FINAL_WALKTHROUGH, FINAL_WALKTHROUGH_CHECK
+
+    def handler(stage, model, payload, kwargs):
+        if stage == "fable":
+            row = payload["paragraphs"][0]
+            return {"reviewed_ids": [x["id"] for x in payload["paragraphs"]],
+                    "findings": [{**finding(row["id"], "brand new", "brand-new", "usage"), "evidence": []}],
+                    "comment_decisions": [], "editorial_verdict": "ready"}
+
+    readers = Readers(handler=handler)
+    result = FixedWorkflow(make_book("A brand new board waited."), tmp_path / "scope", calls=readers).run()
+    assert list(result["accepted"].values()) == ["A brand-new board waited."]
+    systems = {}
+    for row in readers.events:
+        systems.setdefault(row["stage"], row["system"])
+    assert all(FINAL_WALKTHROUGH in systems[stage] for stage in ("fable", "astra"))
+    assert all(FINAL_WALKTHROUGH not in systems[stage] for stage in systems if stage not in {"fable", "astra"})
+    assert CONTINUITY_TASK in systems["continuity"]
+    assert all(CONTINUITY_TASK not in systems[stage] for stage in systems if stage != "continuity")
+    assert FINAL_WALKTHROUGH_CHECK in systems["fable_checks_meaning"]
+    assert FINAL_WALKTHROUGH_CHECK not in systems.get("typed_screen", "")
+    fable = [row for row in readers.events if row["stage"] == "fable"]
+    assert all(row["payload"]["book_map"]["complete_inventory"] is True for row in fable)
+    assert "usage" in fable[0]["schema"]["properties"]["findings"]["items"]["properties"]["category"]["enum"]
+    from galley.fixed_workflow import READ_SCHEMA
+    assert "usage" not in READ_SCHEMA["properties"]["findings"]["items"]["properties"]["category"]["enum"]
+
+
+def test_book_map_lists_headings_and_running_heads_and_header_edits_round_trip(tmp_path):
+    from galley.fixed_documents import write_manuscripts
+    document = Document()
+    document.add_paragraph("CHAPTER 2", style="Heading 1")
+    document.add_paragraph("The first body paragraph of the chapter.")
+    document.add_paragraph("The second body paragraph of the chapter.")
+    document.add_paragraph("TOP TEN")
+    document.add_paragraph("Only one item.")
+    document.sections[0].header.paragraphs[0].text = "CHAPTER ONE"
+    source = tmp_path / "book.docx"
+    document.save(source)
+    header_id = None
+
+    def handler(stage, model, payload, kwargs):
+        nonlocal header_id
+        if stage == "fable":
+            heads = [x for x in payload["paragraphs"] if x["id"].startswith("header")]
+            if heads:
+                header_id = heads[0]["id"]
+                return {"reviewed_ids": [x["id"] for x in payload["paragraphs"]],
+                        "findings": [{**finding(header_id, "CHAPTER ONE", "CHAPTER 1", "structure"), "evidence": []}],
+                        "comment_decisions": [], "editorial_verdict": "ready"}
+
+    readers = Readers(handler=handler)
+    result = FixedWorkflow(source, tmp_path / "map", calls=readers).run()
+    assert result["accepted"][header_id] == "CHAPTER 1"
+    book_map = next(row for row in readers.events if row["stage"] == "fable")["payload"]["book_map"]
+    assert [(h["text"], h["signal"], h["body_paragraphs"]) for h in book_map["headings"]] == [
+        ("CHAPTER 2", "style", 2), ("TOP TEN", "caps_line", 1)]
+    assert [(h["location"], h["text"]) for h in book_map["headers_footers"]] == [("header", "CHAPTER ONE")]
+    tracked, clean, _ = write_manuscripts(source, tmp_path / "final", result["accepted"])
+    assert Document(clean).sections[0].header.paragraphs[0].text == "CHAPTER 1"
+
+
+@pytest.mark.parametrize("replacement, problem", [
+    ("*Huckleberry Finn*", "markup"),
+    ("Huckleberry\nFinn", "line break"),
+])
+def test_reader_replacements_that_are_not_manuscript_text_are_rejected(replacement, problem):
+    from galley.fixed_workflow import RejectedModelProposal
+    texts = {"p1": "She read Huckleberry Finn twice."}
+    with pytest.raises(RejectedModelProposal, match=problem) as info:
+        _candidate(finding("p1", "Huckleberry Finn", replacement), texts, FABLE)
+    assert info.value.status == "rejected_invalid_proposal"
+    with pytest.raises(RejectedModelProposal, match="paragraph start"):
+        _candidate(finding("p1", "She", " She"), texts, FABLE)
+    assert _candidate(finding("p1", "She read", "She had read"), texts, FABLE)["replacement"] == "had "
+
+
+def test_markup_from_a_final_reader_lands_in_the_rejected_diagnostics(make_book, tmp_path):
+    def handler(stage, model, payload, kwargs):
+        if stage == "fable":
+            row = payload["paragraphs"][0]
+            return {"reviewed_ids": [x["id"] for x in payload["paragraphs"]],
+                    "findings": [{**finding(row["id"], "Huckleberry Finn", "*Huckleberry Finn*", "typesetting"), "evidence": []}],
+                    "comment_decisions": [], "editorial_verdict": "ready"}
+
+    readers = Readers(handler=handler)
+    result = FixedWorkflow(make_book("She read Huckleberry Finn twice."), tmp_path / "markup", calls=readers).run()
+    assert result["accepted"] == result["original"]
+    rejected = [h for h in result["history"] if h.get("rejected_proposal") and h["stage"] == "fable"]
+    assert rejected and rejected[0]["rejected_proposal"]["status"] == "rejected_invalid_proposal"
+    assert "markup" in rejected[0]["rejected_proposal"]["reason"]
+
+
+# --- continuity lane ----------------------------------------------------------
+
+def continuity_finding(pid, quote, replacement, evidence, *, action="edit", question="", missing=""):
+    return {"para_id": pid, "quote": quote, "occurrence": 1, "replacement": replacement,
+            "action": action, "category": "continuity", "reason": "The surname is established elsewhere.",
+            "question": question, "missing_knowledge": missing, "evidence": evidence}
+
+
+def test_continuity_reads_the_whole_book_once_and_opus_rules_with_the_cited_evidence(make_book, tmp_path):
+    seen = {}
+
+    def handler(stage, model, payload, kwargs):
+        if stage == "continuity":
+            seen["payload"] = payload
+            assert model == FABLE
+            return {"findings": [continuity_finding("body-0001", "Beckham", "Brooks",
+                                                    [{"para_id": "body-0000", "quote": "Kai Brooks smiled."}])],
+                    "reading_notes": "One surname split."}
+        if stage == "continuity_adjudication":
+            assert model == OPUS
+            seen["sites"] = payload["sites"]
+            return {"decisions": [ruling(site, replacement=site["proposals"][0]["replacement"]) for site in payload["sites"]]}
+        if stage == "continuity_checks_meaning":
+            seen["checks"] = payload["changes"]
+
+    readers = Readers(handler=handler)
+    result = FixedWorkflow(make_book("Kai Brooks smiled.", "Then Kai Beckham left."), tmp_path / "continuity", calls=readers).run()
+    assert list(result["accepted"].values()) == ["Kai Brooks smiled.", "Then Kai Brooks left."]
+    assert [row["id"] for row in seen["payload"]["book"]] == ["body-0000", "body-0001"]
+    assert seen["payload"]["complete_book"] is True and seen["payload"]["part"] == [1, 1]
+    assert all(row["location"] == "body" for row in seen["payload"]["book"])
+    [site] = seen["sites"]
+    assert site["evidence_paragraphs"] == {"body-0000": "Kai Brooks smiled."}
+    assert site["proposals"][0]["evidence"][0]["quote"] == "Kai Brooks smiled."
+    assert seen["checks"][0]["evidence"][0]["para_id"] == "body-0000"
+    assert not any(row["stage"] == "continuity_screen" for row in readers.events)
+    applied = [h for h in result["history"] if h.get("applied") and h["stage"] == "continuity"]
+    assert applied[0]["applied"]["models"] == [FABLE, OPUS]
+    assert [s["stage"] for s in result["stages"]].index("continuity") < [s["stage"] for s in result["stages"]].index("fable")
+
+
+@pytest.mark.parametrize("evidence, reason", [
+    ([], "lacks cited evidence"),
+    ([{"para_id": "body-0001", "quote": "Beckham"}], "another paragraph"),
+    ([{"para_id": "body-0000", "quote": "Kai Brooks frowned."}], "does not occur verbatim"),
+])
+def test_continuity_edits_without_verified_evidence_are_rejected(make_book, tmp_path, evidence, reason):
+    def handler(stage, model, payload, kwargs):
+        if stage == "continuity":
+            return {"findings": [continuity_finding("body-0001", "Beckham", "Brooks", evidence)],
+                    "reading_notes": ""}
+
+    readers = Readers(handler=handler)
+    result = FixedWorkflow(make_book("Kai Brooks smiled.", "Then Kai Beckham left."), tmp_path / "evidence", calls=readers).run()
+    assert result["accepted"] == result["original"]
+    assert not any(row["stage"] == "continuity_adjudication" for row in readers.events)
+    rejected = [h for h in result["history"] if h.get("rejected_proposal") and h["stage"] == "continuity"]
+    assert rejected and reason in rejected[0]["rejected_proposal"]["reason"]
+
+
+@pytest.mark.parametrize("path", ["opus_drop", "opus_query", "reader_query"])
+def test_continuity_drop_and_query_paths(make_book, tmp_path, path):
+    evidence = [{"para_id": "body-0000", "quote": "the Rusty Hook Tavern"}]
+
+    def handler(stage, model, payload, kwargs):
+        if stage == "continuity":
+            if path == "reader_query":
+                return {"findings": [continuity_finding("body-0001", "the Mad Crabber", "the Mad Crabber", evidence,
+                                                        action="query", question="Which name is the restaurant's?",
+                                                        missing="The intended restaurant name")], "reading_notes": ""}
+            return {"findings": [continuity_finding("body-0001", "the Mad Crabber", "the Rusty Hook Tavern", evidence)],
+                    "reading_notes": ""}
+        if stage == "continuity_adjudication":
+            if path == "opus_drop":
+                return {"decisions": [ruling(site, "drop") for site in payload["sites"]]}
+            return {"decisions": [{**ruling(site, "query"), "question": "Which name is the restaurant's?",
+                                   "missing_knowledge": "The intended restaurant name"} for site in payload["sites"]]}
+
+    readers = Readers(handler=handler)
+    result = FixedWorkflow(make_book("They ate at the Rusty Hook Tavern.", "Later they left the Mad Crabber."),
+                           tmp_path / path, calls=readers).run()
+    assert result["accepted"] == result["original"]
+    if path == "opus_drop":
+        assert result["questions"] == []
+    else:
+        assert [q["question"] for q in result["questions"]] == ["Which name is the restaurant's?"]
+        assert result["questions"][0]["stage"] == "continuity"
+    assert any(row["stage"] == "continuity_adjudication" for row in readers.events) == (path != "reader_query")
+
+
+def test_a_skipped_continuity_read_still_delivers(make_book, tmp_path):
+    def handler(stage, model, payload, kwargs):
+        if stage == "continuity":
+            return {"_skipped_read": {"stage": stage, "model": model, "reason": "Simulated exhausted read"}}
+
+    readers = Readers(handler=handler)
+    result = FixedWorkflow(make_book("A quiet page."), tmp_path / "skipped", calls=readers).run()
+    assert result["review_complete"] is False and result["skipped_reads"]
+    continuity = json.loads((tmp_path / "skipped/stages/continuity.json").read_text())["evidence"]
+    assert continuity["coverage"][0]["status"] == "skipped" and continuity["skipped_reads"]
+    assert [row["stage"] for row in readers.events if row["stage"] in {"fable", "astra"}] == ["fable", "astra"]
+
+
+def test_a_version_2_workspace_requires_a_fresh_run(make_book, tmp_path):
+    source = make_book("A quiet page.")
+    flow = FixedWorkflow(source, tmp_path / "v2", calls=object())
+    marker = json.loads(flow.manifest.read_text())
+    marker["identity"]["version"] = "fixed-proofreading-v2"
+    flow.manifest.write_text(json.dumps(marker))
+    with pytest.raises(FixedWorkflowError, match="fresh workspace"):
+        FixedWorkflow(source, tmp_path / "v2", calls=object())

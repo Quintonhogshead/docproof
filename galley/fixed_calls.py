@@ -330,9 +330,24 @@ def _transport(model: str, requested: str | None) -> str:
 
 
 CLAUDE_READ_TIMEOUT_SECONDS = 900
+# A whole-book read at high effort needs longer than a windowed one.
+CLAUDE_STAGE_TIMEOUT_SECONDS = {"continuity": 1800}
 
 
-def _default_provider(cfg: Config, *, model: str):
+def _make_provider(factory, cfg, model, stage):
+    """Pass the stage only to a factory that accepts it: the stage selects a
+    read timeout, and older factories (tests, custom transports) take
+    `(cfg, *, model)` alone."""
+    import inspect
+    try:
+        parameters = inspect.signature(factory).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    accepts = "stage" in parameters or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values())
+    return factory(cfg, model=model, stage=stage) if accepts else factory(cfg, model=model)
+
+
+def _default_provider(cfg: Config, *, model: str, stage: str | None = None):
     if not model.startswith("claude-"):
         return build_provider(cfg, model=model)
     from docproof.providers.subagent import SubagentProvider, availability
@@ -344,7 +359,7 @@ def _default_provider(cfg: Config, *, model: str):
         async def _turn(self, *args, evidence, **kwargs):
             import asyncio
             result = await asyncio.wait_for(super()._turn(*args, evidence=evidence, **kwargs),
-                                            timeout=CLAUDE_READ_TIMEOUT_SECONDS)
+                                            timeout=CLAUDE_STAGE_TIMEOUT_SECONDS.get(stage, CLAUDE_READ_TIMEOUT_SECONDS))
             message = evidence.get("result")
             if message is None:
                 return replace(result, stop_reason="incomplete", error="Claude supplied no terminal result")
@@ -720,7 +735,7 @@ class FixedCalls:
                     _, context = self._transport_context(request, directory, attempt)
                     try:
                         with use_context(context):
-                            provider = self.provider_factory(self._provider_config(model, effort), model=model)
+                            provider = _make_provider(self.provider_factory, self._provider_config(model, effort), model, stage)
                     except Exception as exc:
                         receipt.update(status="preflight_failed", failure_category=type(exc).__name__)
                         _atomic(receipt_path, receipt)

@@ -170,3 +170,51 @@ def test_a_real_word_recurring_a_few_times_is_still_queried():
     out = propagate_recurrences([seed], ps)
     assert {f.para_id for f in out} == {"body-0001", "body-0002"}
     assert all(f.force_query for f in out)
+
+
+# --- casing seeds (the god -> God in six of seven places case) ---------------
+
+def test_casing_seed_propagates_only_to_exact_case_sites_as_screened_edits():
+    ps = paras("She said thank god for the storm.",           # the seed
+               "He whispered thank god again and again.",      # exact-case site
+               "God was silent. The GOD of thunder waited.")   # other casings
+    seed = _edit(ps[0], "god", "God")
+    assert propagate_recurrences([seed], ps) == []              # legacy: casing never seeds
+    out = propagate_recurrences([seed], ps, casing=True)
+    assert [(f.para_id, f.corrected_text) for f in out] == [
+        ("body-0001", "He whispered thank God again and again.")]
+    assert not out[0].force_query and out[0].confidence == "high"
+    assert 'changed to "God" at 1 other site(s) in this run' in out[0].explanation
+
+
+def test_casing_seed_skips_sentence_initial_positions():
+    ps = paras("The blue Earth turned.",                       # the seed: Earth -> earth
+               "Earth was quiet. He loved the Earth so.")      # first is positional, second is not
+    seed = _edit(ps[0], "Earth", "earth")
+    out = propagate_recurrences([seed], ps, casing=True)
+    assert [f.corrected_text for f in out] == ["He loved the earth so."]
+
+
+def test_contradictory_or_mixed_casing_seeds_are_dropped():
+    ps = paras("thank god one.", "thank God two.", "a god three.", "the gods four.")
+    up, down = _edit(ps[0], "god", "God"), _edit(ps[1], "God", "god")
+    assert propagate_recurrences([up, down], ps, casing=True) == []
+    spelling = _edit(ps[2], "god", "gods")
+    assert propagate_recurrences([up, spelling], ps, casing=True) == []
+
+
+def test_hyphenation_seed_propagates_and_casing_edits_are_uncapped():
+    ps = paras("She met a grown up man.", "He met a grown up man too.")
+    out = propagate_recurrences([_edit(ps[0], "grown up", "grown-up")], ps, casing=True)
+    assert [f.corrected_text for f in out] == ["He met a grown-up man too."]
+    many = paras("thank god zero.", *[f"thank god {i}." for i in range(1, 21)])
+    out = propagate_recurrences([_edit(many[0], "god", "God")], many, casing=True)
+    assert len(out) == 20 and all(not f.force_query for f in out)
+
+
+def test_max_ask_sites_override_lifts_the_common_word_cap():
+    ps = paras("It was okay then.", *[f"It was okay {i}." for i in range(13)])
+    seed = _edit(ps[0], "okay", "OK")
+    assert propagate_recurrences([seed], ps) == []
+    out = propagate_recurrences([seed], ps, max_ask_sites=100)
+    assert len(out) == 13 and all(f.force_query for f in out)

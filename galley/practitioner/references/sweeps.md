@@ -37,7 +37,9 @@ read `references/house-rules.md` before choosing replacements.
 Normalization (curling quotes, canonical spacing) defines analysis coordinates;
 it is not a silent edit to the delivered wording. Each wording change needs a
 tracked finding. `sweep_terminal_period` skips attribution/display/template lines,
-and must be OFF on split-paragraph books where it would punctuate fragments.
+and on the legacy agent path must be OFF on split-paragraph books where it
+would punctuate fragments (the fixed workflow rejoins page runovers at intake —
+see `docs/fixed-galley.md` — so there the sweep stays on).
 Dialogue tags followed by an opening quote do not acquire a period.
 `sweep_decade_apostrophe` applies to the/early/late/mid decade leads, never ages
 or temperatures. Skip headings structurally (short line, no terminal punctuation,

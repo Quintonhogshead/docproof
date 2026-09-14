@@ -52,6 +52,7 @@ FREE_FORM: frozenset[str] = frozenset({
     "repair",             # repair.py — the atomic broken-sentence repair channel
     "term_consistency",   # consistency.py CONSISTENCY_KEY
     "name_consistency",   # consistency.py NAME_KEY
+    "case_split",         # consistency.py CASE_SPLIT_KEY — casing splits, fixed Galley only
     "near_duplicate_name",# pipeline.py — protected-name pairs too close to call
     "unclosed_quote",     # sweeps.py — unbalanced-quotation queries
     "speaker_split",      # speakersplit.py — the split's declarative comment

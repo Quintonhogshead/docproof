@@ -13,6 +13,7 @@ import copy
 from dataclasses import asdict, replace
 import hashlib
 import inspect
+import re
 import itertools
 import json
 from pathlib import Path
@@ -464,13 +465,14 @@ def _house_findings(paragraphs, prepared, cfg):
     return found, [asdict(report) for report in reports]
 
 
-def _consistency_findings(paragraphs, prepared, cfg):
+def _consistency_findings(paragraphs, prepared, cfg, **overrides):
     from docproof.consistency import find_inconsistencies, to_findings
     options = {k: v for k, v in cfg.consistency.model_dump().items() if k in inspect.signature(find_inconsistencies).parameters}
     options.update(enabled=True, max_queries_per_kind=max(1, sum(len(p.text) for p in paragraphs)),
         respell=getattr(prepared.variant, "respell_map", {}),
         protected=tuple(prepared.spell.lexicon) + tuple(cfg.consistency.seeded_names),
         dictionary=cfg.spellcheck.dictionary or getattr(prepared.variant, "dictionary", None) or "en_US")
+    options.update(overrides)
     return to_findings(find_inconsistencies(paragraphs, **options), paragraphs)
 
 
@@ -559,26 +561,50 @@ def collect_local_candidates(prepared, texts, directory, *, identity, poetry_ids
     return _packet(directory, request, build)
 
 
+# A seed word: letters joined by apostrophes or hyphens, so band-aid -> Band-Aid
+# and grown up -> grown-up read as one swap each, never as a sweep of "band".
+_SEED_WORD = re.compile(r"[^\W\d_]+(?:['’\-‐‑][^\W\d_]+)*\Z", re.UNICODE)
+
+
 def _recurrence_seeds(original, current, excluded):
-    import re
     from difflib import SequenceMatcher
+    from docproof.spellscan import _sentence_initial
     seeds = []
     # Word-token deltas preserve whole typo surfaces (recieved -> received),
-    # whereas character-minimal diffs would trim them to ie -> ei.
-    token = re.compile(r"\w+(?:['’]\w+)*|\W+", re.UNICODE)
+    # whereas character-minimal diffs would trim them to ie -> ei. Hyphenated
+    # and apostrophe-joined words are one token for the same reason.
+    token = re.compile(r"\w+(?:['’\-‐‑]\w+)*|\W+", re.UNICODE)
     for pid, before in original.items():
         if pid in excluded or pid not in current or before == current[pid]:
             continue
         after = current[pid]
         a, b = list(token.finditer(before)), list(token.finditer(after))
-        for tag, i, j, k, l in SequenceMatcher(a=[m.group() for m in a], b=[m.group() for m in b], autojunk=False).get_opcodes():
+        opcodes = SequenceMatcher(a=[m.group() for m in a], b=[m.group() for m in b], autojunk=False).get_opcodes()
+        # Two replaced words around one unchanged space are one two-word swap
+        # (easy speed -> Easy Speed), not two independent single-word seeds
+        # that would each sweep the book on their own.
+        merged = []
+        for op in opcodes:
+            if (len(merged) >= 2 and op[0] == "replace" and merged[-1][0] == "equal"
+                    and merged[-2][0] == "replace"
+                    and merged[-1][2] - merged[-1][1] == 1 and a[merged[-1][1]].group() == " "):
+                first = merged[-2]
+                merged[-2:] = [("replace", first[1], op[2], first[3], op[4])]
+            else:
+                merged.append(op)
+        for tag, i, j, k, l in merged:
             if tag != "replace" or i == j or k == l:
                 continue
             old = before[a[i].start():a[j - 1].end()]
             new = after[b[k].start():b[l - 1].end()]
             if (not 1 <= len(old.split()) <= 2 or not 1 <= len(new.split()) <= 2 or
-                    not all(word.isalpha() for word in old.split() + new.split()) or
+                    not all(_SEED_WORD.match(word) for word in old.split() + new.split()) or
                     old != old.strip() or new != new.strip()):
+                continue
+            # A capital supplied because the word now opens a sentence is the
+            # sentence's doing, not a casing decision about the word.
+            if (old.lower() == new.lower() and old[:1].islower() and new[:1].isupper()
+                    and _sentence_initial(after, b[k].start())):
                 continue
             # Seeds sit at the corrected word's CURRENT location, so claimed
             # spans cannot accidentally mask a later occurrence after edits.
@@ -609,11 +635,19 @@ def collect_completion_candidates(prepared, original, current, directory, *, ide
         ceiling = max(1, sum(len(p.text) for p in paragraphs))
         language = _dictionary(prepared, cfg)
         seeds = _recurrence_seeds(original, current, set(poetry_ids))
+        # A casing the run has already decided by an accepted edit outranks
+        # the count-based split scan for that term.
+        casing_keys = sorted({s.anchor.delete_text.lower() for s in seeds
+                              if s.anchor.delete_text.lower() == s.anchor.insert_text.lower()})
         house, reports = _house_findings(paragraphs, prepared, cfg)
-        groups = {"house_sweeps": house, "consistency": _consistency_findings(paragraphs, prepared, cfg),
+        groups = {"house_sweeps": house,
+            "consistency": _consistency_findings(paragraphs, prepared, cfg, case_split_exclude=casing_keys),
             "residuals": residual_queries(paragraphs, [], max_per_rule=ceiling),
+            # Every row here is screened in context, so casing decisions
+            # propagate as edits and the common-word query cap is lifted.
             "recurrences": propagate_recurrences(seeds, paragraphs, dictionary=language,
-                protected=prepared.spell.lexicon, max_sites_per_surface=ceiling),
+                protected=prepared.spell.lexicon, max_sites_per_surface=ceiling,
+                casing=True, max_ask_sites=ceiling),
             "calendar": calendar_findings(paragraphs, itertools.count(1))}
         rows, checks = [], []
         for name, found in groups.items():
@@ -624,7 +658,8 @@ def collect_completion_candidates(prepared, original, current, directory, *, ide
         rows.extend(structure)
         checks.append(_check("normalization_and_speakers", paragraphs, len(structure)))
         return _deduplicate(rows), checks, [], {"sweep_reports": reports,
-            "recurrence_seed_count": len(seeds), "uncapped_site_ceiling": ceiling,
+            "recurrence_seed_count": len(seeds), "casing_seed_keys": casing_keys,
+            "uncapped_site_ceiling": ceiling,
             "recurrence_guard": "Context-dependent common-word floods retain the existing exclusion guard; no propagation is applied directly."}
 
     return _packet(directory, request, build)

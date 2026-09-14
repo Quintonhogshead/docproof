@@ -141,3 +141,40 @@ def test_changed_extracted_policy_cannot_resume_old_recipe(tmp_path, monkeypatch
     monkeypatch.setattr(press_prompt, "FRONTIER_TASK", press_prompt.FRONTIER_TASK + "\nNew rule.")
     with pytest.raises(FixedWorkflowError, match="recipe changed"):
         FixedWorkflow(source, tmp_path / "run", calls=object())
+
+
+def test_seam_hyphen_sites_need_a_dictionary_and_an_unknown_part():
+    known = {"the", "road", "county", "well", "known", "fact"}
+    knows = lambda w: w.lower() in known
+    paragraphs = [para("a", "The Cala-veras road."), para("b", "Calaveras County."),
+                  para("c", "A well-known fact."), para("d", "The Tusca-loosa road.")]
+    focused = focused_checks(paragraphs, knows=knows)
+    seams = [s for s in focused["sites"] if s["check"] == "seam_hyphen"]
+    assert [(s["para_id"], s["quote"]) for s in seams] == [("a", "Cala-veras"), ("d", "Tusca-loosa")]
+    assert "occurs 1 time(s) unhyphenated" in seams[0]["detail"]
+    assert "neither 'Tusca' nor 'loosa'" in seams[1]["detail"] and focused["counts"]["seam_hyphen"] == 2
+    without = focused_checks(paragraphs)
+    assert without["counts"]["seam_hyphen"] == 0 and not any(s["check"] == "seam_hyphen" for s in without["sites"])
+
+
+def test_book_map_is_a_complete_inventory():
+    from galley.press_checks import book_map
+    paragraphs = [para("h1", "CHAPTER ONE", style="Heading1"), para("p1", "Body one."), para("p2", "Body two."),
+                  para("h2", "ACKNOWLEDGEMENTS"), para("p3", "Thanks."),
+                  para("r1", "12 | ANA AND ATLAS", part="word/header1.xml", location="header"),
+                  para("r2", "", part="word/header2.xml", location="header")]
+    result = book_map(paragraphs, lambda style: style.startswith("Heading"))
+    assert result["complete_inventory"] is True
+    assert [(h["id"], h["signal"], h["body_paragraphs"]) for h in result["headings"]] == [
+        ("h1", "style", 2), ("h2", "caps_line", 1)]
+    assert [h["id"] for h in result["headers_footers"]] == ["r1"]
+    assert result["total_body_paragraphs"] == 3
+
+
+def test_walkthrough_and_continuity_prompts_are_bound_into_the_recipe_identity(monkeypatch):
+    before = press_prompt.policy_identity()
+    for name in ("FINAL_WALKTHROUGH", "FINAL_WALKTHROUGH_CHECK", "CONTINUITY_TASK"):
+        monkeypatch.setattr(press_prompt, name, getattr(press_prompt, name) + "\nNew rule.")
+        assert press_prompt.policy_identity() != before
+        monkeypatch.undo()
+        assert press_prompt.policy_identity() == before

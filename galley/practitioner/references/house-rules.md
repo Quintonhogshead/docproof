@@ -35,8 +35,9 @@ Redding, Purpura, Paik, and Georgis precedents; full examples remain in history.
 - Protect attribution/copyright template/display lines structurally before the
   ladder. Use locked intent zones for label formatting so number/period passes
   cannot damage it; explicit chapter-label repair rows still follow the authorized
-  label map. On split-paragraph books disable the destructive terminal-period
-  sweep before approval. Never detect headings solely by style name.
+  label map. On the legacy agent path, disable the destructive terminal-period
+  sweep on split-paragraph books before approval (the fixed workflow rejoins
+  page runovers at intake instead). Never detect headings solely by style name.
 
 ## Decide before querying
 

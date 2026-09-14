@@ -13,11 +13,34 @@ and changed package members to the review and final certificate. Existing
 comments and untouched package members are preserved. Rejecting Galley's new
 corrections restores this baseline, including the edits the book arrived with.
 Unsupported revision types stop before paid reads with a specific intake error.
-Clean files keep their existing source identity; no baseline is created.
+
+Intake also rejoins page-runover paragraphs. A typeset export (an InDesign or
+PDF-derived .docx) stores a paragraph that spills across a page as two
+consecutive paragraphs, and every reader then "repairs" the seam: a period on
+the first half, an opening quotation mark on the second, a line-break hyphen
+left inside a word. The export records the truth in paragraph geometry: under a
+first-line-indent convention a true paragraph's first line starts one indent in
+from the body margin (`left + firstLine`, whether written as 248+300 or 548+0),
+and a continuation's first line starts flush at the margin (248+0). When at
+least 60% of prose body paragraphs carry explicit indent geometry and at least
+a quarter of those start indented, each consecutive same-style body paragraph
+whose first line starts at the margin is folded onto the paragraph before it,
+keeping the head's properties, indent and section break, moving the
+continuation's runs, bookmarks and comment ranges, and dropping a line-break
+hyphen when the dictionary knows the joined word. Text shape is never consulted.
+Refused seams (a heading, a style change, an empty paragraph or a section break
+on both halves, a flush head) are counted in the receipt. The join is recorded
+in `intake/receipt.json` (`runover_joins`: ids, seam offsets, separators,
+hyphen decisions) and in the proofreading report; it is not a tracked change,
+so rejecting Galley's corrections restores the joined baseline. This is
+`fixed-intake-v2`; a v1 baseline requires a fresh workspace. Clean files that
+need neither transformation keep their existing source identity; no baseline
+is created.
 
 The agreed sequence is:
 
-1. Preserve and identify the incoming manuscript.
+1. Preserve and identify the incoming manuscript, accept its revisions and
+   rejoin its page-runover paragraphs.
 2. Sonnet reads small samples distributed across the manuscript to determine
    whether it is poetry. Poetry follows the existing spelling-only route and
    finishes without the prose stages or requiring a ChatGPT login.
@@ -36,8 +59,45 @@ The agreed sequence is:
 8. Opus and Sol independently sweep every paragraph of the corrected book.
    Sol uses the saved ChatGPT subscription login. Unresolved proposals go to
    Sonnet and Luna screening, with Opus settling only disagreements from that pair.
-9. Fable 5.1 sweeps the resulting book and reviews every proposed Galley comment.
-10. Astra sweeps the Fable-corrected book and reviews every surviving comment.
+   The deterministic propagation and consistency sweep then runs (below).
+9. Fable 5.1 reads the whole current book in one request for continuity:
+   names, places, businesses, relationships, timeline and geography the book
+   contradicts about itself. Every finding cites verbatim evidence elsewhere in
+   the book, verified by code. Evidenced edits go straight to Opus adjudication
+   with the cited paragraphs attached, then the usual Luna checks; unresolved
+   contradictions become author questions.
+10. Fable 5.1 sweeps the resulting book under the final walk-through scope and
+    reviews every proposed Galley comment; the propagation and consistency
+    sweep then carries its accepted decisions book-wide.
+11. Astra sweeps the Fable-corrected book under the same scope and reviews
+    every surviving comment, followed by the final propagation and
+    consistency sweep.
+
+## Final walk-through scope
+
+Fable and Astra are the last human-grade pass before the book is presentable,
+so their read is widened beyond clear mechanical errors — still minimal edits,
+never rewrites: typesetting and layout artifacts (a line-break hyphen inside a
+word, page-split fragments, stray characters); a continuity backstop with
+verified evidence; facts and logic a general reader would notice (edit only
+when the wording makes the fix unambiguous, otherwise query); headings, running
+heads and front/back matter, read against `book_map`, a complete inventory of
+every current heading and every header/footer paragraph (the older
+`structure_context` is only a bounded opening-pages excerpt); and copyedit-grade
+usage (brand-new before a noun, a nonrestrictive appositive, faulty
+parallelism). Author voice, dialect, dialogue, deliberate fragments, invented
+terms, quotations, the established variant and poetry keep their protections.
+Header and footer paragraphs are owned, editable paragraphs. A deterministic
+`seam_hyphen` focused check flags a hyphenated word whose parts the dictionary
+does not know but whose joined form it does, or which the book writes
+unhyphenated elsewhere. Continuity findings from these readers must cite
+evidence like the continuity lane's; a continuity edit without verified
+evidence is discarded. Replacements must be plain manuscript text: a reader
+replacement that introduces Markdown or backslash characters, a line break or
+tab into a paragraph that has none, or whitespace at a paragraph boundary is
+rejected as `rejected_invalid_proposal`. The Luna meaning and correction checks
+for these stages receive the same widened scope and the verified evidence, so
+an evidenced name reconciliation is not bounced as a fact change.
 
 ## Explicit disagreement gate
 
@@ -199,12 +259,27 @@ measurements stay in internal diagnostics and cannot justify edits or author
 questions. Poetry stays on its spelling-only route, including poetry sections
 excluded from the prose checking pass.
 
-After the main prose repairs, a bounded local completion pass checks residual
-house-rule errors and other occurrences of accepted word corrections. These
-receive Sonnet and Luna screening, followed by the usual correction checks. Local
-rules never authorize an edit on their own. Their candidates pass the same
-proofreading and intent guards as the model readers; Fable and Astra still
-review any resulting comments.
+After the ensemble sweep, and again after each of the Fable and Astra reads,
+the deterministic propagation and consistency sweep runs over the current book
+so that every accepted decision is applied consistently. It re-emits every
+accepted word or short-phrase swap at its other occurrences, including casing
+decisions (`god` changed to `God` in six of seven places proposes the seventh:
+exact-case sites only, sentence-initial positions excluded, as screened edits)
+and hyphenation decisions (`band-aid` to `Band-Aid`, `grown up` to `grown-up`);
+the common-word query cap is lifted because every row is screened. It also
+raises casing splits no edit created (`earth` ×11 against `Earth` ×3 outside
+sentence-initial position, `easy speed` against `Easy Speed`): when the
+dominant form leads 3:1 over at least five uses it is proposed as a tracked
+edit at each outlier, and a closer split is proposed with its counts and no
+preference. ALLCAPS forms, capitalized name phrases (Atlas the Elephant, Easy
+Speed counted only as the phrase) and determiner-led kinship nouns (my mom
+against Mom) are excluded; a casing the run has already decided by an edit
+outranks the counts. Residual house-rule errors are rechecked in the same pass.
+Every candidate receives Sonnet and Luna screening, Opus on disagreement, and
+the usual correction checks; each pass has its own local receipt
+(`completion`, `completion_fable`, `completion_astra`). Local rules never
+authorize an edit on their own, and Fable and Astra still review any resulting
+comments.
 
 Local scan receipts record paragraph coverage, configuration, implementation
 hashes, and results. Successful scans are reused on resume. A missing checker,
@@ -288,8 +363,10 @@ be selected halfway through a legacy manuscript; use a separate workspace for a
 fresh run. Fixed checkpoint identity also survives an interruption before the
 first driver result is written.
 
-The compulsory local checks belong to fixed recipe version 2. A workspace
-created by fixed version 1 cannot resume under the new recipe: start a fresh
+The compulsory local checks belong to fixed recipe version 2; the continuity
+lane, the final walk-through scope, the post-Fable and post-Astra propagation
+passes and the casing sweep belong to version 3. A workspace created by an
+earlier fixed version cannot resume under the new recipe: start a fresh
 workspace so the added checks cover the original manuscript and become part
 of its certification. Existing checkpoints are not silently relabeled as having
 completed checks that were absent from their recipe.
