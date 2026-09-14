@@ -202,3 +202,33 @@ def test_report_describes_runover_joins_and_not_revisions(manuscript):
     assert "Incoming tracked changes" not in report
     revised = fd._report(result, [], {"resolved_revision_elements": {"word/document.xml": 2}, "runover_joins": []})
     assert "Incoming tracked changes" in revised and "Page-runover" not in revised
+
+
+def test_a_question_about_a_running_head_is_carried_by_the_first_body_paragraph(tmp_path):
+    """Word keeps comments in the body only; a running-head question must not
+    block the delivery of 569 good corrections (Wilder, 2026-09-14)."""
+    from docx import Document
+    from docproof.utils.xml_helpers import DocxPackage, qn
+    source = tmp_path / "Writer - Book 1.docx"
+    document = Document()
+    document.add_paragraph("PROLOGUE")
+    document.add_paragraph("The boat arrived at dawn.")
+    document.sections[0].header.paragraphs[0].text = "CHAPTER ONE"
+    document.save(source)
+    accepted = fd.paragraph_views(source)
+    header = next(pid for pid, text in accepted.items() if text == "CHAPTER ONE")
+    first = next(pid for pid, text in accepted.items() if text == "PROLOGUE")
+    assert header.startswith("header")
+    question = {"id": "q-head", "para_id": header, "quote": "CHAPTER ONE",
+                "question": "Should this be PROLOGUE?", "missing_knowledge": "The intended label"}
+    tracked, clean, details = fd.write_manuscripts(source, tmp_path / "out", accepted, [question])
+    row = next(x for x in details if x["finding_id"] == "q-head")
+    assert row["queried"] and row["relocated_from"] == header and row["para_id"] == first
+    comments = DocxPackage(tracked).tree("word/comments.xml")
+    texts = ["".join(t.text or "" for t in c.iter(qn("w:t"))) for c in comments if c.tag == qn("w:comment")]
+    assert texts and "About the running head \u201cCHAPTER ONE\u201d: Should this be PROLOGUE?" in texts[0]
+    assert fd.paragraph_views(clean) == accepted
+    result = {"identity": {}, "source": str(source), "poetry_only": False, "questions": [question],
+              "stages": [], "history": []}
+    report = fd._report(result, details)
+    assert "because Word keeps comments in the body" in report
