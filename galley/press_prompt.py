@@ -232,6 +232,16 @@ stylistic rewriting. evidence on a change lists verified passages elsewhere in t
 book; reconciling a name, place or fact to that evidenced established form
 preserves the book's facts. """
 
+# The screen that rules on a final reader's QUESTIONS must judge them in the
+# reader's own scope. Without this, Wilder's screen dropped seven of eight
+# fact, logic and continuity questions as "outside proofreading scope".
+WALKTHROUGH_QUERY_RIDER = FINAL_WALKTHROUGH_CHECK + """A question raised in this
+stage about a fact or logic a general reader would notice, a continuity
+contradiction, or a heading or running-head inconsistency is in scope: keep it
+as a query when the reader names what only the author can supply and the text
+does not settle it. Drop it only when the book itself answers it or the concern
+is stylistic. """
+
 CONTINUITY_TASK = """WHOLE-BOOK CONTINUITY READ
 You hold the complete current manuscript in reading order (id, text, location).
 Find only statements the book contradicts ABOUT ITSELF. Do not compare it with

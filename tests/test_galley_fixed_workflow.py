@@ -1369,3 +1369,85 @@ def test_number_sites_are_read_under_short_labels_and_recorded_by_durable_id(mak
     assert all(s["text"] for r in reads for s in r["payload"]["sites"])
     stage = json.loads(Path(next(s["path"] for s in result["stages"] if s["stage"] == "numbers")).read_text())
     assert [s["id"][:7] for s in stage["evidence"]["sites"]] == ["number-"] * 3
+
+
+def test_final_reader_questions_are_screened_in_the_walkthrough_scope(make_book, tmp_path):
+    """Wilder 2026-09-14: Fable and Astra raised eight fact, logic, continuity and
+    structure questions; the screen, judging under the plain contract, dropped
+    seven as out of scope. The screen now carries the walk-through rider."""
+    from galley.press_prompt import WALKTHROUGH_QUERY_RIDER
+    book = make_book("The sun sets over the Atlantic at Juno Beach.", "We seen the birds.")
+
+    def typed(stage, model, paragraphs, keys):
+        pid, text = next(iter(paragraphs.items()))
+        return [_typed_row(pid, text, "seen", "saw", "subject_verb_agreement")] if "subject_verb_agreement" in keys and model == SONNET else []
+
+    def handler(stage, model, payload, kwargs):
+        if stage == "astra":
+            row = payload["paragraphs"][0]
+            return {"reviewed_ids": [x["id"] for x in payload["paragraphs"]],
+                    "findings": [{**finding(row["id"], "sun sets over the Atlantic", "", "fact_logic", action="query",
+                                            missing="Which coast the sunset is seen from"), "evidence": []}],
+                    "comment_decisions": [comment_decision(q) for q in payload.get("comments", [])],
+                    "editorial_verdict": "ready"}
+        if stage == "astra_screen":
+            return {"decisions": [{"id": s["id"], "action": "query", "replacement": "", "reason": "Geography.",
+                                   "question": "Which coast?", "missing_knowledge": "The intended coast"} for s in payload["sites"]]}
+    readers = Readers(typed=typed, handler=handler)
+    result = FixedWorkflow(book, tmp_path / "run", calls=readers).run()
+    screens = {r["stage"]: r["system"] for r in readers.events if r["stage"].endswith("_screen")}
+    assert "astra_screen" in screens and WALKTHROUGH_QUERY_RIDER in screens["astra_screen"]
+    assert all(WALKTHROUGH_QUERY_RIDER not in system for stage, system in screens.items()
+               if not stage.startswith(("fable", "astra")))
+    assert FixedWorkflow._query_rider("typed") == "" and FixedWorkflow._query_rider("fable") == WALKTHROUGH_QUERY_RIDER
+    assert [q["question"] for q in result["questions"]] == ["Which coast?"]
+
+
+def test_completed_run_can_reinstate_dropped_walkthrough_questions(make_book, tmp_path):
+    from galley.fixed_reinstate import reinstate_walkthrough_questions, FixedReinstateError, STAGE
+    from galley.fixed_documents import write_manuscripts, paragraph_views
+    from docproof.utils.xml_helpers import DocxPackage, qn
+    book = make_book("The sun sets over the Atlantic at Juno Beach.", "Gray whales pass Florida.")
+    workspace = tmp_path / "ws"
+
+    def handler(stage, model, payload, kwargs):
+        if stage == "astra":
+            rows = payload["paragraphs"]
+            return {"reviewed_ids": [x["id"] for x in rows],
+                    "findings": [{**finding(rows[0]["id"], "sun sets over the Atlantic", "", "fact_logic", action="query",
+                                            missing="The intended coast"), "evidence": []},
+                                 {**finding(rows[1]["id"], "Gray whales", "", "fact_logic", action="query",
+                                            missing="The intended species"), "evidence": []}],
+                    "comment_decisions": [comment_decision(q) for q in payload.get("comments", [])],
+                    "editorial_verdict": "needs_human"}
+        # The original run's screen drops both (the Readers default).
+    readers = Readers(handler=handler)
+    result = FixedWorkflow(book, workspace / "runs" / "fixed", calls=readers).run()
+    assert result["questions"] == [] and result["editorial_verdict"] == "needs_human"
+    (workspace / "runs" / "driver").mkdir(parents=True)
+    (workspace / "runs" / "driver" / "package.json").write_text("{}")
+    (workspace / "handoff").mkdir()
+
+    def reinstating(stage, model, payload, kwargs):
+        if stage == STAGE + "_screen":
+            return {"decisions": [{"id": s["id"], "action": "query" if "sun" in payload["paragraphs"][s["para_id"]]["text"] else "drop",
+                                   "replacement": "", "reason": "Geography a reader would notice.",
+                                   "question": "Which coast is the sunset seen from?", "missing_knowledge": "The intended coast"}
+                                  for s in payload["sites"]]}
+    again = Readers(handler=reinstating)
+    out = reinstate_walkthrough_questions(book, workspace, calls=again)
+    assert out["candidates"] == 2 and [q["question"] for q in out["reinstated"]] == ["Which coast is the sunset seen from?"]
+    stages = {r["stage"] for r in again.events}
+    assert STAGE + "_screen" in stages and STAGE + "_comment_review" in stages
+    assert not any(r["stage"] in {"typed", "astra", "fable", "numbers"} for r in again.events), "nothing is re-read"
+    saved = json.loads((workspace / "runs/fixed/result.json").read_text())
+    assert [s["stage"] for s in saved["stages"]][-2:] == ["astra", STAGE]
+    assert saved["accepted"] == result["accepted"] and len(saved["questions"]) == 1
+    manifest = json.loads((workspace / "runs/fixed/workflow.json").read_text())
+    assert manifest["result_sha256"] == saved["result_sha256"] and manifest["status"] == "completed"
+    assert not (workspace / "runs/driver/package.json").exists() and not (workspace / "handoff").exists()
+    tracked, clean, details = write_manuscripts(book, tmp_path / "out", saved["accepted"], saved["questions"])
+    comments = DocxPackage(tracked).tree("word/comments.xml")
+    assert any("Which coast" in "".join(t.text or "" for t in c.iter(qn("w:t"))) for c in comments if c.tag == qn("w:comment"))
+    with pytest.raises(FixedReinstateError, match="already"):
+        reinstate_walkthrough_questions(book, workspace, calls=Readers())

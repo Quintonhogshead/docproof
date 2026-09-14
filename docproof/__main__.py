@@ -1472,7 +1472,26 @@ def cmd_galley(args) -> int:
             "journal": _galley_journal,
             "plan-line": _galley_plan_line,
             "fixed-timeline": _galley_fixed_timeline,
+            "fixed-reinstate-questions": _galley_fixed_reinstate,
             "outcome": _galley_outcome}[args.galley_cmd](args)
+
+
+def _galley_fixed_reinstate(args) -> int:
+    from galley.fixed_reinstate import reinstate_walkthrough_questions
+    def progress(event, **fields):
+        print(json.dumps({"event": event, **fields}, default=str), file=sys.stderr, flush=True)
+    try:
+        out = reinstate_walkthrough_questions(args.book, args.workspace, progress=progress, max_api_usd=args.budget)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    summary = {"workspace": out["workspace"], "candidates": out["candidates"], "unanchored": out["unanchored"],
+               "reinstated": [{"para_id": q["para_id"], "question": q["question"]} for q in out["reinstated"]],
+               "questions": len(out["result"]["questions"])}
+    print(json.dumps(summary, indent=2, ensure_ascii=False) if args.json else
+          f"{len(out['reinstated'])} of {out['candidates']} dropped questions reinstated; "
+          f"{summary['questions']} author questions now; package removed for re-delivery.")
+    return 0
 
 
 def _galley_fixed_timeline(args) -> int:

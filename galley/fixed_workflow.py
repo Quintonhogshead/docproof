@@ -645,7 +645,13 @@ class FixedWorkflow:
         self._cancel()
         return evidence
 
-    def _screen_candidates(self, stage, sites):
+    @staticmethod
+    def _query_rider(stage):
+        """The final walk-through's questions are screened in its own scope."""
+        from galley.press_prompt import WALKTHROUGH_QUERY_RIDER
+        return WALKTHROUGH_QUERY_RIDER if stage in {"fable", "astra", "walkthrough_questions"} else ""
+
+    def _screen_candidates(self, stage, sites, rider=""):
         from galley.fixed_screening import PAIR, aliases, decision_key, packet, windows
         from galley.settle import xml_safe
         batches = list(windows(sites))
@@ -661,7 +667,7 @@ class FixedWorkflow:
             "reason is one short sentence of at most 25 words; leave replacement, question and missing_knowledge empty unless the action needs them. "
             "Sites are named s01, s02, ... within this request; return each decision under exactly that name. "
             "action is apply, drop or query only: a proposal you accept is apply (never edit). Return every field of the decision "
-            "schema for every site, with an empty string where a field does not apply, and no field the schema does not name.",
+            "schema for every site, with an empty string where a field does not apply, and no field the schema does not name. " + rider,
             {"story_sheet": self.context, **packet(batch)}, DECISIONS, max_tokens=16000))
             for batch in batches for model in PAIR]
         answers = iter(self.scheduler.map(jobs))
@@ -727,10 +733,11 @@ class FixedWorkflow:
                              "start": lo, "end": hi, "before": self.current[pid][lo:hi],
                              "paragraph": self.current[pid], "source": self.original[pid], "proposals": group})
         sites = disputed
-        agreed, disputed = self._screen_candidates(stage, sites)
+        rider = self._query_rider(stage)
+        agreed, disputed = self._screen_candidates(stage, sites, rider=rider)
         windows = list(_windows(disputed, 20000))
         jobs = [(OPUS, partial(self._ask,stage + "_disputes", OPUS,
-                "Settle EVERY explicit disagreement between the Sonnet and Luna screening decisions. Both decisions are supplied in screening. Apply only a clear proofreading correction supported by context; you may reject every proposal. replacement replaces exactly the before span: preserve all unchanged text inside that span, and do not include text outside it. The span may cover a word, several sentences, or the entire paragraph. Drop false alarms, stylistic preferences and resolved issues. Query only an actual textual problem whose missing fact or intended meaning requires the author. A disagreement alone is not a query. Preserve formatting proposals only when a house rule requires them.",
+                "Settle EVERY explicit disagreement between the Sonnet and Luna screening decisions. Both decisions are supplied in screening. Apply only a clear proofreading correction supported by context; you may reject every proposal. replacement replaces exactly the before span: preserve all unchanged text inside that span, and do not include text outside it. The span may cover a word, several sentences, or the entire paragraph. Drop false alarms, stylistic preferences and resolved issues. Query only an actual textual problem whose missing fact or intended meaning requires the author. A disagreement alone is not a query. Preserve formatting proposals only when a house rule requires them. " + rider,
                 {"story_sheet": self.context, "sites": window}, DECISIONS, effort="high")) for window in windows]
         for window, result in zip(windows, self.scheduler.map(jobs)):
             result = self._drop_unreviewed(window) if result is None else result["decisions"]
@@ -1437,6 +1444,10 @@ class FixedWorkflow:
                     self._record(stage, coverage=read_coverage, press_audit=audit, local=completion)
                 else:
                     self._record(stage, coverage=read_coverage, local=completion)
+        return self._write_result(all_poetry)
+
+    def _write_result(self, all_poetry):
+        """Freeze the run's evidence: result.json and the completed checkpoint."""
         self.calls.assert_complete()
         self._validate_source()
         result = {"identity": self.identity, "execution_mode": "fixed", "status": "completed",
