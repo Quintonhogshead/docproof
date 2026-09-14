@@ -208,7 +208,7 @@ def accept_story(queue, task, raw):
     if task["state"] != "queued":
         raise TeaserError("This task is not waiting for a storysheet.")
     task["storysheet"] = story.model_dump()
-    task["progress"] = "Storysheet ready; waiting for Qwen"
+    task["progress"] = "Sol's finished copy is ready for Qwen to rephrase"
     queue.save(task, "story_ready")
     return queue.get(task["id"])
 
@@ -219,9 +219,9 @@ def generate_draft(queue, task, *, provider=None):
     if task["state"] != "story_ready":
         raise TeaserError("This task cannot generate another draft.")
     story = Storysheet.model_validate(task["storysheet"])
-    if not story.writer_brief.public_setup:
+    if not story.writer_brief.public_setup or not current_writer_brief(task).author_copy.teasers:
         task.setdefault("prior_storysheets", []).append(task.pop("storysheet"))
-        task["progress"] = "Preparing a public-only writing brief for Qwen"
+        task["progress"] = "Sol is preparing complete copy for Qwen to rephrase"
         queue.save(task, "queued")
         return queue.get(task["id"])
     recent = [t for t in task.get("generation_times", []) if t > time.time() - 86400]
@@ -240,7 +240,6 @@ def generate_draft(queue, task, *, provider=None):
     previous = task["drafts"][-1]["content"] if task["drafts"] else None
     retained = {}
     retain_guidance = False
-    public_feedback = []
     if previous and task["reviews"]:
         prior = Draft.model_validate(previous)
         review = Review.model_validate(task["reviews"][-1])
@@ -257,33 +256,29 @@ def generate_draft(queue, task, *, provider=None):
                 e.field not in ("teaser", "angle") for e in review.edits)
             retain_guidance = retain_guidance and not any(
                 not issue.startswith("Option ") for issue in draft_issues(prior))
-            public_feedback = draft_issues(prior)
-            for option in review.options:
-                failed = [label for key, label in (
-                    ("accurate", "factual accuracy"), ("spoiler_safe", "spoiler safety"),
-                    ("clear", "clarity"), ("faithful_voice", "faithful voice"),
-                    ("distinct_angle", "a distinct angle")) if not getattr(option, key)]
-                if failed:
-                    public_feedback.append(f"Rewrite option {option.number} from the public brief to improve " +
-                                           ", ".join(failed) + ". Do not add facts beyond that brief.")
-            if not review.guidance_approved:
-                public_feedback.append("Rewrite the hooks and author guide using only the public setup; "
-                                       "keep endings unresolved and meet every length requirement.")
+    brief = current_writer_brief(task)
+    validate_writer_brief(brief)
+    # A previously approved rephrasing can survive only if Sol kept its baseline.
+    old_copy = task["drafts"][-1].get("source_copy") if task["drafts"] else None
+    new_copy = brief.author_copy.model_dump()
+    old_options = {t["number"]: t for t in old_copy["teasers"]} if old_copy else {}
+    new_options = {t["number"]: t for t in new_copy["teasers"]}
+    retained = {n: t for n, t in retained.items() if old_options.get(n) == new_options.get(n)}
+    retain_guidance = retain_guidance and bool(old_copy) and all(
+        old_copy.get(k) == v for k, v in new_copy.items() if k != "teasers")
     # The provider receives a strict allowlist: no manuscript passages, private
     # storysheet fields, internal feedback, or rejected copy (which may spoil it).
     approved_copy = {"teasers": [retained[n].model_dump() for n in sorted(retained)]}
     if retain_guidance:
         approved_copy.update({k: v for k, v in previous.items() if k != "teasers"})
-    brief = current_writer_brief(task)
-    system, user = writer_prompt(brief.model_dump(), approved_copy,
-                                public_feedback, sorted(retained))
-    task["progress"] = "Qwen is writing five teasers and author guidance"
+    system, user = writer_prompt(new_copy, approved_copy, sorted(retained))
+    task["progress"] = "Qwen is rephrasing Sol's finished copy"
     # If the process dies during generation, require reconciliation rather than
     # submitting a duplicate paid request on the next poll.
     task["generation_times"] = recent + [time.time()]
     task.setdefault("writer_handoffs", []).append({"at": time.time(),
-        "public_brief": brief.model_dump(), "approved_copy": approved_copy,
-        "public_feedback": public_feedback, "prompt_sha256": digest({"system": system, "user": user})})
+        "author_copy": new_copy, "approved_copy": approved_copy,
+        "prompt_sha256": digest({"system": system, "user": user})})
     queue.save(task, "generating")
     token_limit = min(MAX_WRITER_TOKENS, max(INITIAL_WRITER_TOKENS,
                                           task.get("writer_token_limit", INITIAL_WRITER_TOKENS)))
@@ -315,6 +310,7 @@ def generate_draft(queue, task, *, provider=None):
         task["drafts"].append({"content": draft.model_dump(), "sha256": digest(draft),
                                "model": QWEN_MODEL, "provider": "deepinfra",
                                "operation": "generation",
+                               "source_copy": new_copy,
                                "retained_from": retained_from,
                                "usage": vars(result.usage)})
         task["small_edit_rounds"] = 0
@@ -365,6 +361,7 @@ def accept_review(queue, task, raw):
             task["drafts"].append({"content": corrected.model_dump(), "sha256": digest(corrected),
                 "model": SOL_MODEL, "provider": "chatgpt-subscription", "operation": "bounded_correction",
                 "base_sha256": digest(draft), "review_sha256": digest(review),
+                "source_copy": task["drafts"][-1].get("source_copy"),
                 "edits": [e.model_dump() for e in review.edits]})
             task["small_edit_rounds"] = task.get("small_edit_rounds", 0) + 1
             task["progress"] = "Sol corrected small errors; checking the corrected package against the manuscript"
@@ -372,7 +369,7 @@ def accept_review(queue, task, raw):
             return queue.get(task["id"])
         except ValueError as exc:
             task["feedback"].append(str(exc))
-    task["progress"] = "Approved; waiting for Google Docs upload" if not issues else "Qwen revisions needed"
+    task["progress"] = "Approved; waiting for Google Docs upload" if not issues else "Sol is resolving copy revisions"
     state = "approved" if not issues else "brief_ready"
     generations = sum(d.get("operation") != "bounded_correction" for d in task["drafts"])
     if issues and generations and generations % MAX_DRAFTS_PER_CYCLE == 0:
@@ -406,6 +403,6 @@ def accept_writer_brief(queue, task, raw):
     task["writer_brief"] = brief.model_dump()
     task["writer_brief_story"] = digest(task["storysheet"])
     task["writer_brief_review"] = raw["review_sha256"]
-    task["progress"] = "The revised public brief is ready for Qwen"
+    task["progress"] = "Sol's corrected copy is ready for Qwen to rephrase"
     queue.save(task, "story_ready")
     return queue.get(task["id"])

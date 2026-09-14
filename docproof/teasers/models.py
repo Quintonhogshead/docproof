@@ -38,6 +38,9 @@ class WriterBrief(Record):
     public_facts: list[str] = Field(default_factory=list)
     five_angles: list[str] = Field(default_factory=list)
     writing_instructions: str = ""
+    # An empty legacy default is refreshed before any rephrasing call.
+    author_copy: Draft = Field(default_factory=lambda: Draft(teasers=[], opening_hooks=[],
+        editorial_note="", elements=[], best_practices=[], modification_checklist=[]))
 
 
 class BriefReview(Record):
@@ -87,6 +90,10 @@ class Draft(Record):
     elements: list[Element]
     best_practices: list[str]
     modification_checklist: list[str]
+
+
+WriterBrief.model_rebuild()
+Storysheet.model_rebuild()
 
 
 class SourceReview(Record):

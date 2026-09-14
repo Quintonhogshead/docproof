@@ -86,7 +86,7 @@ def process(task, client, home, *, runner=None):
                     "draft_sha256": task["drafts"][-1]["sha256"],
                     "review_sha256": digest(Review.model_validate(task["reviews"][-1]))})["task"]
             elif task["state"] == "story_ready":
-                progress("Qwen is writing five teasers and author guidance")
+                progress("Qwen is rephrasing Sol's finished teasers and guide")
                 task = client.call("draft", task["id"])["task"]
             elif task["state"] == "drafted":
                 story = Storysheet.model_validate(task["storysheet"])

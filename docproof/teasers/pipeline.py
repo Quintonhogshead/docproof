@@ -78,7 +78,8 @@ def evidence_for(facts, source_chunks):
 
 def analyze(source_chunks, work, *, runner=None, progress=lambda stage: None, feedback=None, attempt=0):
     readings = []
-    for c in source_chunks:
+    # A manuscript that fits in one call needs no intermediate reading summary.
+    for c in source_chunks if len(source_chunks) > 1 else []:
         progress(f"Reading manuscript portion {c['id']} of {len(source_chunks)}")
         def validate_reading(reading):
             if (reading.chunk_id != c["id"] or
@@ -91,12 +92,13 @@ def analyze(source_chunks, work, *, runner=None, progress=lambda stage: None, fe
         reading = sol(prompts.reading_prompt(c), Reading, work,
                       "reading-" + digest(c), runner=runner, attempt=attempt, validate=validate_reading)
         readings.append(reading)
-    evidence = evidence_for([f for r in readings for f in r.facts], source_chunks)
-    progress("Preparing five teaser angles")
+    evidence = (evidence_for([f for r in readings for f in r.facts], source_chunks)
+                if readings else source_chunks[0]["paragraphs"])
+    progress("Sol is writing five complete teasers and the author guide")
     prompt = prompts.story_prompt([r.model_dump() for r in readings], evidence, feedback)
     def validate_prepared(story):
         validate_story(story, source_chunks)
-        progress("Checking that Qwen's writing brief is accurate and spoiler-safe")
+        progress("Checking Sol's finished copy before rephrasing")
         brief_hash = digest(story.writer_brief)
         check_prompt = prompts.brief_review_prompt(story.model_dump(), evidence, brief_hash)
         check = sol(check_prompt, BriefReview, work, "brief-review-" + brief_hash,
@@ -132,13 +134,19 @@ def validate_writer_brief(brief):
             any(not getattr(brief, name).strip() for name in ("public_setup", "reader_promise",
                 "central_pressure", "stakes", "genre_and_audience", "voice", "writing_instructions"))):
         raise ValueError("The public-only writing brief is incomplete.")
+    if not brief.author_copy.teasers:
+        raise ValueError("Sol must write the complete author copy before Qwen can rephrase it.")
+    issues = draft_issues(brief.author_copy)
+    if issues:
+        raise ValueError("Sol's finished copy needs correction: " + "; ".join(issues))
 
 
 def revise_writer_brief(story, previous, feedback, source_chunks, work, *, runner=None,
                         progress=lambda stage: None, attempt=0):
-    evidence = evidence_for(story.public_facts, source_chunks)
+    evidence = (source_chunks[0]["paragraphs"] if len(source_chunks) == 1
+                else evidence_for(story.public_facts, source_chunks))
     prompt = prompts.revise_brief_prompt(story.model_dump(), previous.model_dump(), feedback, evidence)
-    progress("Updating Qwen's public writing brief from the review")
+    progress("Sol is correcting the finished copy before rephrasing")
     def validate(brief):
         validate_writer_brief(brief)
         progress("Checking the revised public brief for accuracy and spoilers")
@@ -158,7 +166,8 @@ def review(story, draft, source_chunks, work, *, runner=None,
            progress=lambda stage: None, attempt=0):
     draft_hash = digest(draft)
     checks = []
-    for c in source_chunks:
+    # Review a small source directly, rather than asking two editors in succession.
+    for c in source_chunks if len(source_chunks) > 1 else []:
         progress(f"Checking teasers against manuscript portion {c['id']} of {len(source_chunks)}")
         prompt = prompts.source_review_prompt(c, draft.model_dump(), draft_hash)
         def validate_check(check):
@@ -169,7 +178,8 @@ def review(story, draft, source_chunks, work, *, runner=None,
         checks.append(check.model_dump())
     progress("Reviewing all five options and author guidance")
     prompt = prompts.review_prompt(story.model_dump(), draft.model_dump(), checks,
-                                   draft_issues(draft), draft_hash)
+                                   draft_issues(draft), draft_hash,
+                                   source_chunks=source_chunks if len(source_chunks) == 1 else None)
     def validate_final(result):
         if result.draft_sha256 != draft_hash or sorted(result.covered_chunk_ids) != [c["id"] for c in source_chunks]:
             raise ValueError("Sol's final review is missing draft or manuscript coverage.")

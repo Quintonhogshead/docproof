@@ -25,7 +25,7 @@ from docproof.teasers.models import (Draft, Teaser, Element, Fact, Storysheet,
 
 
 @pytest.fixture
-def story():
+def story(draft):
     return Storysheet(title="The Ferry Ledger", author="", source_complete=True,
         source_limitations=[], reader_promise="A quiet family reconciliation on a working island.",
         narrative_center="Mara and her brother", premise="Mara returns to repair the island ferry.",
@@ -41,7 +41,7 @@ def story():
             stakes="Their relationship and the ferry's future.", genre_and_audience="Adult family fiction",
             voice="Restrained and concrete", public_facts=["Mara returns; her brother wants to sell the ferry."],
             five_angles=["Return", "Siblings", "Island", "Inheritance", "Repair"],
-            writing_instructions="Leave the final decision unresolved."))
+            writing_instructions="Leave the final decision unresolved.", author_copy=draft.model_copy(deep=True)))
 
 
 @pytest.fixture
@@ -149,7 +149,10 @@ def test_qwen_never_receives_private_ending_or_rejected_copy(queued, story, draf
     class Initial:
         def complete_structured(self, **kw):
             assert secret not in kw["user"] and secret not in kw["system"]
-            assert "PUBLIC WRITING BRIEF" in kw["user"]
+            assert "SOL'S FINISHED COPY" in kw["user"]
+            assert json.dumps(story.writer_brief.author_copy.model_dump(), ensure_ascii=False) in kw["user"]
+            assert story.writer_brief.public_setup not in kw["user"]
+            assert story.writer_brief.writing_instructions not in kw["user"]
             return ProviderResult(parsed=bad.model_dump())
     task = generate_draft(queue, task, provider=Initial())
     review = approved(bad)
@@ -162,7 +165,8 @@ def test_qwen_never_receives_private_ending_or_rejected_copy(queued, story, draf
     class Revision:
         def complete_structured(self, **kw):
             assert secret not in kw["user"] and secret not in kw["system"]
-            assert "Rewrite option 1 from the public brief to improve spoiler safety" in kw["user"]
+            assert "Make no editorial decisions" in kw["system"]
+            assert "PUBLIC REVISION NOTES" not in kw["user"]
             assert "APPROVED OPTIONS TO PRESERVE:\n[2, 3, 4, 5]" in kw["user"]
             return ProviderResult(parsed=draft.model_dump())
     task = next_brief(queue, task, story)
@@ -179,6 +183,31 @@ def test_legacy_task_refreshes_private_brief_before_any_writer_call(queued, stor
     assert result["state"] == "queued"
     assert "storysheet" not in result and "generation_times" not in result
     assert result["prior_storysheets"]
+
+
+def test_outline_only_task_must_get_finished_sol_copy(queued, story):
+    queue, _, task = queued
+    task["storysheet"] = story.model_dump()
+    task["storysheet"]["writer_brief"].pop("author_copy")
+    queue.save(task, "story_ready")
+    result = generate_draft(queue, queue.get(task["id"]), provider=object())
+    assert result["state"] == "queued" and "generation_times" not in result
+
+
+def test_changed_sol_copy_invalidates_previously_passing_rephrasing(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    review = approved(draft)
+    review.approved = False
+    task = accept_review(queue, task, review.model_dump())
+    story.writer_brief.author_copy.teasers[0].paragraphs[0] = (
+        story.writer_brief.author_copy.teasers[0].paragraphs[0].replace("Mara returns", "Mara comes back"))
+    task = next_brief(queue, task, story)
+    class Provider:
+        def complete_structured(self, **kw):
+            assert "APPROVED OPTIONS TO PRESERVE:\n[2, 3, 4, 5]" in kw["user"]
+            return ProviderResult(parsed=story.writer_brief.author_copy.model_dump())
+    task = generate_draft(queue, task, provider=Provider())
+    assert "Mara comes back" in task["drafts"][-1]["content"]["teasers"][0]["paragraphs"][0]
 
 
 def test_revised_spoiler_boundary_does_not_reuse_old_approved_copy(queued, story, draft):
@@ -216,10 +245,11 @@ def test_broader_revision_waits_for_bound_public_brief(queued, story, draft):
     assert accept_writer_brief(queue, task, payload)["writer_brief"] == brief.model_dump()
     class Revision:
         def complete_structured(self, **kw):
-            assert brief.writing_instructions in kw["user"]
+            assert brief.writing_instructions not in kw["user"]
+            assert json.dumps(brief.author_copy.model_dump(), ensure_ascii=False) in kw["user"]
             return ProviderResult(parsed=draft.model_dump())
     result = generate_draft(queue, task, provider=Revision())
-    assert result["writer_handoffs"][-1]["public_brief"] == brief.model_dump()
+    assert result["writer_handoffs"][-1]["author_copy"] == brief.author_copy.model_dump()
 
 
 def test_count_structure_and_guidance_cannot_be_omitted(draft):
@@ -601,9 +631,9 @@ def test_sol_is_subscription_high_and_validated_answers_resume(tmp_path, story):
         return story.model_dump()
     source = pipeline.chunks("Mara returns to repair the ferry.")
     assert pipeline.analyze(source, tmp_path, runner=runner) == story
-    assert len(calls) == 3
+    assert len(calls) == 2
     pipeline.analyze(source, tmp_path, runner=runner, attempt=1)
-    assert len(calls) == 3
+    assert len(calls) == 2
 
 
 def test_public_brief_must_pass_sol_check_before_leaving_analysis(tmp_path, story):
@@ -619,6 +649,18 @@ def test_public_brief_must_pass_sol_check_before_leaving_analysis(tmp_path, stor
         pipeline.analyze(pipeline.chunks("Mara returns."), tmp_path, runner=runner)
     saved = [json.loads(p.read_text())["answer"] for p in (tmp_path / "answers").glob("*.json")]
     assert not any("writer_brief" in answer for answer in saved)
+
+
+def test_single_portion_review_reads_original_and_sol_copy_in_one_call(tmp_path, story, draft):
+    source = pipeline.chunks("ORIGINAL_OPENING\nORIGINAL_ENDING")
+    calls = []
+    def runner(prompt, schema, work, **kw):
+        calls.append(prompt)
+        assert "ORIGINAL_OPENING" in prompt and "ORIGINAL_ENDING" in prompt
+        assert "author_copy" in prompt and "baseline" in prompt
+        return approved(draft).model_dump()
+    assert pipeline.review(story, draft, source, tmp_path, runner=runner).approved
+    assert len(calls) == 1
 
 
 def test_revision_translates_private_findings_and_rechecks_public_brief(tmp_path, story):

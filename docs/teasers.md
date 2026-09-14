@@ -14,32 +14,34 @@ editorial approval step.
    before archiving. The queue freezes its complete text and source identity.
 2. The Fly agent sidecar reads every contiguous manuscript portion through
    `gpt-5.6-sol` at `high`, using the existing cloud ChatGPT subscription login.
-   This produces coverage-checked reading notes and a private storysheet. Sol
-   separately prepares a public-only writing brief with safe facts, five angles,
-   tone and general guardrails. Large paragraphs and long books are partitioned,
-   never silently cut off.
+   Sol creates a private storysheet and writes the complete five teasers, hooks,
+   note and author guide. It makes every editorial and factual decision, then
+   checks the finished public copy before rephrasing. Large paragraphs and long
+   books use coverage-checked reading portions, never silent truncation. A source
+   that fits in one call is read directly without an intermediate summary.
 3. The Fly web server calls `Qwen/Qwen3.6-27B` through DeepInfra, using the
-   key already stored in DocProof settings. Qwen writes the initial package.
-   Its input is explicitly allowlisted: the public brief, spoiler-safe revision
-   instructions and previously approved copy only. It receives no manuscript
+   key already stored in DocProof settings. Qwen only rephrases Sol's finished copy.
+   Its input contains that complete copy and any previously approved rephrasings.
+   It receives no open-ended writing brief, manuscript
    passages, private storysheet, ending details, protected-revelation list, raw
    review feedback or rejected draft. The actual public handoff is recorded for
-   audit. Older tasks without a public brief rebuild it automatically before any
+   audit. Older tasks without finished Sol copy rebuild it automatically before any
    further writer call.
-4. Sol checks the exact saved draft against every source portion, then reviews all
-   five options and the author guide. Approval is bound to the saved draft hash
+4. Sol compares the exact rephrasing with its finished baseline and every source
+   portion, checking all five options and the author guide. A source that fits in
+   one call is included directly in this review. Approval is bound to the saved draft hash
    and the complete list of manuscript portions. Sol can directly correct names,
    short factual phrases or individual sentences. Each exact replacement needs
    manuscript evidence and is limited to 40 words/320 characters; a review can
    replace at most five spans and 80 words in total. The corrected package is saved
    with its edit history and receives a complete fresh source check and approval.
    Proposed edits cannot approve their own output. After two correction rounds,
-   remaining issues automatically return to Qwen.
-5. For larger revisions, Sol turns its private editorial findings into a corrected
-   public writing brief, then independently checks that brief for accuracy and
-   spoilers before Qwen receives it. This lets Qwen fix specific problems without
-   receiving the ending or private review text. Previously passing options
-   retain their exact text while failed copy is revised. The complete assembled
+   Sol resolves remaining issues in the original copy before further rephrasing.
+5. For larger revisions, Sol corrects the complete public copy itself and checks
+   it for accuracy and spoilers before Qwen rephrases it. Qwen makes no editorial
+   decisions and receives no ending or private review text. Previously passing
+   options retain their exact text only when Sol's corresponding baseline remains
+   unchanged. The complete assembled
    package still receives a fresh, source-bound review; retained prose has an
    internal provenance link to its original draft. After five unsuccessful Qwen drafts,
    Sol refreshes the brief. Temporary failures retry with increasing delays, up
