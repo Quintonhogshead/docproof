@@ -136,6 +136,9 @@ def status(home: str | Path, *, get_key=None,
         "hubspot_corrections_text_property": ws.hubspot_corrections_text_property,
         "corrections_folder_name": ws.corrections_folder_name,
         "corrections_model_passes": ws.corrections_model_passes,
+        # What kicks the stage off: the form's own submissions (default), or
+        # the old HubSpot-workflow gate. See app/watch/corrections.py.
+        "corrections_intake": getattr(ws, "corrections_intake", "form"),
         # The IDML engine's own quiet-period and form-poll settings, and the
         # readout of who is currently held for it — read from `state.json`
         # rather than Drive, so asking costs nothing and works even signed out.
@@ -145,6 +148,14 @@ def status(home: str | Path, *, get_key=None,
         "corrections_form_file_property": ws.corrections_form_file_property,
         "corrections_form_notes_property": ws.corrections_form_notes_property,
         "corrections_form_start_after": ws.corrections_form_start_after,
+        # The form fields form-intake mode reads to name and match the author,
+        # independent of the file/notes fields above.
+        "corrections_form_first_property":
+            getattr(ws, "corrections_form_first_property", "firstname"),
+        "corrections_form_last_property":
+            getattr(ws, "corrections_form_last_property", "lastname"),
+        "corrections_form_book_property":
+            getattr(ws, "corrections_form_book_property", ""),
         "hubspot_corrections_book_property": ws.hubspot_corrections_book_property,
         "corrections_pending": corrections.pending_summary(state, ws),
         "max_files_per_tick": ws.max_files_per_tick,

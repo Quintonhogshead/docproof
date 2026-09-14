@@ -87,6 +87,10 @@ class WatchUpdate(BaseModel):
     corrections_form_notes_property: str | None = None
     corrections_form_start_after: str | None = None
     hubspot_corrections_book_property: str | None = None
+    corrections_intake: str | None = None
+    corrections_form_first_property: str | None = None
+    corrections_form_last_property: str | None = None
+    corrections_form_book_property: str | None = None
     corrections_engine: str | None = None
     corrections_native_auto_upload: bool | None = None
     corrections_native_partial_upload: bool | None = None
@@ -550,6 +554,12 @@ def register(app: FastAPI) -> None:
             if update.corrections_engine not in ("idml", "native"):
                 raise HTTPException(400, "Choose IDML or native InDesign corrections.")
             ws.corrections_engine = update.corrections_engine
+        if update.corrections_intake is not None:
+            intake = update.corrections_intake.strip().lower()
+            if intake not in ("form", "hubspot"):
+                raise HTTPException(400, "corrections_intake must be 'form' "
+                                         "or 'hubspot'.")
+            ws.corrections_intake = intake
         for name in WatchUpdate.model_fields:
             if name.startswith("corrections_native_"):
                 value = getattr(update, name)
@@ -570,7 +580,10 @@ def register(app: FastAPI) -> None:
                      "corrections_form_id", "corrections_form_file_property",
                      "corrections_form_notes_property",
                      "corrections_form_start_after",
-                     "hubspot_corrections_book_property"):
+                     "hubspot_corrections_book_property",
+                     "corrections_form_first_property",
+                     "corrections_form_last_property",
+                     "corrections_form_book_property"):
             value = getattr(update, name)
             if value is not None:
                 setattr(ws, name, value.strip())

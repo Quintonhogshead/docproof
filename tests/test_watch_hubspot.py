@@ -243,3 +243,69 @@ def test_a_pattern_that_does_not_match_is_no_key_not_an_error():
 
 def test_an_empty_name_has_no_key():
     assert key_from_name("", "") is None
+
+
+def test_a_form_file_redirect_is_followed_without_the_token(tmp_path):
+    """The signed form link answers with a redirect to a CDN. The bearer token
+    goes with the first request only; the second hop carries no headers."""
+    import io
+    import urllib.error
+    import urllib.request
+    from email.message import Message
+
+    from app.watch import hubspot
+
+    seen = []
+
+    class _Response(io.BytesIO):
+        headers = Message()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def opener(request, timeout=60):
+        seen.append((request.full_url, dict(request.header_items())))
+        if "hubapi.com" in request.full_url:
+            headers = Message()
+            headers["Location"] = "https://cdn.example.net/files/1?sig=abc"
+            raise urllib.error.HTTPError(request.full_url, 302, "Found",
+                                         headers, io.BytesIO(b""))
+        return _Response(b"%PDF-1.4 the proof")
+
+    got = hubspot.download_file(
+        "tok", "https://api.hubapi.com/form-integrations/v1/uploaded-files/"
+        "signed-url-redirect/1?filename=proof.pdf", tmp_path, opener=opener)
+
+    assert got.name == "proof.pdf" and got.read_bytes().startswith(b"%PDF")
+    assert [u for u, _ in seen] == [
+        "https://api.hubapi.com/form-integrations/v1/uploaded-files/"
+        "signed-url-redirect/1?filename=proof.pdf",
+        "https://cdn.example.net/files/1?sig=abc"]
+    assert any(k.lower() == "authorization" for k in seen[0][1])
+    assert not any(k.lower() == "authorization" for k in seen[1][1])
+
+
+def test_a_sign_in_page_is_not_mistaken_for_the_form_file(tmp_path):
+    import io
+    from email.message import Message
+
+    import pytest
+
+    from app.watch import hubspot
+
+    class _Response(io.BytesIO):
+        headers = Message()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    with pytest.raises(hubspot.HubSpotError, match="sign-in page"):
+        hubspot.download_file(
+            "tok", "https://api.hubapi.com/files/9?filename=list.docx",
+            tmp_path, opener=lambda r, timeout=60: _Response(b"<html>login"))

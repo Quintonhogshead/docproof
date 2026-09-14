@@ -1270,30 +1270,38 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                   <label class="field"><span>Technical block outcome value</span><input id="corrections-native-technical-value" type="text"></label>
                 </details>
 
+                <label class="field" id="corrections-intake-field">
+                  <span>Kicked off by</span>
+                  <select id="corrections-intake">
+                    <option value="form">The author's submitted form (recommended)</option>
+                    <option value="hubspot">A HubSpot status set by a workflow</option>
+                  </select>
+                </label>
                 <label class="checkbox">
                   <input type="checkbox" id="corrections-enabled">
                   Apply interior corrections automatically
                   <small class="muted">Off by default. Needs HubSpot and
                     a separate Drive folder for each author.</small>
                 </label>
-                <label class="field">
+                <label class="field" id="corrections-ready-field">
                   <span>HubSpot status value the form workflow sets</span>
                   <input type="text" id="corrections-ready"
                          placeholder="Ready for Corrections">
                 </label>
                 <label class="field">
-                  <span>Legacy IDML completion status</span>
+                  <span id="corrections-done-label">Legacy IDML completion status</span>
                   <input type="text" id="corrections-done"
                          placeholder="Corrections Applied">
+                  <small class="muted" id="corrections-done-hint"></small>
                 </label>
-                <label class="field">
+                <label class="field" id="corrections-file-prop-field">
                   <span>Record property holding the form's uploaded file</span>
                   <input type="text" id="corrections-file-prop"
                          placeholder="e.g. corrections_file">
                   <small class="muted">A marked-up PDF proof or a Word list.
                     HubSpot stores the upload as a URL on the record.</small>
                 </label>
-                <label class="field">
+                <label class="field" id="corrections-text-prop-field">
                   <span>Record property holding the form's typed
                     corrections</span>
                   <input type="text" id="corrections-text-prop"
@@ -1303,6 +1311,8 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                   <span>Author subfolder that holds the InDesign files</span>
                   <input type="text" id="corrections-folder"
                          placeholder="Interior Design">
+                  <small class="muted">Main folder → author → Interior
+                    Design → the highest-numbered Book N.idml</small>
                 </label>
                 <label class="checkbox">
                   <input type="checkbox" id="corrections-model-passes">
@@ -1324,7 +1334,7 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                 </label>
                 <details id="corrections-form-poll-details">
                   <summary>Read the form's own submissions</summary>
-                  <label class="checkbox">
+                  <label class="checkbox" id="corrections-form-poll-field">
                     <input type="checkbox" id="corrections-form-poll">
                     Fold every submission of the corrections form for the
                     record, not only the properties the workflow copied
@@ -1334,6 +1344,22 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                   <label class="field">
                     <span>Form ID</span>
                     <input type="text" id="corrections-form-id">
+                  </label>
+                  <label class="field">
+                    <span>Form field holding the author's first name</span>
+                    <input type="text" id="corrections-form-first-field"
+                           placeholder="firstname">
+                  </label>
+                  <label class="field">
+                    <span>Form field holding the author's last name</span>
+                    <input type="text" id="corrections-form-last-field"
+                           placeholder="lastname">
+                  </label>
+                  <label class="field">
+                    <span>Form field naming the book (authors with several
+                      books)</span>
+                    <input type="text" id="corrections-form-book-field"
+                           placeholder="which_book_are_these_corrections_for_">
                   </label>
                   <label class="field">
                     <span>Form field holding the uploaded file</span>

@@ -7817,6 +7817,7 @@ function renderWatch(body, quiet) {
   $('proof-needs-human').value = w.hubspot_proof_needs_human_value ?? '';
   applyProofRunnerHint();
   $('corrections-enabled').checked = !!w.corrections_enabled;
+  $('corrections-intake').value = w.corrections_intake || 'form';
   $('corrections-ready').value = w.hubspot_corrections_ready_value ?? '';
   $('corrections-done').value = w.hubspot_corrections_done_value ?? '';
   $('corrections-file-prop').value = w.hubspot_corrections_file_property ?? '';
@@ -7830,9 +7831,13 @@ function renderWatch(body, quiet) {
   $('corrections-book-prop').value = w.hubspot_corrections_book_property ?? '';
   $('corrections-form-poll').checked = !!w.corrections_form_poll;
   $('corrections-form-id').value = w.corrections_form_id ?? '';
+  $('corrections-form-first-field').value = w.corrections_form_first_property ?? '';
+  $('corrections-form-last-field').value = w.corrections_form_last_property ?? '';
+  $('corrections-form-book-field').value = w.corrections_form_book_property ?? '';
   $('corrections-form-file-field').value = w.corrections_form_file_property ?? '';
   $('corrections-form-notes-field').value = w.corrections_form_notes_property ?? '';
   $('corrections-form-start-after').value = w.corrections_form_start_after ?? '';
+  applyCorrectionsIntakeHint();
   $('corrections-engine').value = w.corrections_engine || 'idml';
   $('corrections-native-upload').checked = !!w.corrections_native_auto_upload;
   $('corrections-native-partial').checked = w.corrections_native_partial_upload === true;
@@ -8242,6 +8247,27 @@ function applyProofRunnerHint() {
       + 'Claude Max subscription, settles and certifies it, and delivers the '
       + 'Book 2 set with the decision log; DocWatch picks the verdict up on '
       + 'its next pass.';
+}
+
+// The IDML corrections stage can be kicked off two ways: by the author's own
+// form submission (the default — HubSpot is only written afterwards, once
+// exactly one Projects record matches the author's name), or by a HubSpot
+// workflow that flips a status value first, the old gate. The fields each
+// mode needs are different, so the drawer hides what the current mode does
+// not use rather than showing every field at once.
+function applyCorrectionsIntakeHint() {
+  const el = $('corrections-intake');
+  if (!el) return;
+  const hubspot = el.value === 'hubspot';
+  $('corrections-ready-field').hidden = !hubspot;
+  $('corrections-file-prop-field').hidden = !hubspot;
+  $('corrections-text-prop-field').hidden = !hubspot;
+  $('corrections-form-poll-field').hidden = !hubspot;
+  $('corrections-done-label').textContent = hubspot
+    ? 'Legacy IDML completion status' : 'Completion status';
+  $('corrections-done-hint').textContent = hubspot
+    ? '' : "Written on the author's Projects record after the hand-off "
+      + 'lands, when exactly one record matches the author’s name.';
 }
 
 function proofWhen(iso) {
@@ -10064,15 +10090,22 @@ function automationWorkflows() {
   const proofReady = !!(w.hubspot_enabled && w.hubspot_proof_ready_value
                         && w.hubspot_proof_done_value);
   const nativeCorrections = w.corrections_engine === 'native';
+  const idmlIntake = w.corrections_intake || 'form';
   const corrReady = nativeCorrections
     ? !!(folderReady && w.hubspot_enabled && w.corrections_native_form_id
          && w.corrections_native_start_after
          && (w.corrections_native_form_file_property || w.corrections_native_form_notes_property))
-    : !!(w.hubspot_enabled && w.subfolders_enabled
-                       && w.hubspot_corrections_ready_value
-                       && w.hubspot_corrections_done_value
-                       && (w.hubspot_corrections_file_property
-                           || w.hubspot_corrections_text_property));
+    : (idmlIntake === 'hubspot'
+        ? !!(w.hubspot_enabled && w.subfolders_enabled
+                           && w.hubspot_corrections_ready_value
+                           && w.hubspot_corrections_done_value
+                           && (w.hubspot_corrections_file_property
+                               || w.hubspot_corrections_text_property))
+        // Form intake: kicked off by the author's own submission, so nothing
+        // sets a ready value — the stage needs the form itself and the
+        // author-subfolder route to the designer's IDML.
+        : !!(w.hubspot_enabled && w.subfolders_enabled
+             && w.corrections_form_id && w.corrections_folder_name));
   // When a workflow reads "Needs setup", `setup` names what's missing and where
   // to fix it: a `target` tab jumps straight there, `self` opens the drawer
   // whose own fields are the fix, and a null target means the blocker is a
@@ -10118,11 +10151,17 @@ function automationWorkflows() {
           if (nativeCorrections && (w.interior_computer || w.corrections_native_form_poll)) {
             return 'Pre-Proof correction form';
           }
-          // The IDML engine's own form-poll mode: every submission of the form
-          // is folded in, not only the properties the workflow copied — worth
-          // saying, since it changes what counts as "one more round".
-          if (!nativeCorrections && w.corrections_form_poll) {
-            return 'Pre-Proof correction form + ' + hubspotText;
+          if (!nativeCorrections) {
+            // Form intake: the author's own submission starts the stage —
+            // HubSpot's status is only ever written afterward, never read.
+            if (idmlIntake === 'form') return 'Pre-Proof correction form';
+            // The old gate's own form-poll mode: every submission of the
+            // form is folded in, not only the properties the workflow
+            // copied — worth saying, since it changes what counts as "one
+            // more round".
+            if (w.corrections_form_poll) {
+              return 'Pre-Proof correction form + ' + hubspotText;
+            }
           }
           return hubspotText;
         })(),
@@ -10139,8 +10178,10 @@ function automationWorkflows() {
       setup: (w.interior_computer || !w.corrections_enabled || corrReady) ? null
         : (w.hubspot_enabled
             ? (w.subfolders_enabled
-                ? { hint: 'Add the trigger, completion status, and at least one '
-                    + 'corrections form property below.', target: 'self' }
+                ? { hint: (!nativeCorrections && idmlIntake === 'form')
+                    ? 'Add the correction form ID below.'
+                    : 'Add the trigger, completion status, and at least one '
+                      + 'corrections form property below.', target: 'self' }
                 : { hint: 'This workflow needs a separate Drive folder for each '
                     + 'author. Ask your administrator to enable author folders.',
                     target: 'connection' })
@@ -10681,6 +10722,10 @@ $('wf-proof-save').addEventListener('click', async () => {
   } finally { button.disabled = false; }
 });
 
+// Toggle the corrections drawer's fields to match the chosen intake mode as
+// soon as somebody picks one, without waiting for a save round-trip.
+$('corrections-intake').addEventListener('change', applyCorrectionsIntakeHint);
+
 // The Interior corrections drawer: the switch, the two HubSpot values, the two
 // form properties, the designer's folder name and the model-passes switch.
 $('wf-corrections-save').addEventListener('click', async () => {
@@ -10692,6 +10737,7 @@ $('wf-corrections-save').addEventListener('click', async () => {
       method: 'PUT', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         corrections_enabled: $('corrections-enabled').checked,
+        corrections_intake: $('corrections-intake').value,
         hubspot_corrections_ready_value: $('corrections-ready').value,
         hubspot_corrections_done_value: $('corrections-done').value,
         hubspot_corrections_file_property: $('corrections-file-prop').value,
@@ -10703,6 +10749,9 @@ $('wf-corrections-save').addEventListener('click', async () => {
         hubspot_corrections_book_property: $('corrections-book-prop').value,
         corrections_form_poll: $('corrections-form-poll').checked,
         corrections_form_id: $('corrections-form-id').value,
+        corrections_form_first_property: $('corrections-form-first-field').value,
+        corrections_form_last_property: $('corrections-form-last-field').value,
+        corrections_form_book_property: $('corrections-form-book-field').value,
         corrections_form_file_property: $('corrections-form-file-field').value,
         corrections_form_notes_property: $('corrections-form-notes-field').value,
         corrections_form_start_after: $('corrections-form-start-after').value,

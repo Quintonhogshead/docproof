@@ -932,6 +932,65 @@ def test_put_round_trips_quiet_seconds_and_form_poll(client):
     assert body["watch"]["corrections_form_poll"] is True
 
 
+def test_the_status_carries_corrections_intake_and_form_name_properties(client):
+    # Set directly on the instance rather than through the constructor: the
+    # dataclass field is being added to `WatchSettings` by a change landing
+    # alongside this one, and plain attribute assignment works whether or
+    # not that field is declared yet, the same way `ws.save()` (a `__dict__`
+    # dump) round-trips it to disk either way.
+    ws = corrections_configured(client, subfolders_enabled=True)
+    ws.corrections_intake = "hubspot"
+    ws.corrections_form_first_property = "author_first"
+    ws.corrections_form_last_property = "author_last"
+    ws.corrections_form_book_property = "book_field"
+    ws.save(client.home)
+
+    w = watch_of(client)["watch"]
+
+    assert w["corrections_intake"] == "hubspot"
+    assert w["corrections_form_first_property"] == "author_first"
+    assert w["corrections_form_last_property"] == "author_last"
+    assert w["corrections_form_book_property"] == "book_field"
+
+
+def test_the_status_defaults_corrections_intake_to_form(client):
+    corrections_configured(client, subfolders_enabled=True)
+
+    w = watch_of(client)["watch"]
+
+    assert w["corrections_intake"] == "form"
+
+
+def test_put_round_trips_corrections_intake_and_form_name_properties(client):
+    corrections_configured(client, subfolders_enabled=True)
+
+    body = client.put("/api/watch", json={
+        "corrections_intake": "hubspot",
+        "corrections_form_first_property": "author_first",
+        "corrections_form_last_property": "author_last",
+        "corrections_form_book_property": "book_field",
+    }).json()
+
+    ws = WatchSettings.load(client.home)
+    assert ws.corrections_intake == "hubspot"
+    assert ws.corrections_form_first_property == "author_first"
+    assert ws.corrections_form_last_property == "author_last"
+    assert ws.corrections_form_book_property == "book_field"
+    assert body["watch"]["corrections_intake"] == "hubspot"
+    assert body["watch"]["corrections_form_first_property"] == "author_first"
+    assert body["watch"]["corrections_form_last_property"] == "author_last"
+    assert body["watch"]["corrections_form_book_property"] == "book_field"
+
+
+def test_put_refuses_a_corrections_intake_that_is_not_form_or_hubspot(client):
+    corrections_configured(client, subfolders_enabled=True)
+
+    resp = client.put("/api/watch", json={"corrections_intake": "carrier-pigeon"})
+
+    assert resp.status_code == 400
+    assert "corrections_intake" in resp.json()["detail"]
+
+
 def test_rehearse_refuses_when_corrections_are_off(client):
     configured(client, hubspot_enabled=True)      # corrections left off
 

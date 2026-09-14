@@ -20,7 +20,7 @@ from app.watch import cli
 from app.watch import corrections
 from app.watch import schedule as schedulelib
 from app.watch import tick as ticklib
-from app.watch.settings import WatchSettings
+from app.watch.settings import WATCH_SETTINGS, WatchSettings
 from app.watch.stages import (AT_PROP, FAILED, FORMATTED, JOB_PROP,
                               REASON_PROP, STATE_PROP)
 from app.watch.state import FileRecord, WatchState
@@ -540,6 +540,106 @@ def test_status_says_when_nothing_is_scheduled(home, capsys, agent):
     run(home, "status")
 
     assert "only when you say so" in capsys.readouterr().out
+
+
+# --- interior corrections: intake mode ------------------------------------
+
+def hubspot_and_subfolders_configured(home, **over):
+    """A watcher with the HubSpot gate and per-author subfolders fully filled
+    in, so `init` never has to fall back to an interactive `_ask()` prompt —
+    every field `_apply_hubspot` / `_apply_subfolders` would otherwise ask
+    for is already set."""
+    return configured(
+        home, hubspot_enabled=True, subfolders_enabled=True,
+        hubspot_object="deals", hubspot_key_property="key",
+        hubspot_status_property="status",
+        hubspot_format_ready_value="Ready", hubspot_format_done_value="Done",
+        hubspot_first_property="firstname", hubspot_last_property="lastname",
+        **over)
+
+
+def saved_settings(home) -> dict:
+    """The raw settings file, read as JSON rather than through
+    `WatchSettings.load` — which drops any key that is not (yet) a declared
+    dataclass field. `corrections_intake` and its three form-name siblings
+    are being added to `WatchSettings` by another change alongside this one;
+    reading the file directly lets this test assert the CLI wrote them
+    whether or not that field is declared yet."""
+    return json.loads((home / WATCH_SETTINGS).read_text())
+
+
+def test_init_corrections_intake_defaults_to_form(home, capsys, monkeypatch):
+    hubspot_and_subfolders_configured(home)
+    signed_in(monkeypatch)
+
+    assert run(home, "init", "--enable-corrections") == cli.OK
+
+    out = capsys.readouterr().out
+    assert "kicked off by the form's own submissions" in out
+    assert saved_settings(home).get("corrections_intake", "form") == "form"
+
+
+def test_init_corrections_intake_hubspot(home, capsys, monkeypatch):
+    hubspot_and_subfolders_configured(home)
+    signed_in(monkeypatch)
+
+    assert run(home, "init", "--enable-corrections",
+               "--corrections-intake", "hubspot",
+               "--hubspot-corrections-file-property",
+               "corrections_file") == cli.OK
+
+    out = capsys.readouterr().out
+    assert "kicked off by HubSpot 'Ready for Corrections'" in out
+    assert saved_settings(home)["corrections_intake"] == "hubspot"
+
+
+def test_init_corrections_intake_round_trips_back_to_form(home):
+    hubspot_and_subfolders_configured(home)
+    run(home, "init", "--enable-corrections", "--corrections-intake", "hubspot",
+        "--hubspot-corrections-file-property", "corrections_file")
+
+    run(home, "init", "--corrections-intake", "form")
+
+    assert saved_settings(home)["corrections_intake"] == "form"
+
+
+def test_init_corrections_form_name_properties_round_trip(home):
+    hubspot_and_subfolders_configured(home)
+
+    run(home, "init", "--enable-corrections",
+        "--corrections-form-first-property", "author_first",
+        "--corrections-form-last-property", "author_last",
+        "--corrections-form-book-property", "book_field")
+
+    data = saved_settings(home)
+    assert data["corrections_form_first_property"] == "author_first"
+    assert data["corrections_form_last_property"] == "author_last"
+    assert data["corrections_form_book_property"] == "book_field"
+
+
+def test_corrections_status_shows_first_last_and_title_when_present(
+        home, capsys, monkeypatch):
+    configured(home)
+    rows = [{
+        "record_id": "rec-3",
+        "first": "Jamie",
+        "last": "Rivera",
+        "title": "The Long Road",
+        "first_seen": "2026-09-14T10:00:00+00:00",
+        "last_submission_at": "2026-09-14T10:00:00+00:00",
+        "ready_at": "2026-09-14T13:00:00+00:00",
+        "ready": False,
+        "submissions": 1,
+        "source_name": "Rivera - Book 2.idml",
+    }]
+    monkeypatch.setattr(corrections, "pending_summary",
+                        lambda state, ws, **kw: rows, raising=False)
+
+    assert run(home, "corrections", "status") == cli.OK
+
+    out = capsys.readouterr().out
+    assert "Jamie Rivera" in out
+    assert "The Long Road" in out
 
 
 # --- interior corrections: status and rehearsal --------------------------------
