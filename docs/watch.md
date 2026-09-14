@@ -388,9 +388,20 @@ for next time.
 The fifth stage, and the first over a **designer's** file rather than a
 manuscript. After the interior is typeset the author fills in the press's
 *Pre-Proof Interior Design Corrections Form* — sometimes a marked-up PDF proof,
-sometimes a Word list, sometimes their own words in the form's text box. A
-HubSpot workflow flips the status dropdown to `Ready for Corrections` when the
-form lands; DocWatch does the rest:
+sometimes a Word list, sometimes their own words in the form's text box.
+
+By default (`corrections_intake: form`) the **form's own submission** kicks
+the stage off — not a HubSpot toggle. DocWatch reads the form directly (this
+needs the HubSpot private app's forms read scope), waits out the quiet
+period below, then walks **Main folder → author → Interior Design → the
+highest-numbered `Book N.idml`**, applies what it can, and hands back
+`Book N.5` and its spreadsheet beside it. Only once that hand-off lands does
+DocWatch touch HubSpot at all: if exactly one Projects record's name matches
+the author, it moves to `Corrections Applied`; if none or more than one
+match, nothing is written and the completion email says the status was not
+moved, so a person can move it by hand. The older, workflow-gated flow is
+still there as the alternative (`corrections_intake: hubspot`, below) for an
+install that wants a HubSpot status to be the trigger instead.
 
 ```
 Author Folder/
@@ -403,21 +414,40 @@ Author Folder/
       Johnson - Book 3.5 - checks.jsx            DocProof: the InDesign walkthrough
 ```
 
-| stage | reads | the workflow sets | DocProof writes | and hands back |
+| stage | reads | starts on | DocProof writes | and hands back |
 |---|---|---|---|---|
-| corrections | the highest `<surname> - Book N.idml` in `Interior Design` | `Ready for Corrections` | `Corrections Applied` | `<surname> - Book N.5.idml` + spreadsheet |
+| corrections | the highest `<surname> - Book N.idml` in `Interior Design` | the form's own submission (`form` intake, default) or the record reaching `Ready for Corrections` (`hubspot` intake) | `Corrections Applied`, once exactly one Projects record matches | `<surname> - Book N.5.idml` + spreadsheet |
 
-Off by default. It needs the HubSpot gate **and** per-author subfolders on —
-the form flips a CRM value, and the IDML lives in the author's own folder — and
-the names of the two properties the workflow copies the form's answers into:
+Off by default. It needs HubSpot switched on (the private-app token is what
+reads the form) **and** per-author subfolders — the author's Drive folder is
+resolved from the first and last name the author typed on the form, and
+nothing in HubSpot has to be "ready" first — plus the correction form's own
+id, so the ordinary case is:
 
 ```bash
 docproof-watch init --enable-corrections \
+  --corrections-form-start-after 2026-09-15
+```
+
+Set `--corrections-form-start-after` to the day you switch it on, so rounds
+the press already handled by hand never get folded into the first job. The
+form id and the form fields naming the author (`--corrections-form-id`,
+`--corrections-form-first-property`, `--corrections-form-last-property`,
+`--corrections-form-book-property` for a multi-book author) all ship with the
+press's own defaults and rarely need to be touched.
+
+To keep the older, workflow-gated flow instead — a HubSpot workflow flips the
+status dropdown to `Ready for Corrections` when the form lands, and DocWatch
+reads the properties the workflow copied onto the record:
+
+```bash
+docproof-watch init --enable-corrections --corrections-intake hubspot \
   --hubspot-corrections-file-property corrections_file \
   --hubspot-corrections-text-property corrections_text
 ```
 
-Or in the app: **Automations → Workflows → Interior corrections**.
+Or in the app: **Automations → Workflows → Interior corrections**, where
+"Kicked off by" chooses the mode.
 
 **The file it reads.** The designer exports whole numbers — `Book 3`, then
 `Book 4` after the next round — and DocProof hands back the half-step, so an
@@ -435,19 +465,25 @@ hours`). An author who submits the form twice in an afternoon gets one job
 over everything they sent, not two half-corrected exports; `docproof-watch
 corrections status` lists what is waiting and when its hold ends.
 
-**What it reads.** The form's uploaded file is fetched from the URL HubSpot
-stores on the record — a PDF proof with comments is read deterministically
-(every mark becomes a row, page and all), a Word file with tracked changes the
-same; a Word *list* or the form's typed text goes through the house reader
-(Luna) to become exact find/replace edits. A proof PDF beside the export under
-the same stem (`Johnson - Book 3.pdf`) lends its page texts so a typed "page 47"
-narrows to the text page 47 actually set. A form that reached the record with
-neither a file nor text stops the book and tells you to check the workflow.
-Every submission folded into the job — whether read off the record's own
-properties (the default, one submission) or, with `--corrections-form-poll`,
-every event the form itself recorded for that record — lands in the one job
-and the one spreadsheet, each row's **Submission** column naming which round
-it came from once there was more than one.
+**What it reads.** The uploaded file and typed notes come from the form
+itself. In the default `form` intake mode they come straight off the
+submission's own fields (`corrections_form_file_property` /
+`corrections_form_notes_property`); in `hubspot` intake mode they come from
+the URL and text a workflow already copied onto the record's properties.
+Either way, a PDF proof with comments is read deterministically (every mark
+becomes a row, page and all), a Word file with tracked changes the same; a
+Word *list* or the form's typed text goes through the house reader (Luna) to
+become exact find/replace edits. A proof PDF beside the export under the same
+stem (`Johnson - Book 3.pdf`) lends its page texts so a typed "page 47"
+narrows to the text page 47 actually set. A form submission with neither a
+file nor text stops the book and tells you to check the form. Every
+submission for the author is folded into the one job and the one spreadsheet
+— in `form` intake mode that is every event the form itself recorded, several
+rounds of "one more thing" becoming one job; in `hubspot` intake mode it is
+the record's own properties (one submission), or, with
+`--corrections-form-poll`, every form event there too — each row's
+**Submission** column naming which round it came from once there was more
+than one.
 
 **What comes back.** The app's own corrections job runs — anchored, verified,
 with the panel's default model passes unless `--corrections-no-model-passes` —
@@ -462,10 +498,15 @@ whether the two were aligned — a page is never guessed.
 
 **Then a designer.** DocProof expects to place most of a form and not all of it
 — a "remove this chapter" is a layout request, not a text edit — so every book
-moves to `Corrections Applied`, which is the designer's cue to open the
+that moves to `Corrections Applied` is the designer's cue to open the
 `Book N.5`, walk the `checks.jsx`, and finish the *Not applied* sheet by hand.
-Exactly one CRM write per book; the export is marked `done` in Drive last, so a
-pass that dies halfway re-uploads what never landed and never re-applies.
+In `hubspot` intake mode that write is unconditional, the same record that was
+ready. In `form` intake mode it happens only if exactly one Projects record's
+name matches the author — none or several matching stops the CRM write, not
+the hand-off, and the completion email says the status was not moved so a
+person can move it by hand. At most one CRM write per book either way; the
+export is marked `done` in Drive last, so a pass that dies halfway re-uploads
+what never landed and never re-applies.
 
 Every upload is read back from Drive — name, size and checksum — before the
 status moves; a mismatch gets one reupload, and a book that still does not
@@ -489,10 +530,13 @@ behind the newest `.indd` gets the same message naming which book to export.
 own subfolder one level below the author folder, each with its own `Interior
 Design` — DocWatch tries the flat layout first, and only descends into the
 book subfolders when the author folder itself has none. Which book folder a
-ready record belongs to is read off the form's own title
-(`ws.hubspot_corrections_book_property`, `book_title` by default): a title
-that matches none, or more than one, of the author's book folders is a
-`needs_human` verdict rather than a guess at the newest export.
+submission belongs to is read off the book's own title — the form field
+(`corrections_form_book_property`, `which_book_are_these_corrections_for_` by
+default) in `form` intake mode, or the CRM property
+(`hubspot_corrections_book_property`, `book_title` by default) in `hubspot`
+intake mode: a title that matches none, or more than one, of the author's
+book folders is a `needs_human` verdict rather than a guess at the newest
+export.
 
 For the full operational walkthrough — the HubSpot workflow's property
 mapping, the three-hour quiet period, the `.indd`/`.idml` rule, and how to

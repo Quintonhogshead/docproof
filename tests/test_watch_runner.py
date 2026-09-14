@@ -124,6 +124,97 @@ def test_what_the_last_pass_did_is_kept(runner):
     assert last["ok"] and last["started_at"] and last["finished_at"]
 
 
+# --- corrections rehearsal -----------------------------------------------
+
+def test_rehearse_corrections_runs_on_a_thread_and_fills_last_rehearsal(
+        runner, monkeypatch):
+    calls = {}
+
+    def fake(home, ws, record_id, *, ignore_timer, dry_run):
+        calls.update(home=home, record_id=record_id,
+                     ignore_timer=ignore_timer, dry_run=dry_run)
+        report = TickReport()
+        report.corrected.append("Johnson - Book 3.idml: 41 of 58 applied")
+        report.uploaded.append("Johnson - Book 3.5.idml")
+        report.needs_human.append(("Johnson - Book 3.idml", "no folder"))
+        report.waiting = 2
+        return report
+    monkeypatch.setattr("app.watch.corrections.rehearse", fake)
+
+    assert runner.busy is False
+    assert runner.rehearse_corrections(
+        "rec-1", dry_run=True, ignore_timer=False) is True
+    runner.wait_idle()
+
+    assert calls["record_id"] == "rec-1"
+    assert calls["dry_run"] is True
+    assert calls["ignore_timer"] is False
+    out = runner.last_rehearsal
+    assert out["record_id"] == "rec-1"
+    assert out["dry_run"] is True and out["ignore_timer"] is False
+    assert out["corrected"] == ["Johnson - Book 3.idml: 41 of 58 applied"]
+    assert out["uploaded"] == ["Johnson - Book 3.5.idml"]
+    assert out["needs_human"] == [["Johnson - Book 3.idml", "no folder"]]
+    assert out["missing_source"] == [] and out["stuck_ready"] == []
+    assert out["failed"] == []
+    assert out["waiting"] == 2
+    assert out["error"] is None
+    assert out["started_at"] and out["finished_at"]
+    assert runner.busy is False
+
+
+def test_rehearse_corrections_records_the_error_when_it_raises(
+        runner, monkeypatch):
+    def fake(home, ws, record_id, *, ignore_timer, dry_run):
+        raise ticklib.NotConfigured("No folder is being watched yet.")
+    monkeypatch.setattr("app.watch.corrections.rehearse", fake)
+
+    runner.rehearse_corrections("rec-1", dry_run=True, ignore_timer=False)
+    runner.wait_idle()
+
+    out = runner.last_rehearsal
+    assert out["error"] == "No folder is being watched yet."
+    assert out["corrected"] == [] and out["uploaded"] == []
+    assert runner.busy is False
+
+
+def test_rehearse_corrections_records_a_drive_error_too(runner, monkeypatch):
+    def fake(home, ws, record_id, *, ignore_timer, dry_run):
+        raise DriveError("Google said no.")
+    monkeypatch.setattr("app.watch.corrections.rehearse", fake)
+
+    runner.rehearse_corrections("rec-1", dry_run=True, ignore_timer=False)
+    runner.wait_idle()
+
+    assert runner.last_rehearsal["error"] == "Google said no."
+
+
+def test_rehearse_corrections_claims_running_like_run_now(runner,
+                                                           monkeypatch):
+    """One pass at a time, whichever door it came in by — a rehearsal is no
+    exception, and must not race a real pass over the same folder."""
+    gate, entered = threading.Event(), threading.Event()
+
+    def fake(home, ws, record_id, *, ignore_timer, dry_run):
+        entered.set()
+        gate.wait(5)
+        return TickReport()
+    monkeypatch.setattr("app.watch.corrections.rehearse", fake)
+
+    assert runner.rehearse_corrections(
+        "rec-1", dry_run=True, ignore_timer=False) is True
+    entered.wait(5)
+
+    assert runner.busy is True
+    assert runner.run_now() is False
+    assert runner.rehearse_corrections(
+        "rec-2", dry_run=True, ignore_timer=False) is False
+
+    gate.set()
+    runner.wait_idle()
+    assert runner.busy is False
+
+
 def test_stopping_does_not_wait_on_a_pass_that_is_mid_book(runner):
     """Quitting kills the thread, and that is safe: the checkpoint replays what
     was paid for and the Drive marker is written last."""

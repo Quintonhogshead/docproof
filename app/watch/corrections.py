@@ -3,8 +3,13 @@ applied to the designer's exported IDML, with a spreadsheet that accounts for
 every correction — and the whole thing back in the author's folder.
 
 The fifth stage, and the first over a designer's file rather than a manuscript.
-A HubSpot workflow flips the status dropdown to "Ready for Corrections" when
-the form comes in; a pass then, per ready record:
+What kicks a book off is `corrections_intake`: "form" (the default) reads the
+Pre-Proof Interior Design Corrections Form's own submissions directly — nobody
+in HubSpot has to do anything — and only afterwards, once the book is
+delivered, looks up the one Projects record named for the author to move its
+status; "hubspot" is the old gate, a workflow that flips a status dropdown to
+"Ready for Corrections" when the form comes in, which this pass then reads
+back off the record. Either way, once a submission is in hand:
 
     author folder -> "Interior Design" -> the highest "<surname> - Book N.idml"
     the form's file (a marked-up PDF proof, or a Word list) and/or typed text
@@ -13,7 +18,8 @@ the form comes in; a pass then, per ready record:
     -> "<surname> - Book N.5.idml", "<surname> - Book N.5 - corrections.xlsx"
        (Applied / Not applied), notes and the InDesign check tour, uploaded
        beside the source
-    -> HubSpot moved to the done value; the source IDML marked done in Drive.
+    -> HubSpot moved to the done value when it could be found; the source
+       IDML marked done in Drive either way.
 
 Every book then goes to a human designer for what could not be applied — the
 spreadsheet is written for that designer, so its page numbers are the file's
@@ -32,7 +38,7 @@ import hashlib
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -45,6 +51,7 @@ from app.settings import get_api_key, resource_root
 from . import drive, folders, hubspot, naming
 from .drive import DriveFile
 from .hubspot import HubSpotAuthError, HubSpotError
+from .names import name_key
 from .prep import _already_there
 from .settings import WatchSettings
 from .stages import (AT_PROP, CORRECTIONS_DONE, CORRECTIONS_FAILED,
@@ -69,9 +76,9 @@ EXTRACT_MODEL = "gpt-5.6-luna"
 
 __all__ = ["Work", "Submission", "CorrectionsFailed", "discover",
            "gather_submissions", "hold_or_release", "ready_at",
-           "pending_summary", "run_stage", "pick_source", "proof_pdf_for",
-           "hand_off_names", "artifacts", "make_job", "run_job",
-           "upload_outputs", "verify_uploads", "mark_source",
+           "pending_summary", "run_stage", "rehearse", "pick_source",
+           "proof_pdf_for", "hand_off_names", "artifacts", "make_job",
+           "run_job", "upload_outputs", "verify_uploads", "mark_source",
            "extract_provider", "fetch_submission", "fetch_submissions"]
 
 
@@ -101,6 +108,18 @@ class Work:
     submissions: tuple[dict, ...] = ()
     file_urls: tuple[str, ...] = ()
     text: str = ""
+    # Form intake only (`corrections_intake == "form"`): the pending-ledger key
+    # this job was released from (`corrections.hold_or_release`'s own key,
+    # `form:<first>|<last>`) — `record_id` is the HubSpot record to write the
+    # done value onto, which form intake resolves separately and may not find
+    # at all. Empty in hubspot-gate mode, where the HubSpot record id already
+    # doubles as the pending key.
+    pending_key: str = ""
+    # Form intake only: set when the write-back HubSpot record could not be
+    # resolved to exactly one Projects record (`_match_hubspot_record`) — the
+    # book is still delivered, but this explains why its status did not move,
+    # for `_one` to add to `report.needs_human` once delivery is done.
+    hubspot_note: str = ""
 
 
 @dataclass(frozen=True)
@@ -134,19 +153,42 @@ def discover(hs_token: str, token: str, ws: WatchSettings, state: WatchState,
              *, opener, report, only_record: str | None = None,
              ignore_timer: bool = False, now: datetime | None = None
              ) -> list[Work]:
-    """Ask HubSpot who is ready, hold each one for its quiet period, then look
-    only in the released authors' folders.
+    """Find every book this pass can correct, in whichever mode
+    `corrections_intake` names — "form" (the default): the corrections form's
+    own submissions are the trigger, grouped by author; "hubspot": the old
+    gate, a workflow-flipped status dropdown — then hold each release for its
+    quiet period and resume anything already paid for but not yet delivered.
 
-    HubSpot drives, Drive follows — the parent Author Folder is never listed.
-    A record still inside its quiet period (`hold_or_release`) is counted as
-    waiting and left for a later pass, unless `ignore_timer` — a rehearsal or a
-    `--record` rerun — says to run it now regardless. `only_record` narrows the
-    whole pass to one HubSpot record id. Every author that cannot be resolved
-    to exactly one file to correct is reported (`report.needs_human` /
-    `missing_source` / `stuck_ready`) and left where it is; nothing here
-    guesses. Returns the books this pass can work."""
+    Every author that cannot be resolved to exactly one file to correct is
+    reported (`report.needs_human` / `missing_source` / `stuck_ready`) and
+    left where it is; nothing here guesses. Returns the books this pass can
+    work."""
     now = now or datetime.now(timezone.utc)
     _drop_finished_pending(state)
+    mode = (ws.corrections_intake or "form").strip().lower()
+    if mode == "form":
+        works, seen = _discover_form(hs_token, token, ws, state, opener=opener,
+                                     report=report, only_record=only_record,
+                                     ignore_timer=ignore_timer, now=now)
+    else:
+        works, seen = _discover_hubspot(hs_token, token, ws, state, opener=opener,
+                                        report=report, only_record=only_record,
+                                        ignore_timer=ignore_timer, now=now)
+    works.extend(_resume_paid_for(token, state, seen, opener=opener))
+    uniq = {w.idml.id: w for w in works}
+    return list(uniq.values())
+
+
+def _discover_hubspot(hs_token: str, token: str, ws: WatchSettings,
+                      state: WatchState, *, opener, report,
+                      only_record: str | None, ignore_timer: bool,
+                      now: datetime) -> tuple[list[Work], set[str]]:
+    """`corrections_intake == "hubspot"`: ask HubSpot who is flagged ready,
+    hold each one for its quiet period, then look only in the released
+    authors' folders. HubSpot drives, Drive follows — the parent Author Folder
+    is never listed. `only_record` narrows the whole pass to one HubSpot
+    record id. Returns the pass's works and every HubSpot record id it looked
+    at (held or released), so `_resume_paid_for` does not double up on it."""
     want = [p for p in (ws.hubspot_status_property, ws.hubspot_first_property,
                         ws.hubspot_last_property,
                         ws.hubspot_corrections_file_property,
@@ -162,7 +204,7 @@ def discover(hs_token: str, token: str, ws: WatchSettings, state: WatchState,
     except HubSpotError as e:
         log.info("Waiting: could not fetch the corrections Projects from "
                  "HubSpot (%s); the next run will try again.", e)
-        return []
+        return [], set()
 
     # Read the form once for the whole pass — every ready record is matched
     # against the same page of events, rather than one HTTP round trip apiece.
@@ -208,26 +250,183 @@ def discover(hs_token: str, token: str, ws: WatchSettings, state: WatchState,
                 state.corrections_pending[record.id] = entry
                 state.save()
             works.append(work)
+    return works, seen
 
-    # A book already paid for — its job exists on the state file and it is not
-    # yet delivered — is picked up again from the folder it recorded, whether or
-    # not a person has since moved its status. The submission is not re-read:
-    # the job carries the edit list, so only delivery is left to do.
+
+def _form_key(first: str, last: str) -> str:
+    """The pending-ledger key one author's form rows are grouped under, in
+    form-intake mode — a name, not a HubSpot id, since nothing in HubSpot has
+    necessarily been touched yet."""
+    return f"form:{name_key(first)}|{name_key(last)}"
+
+
+def _matches_only_record(only_record: str, key: str, author: str,
+                         state: WatchState) -> bool:
+    """Whether a `--record` rerun's `only_record` means this form group — a
+    key, a bare "First Last", or (once a book from this group has already
+    matched one) the HubSpot record id it resolved to."""
+    want = only_record.strip()
+    if want == key or name_key(want) == name_key(author):
+        return True
+    return any(rec.corrections_pending_key == key and rec.corrections_hubspot_id == want
+              for rec in state.files.values())
+
+
+def _discover_form(hs_token: str, token: str, ws: WatchSettings,
+                   state: WatchState, *, opener, report,
+                   only_record: str | None, ignore_timer: bool,
+                   now: datetime) -> tuple[list[Work], set[str]]:
+    """`corrections_intake == "form"` (the default): read the corrections
+    form's own submissions and group them by author, so nobody has to touch
+    HubSpot for a round of corrections to start. Each released group is
+    resolved to a file the same way hubspot mode is (`_resolve_form`), and —
+    only once it is ready to run, and only if `ws.hubspot_write_back` — is
+    matched to the one Projects record named for the author, so its status can
+    still move when the book is delivered. Returns the pass's works and every
+    group key it looked at (held or released)."""
+    try:
+        rows = hubspot.form_submissions(hs_token, ws.corrections_form_id,
+                                        opener=opener)
+    except HubSpotError as e:
+        log.info("Waiting: could not read the corrections form's submissions "
+                 "(%s); the next run will try again.", e)
+        report.needs_human.append(("Corrections form",
+                                   f"could not read the form's submissions: {e}"))
+        return [], set()
+
+    cutoff = hubspot.timestamp_value(ws.corrections_form_start_after)
+    first_field = (ws.corrections_form_first_property or "").casefold()
+    last_field = (ws.corrections_form_last_property or "").casefold()
+    book_field = (ws.corrections_form_book_property or "").casefold()
+    file_field = (ws.corrections_form_file_property or "").casefold()
+    notes_field = (ws.corrections_form_notes_property or "").casefold()
+
+    groups: dict[str, dict] = {}
+    for row in rows:
+        submitted = hubspot.timestamp_value(row.get("submittedAt"))
+        if cutoff and submitted and submitted <= cutoff:
+            continue                      # a round the press handled by hand
+        mapped = _mapped_values(row)
+        first = mapped.get(first_field, "").strip() if first_field else ""
+        last = mapped.get(last_field, "").strip() if last_field else ""
+        if not first or not last:
+            marker = hubspot.row_marker(row)
+            reason = ("has no first or last name, so DocProof cannot tell "
+                      "which author it belongs to.")
+            log.warning("Needs a person: corrections form submission %s (%s)",
+                        marker, reason)
+            report.needs_human.append(
+                (f"Corrections form submission {marker}", reason))
+            continue
+        key = _form_key(first, last)
+        title = mapped.get(book_field, "").strip() if book_field else ""
+        urls = hubspot.file_urls(mapped.get(file_field, "")) if file_field else []
+        text = mapped.get(notes_field, "").strip() if notes_field else ""
+        submitted_at = (datetime.fromtimestamp(submitted, tz=timezone.utc)
+                        .isoformat(timespec="seconds") if submitted else "")
+        group = groups.setdefault(
+            key, {"first": first, "last": last, "title": "", "submissions": []})
+        if title:
+            group["title"] = title
+        group["submissions"].append({"marker": hubspot.row_marker(row),
+                                     "submitted_at": submitted_at,
+                                     "urls": urls, "text": text})
+
+    works: list[Work] = []
+    seen: set[str] = set()
+    for key, group in groups.items():
+        first, last, title = group["first"], group["last"], group["title"]
+        author = folders.compose(first, last)
+        if only_record and not _matches_only_record(only_record, key, author, state):
+            continue
+        seen.add(key)
+        submissions = sorted(group["submissions"], key=lambda s: s["submitted_at"])
+        released, entry = hold_or_release(state, ws, key, author, submissions,
+                                          now=now, first=first, last=last,
+                                          title=title)
+        if not released and not ignore_timer:
+            report.waiting += 1
+            log.info("Holding %s until %s (interior corrections quiet "
+                     "period).", author, ready_at(entry, ws).isoformat())
+            continue
+        work = _resolve_form(token, ws, first, last, title, submissions,
+                             opener=opener, report=report)
+        if work is None:
+            continue
+        record_id, note = "", ""
+        if ws.hubspot_write_back and hs_token:
+            record_id, note = _match_hubspot_record(hs_token, ws, first, last,
+                                                     opener=opener)
+        work = replace(work, record_id=record_id, hubspot_note=note,
+                      pending_key=key)
+        if entry.source_name != work.idml.name:
+            entry.source_name = work.idml.name
+            state.corrections_pending[key] = entry
+            state.save()
+        works.append(work)
+    return works, seen
+
+
+def _match_hubspot_record(hs_token: str, ws: WatchSettings, first: str,
+                          last: str, *, opener) -> tuple[str, str]:
+    """The one Projects record named `first last`, for the write-back once a
+    form-triggered job is delivered — HubSpot's status is never the trigger in
+    form mode, only the after-the-fact cue a designer reads. `(record_id, "")`
+    when exactly one matches; `("", note)` on zero, more than one, or a
+    HubSpot read that failed — the book still gets delivered, and `note` says
+    why its status did not move. The same rule `tick._match_ready_record` uses
+    for by-name formatting intake, over the CRM instead of a name search."""
+    author = folders.compose(first, last)
+    if not (ws.hubspot_last_property and ws.hubspot_first_property):
+        return "", (f"HubSpot's first/last name properties are not "
+                    f"configured; {author}'s status will not be moved.")
+    try:
+        candidates = hubspot.find_by_value(
+            hs_token, ws.hubspot_object, ws.hubspot_last_property, last,
+            want_properties=[ws.hubspot_first_property, ws.hubspot_last_property],
+            opener=opener)
+    except HubSpotAuthError:
+        raise
+    except HubSpotError as e:
+        return "", (f"could not look up the Projects record for {author} "
+                    f"({e}); its status will not be moved.")
+    matches = [r for r in candidates if name_key(
+        r.properties.get(ws.hubspot_first_property, "")) == name_key(first)]
+    if len(matches) == 1:
+        return matches[0].id, ""
+    return "", f"no single Projects record is named {author}; its status will not be moved."
+
+
+def _resume_paid_for(token: str, state: WatchState, seen: set[str], *,
+                     opener) -> list[Work]:
+    """A book already paid for — its job exists on the state file and it is
+    not yet delivered — is picked up again from the folder it recorded,
+    whether or not this pass's own discovery still reports it (a status moved
+    by hand, a form round that aged out of the read, a HubSpot read that
+    failed). The submission is not re-read: the job carries the edit list, so
+    only delivery is left to do.
+
+    `seen` is every key (a HubSpot record id in hubspot mode, a pending-ledger
+    key in form mode) this pass's own discovery already looked at, held or
+    released — those go through the normal per-record path instead, so they
+    are never added twice here."""
+    works: list[Work] = []
     for rec in list(state.files.values()):
-        if (rec.corrections_hubspot_id and rec.corrections_job_id
-                and rec.corrections_hubspot_id not in seen
+        key = rec.corrections_pending_key or rec.corrections_hubspot_id
+        if not (key and rec.corrections_job_id and key not in seen
                 and rec.corrections_marked not in CORRECTIONS_TERMINAL
                 and rec.subfolder_id):
-            listing = drive.list_folder(token, rec.subfolder_id, opener=opener)
-            idml = next((f for f in listing if f.id == rec.file_id), None)
-            if idml is None:
-                continue
-            works.append(Work(record_id=rec.corrections_hubspot_id,
-                              first=rec.author_first, last=rec.author_last,
-                              author=rec.subfolder_name, folder_id=rec.subfolder_id,
-                              idml=idml, listing=listing))
-    uniq = {w.idml.id: w for w in works}
-    return list(uniq.values())
+            continue
+        listing = drive.list_folder(token, rec.subfolder_id, opener=opener)
+        idml = next((f for f in listing if f.id == rec.file_id), None)
+        if idml is None:
+            continue
+        works.append(Work(record_id=rec.corrections_hubspot_id,
+                          first=rec.author_first, last=rec.author_last,
+                          author=rec.subfolder_name, folder_id=rec.subfolder_id,
+                          idml=idml, listing=listing,
+                          pending_key=rec.corrections_pending_key))
+    return works
 
 
 def _drop_finished_pending(state: WatchState) -> None:
@@ -236,9 +435,12 @@ def _drop_finished_pending(state: WatchState) -> None:
     Applied" starts a fresh quiet period rather than resuming the old one."""
     if not state.corrections_pending:
         return
-    finished = {rec.corrections_hubspot_id for rec in state.files.values()
-               if rec.corrections_hubspot_id
-               and rec.corrections_marked in CORRECTIONS_TERMINAL}
+    finished: set[str] = set()
+    for rec in state.files.values():
+        if rec.corrections_marked not in CORRECTIONS_TERMINAL:
+            continue
+        finished.update(k for k in (rec.corrections_hubspot_id,
+                                    rec.corrections_pending_key) if k)
     stale = finished & set(state.corrections_pending)
     if not stale:
         return
@@ -355,10 +557,18 @@ def ready_at(entry: PendingCorrections, ws: WatchSettings) -> datetime:
 
 def hold_or_release(state: WatchState, ws: WatchSettings, record_id: str,
                     author: str, submissions: list[dict], *,
-                    now: datetime) -> tuple[bool, PendingCorrections]:
+                    now: datetime, first: str = "", last: str = "",
+                    title: str = "") -> tuple[bool, PendingCorrections]:
     """Fold newly seen `submissions` into this record's pending entry and say
     whether its quiet period has elapsed. Pure over `now`, so a test can move
     the clock instead of waiting on it.
+
+    `record_id` is whatever this mode's pending-ledger key is — a HubSpot
+    record id in hubspot mode, `_form_key(first, last)` in form mode; either
+    way it is what `already_folded` and `_drop_finished_pending` match a
+    `FileRecord` back to. `first`/`last`/`title` are form mode's own — kept on
+    the entry (first value wins, same as `author`) so `pending_summary` and a
+    later resolve do not have to re-read the form.
 
     A marker already folded into the file this record has already produced (a
     job resumed after it went stale, or a stray re-poll) is never counted as
@@ -370,8 +580,15 @@ def hold_or_release(state: WatchState, ws: WatchSettings, record_id: str,
                                    first_seen=now_iso)
     if author and not entry.author:
         entry.author = author
+    if first and not entry.first:
+        entry.first = first
+    if last and not entry.last:
+        entry.last = last
+    if title and not entry.title:
+        entry.title = title
     already_folded = {marker for rec in state.files.values()
-                      if rec.corrections_hubspot_id == record_id
+                      if (rec.corrections_hubspot_id == record_id
+                          or rec.corrections_pending_key == record_id)
                       for marker in rec.corrections_submissions}
     known = {s.get("marker") for s in entry.submissions if s.get("marker")}
     known |= already_folded
@@ -396,21 +613,97 @@ def pending_summary(state: WatchState, ws: WatchSettings, *,
     """Every record currently held for its quiet period, for `status` and the
     panel to show without either re-reading HubSpot."""
     now = now or datetime.now(timezone.utc)
+    mode = (ws.corrections_intake or "form").strip().lower()
     out = []
     for entry in state.corrections_pending.values():
         due = ready_at(entry, ws)
         out.append({
             "record_id": entry.record_id, "author": entry.author,
+            "first": entry.first, "last": entry.last, "title": entry.title,
             "first_seen": entry.first_seen,
             "last_submission_at": entry.last_submission_at,
             "ready_at": due.isoformat(timespec="seconds"),
             "ready": now >= due, "submissions": len(entry.submissions),
-            "source_name": entry.source_name})
+            "source_name": entry.source_name, "mode": mode})
     return out
+
+
+@dataclass
+class _Located:
+    """What `_locate` found, or why it could not finish. `why` is "" only on a
+    total success, with `interior`/`listing`/`idml` all filled in; otherwise
+    one of `pick_source`'s own reasons ("none", "tie", "done", "failed",
+    "indd-only", "idml-stale"), or "no-folder" (no author folder),
+    "no-interior" (no "Interior Design" and no per-book folders either),
+    "no-title" (a multi-book author and no title to route by — `book_folders`
+    filled), "no-title-match" (the title matched none or more than one book
+    folder — `book_folders` filled), or "rival" (a "Book N.5" already there
+    that this stage did not write — `idml` and `rival` filled)."""
+
+    why: str = ""
+    interior: DriveFile | None = None
+    listing: list[DriveFile] = field(default_factory=list)
+    idml: DriveFile | None = None
+    book_folders: list = field(default_factory=list)
+    rival: DriveFile | None = None
+
+
+def _locate(token: str, ws: WatchSettings, first: str, last: str, title: str,
+           *, opener) -> _Located:
+    """Walk from the author's folder to the designer's chosen export: author
+    folder -> "Interior Design" (or, for a multi-book author, whichever book
+    folder's own "Interior Design" matches `title`) -> the highest integer
+    "<surname> - Book N.idml" there -> refused if a rival "Book N.5" already
+    sits beside it.
+
+    Purely mechanical — it never touches `report`. Shared by hubspot mode's
+    `_resolve` and form mode's `_resolve_form`, which differ only in how they
+    explain a `.why` that is not "" (hubspot mode's book was "flagged ready";
+    form mode's author "submitted the form") — see `_Located`."""
+    author_folder = folders.resolve(first, last, ws.folder_id, token,
+                                    opener=opener)
+    if author_folder is None:
+        return _Located(why="no-folder")
+
+    interior = _child_folder(token, author_folder, ws.corrections_folder_name,
+                             opener=opener)
+    if interior is None:
+        book_folders = _book_folders(token, author_folder, ws, opener=opener)
+        if not book_folders:
+            return _Located(why="no-interior")
+        # A multi-book author: each book has its own subfolder one level below
+        # the author folder, each holding its own "Interior Design". The
+        # title is the only thing that says which one this round belongs to —
+        # see `_match_book_folder`.
+        if not title:
+            return _Located(why="no-title", book_folders=book_folders)
+        match = _match_book_folder(book_folders, title)
+        if match is None:
+            return _Located(why="no-title-match", book_folders=book_folders)
+        _book_folder, interior = match
+
+    listing = drive.list_folder(token, interior.id, opener=opener)
+    idml, why = pick_source(listing, last)
+    if idml is None:
+        return _Located(why=why, listing=listing)
+
+    # Never overwrite. A "Book N.5" already there that this stage did not write
+    # (no source marker pointing at this IDML) is somebody's file.
+    names = hand_off_names(idml.name)
+    rival = next((f for f in listing if f.name == names["idml"]
+                  and f.app_properties.get(SOURCE_PROP) != idml.id), None)
+    if rival is not None:
+        return _Located(why="rival", listing=listing, idml=idml, rival=rival)
+
+    return _Located(interior=interior, listing=listing, idml=idml)
 
 
 def _resolve(token: str, ws: WatchSettings, record, *, opener, report,
             submissions: list[dict] | None = None) -> Work | None:
+    """`corrections_intake == "hubspot"`: resolve one ready record to the file
+    to correct, reporting exactly the sentence hubspot mode always has for
+    each way `_locate` can come up short — nothing here changed by adding form
+    mode, so every existing report stays word for word what it was."""
     submissions = submissions if submissions is not None else []
     first = (record.properties.get(ws.hubspot_first_property) or "").strip()
     last = (record.properties.get(ws.hubspot_last_property) or "").strip()
@@ -423,137 +716,126 @@ def _resolve(token: str, ws: WatchSettings, record, *, opener, report,
         report.waiting += 1
         return None
     author = folders.compose(first, last)
+    prop = ws.hubspot_corrections_book_property
+    title = (record.properties.get(prop) or "").strip() if prop else ""
 
-    author_folder = folders.resolve(first, last, ws.folder_id, token,
-                                    opener=opener)
-    if author_folder is None:
+    located = _locate(token, ws, first, last, title, opener=opener)
+    if located.why == "no-folder":
         reason = (f"no single folder named '{author}' is in the Author Folder, "
                   f"so DocProof will not guess where the book is.")
         log.warning("Needs a person: %s (%s)", author, reason)
         report.needs_human.append((author, reason))
         report.waiting += 1
         return None
-
-    interior = _child_folder(token, author_folder, ws.corrections_folder_name,
-                             opener=opener)
-    if interior is None:
-        book_folders = _book_folders(token, author_folder, ws, opener=opener)
-        if not book_folders:
-            detail = (f"its folder has no '{ws.corrections_folder_name}' "
-                      f"subfolder to hold the designer's IDML")
-            log.info("Waiting: %s is flagged '%s' but %s.", author, ready, detail)
-            report.missing_source.append(
-                (author, f"flagged '{ready}' but {detail}."))
-            report.waiting += 1
-            return None
-        # A multi-book author: each book has its own subfolder one level below
-        # the author folder, each holding its own "Interior Design". The
-        # record's own book title is the only thing that says which one this
-        # round belongs to — see `_match_book_folder`.
-        prop = ws.hubspot_corrections_book_property
-        title = (record.properties.get(prop) or "").strip() if prop else ""
-        if not title:
-            reason = (f"the record has no '{prop or 'book title'}' so "
-                      f"DocProof cannot tell which of {len(book_folders)} "
-                      f"books this form is for.")
-            log.warning("Needs a person: %s (%s)", author, reason)
-            report.needs_human.append((author, reason))
-            report.waiting += 1
-            return None
-        match = _match_book_folder(book_folders, title)
-        if match is None:
-            candidates = ", ".join(f"'{b.name}'" for b, _ in book_folders)
-            reason = (f"'{title}' does not match exactly one of {author}'s "
-                      f"book folders ({candidates}), so DocProof cannot tell "
-                      f"which book this form is for.")
-            log.warning("Needs a person: %s (%s)", author, reason)
-            report.needs_human.append((author, reason))
-            report.waiting += 1
-            return None
-        _book_folder, interior = match
-
-    listing = drive.list_folder(token, interior.id, opener=opener)
-    idml, why = pick_source(listing, last)
-    if idml is None:
-        if why == "done":
-            done_file = next(f for f in listing
-                             if naming.is_idml_source_name(f.name, last)
-                             and f.app_properties.get(CORRECTIONS_PROP)
-                             == CORRECTIONS_DONE)
-            report.stuck_ready.append(
-                (author, f"flagged '{ready}' but its '{done_file.name}' already "
-                         f"has its corrections applied — the status never moved "
-                         f"on, so check the write-back, or wait for the "
-                         f"designer's next export."))
-        elif why == "failed":
-            failed_file = next(f for f in listing
-                               if naming.is_idml_source_name(f.name, last)
-                               and f.app_properties.get(CORRECTIONS_PROP)
-                               == CORRECTIONS_FAILED)
-            props = failed_file.app_properties
-            when = (props.get(AT_PROP) or "")[:10]
-            reason = (f"flagged '{ready}' but its '{failed_file.name}' was "
-                      f"already tried{' on ' + when if when else ''} and marked "
-                      f"failed: {props.get(REASON_PROP) or 'no reason recorded'}."
-                      f" Fix the form or the file and clear the marker to try "
-                      f"again, or move the status on.")
-            log.warning("Needs a person: %s (%s)", author, reason)
-            report.needs_human.append((author, reason))
-        elif why == "tie":
-            reason = (f"two files in {author}'s '{ws.corrections_folder_name}' "
-                      f"folder carry the same highest Book number, so DocProof "
-                      f"cannot tell which is the designer's latest export.")
-            log.warning("Needs a person: %s (%s)", author, reason)
-            report.needs_human.append((author, reason))
-        elif why == "indd-only":
-            indd = _highest_indd(listing, last)
-            stem = Path(indd.name).stem
-            detail = (f"its '{ws.corrections_folder_name}' folder holds "
-                      f"'{indd.name}' and no IDML export of it — in InDesign "
-                      f"open it and choose File → Export → InDesign Markup "
-                      f"(IDML), saved beside it as '{stem}.idml'")
-            log.info("Waiting: %s is flagged '%s' but %s.", author, ready, detail)
-            report.missing_source.append((author,
-                                          f"flagged '{ready}' but {detail}."))
-        elif why == "idml-stale":
-            indd = _highest_indd(listing, last)
-            idml_files = [f for f in listing if not f.is_folder
-                         and naming.is_idml_source_name(f.name, last)]
-            newest_idml = max(idml_files,
-                              key=lambda f: naming.idml_version(f.name)[1])
-            stem = Path(indd.name).stem
-            detail = (f"its '{ws.corrections_folder_name}' folder holds "
-                      f"'{indd.name}' but the newest IDML is "
-                      f"'{newest_idml.name}' — export {_book_token(stem)} as "
-                      f"IDML, saved beside it as '{stem}.idml'")
-            log.info("Waiting: %s is flagged '%s' but %s.", author, ready, detail)
-            report.missing_source.append((author,
-                                          f"flagged '{ready}' but {detail}."))
-        else:
-            detail = (f"its '{ws.corrections_folder_name}' folder holds no "
-                      f"'{last} - Book N.idml'"
-                      + (f" ({len(listing)} other file(s) there)" if listing
-                         else " (it is empty)"))
-            log.info("Waiting: %s is flagged '%s' but %s.", author, ready, detail)
-            report.missing_source.append((author,
-                                          f"flagged '{ready}' but {detail}."))
+    if located.why == "no-interior":
+        detail = (f"its folder has no '{ws.corrections_folder_name}' "
+                  f"subfolder to hold the designer's IDML")
+        log.info("Waiting: %s is flagged '%s' but %s.", author, ready, detail)
+        report.missing_source.append((author, f"flagged '{ready}' but {detail}."))
         report.waiting += 1
         return None
-
-    # Never overwrite. A "Book N.5" already there that this stage did not write
-    # (no source marker pointing at this IDML) is somebody's file.
-    names = hand_off_names(idml.name)
-    rival = next((f for f in listing if f.name == names["idml"]
-                  and f.app_properties.get(SOURCE_PROP) != idml.id), None)
-    if rival is not None:
-        reason = (f"a '{rival.name}' is already in the folder and DocProof did "
-                  f"not write it, so it will not overwrite it. Remove or rename "
-                  f"it, or move the status on.")
+    if located.why == "no-title":
+        reason = (f"the record has no '{prop or 'book title'}' so "
+                  f"DocProof cannot tell which of {len(located.book_folders)} "
+                  f"books this form is for.")
         log.warning("Needs a person: %s (%s)", author, reason)
         report.needs_human.append((author, reason))
         report.waiting += 1
         return None
+    if located.why == "no-title-match":
+        candidates = ", ".join(f"'{b.name}'" for b, _ in located.book_folders)
+        reason = (f"'{title}' does not match exactly one of {author}'s "
+                  f"book folders ({candidates}), so DocProof cannot tell "
+                  f"which book this form is for.")
+        log.warning("Needs a person: %s (%s)", author, reason)
+        report.needs_human.append((author, reason))
+        report.waiting += 1
+        return None
+    if located.why == "done":
+        listing = located.listing
+        done_file = next(f for f in listing
+                         if naming.is_idml_source_name(f.name, last)
+                         and f.app_properties.get(CORRECTIONS_PROP)
+                         == CORRECTIONS_DONE)
+        report.stuck_ready.append(
+            (author, f"flagged '{ready}' but its '{done_file.name}' already "
+                     f"has its corrections applied — the status never moved "
+                     f"on, so check the write-back, or wait for the "
+                     f"designer's next export."))
+        report.waiting += 1
+        return None
+    if located.why == "failed":
+        listing = located.listing
+        failed_file = next(f for f in listing
+                           if naming.is_idml_source_name(f.name, last)
+                           and f.app_properties.get(CORRECTIONS_PROP)
+                           == CORRECTIONS_FAILED)
+        props = failed_file.app_properties
+        when = (props.get(AT_PROP) or "")[:10]
+        reason = (f"flagged '{ready}' but its '{failed_file.name}' was "
+                  f"already tried{' on ' + when if when else ''} and marked "
+                  f"failed: {props.get(REASON_PROP) or 'no reason recorded'}."
+                  f" Fix the form or the file and clear the marker to try "
+                  f"again, or move the status on.")
+        log.warning("Needs a person: %s (%s)", author, reason)
+        report.needs_human.append((author, reason))
+        report.waiting += 1
+        return None
+    if located.why == "tie":
+        reason = (f"two files in {author}'s '{ws.corrections_folder_name}' "
+                  f"folder carry the same highest Book number, so DocProof "
+                  f"cannot tell which is the designer's latest export.")
+        log.warning("Needs a person: %s (%s)", author, reason)
+        report.needs_human.append((author, reason))
+        report.waiting += 1
+        return None
+    if located.why == "indd-only":
+        listing = located.listing
+        indd = _highest_indd(listing, last)
+        stem = Path(indd.name).stem
+        detail = (f"its '{ws.corrections_folder_name}' folder holds "
+                  f"'{indd.name}' and no IDML export of it — in InDesign "
+                  f"open it and choose File → Export → InDesign Markup "
+                  f"(IDML), saved beside it as '{stem}.idml'")
+        log.info("Waiting: %s is flagged '%s' but %s.", author, ready, detail)
+        report.missing_source.append((author, f"flagged '{ready}' but {detail}."))
+        report.waiting += 1
+        return None
+    if located.why == "idml-stale":
+        listing = located.listing
+        indd = _highest_indd(listing, last)
+        idml_files = [f for f in listing if not f.is_folder
+                     and naming.is_idml_source_name(f.name, last)]
+        newest_idml = max(idml_files, key=lambda f: naming.idml_version(f.name)[1])
+        stem = Path(indd.name).stem
+        detail = (f"its '{ws.corrections_folder_name}' folder holds "
+                  f"'{indd.name}' but the newest IDML is "
+                  f"'{newest_idml.name}' — export {_book_token(stem)} as "
+                  f"IDML, saved beside it as '{stem}.idml'")
+        log.info("Waiting: %s is flagged '%s' but %s.", author, ready, detail)
+        report.missing_source.append((author, f"flagged '{ready}' but {detail}."))
+        report.waiting += 1
+        return None
+    if located.why == "rival":
+        reason = (f"a '{located.rival.name}' is already in the folder and "
+                  f"DocProof did not write it, so it will not overwrite it. "
+                  f"Remove or rename it, or move the status on.")
+        log.warning("Needs a person: %s (%s)", author, reason)
+        report.needs_human.append((author, reason))
+        report.waiting += 1
+        return None
+    if located.why:                       # "none" — no export at all
+        listing = located.listing
+        detail = (f"its '{ws.corrections_folder_name}' folder holds no "
+                  f"'{last} - Book N.idml'"
+                  + (f" ({len(listing)} other file(s) there)" if listing
+                     else " (it is empty)"))
+        log.info("Waiting: %s is flagged '%s' but %s.", author, ready, detail)
+        report.missing_source.append((author, f"flagged '{ready}' but {detail}."))
+        report.waiting += 1
+        return None
 
+    interior, listing, idml = located.interior, located.listing, located.idml
     urls, text = _derive_urls_text(submissions)
     if not urls and not text:
         reason = (f"flagged '{ready}' but the record carries no corrections — "
@@ -568,6 +850,149 @@ def _resolve(token: str, ws: WatchSettings, record, *, opener, report,
         return None
 
     return Work(record_id=record.id, first=first, last=last, author=author,
+                folder_id=interior.id, idml=idml, listing=listing,
+                proof_pdf=proof_pdf_for(listing, idml),
+                submissions=tuple(submissions), file_urls=urls, text=text)
+
+
+def _resolve_form(token: str, ws: WatchSettings, first: str, last: str,
+                  title: str, submissions: list[dict], *, opener,
+                  report) -> Work | None:
+    """`corrections_intake == "form"`'s own `_resolve`: the same walk over
+    Drive (`_locate`), with every reason phrased for a book that was never
+    "flagged ready" in the first place — the form's own submission is what
+    happened, so that is what every sentence here says happened."""
+    author = folders.compose(first, last)
+    located = _locate(token, ws, first, last, title, opener=opener)
+    if located.why == "no-folder":
+        reason = (f"no single folder named '{author}' is in the Author Folder, "
+                  f"so DocProof will not guess where the book is.")
+        log.warning("Needs a person: %s (%s)", author, reason)
+        report.needs_human.append((author, reason))
+        report.waiting += 1
+        return None
+    if located.why == "no-interior":
+        detail = (f"its folder has no '{ws.corrections_folder_name}' "
+                  f"subfolder to hold the designer's IDML")
+        log.info("Waiting: %s submitted the corrections form but %s.", author, detail)
+        report.missing_source.append(
+            (author, f"submitted the corrections form but {detail}."))
+        report.waiting += 1
+        return None
+    if located.why == "no-title":
+        prop = ws.corrections_form_book_property
+        reason = (f"the form's '{prop or 'book'}' answer was blank, so "
+                  f"DocProof cannot tell which of {len(located.book_folders)} "
+                  f"books this round is for.")
+        log.warning("Needs a person: %s (%s)", author, reason)
+        report.needs_human.append((author, reason))
+        report.waiting += 1
+        return None
+    if located.why == "no-title-match":
+        candidates = ", ".join(f"'{b.name}'" for b, _ in located.book_folders)
+        reason = (f"'{title}' does not match exactly one of {author}'s "
+                  f"book folders ({candidates}), so DocProof cannot tell "
+                  f"which book this round is for.")
+        log.warning("Needs a person: %s (%s)", author, reason)
+        report.needs_human.append((author, reason))
+        report.waiting += 1
+        return None
+    if located.why == "done":
+        listing = located.listing
+        done_file = next(f for f in listing
+                         if naming.is_idml_source_name(f.name, last)
+                         and f.app_properties.get(CORRECTIONS_PROP)
+                         == CORRECTIONS_DONE)
+        report.stuck_ready.append(
+            (author, f"submitted the corrections form but its "
+                     f"'{done_file.name}' already has its corrections "
+                     f"applied — wait for the designer's next export."))
+        report.waiting += 1
+        return None
+    if located.why == "failed":
+        listing = located.listing
+        failed_file = next(f for f in listing
+                           if naming.is_idml_source_name(f.name, last)
+                           and f.app_properties.get(CORRECTIONS_PROP)
+                           == CORRECTIONS_FAILED)
+        props = failed_file.app_properties
+        when = (props.get(AT_PROP) or "")[:10]
+        reason = (f"submitted the corrections form but its '{failed_file.name}' "
+                  f"was already tried{' on ' + when if when else ''} and marked "
+                  f"failed: {props.get(REASON_PROP) or 'no reason recorded'}."
+                  f" Fix the file and clear the marker to try again.")
+        log.warning("Needs a person: %s (%s)", author, reason)
+        report.needs_human.append((author, reason))
+        report.waiting += 1
+        return None
+    if located.why == "tie":
+        reason = (f"two files in {author}'s '{ws.corrections_folder_name}' "
+                  f"folder carry the same highest Book number, so DocProof "
+                  f"cannot tell which is the designer's latest export.")
+        log.warning("Needs a person: %s (%s)", author, reason)
+        report.needs_human.append((author, reason))
+        report.waiting += 1
+        return None
+    if located.why == "indd-only":
+        listing = located.listing
+        indd = _highest_indd(listing, last)
+        stem = Path(indd.name).stem
+        detail = (f"its '{ws.corrections_folder_name}' folder holds "
+                  f"'{indd.name}' and no IDML export of it — in InDesign "
+                  f"open it and choose File → Export → InDesign Markup "
+                  f"(IDML), saved beside it as '{stem}.idml'")
+        log.info("Waiting: %s submitted the corrections form but %s.", author, detail)
+        report.missing_source.append(
+            (author, f"submitted the corrections form but {detail}."))
+        report.waiting += 1
+        return None
+    if located.why == "idml-stale":
+        listing = located.listing
+        indd = _highest_indd(listing, last)
+        idml_files = [f for f in listing if not f.is_folder
+                     and naming.is_idml_source_name(f.name, last)]
+        newest_idml = max(idml_files, key=lambda f: naming.idml_version(f.name)[1])
+        stem = Path(indd.name).stem
+        detail = (f"its '{ws.corrections_folder_name}' folder holds "
+                  f"'{indd.name}' but the newest IDML is "
+                  f"'{newest_idml.name}' — export {_book_token(stem)} as "
+                  f"IDML, saved beside it as '{stem}.idml'")
+        log.info("Waiting: %s submitted the corrections form but %s.", author, detail)
+        report.missing_source.append(
+            (author, f"submitted the corrections form but {detail}."))
+        report.waiting += 1
+        return None
+    if located.why == "rival":
+        reason = (f"a '{located.rival.name}' is already in the folder and "
+                  f"DocProof did not write it, so it will not overwrite it. "
+                  f"Remove or rename it.")
+        log.warning("Needs a person: %s (%s)", author, reason)
+        report.needs_human.append((author, reason))
+        report.waiting += 1
+        return None
+    if located.why:                       # "none" — no export at all
+        listing = located.listing
+        detail = (f"its '{ws.corrections_folder_name}' folder holds no "
+                  f"'{last} - Book N.idml'"
+                  + (f" ({len(listing)} other file(s) there)" if listing
+                     else " (it is empty)"))
+        log.info("Waiting: %s submitted the corrections form but %s.", author, detail)
+        report.missing_source.append(
+            (author, f"submitted the corrections form but {detail}."))
+        report.waiting += 1
+        return None
+
+    interior, listing, idml = located.interior, located.listing, located.idml
+    urls, text = _derive_urls_text(submissions)
+    if not urls and not text:
+        reason = ("the round carries no corrections — neither an uploaded "
+                  "file nor typed text reached the corrections form.")
+        log.warning("Needs a person: %s (%s)", author, reason)
+        report.needs_human.append((author, reason))
+        report.waiting += 1
+        return None
+
+    return Work(record_id="", first=first, last=last, author=author,
                 folder_id=interior.id, idml=idml, listing=listing,
                 proof_pdf=proof_pdf_for(listing, idml),
                 submissions=tuple(submissions), file_urls=urls, text=text)
@@ -775,6 +1200,63 @@ def run_stage(token: str, home: Path, ws: WatchSettings, state: WatchState,
             state.record(rec)
 
 
+def rehearse(home: Path, ws: WatchSettings, record_id: str, *,
+            ignore_timer: bool, dry_run: bool, get_key=None,
+            opener=drive._open_url):
+    """The same token, state file, runner and job store a real pass builds,
+    handed to `run_stage` scoped to one record — so a rehearsal counts as a
+    pass for that record (its attempts, its state, its HubSpot write) exactly
+    the way a tick's would.
+
+    Shared by the CLI's `docproof-watch corrections rehearse` and the web
+    panel's per-record rehearsal button, so trying one book means the same
+    thing everywhere it can be tried. `tick` is imported lazily: `tick.py`
+    imports this module at load time, so importing it back here at module
+    scope would be a cycle."""
+    from app.jobs import JobRunner, JobStore
+    from app.settings import Paths
+    from . import tick
+    from .settings import GOOGLE_KEY, HUBSPOT_KEY
+    from .state import STATE_FILE, WatchState
+
+    read = get_key or get_api_key
+    if not ws.folder_id:
+        raise tick.NotConfigured(
+            "No folder is being watched yet. Run `docproof-watch init` to "
+            "say which one.")
+    if not ws.client_id or not ws.client_secret:
+        raise tick.NotConfigured(
+            "There is no Google sign-in set up yet. Run `docproof-watch "
+            "auth` — docs/watch.md walks through making the OAuth client it "
+            "asks for.")
+    refresh = read(GOOGLE_KEY)
+    if not refresh:
+        raise tick.NotConfigured(
+            "DocProof is not signed in to Google. Run `docproof-watch "
+            "auth`.")
+    hs_token = read(HUBSPOT_KEY)
+    if not hs_token:
+        raise tick.NotConfigured(
+            "HubSpot is switched on but there is no token. Run "
+            "`docproof-watch hubspot-token` on the desktop, or set the "
+            "HUBSPOT_TOKEN secret on the server.")
+
+    token = drive.refresh_access_token(ws.client_id, ws.client_secret,
+                                       refresh, opener=opener)
+    state = WatchState.load(home / STATE_FILE)
+    paths = Paths(home).ensure()
+    store = JobStore(paths)
+    runner = JobRunner(store, ws.app_settings(home),
+                       config_path=tick.config_path(), notify_home=home)
+
+    report = tick.TickReport()
+    run_stage(token, home, ws, state, runner, store, mock=False,
+             opener=opener, hs_token=hs_token, report=report,
+             only_record=record_id, ignore_timer=ignore_timer,
+             dry_run=dry_run)
+    return report
+
+
 def _one(token: str, home: Path, ws: WatchSettings, work: Work,
          state: WatchState, runner: JobRunner, store: JobStore, *, mock: bool,
          opener, hs_token: str | None, report, dry_run: bool = False) -> None:
@@ -783,6 +1265,7 @@ def _one(token: str, home: Path, ws: WatchSettings, work: Work,
     rec.name = file.name
     rec.modified_time = file.modified_time
     rec.corrections_hubspot_id = work.record_id
+    rec.corrections_pending_key = work.pending_key
     rec.author_first, rec.author_last = work.first, work.last
     rec.subfolder_id, rec.subfolder_name = work.folder_id, work.author
     state.record(rec)                     # before the work, never after
@@ -842,6 +1325,12 @@ def _one(token: str, home: Path, ws: WatchSettings, work: Work,
 
     _finish_hubspot(hs_token, ws, file, rec, state, opener=opener)
     mark_source(token, file, rec, state, status=CORRECTIONS_DONE, opener=opener)
+    if work.hubspot_note:
+        # Form intake only: the book is delivered either way, but no single
+        # Projects record could be resolved to move its status — said only
+        # now, so the report reads "delivered, and here is what did not
+        # happen" rather than looking like the book itself failed.
+        report.needs_human.append((file.name, work.hubspot_note))
 
 
 def _plan_line(name: str, work: Work) -> str:

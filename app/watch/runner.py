@@ -34,6 +34,7 @@ from app.lock import FolderInUse, FolderLock, describe_owner
 from app.settings import Paths
 
 from . import auth as authlib
+from . import corrections
 from . import daily
 from . import tick as ticklib
 from .drive import AuthExpired, DriveError
@@ -107,6 +108,10 @@ class WatchRunner:
         self._running = False
         self._started_at = ""
         self._last: TickOutcome | None = None
+        # The most recent per-record corrections rehearsal (see
+        # `rehearse_corrections`), for the panel's readout. None until one has
+        # been asked for.
+        self.last_rehearsal: dict | None = None
         self._signin: SignIn | None = None
         self._timer: threading.Thread | None = None
         # When the fixed-times clock first looked at an unstamped folder. Held
@@ -156,6 +161,58 @@ class WatchRunner:
         finally:
             with self._mutex:
                 self._running = False
+
+    def rehearse_corrections(self, record_id: str, *, dry_run: bool,
+                             ignore_timer: bool) -> bool:
+        """Try the corrections stage on one record, in the background. False
+        if a pass — a real one or another rehearsal — is already going: it
+        claims `_running` exactly like `run_now`, so the two can never step on
+        each other's Drive writes or HubSpot state."""
+        with self._mutex:
+            if self._running:
+                return False
+            self._running = True
+            self._started_at = _now()
+        threading.Thread(target=self._rehearse_corrections,
+                         args=(record_id,),
+                         kwargs={"dry_run": dry_run,
+                                 "ignore_timer": ignore_timer},
+                         name="docproof-watch-rehearsal", daemon=True).start()
+        return True
+
+    def _rehearse_corrections(self, record_id: str, *, dry_run: bool,
+                              ignore_timer: bool) -> None:
+        outcome = {"record_id": record_id, "dry_run": dry_run,
+                  "ignore_timer": ignore_timer,
+                  "started_at": self._started_at or _now(),
+                  "finished_at": "", "error": None, "corrected": [],
+                  "uploaded": [], "needs_human": [], "missing_source": [],
+                  "stuck_ready": [], "failed": [], "waiting": 0}
+        with self._mutex:
+            self.last_rehearsal = dict(outcome)
+        ws = WatchSettings.load(self.home)
+        try:
+            with FolderLock(self.home):
+                report = corrections.rehearse(
+                    self.home, ws, record_id, ignore_timer=ignore_timer,
+                    dry_run=dry_run)
+        except Exception as e:             # noqa: BLE001 - NotConfigured,
+                                            # DriveError, or anything else that
+                                            # escapes: said plainly, not raised
+                                            # on a thread nobody is waiting on.
+            outcome["error"] = str(e)
+        else:
+            outcome["corrected"] = list(report.corrected)
+            outcome["uploaded"] = list(report.uploaded)
+            outcome["needs_human"] = [[n, r] for n, r in report.needs_human]
+            outcome["missing_source"] = [[n, r] for n, r in report.missing_source]
+            outcome["stuck_ready"] = [[n, r] for n, r in report.stuck_ready]
+            outcome["failed"] = [[n, r] for n, r in report.failed]
+            outcome["waiting"] = report.waiting
+        outcome["finished_at"] = _now()
+        with self._mutex:
+            self.last_rehearsal = outcome
+            self._running = False
 
     def pass_once(self, *, mock: bool = False,
                   _claimed: bool = False) -> TickOutcome:

@@ -240,6 +240,24 @@ def main(argv=None) -> int:
     ini.add_argument("--hubspot-corrections-book-property",
                      help="the Projects property naming the book, read for a "
                           "multi-book author to pick the book folder")
+    ini.add_argument("--corrections-intake", choices=["form", "hubspot"],
+                     help="what kicks the stage off (default 'form'): "
+                          "'form' — the author's own submitted form starts "
+                          "the stage, and HubSpot's status is only written "
+                          "afterwards, once exactly one Projects record "
+                          "matches the author's name; 'hubspot' — the old "
+                          "gate, where a workflow sets the ready value first")
+    ini.add_argument("--corrections-form-first-property",
+                     help="the form field (not the CRM property) carrying "
+                          "the author's first name, in 'form' intake mode "
+                          "(default 'firstname')")
+    ini.add_argument("--corrections-form-last-property",
+                     help="the form field (not the CRM property) carrying "
+                          "the author's last name, in 'form' intake mode "
+                          "(default 'lastname')")
+    ini.add_argument("--corrections-form-book-property",
+                     help="the form field naming the book, for a multi-book "
+                          "author, in 'form' intake mode")
     ini.add_argument("--hubspot-read-only", dest="hubspot_write_back",
                      action="store_false", default=None,
                      help="gate on HubSpot but never write back to it (a book "
@@ -492,16 +510,33 @@ def cmd_init(args, home: Path) -> int:
             budget = ws.proof_budget_usd or "the tier default"
             print(f"  reading at {ws.proof_tier}, up to {budget} per book")
     if ws.corrections_enabled:
-        print(f"Interior corrections on: "
-              f"'{ws.hubspot_corrections_ready_value or '— not set'}' → "
+        corrections_intake = (getattr(ws, "corrections_intake", "form")
+                              or "form").strip().lower()
+        if corrections_intake == "hubspot":
+            trigger = (f"kicked off by HubSpot "
+                      f"'{ws.hubspot_corrections_ready_value or '— not set'}'")
+        else:
+            trigger = "kicked off by the form's own submissions"
+        print(f"Interior corrections on: {trigger} → "
               f"'{ws.hubspot_corrections_done_value or '— not set'}'")
         print(f"  reading '<surname> - Book N.idml' in '{ws.corrections_folder_name}', "
               f"handing back '<surname> - Book N.5.idml' + corrections.xlsx")
-        print(f"  form file property: "
-              f"{ws.hubspot_corrections_file_property or '— not set'}; text "
-              f"property: {ws.hubspot_corrections_text_property or '— not set'}"
-              + ("" if ws.corrections_model_passes
-                 else "  (deterministic only: no model passes)"))
+        if corrections_intake == "hubspot":
+            print(f"  form file property: "
+                  f"{ws.hubspot_corrections_file_property or '— not set'}; text "
+                  f"property: {ws.hubspot_corrections_text_property or '— not set'}"
+                  + ("" if ws.corrections_model_passes
+                     else "  (deterministic only: no model passes)"))
+        else:
+            print(f"  reading form {ws.corrections_form_id or '— not set'} "
+                  f"directly (first: "
+                  f"{getattr(ws, 'corrections_form_first_property', 'firstname')}; "
+                  f"last: "
+                  f"{getattr(ws, 'corrections_form_last_property', 'lastname')}; "
+                  f"book: "
+                  f"{getattr(ws, 'corrections_form_book_property', '') or '— not set'})"
+                  + ("" if ws.corrections_model_passes
+                     else "  (deterministic only: no model passes)"))
         hours = ws.corrections_quiet_seconds / 3600
         print(f"  held {hours:g}h after first seen or the latest new "
               f"submission, whichever is later")
@@ -630,6 +665,9 @@ _CORRECTIONS_FLAGS = (
     ("corrections_form_notes_property", "corrections_form_notes_property"),
     ("corrections_form_start_after", "corrections_form_start_after"),
     ("hubspot_corrections_book_property", "hubspot_corrections_book_property"),
+    ("corrections_form_first_property", "corrections_form_first_property"),
+    ("corrections_form_last_property", "corrections_form_last_property"),
+    ("corrections_form_book_property", "corrections_form_book_property"),
 )
 
 # What the stage cannot run without. The two values ship with defaults; the form
@@ -651,6 +689,8 @@ def _apply_corrections(args, ws: WatchSettings) -> None:
         value = getattr(args, flag, None)
         if value is not None:
             setattr(ws, attr, value)
+    if getattr(args, "corrections_intake", None):
+        ws.corrections_intake = args.corrections_intake
     if getattr(args, "corrections_quiet_hours", None) is not None:
         if args.corrections_quiet_hours < 0:
             print("note: --corrections-quiet-hours cannot be negative; "
@@ -667,17 +707,26 @@ def _apply_corrections(args, ws: WatchSettings) -> None:
               "subfolders on — the form flips a CRM value and the IDML lives in "
               "the author's folder. Enable them with --enable-hubspot and "
               "--enable-subfolders.")
+    intake = (getattr(ws, "corrections_intake", "form") or "form").strip().lower()
     for attr, prompt in _CORRECTIONS_REQUIRED.items():
+        # In form-intake mode nothing sets the ready value — the form's own
+        # submissions start the stage — so it is never asked for.
+        if intake == "form" and attr == "hubspot_corrections_ready_value":
+            continue
         if not getattr(ws, attr):
             setattr(ws, attr, _ask(prompt))
-    if not (ws.hubspot_corrections_file_property
-            or ws.hubspot_corrections_text_property):
-        ws.hubspot_corrections_file_property = _ask(
-            "Which property holds the form's uploaded-file URL (blank if the "
-            "form has no upload)")
-        if not ws.hubspot_corrections_file_property:
-            ws.hubspot_corrections_text_property = _ask(
-                "Which property holds the form's typed corrections")
+    if intake == "hubspot":
+        if not (ws.hubspot_corrections_file_property
+                or ws.hubspot_corrections_text_property):
+            ws.hubspot_corrections_file_property = _ask(
+                "Which property holds the form's uploaded-file URL (blank if the "
+                "form has no upload)")
+            if not ws.hubspot_corrections_file_property:
+                ws.hubspot_corrections_text_property = _ask(
+                    "Which property holds the form's typed corrections")
+    elif not getattr(ws, "corrections_form_id", ""):
+        ws.corrections_form_id = _ask(
+            "Which HubSpot form id DocWatch reads for corrections")
 
 
 # The name properties subfolder mode cannot resolve a folder without.
@@ -1020,7 +1069,15 @@ def cmd_corrections_status(args, home: Path) -> int:
         when = ("ready" if row.get("ready")
                 else _holding_for(row.get("ready_at"), now))
         submissions = row.get("submissions", 0)
-        print(f"  {row.get('author') or '— unnamed':<24} "
+        # `author` is the resolved HubSpot name; `first`/`last` are what the
+        # form itself said, which is all a record has before it is matched —
+        # fall back to those so an unmatched row still shows a name.
+        name = (row.get("author")
+               or " ".join(x for x in (row.get("first"), row.get("last")) if x)
+               or "— unnamed")
+        title = row.get("title")
+        label = f"{name} ({title})" if title else name
+        print(f"  {label:<24} "
               f"{row.get('record_id') or '—':<16} "
               f"{submissions} submission(s)   "
               f"first seen {row.get('first_seen') or '—'}   "
@@ -1106,48 +1163,10 @@ def _corrections_rehearsal(home: Path, ws: WatchSettings, record: str, *,
     """The same token, state file, runner and job store `once` builds for a
     real pass, handed to `corrections.run_stage` scoped to one record — so a
     rehearsal counts as a pass for that record (its attempts, its state, its
-    HubSpot write) exactly the way a tick's would."""
-    from app.jobs import JobRunner, JobStore
-    from app.settings import Paths
-    from . import drive as drivelib
-    from .settings import GOOGLE_KEY
-    from .state import STATE_FILE, WatchState
-
-    if not ws.folder_id:
-        raise ticklib.NotConfigured(
-            "No folder is being watched yet. Run `docproof-watch init` to "
-            "say which one.")
-    if not ws.client_id or not ws.client_secret:
-        raise ticklib.NotConfigured(
-            "There is no Google sign-in set up yet. Run `docproof-watch "
-            "auth` — docs/watch.md walks through making the OAuth client it "
-            "asks for.")
-    refresh = get_api_key(GOOGLE_KEY)
-    if not refresh:
-        raise ticklib.NotConfigured(
-            "DocProof is not signed in to Google. Run `docproof-watch "
-            "auth`.")
-    hs_token = get_api_key(HUBSPOT_KEY)
-    if not hs_token:
-        raise ticklib.NotConfigured(
-            "HubSpot is switched on but there is no token. Run "
-            "`docproof-watch hubspot-token` on the desktop, or set the "
-            "HUBSPOT_TOKEN secret on the server.")
-
-    token = drivelib.refresh_access_token(ws.client_id, ws.client_secret,
-                                          refresh, opener=drivelib._open_url)
-    state = WatchState.load(home / STATE_FILE)
-    paths = Paths(home).ensure()
-    store = JobStore(paths)
-    runner = JobRunner(store, ws.app_settings(home),
-                       config_path=ticklib.config_path(), notify_home=home)
-
-    report = ticklib.TickReport()
-    correctionslib.run_stage(
-        token, home, ws, state, runner, store, mock=False,
-        opener=drivelib._open_url, hs_token=hs_token, report=report,
-        only_record=record, ignore_timer=ignore_timer, dry_run=dry_run)
-    return report
+    HubSpot write) exactly the way a tick's would. The web panel's own
+    rehearsal button calls the same `corrections.rehearse` this delegates to."""
+    return correctionslib.rehearse(home, ws, record, ignore_timer=ignore_timer,
+                                   dry_run=dry_run)
 
 
 def _report_corrections_rehearsal(report: ticklib.TickReport,

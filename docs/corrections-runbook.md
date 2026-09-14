@@ -9,8 +9,37 @@ running one round for real.
 
 ## The HubSpot workflow
 
-One HubSpot workflow does the copying, from the *Pre-Proof Interior Design
-Corrections Form* onto the Project record:
+By default (`corrections_intake: form`) there is no workflow to build. The
+*Pre-Proof Interior Design Corrections Form* itself is the trigger: DocWatch
+polls the form's own submissions using the HubSpot private app's **forms
+read** scope, resolves the author from the submission's own first/last-name
+fields, waits out the quiet period below, then walks **Main folder → author
+→ Interior Design → the highest-numbered `Book N.idml`**, applies what it
+can, and hands back `Book N.5` and its spreadsheet beside it. Only after that
+hand-off lands does DocWatch touch HubSpot at all: if exactly one Projects
+record's name matches the author, it moves to `Corrections Applied`; if none
+or more than one match, nothing is written and the completion email says the
+status was not moved, so a person can move it by hand.
+
+| the form | DocWatch reads it as |
+|---|---|
+| the author's first name | `ws.corrections_form_first_property` (`firstname` by default) |
+| the author's last name | `ws.corrections_form_last_property` (`lastname` by default) |
+| the uploaded file (a marked-up PDF proof, or a Word list) | `ws.corrections_form_file_property` |
+| the typed correction text | `ws.corrections_form_notes_property` |
+| the book's title (authors with several books) | `ws.corrections_form_book_property` |
+
+A submission needs **either** the file field or the notes field filled in —
+not both — since a form with no upload leaves the file field blank and a form
+with no typed box leaves the notes field blank. `_resolve` (in
+`app/watch/corrections.py`) refuses a submission with neither: check the form
+itself before assuming DocWatch missed something.
+
+### The older, workflow-gated flow (`corrections_intake: hubspot`)
+
+An install that would rather have a HubSpot status be the trigger can build
+one HubSpot workflow that copies the form onto the Project record instead,
+and switch `corrections_intake` to `hubspot`:
 
 | the form | the workflow copies it to | DocWatch reads it as |
 |---|---|---|
@@ -21,31 +50,35 @@ Corrections Form* onto the Project record:
 
 A record needs **either** the file property or the text property populated —
 not both — since a form with no upload leaves `corrections_file` blank and a
-form with no typed box leaves `corrections_text` blank. `_resolve` (in
-`app/watch/corrections.py`) refuses a record with neither: check the workflow
-before assuming the form itself is empty.
+form with no typed box leaves `corrections_text` blank. `_resolve` refuses a
+record with neither: check the workflow before assuming the form itself is
+empty.
 
-If your install polls the form directly rather than waiting on the workflow's
-copy (`corrections_form_poll` on), DocWatch reads the form submissions API
-instead of the record's properties, using the **forms** read scope on the
-OAuth client — add it in the Google Cloud console alongside Drive's, or a poll
-that should see new submissions silently sees none.
+If this install also polls the form directly rather than waiting on the
+workflow's copy (`corrections_form_poll` on), DocWatch reads the form
+submissions API instead of the record's properties, using the same **forms**
+read scope on the OAuth client — add it in the Google Cloud console alongside
+Drive's, or a poll that should see new submissions silently sees none.
 
 ## Turning it on
 
-Locally:
+Locally, the ordinary case — form intake, the default:
 
 ```bash
 docproof-watch init --enable-corrections \
-  --hubspot-corrections-file-property corrections_file \
-  --hubspot-corrections-text-property corrections_text
+  --corrections-form-start-after 2026-09-15
 ```
 
-This needs the HubSpot gate and per-author subfolders on first — the form
-flips a CRM value, and the designer's IDML lives in the author's own folder —
-so a first-time install is usually `--enable-hubspot --enable-subfolders
---enable-corrections` together, with the object, key and name properties HubSpot
-already needs for formatting.
+This needs the HubSpot gate and per-author subfolders on first — DocWatch
+still resolves the author's Drive folder from HubSpot's first/last-name
+properties, even though nothing there has to be "ready" first — so a
+first-time install is usually `--enable-hubspot --enable-subfolders
+--enable-corrections` together, with the object, key and name properties
+HubSpot already needs for formatting. Set `--corrections-form-start-after`
+to the day you switch it on, with that day's date: submissions older than it
+are rounds the press already handled by hand, and they must not be folded
+into the next job. Without it, an author's whole submission history is on
+the table.
 
 On the server, the same command runs over SSH, against the watcher's home on
 the `/data` volume:
@@ -53,8 +86,18 @@ the `/data` volume:
 ```bash
 fly ssh console -a atmosphere-docproof -C \
   "docproof-watch --home /data/docproof/watch init --enable-corrections \
-   --hubspot-corrections-file-property corrections_file \
-   --hubspot-corrections-text-property corrections_text"
+   --corrections-form-start-after 2026-09-15"
+```
+
+To keep the older, workflow-gated flow instead, add `--corrections-intake
+hubspot` and the two properties the workflow copies — no
+`--corrections-form-start-after` is needed, since nothing is folded from the
+form's own submission history:
+
+```bash
+docproof-watch init --enable-corrections --corrections-intake hubspot \
+  --hubspot-corrections-file-property corrections_file \
+  --hubspot-corrections-text-property corrections_text
 ```
 
 `docproof-watch init` prints what it is still missing (a HubSpot token, a
@@ -62,10 +105,16 @@ Google sign-in) and asks for anything required it was not given, the same as
 running it interactively — see DEPLOY.md for the shape of these `fly ssh
 console -C "..."` one-liners generally.
 
-When form-poll mode goes live, pass `--corrections-form-start-after
-<ISO date>` with that day's date: submissions older than it are rounds the
-press already handled by hand, and they must not be folded into the next job.
-Without it, an author's whole submission history is on the table.
+The same settings are also reachable from the app itself, for anyone without
+shell access to the server: **Automations → Workflows → Interior
+corrections** opens the workflow's drawer, where "Kicked off by" chooses
+`form` or `hubspot`, and the switch, the relevant HubSpot or form values, the
+designer's subfolder name and the quiet period (in hours) all live next to
+each other. Fill them in and click **Save correction settings** — that is
+the `docproof-watch init --enable-corrections ...` flags, written the same
+way, without a terminal. Turning the switch on is the last step, same as on
+the command line: it is worth saving the rest first so the stage's first
+pass already has somewhere to read from.
 
 ## The three-hour quiet period
 
@@ -113,11 +162,16 @@ Design` folder as `<surname> - Book N.idml` — a plain integer, never a `.5`.
 ## Multiple books, one author
 
 An author with more than one book in flight — a series, or a second title
-under contract — has more than one Project record in HubSpot, and the form's
-own **title** field (copied to `book_title`) is what tells DocWatch which
-book a submission belongs to. Get the book's title right on the form; a title
-that does not match any open Project reads as "no book to apply this to,"
-which is a `needs_human` verdict, not a silent guess at the newest export.
+under contract — has more than one book subfolder under `Interior Design`,
+and the form's own **book** field is what tells DocWatch which book a
+submission belongs to: in `form` intake mode that is
+`corrections_form_book_property` (`which_book_are_these_corrections_for_` by
+default), read straight off the submission; in `hubspot` intake mode it is
+the workflow's copy of that answer onto `book_title`
+(`hubspot_corrections_book_property`). Get the book's title right on the
+form; a title that does not match any of the author's book folders (or
+matches more than one) reads as "no book to apply this to," which is a
+`needs_human` verdict, not a silent guess at the newest export.
 
 ## Rehearsing one record
 
@@ -160,6 +214,18 @@ A rehearsal exits `0` when the record came through clean, `1` when it ended in
 it could not run at all — corrections switched off, HubSpot switched off, or
 the install running the native InDesign engine, which this rehearsal does not
 drive.
+
+The same rehearsal is one click in the app, no terminal needed. The Interior
+corrections drawer's **Waiting for corrections** readout lists every record
+currently held for its quiet period — the same account `corrections status`
+prints — each row with its own **Dry run** and **Run now** buttons: Dry run is
+the equivalent of `--dry-run`, Run now of `--now` (it asks you to confirm
+first, since it applies for real before the quiet period is up). A record that
+has not shown up in that table yet can still be rehearsed by typing its
+HubSpot record id into the small form underneath and using the same two
+buttons there. Either way, the drawer's **Last rehearsal** readout shows what
+happened — corrected, uploaded, needs a person, or failed, in the same words
+the command line prints — and keeps polling while one is still running.
 
 ## Recovery
 

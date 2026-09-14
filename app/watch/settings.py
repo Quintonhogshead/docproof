@@ -337,6 +337,19 @@ class WatchSettings:
     # Off by default; requires `hubspot_enabled` and `subfolders_enabled`. See
     # app/watch/corrections.py and docs/watch.md.
     corrections_enabled: bool = False
+    # What kicks a book off. "form" (the default): the corrections form's own
+    # submissions are the trigger — nobody in HubSpot has to touch anything;
+    # DocWatch groups the form's rows by author, holds each round for its
+    # quiet period the same as always, and only once a book is delivered does
+    # it look up the one Projects record named for the author to move its
+    # status — see `corrections._match_hubspot_record`. A name that matches
+    # zero or more than one record still delivers the book; it only means the
+    # status is left where it is, said in `report.needs_human`. "hubspot": the
+    # old gate — a HubSpot workflow flips `hubspot_status_property` to
+    # `hubspot_corrections_ready_value` when the form comes in, and DocWatch
+    # reads the submission back off that record (its own properties, or the
+    # form's events in `corrections_form_poll` mode).
+    corrections_intake: str = "form"
     hubspot_corrections_ready_value: str = "Ready for Corrections"
     hubspot_corrections_done_value: str = "Corrections Applied"
     # The form's answers, as the workflow copies them onto the Projects record:
@@ -361,8 +374,10 @@ class WatchSettings:
     # seconds`), so an install running both reads the same wait either way.
     # See `corrections.hold_or_release`.
     corrections_quiet_seconds: int = 10800
-    # Off by default, matching the native adapter's own switch: a ready record
-    # is read off the CRM properties the workflow copies the form into
+    # Only read in `corrections_intake == "hubspot"` — form mode always reads
+    # the form itself, by definition, so this switch has nothing left to do
+    # there. Off by default, matching the native adapter's own switch: a ready
+    # record is read off the CRM properties the workflow copies the form into
     # (`hubspot_corrections_file_property` / `_text_property`), one submission
     # per record. On, DocWatch instead polls the form itself and folds every
     # submission it finds for the record — several rounds of "one more thing" —
@@ -379,17 +394,31 @@ class WatchSettings:
     # the native adapter's pair, for the same form.
     corrections_form_file_property: str = "interior_design_corrections_documents"
     corrections_form_notes_property: str = "anything_else_"
+    # Which of the form's own fields carry the author's name, read in BOTH
+    # intake modes — form mode groups every submission by these two fields
+    # (see `corrections._form_key`); hubspot mode's `_match_form_rows` falls
+    # back to them only when a submission event is not associated to the
+    # record by CRM id. Same defaults as the native adapter's pair.
+    corrections_form_first_property: str = "firstname"
+    corrections_form_last_property: str = "lastname"
     # Submissions older than this (ISO date or datetime, UTC when bare) are
     # never folded — set it the day form-poll mode goes live, so the rounds
     # the press handled by hand before then stay out of the next job. Empty
     # means no cut-off.
     corrections_form_start_after: str = ""
-    # The Projects property naming the book. Read only for a multi-book author
+    # The Projects property naming the book, read in hubspot mode
+    # (`_resolve`'s own `_locate` call). Read only for a multi-book author
     # whose books each sit in their own subfolder (no single "Interior Design"
     # directly under the author folder) — it is what tells DocWatch which of
     # the author's book folders a ready record's round belongs to; see
     # `corrections._match_book_folder`. A single-book author never needs it.
     hubspot_corrections_book_property: str = "book_title"
+    # Form mode's own book-title field — the form's own field name, not a CRM
+    # property, since form mode never waits on a record to exist. Same job as
+    # `hubspot_corrections_book_property` above, read by `_resolve_form`
+    # instead of `_resolve`. The press's own field name on the Pre-Proof
+    # Interior Design Corrections Form.
+    corrections_form_book_property: str = "which_book_are_these_corrections_for_"
 
     # The corrections stage originally operated on an exported IDML.  Native
     # InDesign files are opt-in so an existing watch configuration keeps the

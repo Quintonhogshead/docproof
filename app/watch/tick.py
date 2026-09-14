@@ -2028,22 +2028,41 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
                     "Native corrections are switched on but " + ", ".join(blanks)
                     + " is not set. Run `docproof-watch init`, or turn corrections off.")
         else:
-            # Legacy IDML mode retains its original configuration contract.
+            # Legacy IDML mode retains its original configuration contract,
+            # split by what kicks the stage off. `corrections_intake` (added
+            # alongside `WatchSettings`) defaults to "form": the author's own
+            # submitted form starts the stage, and HubSpot's status is only
+            # written afterward — so nothing here reads a ready value or the
+            # workflow's copied properties. "hubspot" keeps the old gate.
+            intake = (getattr(ws, "corrections_intake", "form")
+                     or "form").strip().lower()
+            if intake not in ("form", "hubspot"):
+                raise NotConfigured(
+                    f"corrections_intake is '{ws.corrections_intake}'; it has "
+                    "to be 'form' or 'hubspot'. Run `docproof-watch init "
+                    "--corrections-intake form|hubspot`, or turn corrections "
+                    "off.")
             if not ws.hubspot_enabled or not ws.subfolders_enabled:
                 raise NotConfigured(
                     "Interior corrections are switched on but HubSpot or per-author "
                     "subfolders are not. The form flips a HubSpot status and the "
                     "IDML lives in the author's folder, so both have to be on. Run "
                     "`docproof-watch init`, or turn corrections off.")
-            blanks = [name for name, value in (
-                ("hubspot_corrections_ready_value", ws.hubspot_corrections_ready_value),
-                ("hubspot_corrections_done_value", ws.hubspot_corrections_done_value),
-                ("corrections_folder_name", ws.corrections_folder_name),
-            ) if not value]
-            if not (ws.hubspot_corrections_file_property
-                    or ws.hubspot_corrections_text_property):
-                blanks.append("hubspot_corrections_file_property or "
-                              "hubspot_corrections_text_property")
+            if intake == "form":
+                blanks = [name for name, value in (
+                    ("corrections_form_id", ws.corrections_form_id),
+                    ("corrections_folder_name", ws.corrections_folder_name),
+                ) if not value]
+            else:
+                blanks = [name for name, value in (
+                    ("hubspot_corrections_ready_value", ws.hubspot_corrections_ready_value),
+                    ("hubspot_corrections_done_value", ws.hubspot_corrections_done_value),
+                    ("corrections_folder_name", ws.corrections_folder_name),
+                ) if not value]
+                if not (ws.hubspot_corrections_file_property
+                        or ws.hubspot_corrections_text_property):
+                    blanks.append("hubspot_corrections_file_property or "
+                                  "hubspot_corrections_text_property")
             if blanks:
                 raise NotConfigured(
                     "Interior corrections are switched on but " + ", ".join(blanks)

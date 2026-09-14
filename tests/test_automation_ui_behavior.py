@@ -56,7 +56,7 @@ def test_quiet_poll_updates_clock_without_rebuilding_unchanged_rows():
         renderWatchSignIn: noop, renderWatchRun: noop, renderWatchBanner: noop,
         renderWatchFiles: noop, renderProofReadout: noop, applyWatchSchedule: noop,
         renderNativeWorker: noop, renderNativeIntake: noop, renderInteriorComputer: noop, refreshNativeQueue: noop,
-        renderWatchNextRun: noop,
+        renderWatchNextRun: noop, renderCorrectionsWaiting: noop, renderCorrectionsRehearsal: noop,
       });
       vm.runInContext(source, context);
       await context.loadWatch({quiet: true});

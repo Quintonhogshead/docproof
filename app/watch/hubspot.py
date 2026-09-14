@@ -206,6 +206,22 @@ def set_properties(token: str, object_type: str, record_id: str,
                what=f"mark the {object_type} record done")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow a redirect, so the caller can decide what rides along
+    on the next hop. urllib would otherwise carry every header — the bearer
+    token included — to wherever HubSpot points, which is a CDN."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _open_first_hop(request: urllib.request.Request, timeout: int = 60):
+    """`_open_url` that stops at the first redirect (raised as an HTTPError
+    carrying the Location), for the one request that carries the token."""
+    return urllib.request.build_opener(_NoRedirect()).open(request,
+                                                           timeout=timeout)
+
+
 def download_file(token: str, url: str, dest_dir, *, opener=_open_url,
                   fallback_name: str = "submission") -> "Path":
     """A file the author attached to a HubSpot form, onto disk.
@@ -213,9 +229,11 @@ def download_file(token: str, url: str, dest_dir, *, opener=_open_url,
     A form's file-upload field stores the uploaded file as a URL on the record —
     a signed `form-integrations/.../signed-url-redirect/...` link, or a
     `hubspotusercontent` address. The bearer token rides along only to HubSpot's
-    own hosts, never to wherever a redirect lands. The name comes from the URL's
-    `filename=` (what the author called it), else the Content-Disposition, else
-    the path; a name with no suffix cannot be read, and the caller says so."""
+    own hosts, and only for the first hop: a redirect off that host is followed
+    with a fresh, header-free request, so the token never reaches the CDN the
+    signed link lands on. The name comes from the URL's `filename=` (what the
+    author called it), else the Content-Disposition, else the path; a name with
+    no suffix cannot be read, and the caller says so."""
     from pathlib import Path
     import re as _re
     import urllib.parse
@@ -225,14 +243,32 @@ def download_file(token: str, url: str, dest_dir, *, opener=_open_url,
         raise HubSpotError(f"{url!r} is not a web address DocProof can fetch.")
     request = urllib.request.Request(url, method="GET")
     host = (parsed.hostname or "").lower()
-    if host.endswith("hubapi.com") or host.endswith("hubspot.com"):
+    with_token = host == "hubapi.com" or host.endswith(".hubapi.com") \
+        or host == "hubspot.com" or host.endswith(".hubspot.com")
+    if with_token:
         request.add_header("Authorization", f"Bearer {token}")
-    with _answer(request, opener=opener, what="download the form's file") as r:
-        body = r.read()
-        disposition = ""
-        headers = getattr(r, "headers", None)
-        if headers is not None:
-            disposition = headers.get("Content-Disposition", "") or ""
+    # The token-bearing hop must not be followed blindly; an injected opener
+    # (a test's) is trusted to answer the request itself, redirect and all.
+    first_hop = _open_first_hop if (with_token and opener is _open_url) else opener
+    what = "download the form's file"
+    try:
+        with _answer(request, opener=first_hop, what=what) as r:
+            body = r.read()
+            headers = getattr(r, "headers", None)
+    except HubSpotError as e:
+        hop = e.__cause__
+        location = ""
+        if isinstance(hop, urllib.error.HTTPError) and 300 <= hop.code < 400:
+            location = (hop.headers or {}).get("Location", "") or ""
+        if not location:
+            raise
+        onward = urllib.request.Request(urllib.parse.urljoin(url, location),
+                                        method="GET")      # no headers, on purpose
+        with _answer(onward, opener=opener, what=what) as r:
+            body = r.read()
+            headers = getattr(r, "headers", None)
+    disposition = (headers.get("Content-Disposition", "") or "") \
+        if headers is not None else ""
     query = urllib.parse.parse_qs(parsed.query)
     name = (query.get("filename") or [""])[0]
     if not name and disposition:
@@ -242,6 +278,11 @@ def download_file(token: str, url: str, dest_dir, *, opener=_open_url,
     if not name:
         name = urllib.parse.unquote(parsed.path.rsplit("/", 1)[-1])
     name = name.replace("/", "-").replace(":", "-").strip() or fallback_name
+    name = Path(name).name or fallback_name
+    if Path(name).suffix.lower() in (".pdf", ".docx") and \
+            body.lstrip()[:200].lower().startswith((b"<!doctype html", b"<html")):
+        raise HubSpotError("HubSpot returned a sign-in page instead of the "
+                           "form's file; the token may lack the files scope.")
     folder = Path(dest_dir)
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / name

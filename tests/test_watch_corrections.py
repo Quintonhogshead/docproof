@@ -61,6 +61,11 @@ def ws(**over) -> WatchSettings:
                   hubspot_first_property="firstname",
                   hubspot_last_property="lastname",
                   corrections_enabled=True,
+                  # Every test below this line was written against the old
+                  # HubSpot-status gate, so it keeps that mode explicitly —
+                  # form intake (the stage's new default) has its own fixture,
+                  # `form_ws`, and its own tests further down.
+                  corrections_intake="hubspot",
                   hubspot_corrections_file_property="corr_file",
                   hubspot_corrections_text_property="corr_text",
                   corrections_model_passes=False,
@@ -70,6 +75,23 @@ def ws(**over) -> WatchSettings:
                   corrections_quiet_seconds=0)
     fields.update(over)
     return WatchSettings(**fields)
+
+
+def form_ws(**over) -> WatchSettings:
+    """`ws()`, switched to form intake: the corrections form's own submissions
+    are the trigger instead of a HubSpot status. The two CRM properties
+    (`hubspot_corrections_file_property` / `_text_property`) are kept set even
+    though form mode never reads them — the stage's preflight is shared with
+    hubspot mode and still checks for them."""
+    fields = dict(corrections_intake="form",
+                 corrections_form_first_property="firstname",
+                 corrections_form_last_property="lastname",
+                 corrections_form_book_property="book_title",
+                 corrections_form_file_property="files",
+                 corrections_form_notes_property="notes",
+                 corrections_quiet_seconds=0)
+    fields.update(over)
+    return ws(**fields)
 
 
 def ready(**extra) -> dict:
@@ -720,3 +742,247 @@ def test_form_poll_leaves_rounds_before_the_start_date_alone(
     rec = WatchState.load(tmp_path / "state.json").get("idml-3")
     assert len(rec.corrections_submissions) == 1
     assert "Old round" not in rec.corrections_input_name
+
+
+# --- form intake (`corrections_intake == "form"`) ---------------------------------
+#
+# Here the corrections form's own submissions are the trigger: nobody in
+# HubSpot flips anything, so the fake HubSpot below never carries a record at
+# "Ready for Corrections" — it carries, at most, a Projects record or two
+# named for the author, purely for the write-back `_match_hubspot_record`
+# looks up once a book is delivered.
+
+def test_form_intake_runs_from_the_forms_own_submissions_and_moves_hubspot(
+        tmp_path, monkeypatch):
+    opener = make_opener(tmp_path, hubspot={"Johnson": {"firstname": "Quinton",
+                                                        "lastname": "Johnson"}})
+    opener.content["form-sub-1"] = submission(tmp_path)
+    rows = [
+        _form_row("2026-09-01T00:00:00Z", firstname="Quinton", lastname="Johnson",
+                 files=("https://api.hubapi.com/files/form-sub-1"
+                        "?filename=Round%201.docx")),
+        _form_row("2026-09-02T00:00:00Z", firstname="Quinton", lastname="Johnson",
+                 notes="Change 'gone' to 'here'."),
+    ]
+    monkeypatch.setattr(corrlib.hubspot, "form_submissions",
+                        lambda *a, **k: rows)
+    monkeypatch.setattr(corrlib, "extract_provider", lambda: (
+        FakeProvider(results=[ProviderResult(parsed={"edits": [
+            {"find": "gone", "replace": "here", "instruction": "swap"}]})]),
+        "fake-model"))
+    settings = form_ws()
+
+    report = run(tmp_path, settings, opener)
+
+    assert not report.failed, report.failed
+    assert report.corrected and report.corrected[0].startswith(SOURCE)
+    placed = uploads_in(opener)
+    assert "Johnson - Book 3.5.idml" in placed
+    assert "Johnson - Book 3.5 - corrections.xlsx" in placed
+    rec = WatchState.load(tmp_path / "state.json").get("idml-3")
+    assert len(rec.corrections_submissions) == 2
+    assert rec.corrections_pending_key == "form:quinton|johnson"
+    # Exactly one Johnson record sits in the fake HubSpot, so its status moved
+    # — even though nothing there was ever flagged "Ready for Corrections".
+    assert opener.hubspot["hs-Johnson"]["properties"]["docproof"] == \
+        "Corrections Applied"
+    assert len(patches(opener)) == 1
+    assert report.needs_human == []
+
+
+def test_form_intake_with_two_matching_hubspot_records_delivers_but_leaves_hubspot_alone(
+        tmp_path, monkeypatch):
+    opener = make_opener(tmp_path, hubspot={
+        "Johnson1": {"firstname": "Quinton", "lastname": "Johnson"},
+        "Johnson2": {"firstname": "Quinton", "lastname": "Johnson"}})
+    rows = [_form_row("2026-09-01T00:00:00Z", firstname="Quinton",
+                      lastname="Johnson", files=FILE_URL)]
+    monkeypatch.setattr(corrlib.hubspot, "form_submissions",
+                        lambda *a, **k: rows)
+    settings = form_ws()
+
+    report = run(tmp_path, settings, opener)
+
+    assert not report.failed, report.failed
+    assert "Johnson - Book 3.5.idml" in uploads_in(opener)
+    assert patches(opener) == []
+    assert any("no single Projects record" in reason
+              for _, reason in report.needs_human)
+
+
+def test_form_intake_row_with_no_last_name_needs_a_person(tmp_path, monkeypatch):
+    opener = make_opener(tmp_path, hubspot={})
+    rows = [_form_row("2026-09-01T00:00:00Z", firstname="Quinton", lastname="",
+                      files=FILE_URL)]
+    monkeypatch.setattr(corrlib.hubspot, "form_submissions",
+                        lambda *a, **k: rows)
+    settings = form_ws()
+
+    report = run(tmp_path, settings, opener)
+
+    assert any("no first or last name" in reason
+              for _, reason in report.needs_human)
+    assert uploads_in(opener) == {}
+    assert report.corrected == []
+
+
+def test_form_intake_is_held_and_then_released_past_its_quiet_period(
+        tmp_path, monkeypatch):
+    opener = make_opener(tmp_path, hubspot={"Johnson": {"firstname": "Quinton",
+                                                        "lastname": "Johnson"}})
+    rows = [_form_row("2026-09-01T00:00:00Z", firstname="Quinton",
+                      lastname="Johnson", files=FILE_URL)]
+    monkeypatch.setattr(corrlib.hubspot, "form_submissions",
+                        lambda *a, **k: rows)
+    settings = form_ws(corrections_quiet_seconds=10800)
+
+    held = run(tmp_path, settings, opener)
+    assert held.corrected == []
+    assert held.waiting >= 1
+    assert uploads_in(opener) == {}
+    state = WatchState.load(tmp_path / "state.json")
+    assert len(state.corrections_pending) == 1
+    entry = next(iter(state.corrections_pending.values()))
+    assert entry.record_id == "form:quinton|johnson"
+    assert entry.author == "Quinton Johnson"
+    assert entry.first == "Quinton" and entry.last == "Johnson"
+    assert len(entry.submissions) == 1
+
+    # Back-date the hold past its own quiet period, the way waiting three
+    # hours would — a test cannot wait three hours, so it moves the clock the
+    # record's own state remembers instead.
+    for pending in state.corrections_pending.values():
+        pending.first_seen = pending.last_submission_at = \
+            "2020-01-01T00:00:00+00:00"
+    state.save()
+
+    released = run(tmp_path, settings, opener)
+    assert released.corrected and released.corrected[0].startswith(SOURCE)
+    assert "Johnson - Book 3.5.idml" in uploads_in(opener)
+
+
+def test_form_intake_a_second_row_resets_the_quiet_period(tmp_path, monkeypatch):
+    opener = make_opener(tmp_path, hubspot={"Johnson": {"firstname": "Quinton",
+                                                        "lastname": "Johnson"}})
+    rows = [_form_row("2026-09-01T00:00:00Z", firstname="Quinton",
+                      lastname="Johnson", files=FILE_URL)]
+    monkeypatch.setattr(corrlib.hubspot, "form_submissions",
+                        lambda *a, **k: rows)
+    settings = form_ws(corrections_quiet_seconds=10800)
+
+    run(tmp_path, settings, opener)
+    state = WatchState.load(tmp_path / "state.json")
+    key = next(iter(state.corrections_pending))
+    assert len(state.corrections_pending[key].submissions) == 1
+    # Back-dated so the two runs' clocks cannot land in the same second and
+    # make the "it moved" assertion below a coin flip.
+    state.corrections_pending[key].first_seen = "2020-01-01T00:00:00+00:00"
+    state.corrections_pending[key].last_submission_at = \
+        "2020-01-01T00:00:00+00:00"
+    state.save()
+    first_wait = corrlib.ready_at(state.corrections_pending[key], settings)
+
+    # A second submission arrives before the hold ends.
+    rows2 = rows + [_form_row("2026-09-02T00:00:00Z", firstname="Quinton",
+                              lastname="Johnson", notes="one more thing")]
+    monkeypatch.setattr(corrlib.hubspot, "form_submissions",
+                        lambda *a, **k: rows2)
+    run(tmp_path, settings, opener)
+    state2 = WatchState.load(tmp_path / "state.json")
+    assert len(state2.corrections_pending[key].submissions) == 2
+    second_wait = corrlib.ready_at(state2.corrections_pending[key], settings)
+    assert second_wait > first_wait
+
+
+def test_form_intake_leaves_rounds_before_the_start_date_alone(
+        tmp_path, monkeypatch):
+    opener = make_opener(tmp_path, hubspot={"Johnson": {"firstname": "Quinton",
+                                                        "lastname": "Johnson"}})
+    opener.content["form-sub-1"] = submission(tmp_path)
+    rows = [
+        _form_row("2026-08-01T00:00:00Z", firstname="Quinton", lastname="Johnson",
+                 files=("https://api.hubapi.com/files/form-sub-1"
+                        "?filename=Old%20round.docx")),
+        _form_row("2026-09-02T00:00:00Z", firstname="Quinton", lastname="Johnson",
+                 notes="Change 'gone' to 'here'."),
+    ]
+    monkeypatch.setattr(corrlib.hubspot, "form_submissions",
+                        lambda *a, **k: rows)
+    monkeypatch.setattr(corrlib, "extract_provider", lambda: (
+        FakeProvider(results=[ProviderResult(parsed={"edits": [
+            {"find": "gone", "replace": "here", "instruction": "swap"}]})]),
+        "fake-model"))
+    settings = form_ws(corrections_form_start_after="2026-08-15")
+
+    report = run(tmp_path, settings, opener)
+
+    assert not report.failed, report.failed
+    rec = WatchState.load(tmp_path / "state.json").get("idml-3")
+    assert len(rec.corrections_submissions) == 1
+    assert "Old round" not in rec.corrections_input_name
+
+
+def test_form_intake_read_failure_needs_a_person_and_runs_nothing(
+        tmp_path, monkeypatch):
+    opener = make_opener(tmp_path, hubspot={"Johnson": {"firstname": "Quinton",
+                                                        "lastname": "Johnson"}})
+
+    def boom(*a, **k):
+        raise HubSpotError("no forms scope on this token")
+
+    monkeypatch.setattr(corrlib.hubspot, "form_submissions", boom)
+    settings = form_ws()
+
+    report = run(tmp_path, settings, opener)
+
+    assert not report.failed, report.failed
+    assert len(report.needs_human) == 1
+    assert "could not read the form" in report.needs_human[0][1]
+    assert uploads_in(opener) == {}
+
+
+def test_form_intake_only_record_selects_the_group_by_name(tmp_path, monkeypatch):
+    opener = make_opener(tmp_path, hubspot={"Johnson": {"firstname": "Quinton",
+                                                        "lastname": "Johnson"}})
+    rows = [_form_row("2026-09-01T00:00:00Z", firstname="Quinton",
+                      lastname="Johnson", files=FILE_URL)]
+    monkeypatch.setattr(corrlib.hubspot, "form_submissions",
+                        lambda *a, **k: rows)
+    settings = form_ws()
+    state = WatchState(tmp_path / "state.json")
+    report = ticklib.TickReport()
+
+    works = corrlib.discover("hubspot-token", "drive-token", settings, state,
+                             opener=opener, report=report,
+                             only_record="Quinton Johnson")
+
+    assert len(works) == 1
+    assert works[0].first == "Quinton" and works[0].last == "Johnson"
+
+    # A key or a HubSpot id name the same group just as well.
+    state2 = WatchState(tmp_path / "state2.json")
+    works_by_key = corrlib.discover(
+        "hubspot-token", "drive-token", settings, state2, opener=opener,
+        report=ticklib.TickReport(), only_record="form:quinton|johnson")
+    assert len(works_by_key) == 1
+
+
+def test_form_intake_pending_summary_carries_first_last_and_mode(
+        tmp_path, monkeypatch):
+    opener = make_opener(tmp_path, hubspot={"Johnson": {"firstname": "Quinton",
+                                                        "lastname": "Johnson"}})
+    rows = [_form_row("2026-09-01T00:00:00Z", firstname="Quinton",
+                      lastname="Johnson", files=FILE_URL)]
+    monkeypatch.setattr(corrlib.hubspot, "form_submissions",
+                        lambda *a, **k: rows)
+    settings = form_ws(corrections_quiet_seconds=10800)
+
+    report = run(tmp_path, settings, opener)
+    assert report.waiting
+
+    state = WatchState.load(tmp_path / "state.json")
+    rows2 = corrlib.pending_summary(state, settings)
+    assert len(rows2) == 1
+    row = rows2[0]
+    assert row["first"] == "Quinton" and row["last"] == "Johnson"
+    assert row["mode"] == "form"
