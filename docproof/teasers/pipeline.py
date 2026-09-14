@@ -8,7 +8,7 @@ from docproof.providers import strict_json_schema
 from docproof.providers.base import inlined_json_schema
 from . import SOL_MODEL, SOL_EFFORT
 from .models import (Reading, Storysheet, SourceReview, Review, Draft, BriefReview, WriterBrief,
-                     digest, draft_issues)
+                     digest, draft_issues, apply_small_edits)
 from . import prompts
 
 CHUNK_CHARS = 90_000
@@ -77,6 +77,14 @@ def evidence_for(facts, source_chunks):
 
 
 def analyze(source_chunks, work, *, runner=None, progress=lambda stage: None, feedback=None, attempt=0):
+    candidate_path = Path(work) / "prepared-copy.json"
+    if candidate_path.exists():
+        candidate = json.loads(candidate_path.read_text())
+        if candidate["source_sha256"] == digest(source_chunks):
+            story = Storysheet.model_validate(candidate["story"])
+            validate_story(story, source_chunks)
+            return approve_prepared_copy(story, candidate["evidence"], source_chunks, work,
+                runner=runner, progress=progress, attempt=attempt, candidate_path=candidate_path)
     readings = []
     # A manuscript that fits in one call needs no intermediate reading summary.
     for c in source_chunks if len(source_chunks) > 1 else []:
@@ -96,18 +104,39 @@ def analyze(source_chunks, work, *, runner=None, progress=lambda stage: None, fe
                 if readings else source_chunks[0]["paragraphs"])
     progress("Sol is writing five complete teasers and the author guide")
     prompt = prompts.story_prompt([r.model_dump() for r in readings], evidence, feedback)
-    def validate_prepared(story):
-        validate_story(story, source_chunks)
-        progress("Checking Sol's finished copy before rephrasing")
-        brief_hash = digest(story.writer_brief)
-        check_prompt = prompts.brief_review_prompt(story.model_dump(), evidence, brief_hash)
-        check = sol(check_prompt, BriefReview, work, "brief-review-" + brief_hash,
-                    runner=runner, attempt=attempt)
-        if check.brief_sha256 != brief_hash or not check.accurate or not check.spoiler_safe:
-            raise ValueError("The public writing brief needs revision before Qwen can receive it: " +
-                             "; ".join(check.feedback))
     story = sol(prompt, Storysheet, work, "story-" + digest(prompt), runner=runner,
-                attempt=attempt, validate=validate_prepared)
+                attempt=attempt, validate=lambda value: validate_story(value, source_chunks))
+    # Save finished writing before its copy edit; retries must not rewrite it all.
+    candidate_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = candidate_path.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"source_sha256": digest(source_chunks),
+                                    "story": story.model_dump(), "evidence": evidence}))
+    temporary.replace(candidate_path)
+    return approve_prepared_copy(story, evidence, source_chunks, work, runner=runner,
+        progress=progress, attempt=attempt, candidate_path=candidate_path)
+
+
+def approve_prepared_copy(story, evidence, source_chunks, work, *, runner=None,
+                          progress=lambda stage: None, attempt=0, candidate_path=None):
+    progress("Sol is checking and correcting its finished copy before rephrasing")
+    brief_hash = digest(story.writer_brief)
+    prompt = prompts.brief_review_prompt(story.model_dump(), evidence, brief_hash)
+    def validate(check):
+        if check.brief_sha256 != brief_hash:
+            raise ValueError("The copy edit does not match Sol's saved writing.")
+        if check.edits:
+            apply_small_edits(story.writer_brief.author_copy, check.edits,
+                {p["id"] for c in source_chunks for p in c["paragraphs"]}, max_edits=10, max_words=160)
+    check = sol(prompt, BriefReview, work, "brief-review-" + brief_hash,
+                runner=runner, attempt=attempt, validate=validate)
+    if not check.accurate or not check.spoiler_safe:
+        if candidate_path is not None:
+            candidate_path.replace(candidate_path.with_name("rejected-copy-" + brief_hash + ".json"))
+        raise ValueError("The public writing brief needs revision before Qwen can receive it: " +
+                         "; ".join(check.feedback))
+    if check.edits:
+        story.writer_brief.author_copy = apply_small_edits(story.writer_brief.author_copy, check.edits,
+            {p["id"] for c in source_chunks for p in c["paragraphs"]}, max_edits=10, max_words=160)
     return story
 
 
@@ -149,15 +178,9 @@ def revise_writer_brief(story, previous, feedback, source_chunks, work, *, runne
     progress("Sol is correcting the finished copy before rephrasing")
     def validate(brief):
         validate_writer_brief(brief)
-        progress("Checking the revised public brief for accuracy and spoilers")
         revised = story.model_copy(update={"writer_brief": brief})
-        brief_hash = digest(brief)
-        check_prompt = prompts.brief_review_prompt(revised.model_dump(), evidence, brief_hash)
-        check = sol(check_prompt, BriefReview, work, "brief-review-" + brief_hash,
-                    runner=runner, attempt=attempt)
-        if check.brief_sha256 != brief_hash or not check.accurate or not check.spoiler_safe:
-            raise ValueError("The revised public brief needs correction before Qwen receives it: " +
-                             "; ".join(check.feedback))
+        approve_prepared_copy(revised, evidence, source_chunks, work,
+            runner=runner, progress=progress, attempt=attempt)
     return sol(prompt, WriterBrief, work, "revise-brief-" + digest(prompt), runner=runner,
                attempt=attempt, validate=validate)
 

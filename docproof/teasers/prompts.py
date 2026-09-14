@@ -99,6 +99,11 @@ SOL'S FINISHED COPY:\n""" + data(author_copy)
 def brief_review_prompt(story, evidence, brief_hash):
     return SOURCE_RULE + """
 Check writer_brief.author_copy, the COMPLETE finished public package, before it leaves Sol.
+You are its final copy editor: directly fix localized factual and spoiler errors
+with exact replacements in edits. Do not send a whole package back for rewriting
+when a few specific corrections will resolve the problems. Preserve sound copy.
+Only author_copy goes to Qwen. Treat all other storysheet fields as private context,
+and ground corrections in the supplied original evidence.
 Compare it with the source evidence and private full-book account. It must give
 Qwen accurate, publication-ready copy without any ending details, protected revelations,
 late developments, or lists of what is withheld. 'Do not reveal [actual ending]'
@@ -106,8 +111,17 @@ is a spoiler too. General guardrails like 'leave the final decision unresolved'
 are safe. Check all five teasers, hooks, the note and every guide item. Do not
 weaken actual facts into unsupported uncertainty or confuse an offer with its
 acceptance. Return the supplied brief hash, accuracy and spoiler-safety verdicts,
-and actionable private feedback. Neither your review nor the private account will
-be given to Qwen. Approve only a brief safe for a prospective reader.
+and actionable private feedback for any unresolved problems. Each edit uses
+field=teaser, index=option number and paragraph=one-based paragraph number, or a
+guide/hook field with index=one-based item and paragraph=1. The before text must
+match exactly once at that location. Include a reason and source paragraph_ids.
+At most ten replacements, each before/after at most 40 words and 320 characters,
+at most 160 words total on each side. Keep the required lengths and structure.
+Set accurate and spoiler_safe for the copy AFTER your proposed edits are applied.
+Set them false only for problems that your corrections cannot resolve. An invalid
+edit cannot pass. Use edits=[] when no correction is needed. Neither your review
+nor the private account will be given to Qwen. The resulting rephrasing will still
+receive a separate final review against the whole source before publication.
 """ + data({"private_storysheet": story, "original_evidence": evidence, "brief_sha256": brief_hash})
 
 

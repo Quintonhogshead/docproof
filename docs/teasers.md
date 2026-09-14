@@ -16,7 +16,11 @@ editorial approval step.
    `gpt-5.6-sol` at `high`, using the existing cloud ChatGPT subscription login.
    Sol creates a private storysheet and writes the complete five teasers, hooks,
    note and author guide. It makes every editorial and factual decision, then
-   checks the finished public copy before rephrasing. Large paragraphs and long
+   checks and makes localized corrections to the finished public copy before
+   rephrasing. This copy edit can replace at most ten exact spans and 160 words;
+   the normal post-Qwen source review remains required. Saved finished writing
+   survives retries, so a small correction does not restart the writing pass.
+   Large paragraphs and long
    books use coverage-checked reading portions, never silent truncation. A source
    that fits in one call is read directly without an intermediate summary.
 3. The Fly web server calls `Qwen/Qwen3.6-27B` through DeepInfra, using the

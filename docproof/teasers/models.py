@@ -43,13 +43,6 @@ class WriterBrief(Record):
         editorial_note="", elements=[], best_practices=[], modification_checklist=[]))
 
 
-class BriefReview(Record):
-    brief_sha256: str
-    accurate: bool
-    spoiler_safe: bool
-    feedback: list[str]
-
-
 class Storysheet(Record):
     title: str
     author: str
@@ -122,6 +115,14 @@ class SmallEdit(Record):
     after: str
     reason: str
     paragraph_ids: list[int]
+
+
+class BriefReview(Record):
+    brief_sha256: str
+    accurate: bool
+    spoiler_safe: bool
+    feedback: list[str]
+    edits: list[SmallEdit] = Field(default_factory=list)
 
 
 class Review(Record):
@@ -204,12 +205,13 @@ def approval_issues(draft: Draft, review: Review, chunk_ids: list[int]) -> list[
     return issues
 
 
-def apply_small_edits(draft: Draft, edits: list[SmallEdit], paragraph_ids: set[int]) -> Draft:
+def apply_small_edits(draft: Draft, edits: list[SmallEdit], paragraph_ids: set[int], *,
+                      max_edits: int = 5, max_words: int = 80) -> Draft:
     """Apply a bounded, exact edit batch atomically; never accept replacement packages."""
-    if not 1 <= len(edits) <= 5:
-        raise ValueError("Sol may make at most five small corrections per review.")
-    if any(sum(word_count(getattr(e, side)) for e in edits) > 80 for side in ("before", "after")):
-        raise ValueError("The correction batch exceeds 80 words; ask Qwen to revise it.")
+    if not 1 <= len(edits) <= max_edits:
+        raise ValueError(f"Sol may make at most {max_edits} small corrections per review.")
+    if any(sum(word_count(getattr(e, side)) for e in edits) > max_words for side in ("before", "after")):
+        raise ValueError(f"The correction batch exceeds {max_words} words; Sol must revise the copy.")
     result = draft.model_copy(deep=True)
     for edit in edits:
         if (not edit.before.strip() or not edit.after.strip() or edit.before == edit.after or

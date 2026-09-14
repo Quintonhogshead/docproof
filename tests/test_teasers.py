@@ -431,7 +431,7 @@ def test_small_edit_batch_is_atomic_bounded_and_covers_guidance(draft):
     with pytest.raises(ValueError):
         apply_small_edits(draft, [first, second], {1})
     assert "Mara returns" in draft.teasers[0].paragraphs[0]
-    with pytest.raises(ValueError, match="at most five"):
+    with pytest.raises(ValueError, match="at most 5"):
         apply_small_edits(draft, [first] * 6, {1})
     with pytest.raises(ValueError, match="80 words"):
         apply_small_edits(draft, [first.model_copy(update={"after": "word " * 30})] * 3, {1})
@@ -648,7 +648,40 @@ def test_public_brief_must_pass_sol_check_before_leaving_analysis(tmp_path, stor
     with pytest.raises(ValueError, match="before Qwen can receive it"):
         pipeline.analyze(pipeline.chunks("Mara returns."), tmp_path, runner=runner)
     saved = [json.loads(p.read_text())["answer"] for p in (tmp_path / "answers").glob("*.json")]
-    assert not any("writer_brief" in answer for answer in saved)
+    assert any("writer_brief" in answer for answer in saved)
+    assert not (tmp_path / "prepared-copy.json").exists()
+    assert list(tmp_path.glob("rejected-copy-*.json"))
+
+
+def test_sol_copy_editor_applies_specific_changes_without_rewriting(tmp_path, story):
+    calls = []
+    original = story.writer_brief.author_copy.model_copy(deep=True)
+    edit = correction(original).edits[0]
+    def runner(prompt, schema, work, **kw):
+        calls.append(schema)
+        if "writer_brief" in schema["properties"]:
+            return story.model_dump()
+        return dict(brief_sha256=digest(story.writer_brief), accurate=True, spoiler_safe=True,
+                    feedback=[], edits=[edit.model_dump()])
+    source = pipeline.chunks("Mara comes home to repair the ferry.")
+    result = pipeline.analyze(source, tmp_path, runner=runner)
+    assert result.writer_brief.author_copy == apply_small_edits(original, [edit], {1})
+    assert len(calls) == 2
+    assert pipeline.analyze(source, tmp_path, runner=runner) == result
+    assert len(calls) == 2  # The saved original and exact correction both resume.
+
+
+def test_copy_editor_cannot_approve_invalid_edits(tmp_path, story):
+    edit = correction(story.writer_brief.author_copy).edits[0]
+    edit.before = "This phrase does not occur"
+    def runner(prompt, schema, work, **kw):
+        if "writer_brief" in schema["properties"]:
+            return story.model_dump()
+        return dict(brief_sha256=digest(story.writer_brief), accurate=True, spoiler_safe=True,
+                    feedback=[], edits=[edit.model_dump()])
+    with pytest.raises(ValueError, match="match exactly once"):
+        pipeline.analyze(pipeline.chunks("Mara comes home."), tmp_path, runner=runner)
+    assert (tmp_path / "prepared-copy.json").exists()
 
 
 def test_single_portion_review_reads_original_and_sol_copy_in_one_call(tmp_path, story, draft):
