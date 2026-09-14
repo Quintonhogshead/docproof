@@ -82,7 +82,16 @@ server retains their exact approved wording. Every part of the resulting package
 still receive a fresh review against the manuscript.
 STORYSHEET:\n""" + data(story) + "\nORIGINAL EVIDENCE:\n" + data(evidence)
         + "\nPREVIOUS DRAFT:\n" + data(previous) + "\nEDITORIAL FEEDBACK:\n" + data(feedback)
-        + "\nAPPROVED OPTIONS TO PRESERVE:\n" + data(retained or []))
+        + "\nAPPROVED OPTIONS TO PRESERVE:\n" + data(retained or []) + """
+\nFINAL OUTPUT CHECK: The author guide and editorial note must not list the actual
+ending details, even in phrases such as 'withhold X' or 'do not reveal X'. Those
+phrases reveal X. Refer only to general categories ('the final decision', 'the
+relationship outcome') without naming what happens. Do not echo the protected
+revelations from the storysheet or feedback. Keep the editorial note to 60–100
+words about the reader promise and differences between the five approaches.
+Use 155–170 words per revised teaser and 8–12 words per hook as drafting targets;
+the hard limits remain 140–190 and 5–18. Preserve listed approved options verbatim.
+""")
 
 
 def source_review_prompt(chunk, draft, draft_hash):
