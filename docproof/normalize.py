@@ -60,10 +60,12 @@ class NormalizationReport:
     paragraphs: int = 0      # paragraphs touched
     ambiguous: int = 0       # marks deliberately left straight
     ran: bool = False
+    ellipses: int = 0        # ellipses reset to the house form (house_ellipsis_package)
+    parts: tuple[str, ...] = ()   # package members whose text changed
 
     @property
     def total(self) -> int:
-        return self.quotes + self.spaces
+        return self.quotes + self.spaces + self.ellipses
 
 
 
@@ -269,8 +271,47 @@ def normalize_package(pkg, *, quotes: bool = True, spaces: bool = True,
 
     report = NormalizationReport(quotes=n_quotes, spaces=n_spaces,
                                  paragraphs=n_paras, ambiguous=ambiguous,
-                                 ran=True)
+                                 ran=True, parts=tuple(sorted(parts)))
     log.info("Normalized silently: %d quote(s) curled, %d space run(s) "
              "collapsed across %d paragraph(s); %d mark(s) left straight as "
              "ambiguous.", n_quotes, n_spaces, n_paras, ambiguous)
     return report
+
+
+def house_ellipsis_edits(text: str, *, style: str = "nbsp", variant=None) -> list[tuple[int, int, str]]:
+    """The ellipsis sweep's replacements as untracked edits: … with the house
+    lead (a non-breaking space in the nbsp style) and a plain space after when
+    a word follows. The sweep owns the rule; this only changes how it lands."""
+    from .sweeps import _sweep_ellipsis
+    return [(h.start, h.end, h.replacement)
+            for h in _sweep_ellipsis(text, variant, style)]
+
+
+def house_ellipsis_package(pkg, *, style: str = "nbsp", variant=None) -> NormalizationReport:
+    """Set every ellipsis in the document to the house form, silently.
+
+    Run after normalize_package: its space collapsing and this rule's lead
+    both touch the spaces around an ellipsis, and applying them in two passes
+    keeps each pass's edits from overlapping."""
+    from .utils.xml_helpers import walk_package
+
+    n_ellipses = n_paras = 0
+    parts: set[str] = set()
+    for wp in walk_package(pkg):
+        text = paragraph_text(wp.element)
+        if not text:
+            continue
+        edits = house_ellipsis_edits(text, style=style, variant=variant)
+        if not edits:
+            continue
+        _apply_untracked(wp.element, edits)
+        n_ellipses += len(edits)
+        n_paras += 1
+        parts.add(wp.part)
+    for part in parts:
+        pkg.mark_modified(part)
+    log.info("Ellipses set to the house form silently: %d in %d paragraph(s).",
+             n_ellipses, n_paras)
+    return NormalizationReport(ellipses=n_ellipses, paragraphs=n_paras, ran=True,
+                               parts=tuple(sorted(parts)))
+

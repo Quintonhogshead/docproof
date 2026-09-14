@@ -681,7 +681,7 @@ def test_page_runover_book_yields_no_seam_quote_or_period_candidates(tmp_path, m
     if indented:
         assert seam == []
         assert joined in final["original"].values()
-        assert final["identity"]["intake"]["version"] == "fixed-intake-v2"
+        assert final["identity"]["intake"]["version"] == "fixed-intake-v3"
         assert "Page-runover paragraphs joined at intake" in report
         baseline = worker.workspace / "runs/fixed/intake/accepted" / source.name
         assert paragraph_views(tracked, "reject") == paragraph_views(baseline)

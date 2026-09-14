@@ -191,6 +191,10 @@ _LOCAL_EVIDENCE_VERSIONS = {
     # generator); its local evidence is v3's.
     "fixed-proofreading-v4": {"typed": "initial", "ensemble_sweep": "completion",
                               "fable": "completion_fable", "astra": "completion_astra"},
+    # v5: silent normalization at intake (fixed-intake-v3) and per-window
+    # site labels for screening and number reads; local evidence is v3's.
+    "fixed-proofreading-v5": {"typed": "initial", "ensemble_sweep": "completion",
+                              "fable": "completion_fable", "astra": "completion_astra"},
 }
 
 
@@ -309,6 +313,18 @@ def _report(result, details, receipt=None):
         lines += ["", "Incoming tracked changes were accepted in a separate working baseline using Galley's intake policy. "
                   "The uploaded original is preserved with a verified receipt. Rejecting Galley's new corrections restores "
                   "that accepted baseline; it does not undo edits the manuscript arrived with."]
+    normalization = receipt.get("normalization") or {}
+    if any(normalization.get(k) for k in ("quotes", "spaces", "ellipses")):
+        lines += ["", "## Silent normalization at intake", "",
+                  f"House conventions were applied to the working baseline before reading, without revision markup: "
+                  f"{normalization.get('quotes', 0)} straight quotation marks curled, "
+                  f"{normalization.get('spaces', 0)} runs of spaces collapsed, "
+                  f"{normalization.get('ellipses', 0)} ellipses set to the house form "
+                  f"(… with a non-breaking space before it), across {normalization.get('paragraphs', 0)} paragraphs"
+                  + (f"; {normalization['ambiguous_quotes']} marks were left straight as ambiguous"
+                     if normalization.get("ambiguous_quotes") else "")
+                  + ". These are not corrections and are not listed below; rejecting Galley's corrections "
+                  "restores the normalized baseline."]
     joins = receipt.get("runover_joins") or []
     if joins:
         continuation_lines = sum(len(j["absorbed"]) for j in joins)

@@ -1299,7 +1299,7 @@ def test_number_policy_travels_only_with_number_work(make_book, tmp_path):
     assert flow._policy_for("continuity", "{}") == flow.base_policy
     assert flow.identity["policy_sha256"] == flow.identity["policy_sha256"]
     # The identity covers every contract, so a change to any of them starts a fresh workspace.
-    assert flow.identity["version"] == "fixed-proofreading-v4"
+    assert flow.identity["version"] == "fixed-proofreading-v5"
 
 
 def test_checks_carry_the_categories_of_accepted_corrections(make_book, tmp_path):
@@ -1358,3 +1358,14 @@ def test_final_readers_see_only_tense_sites_that_read_against_the_baseline(make_
     stage = json.loads(Path(next(s["path"] for s in result["stages"] if s["stage"] == "fable")).read_text())
     assert sum(c["tense_sites_omitted"] for c in stage["evidence"]["coverage"]) == 22
     assert sum(c["focused_counts"]["narrative_tense"] for c in stage["evidence"]["coverage"]) == 1
+
+
+def test_number_sites_are_read_under_short_labels_and_recorded_by_durable_id(make_book, tmp_path):
+    book = make_book("She counted 3 boats and twenty gulls at 4 pm.")
+    readers = Readers()
+    result = FixedWorkflow(book, tmp_path / "run", calls=readers).run()
+    reads = [r for r in readers.events if r["stage"] == "numbers"]
+    assert reads and all([s["id"] for s in r["payload"]["sites"]] == ["n01", "n02", "n03"] for r in reads)
+    assert all(s["text"] for r in reads for s in r["payload"]["sites"])
+    stage = json.loads(Path(next(s["path"] for s in result["stages"] if s["stage"] == "numbers")).read_text())
+    assert [s["id"][:7] for s in stage["evidence"]["sites"]] == ["number-"] * 3

@@ -2,6 +2,7 @@
 import copy
 from collections import Counter
 import json
+import re
 import threading
 
 import pytest
@@ -113,7 +114,11 @@ def test_bulk_local_flags_share_context_and_never_reach_opus_when_pair_drops(mak
     assert len(agreed) == 9537 and disputed == []
     assert {e["model"] for e in flow.calls.events} == set(PAIR)
     for model in PAIR:
-        assert Counter(s["id"] for e in flow.calls.events if e["model"] == model for s in e["payload"]["sites"]) == Counter(s["id"] for s in sites)
+        sent = [s for e in flow.calls.events if e["model"] == model for s in e["payload"]["sites"]]
+        # Every site is screened exactly once, under a short per-request label.
+        assert Counter((s["para_id"], s["start"], s["end"]) for s in sent) == Counter((s["para_id"], s["start"], s["end"]) for s in sites)
+        assert all(re.fullmatch(r"s\d\d", s["id"]) for s in sent)
+    assert set(agreed) == {s["id"] for s in sites}
 
 
 def test_old_adjudication_receipts_cannot_resume_under_new_policy(make_book, tmp_path):
@@ -136,3 +141,39 @@ def test_windows_hold_at_most_max_sites_even_when_the_packet_is_small():
     assert [len(b) for b in windows(sites, max_sites=40)] == [40, 20]
     with pytest.raises(ValueError):
         list(windows(sites, max_sites=0))
+
+
+def test_screening_sites_are_labelled_per_request_and_mapped_back_by_code(make_book, tmp_path):
+    """The reader never copies a 22-character hash; a mistyped label still
+    fails coverage rather than being matched approximately."""
+    from galley.fixed_screening import aliases, label
+    flow = _flow(make_book, tmp_path)
+    sites = [{"id": f"d-{'%020x' % i}", "para_id": "p", "paragraph": "He waited, then left.",
+              "source": "He waited, then left.", "start": 9, "end": 10, "before": ",",
+              "proposals": [{"id": f"f-{i}", "start": 9, "end": 10, "before": ",", "replacement": "",
+                             "category": "grammar", "action": "edit", "reason": "Comma.", "models": ["local:x"]}]}
+             for i in range(3)]
+    assert aliases(sites) == {"s01": sites[0]["id"], "s02": sites[1]["id"], "s03": sites[2]["id"]}
+    assert label(24) == "s25"
+    compact = packet(sites)
+    assert [s["id"] for s in compact["sites"]] == ["s01", "s02", "s03"]
+    calls = flow.calls
+    def answer(stage, model, payload, kwargs):
+        ids = [s["id"] for s in payload["sites"]]
+        if model == PAIR[1]:
+            ids = ids[:-1] + [ids[-1] + "d"]                     # Luna's actual mistake
+        return {"decisions": [{"id": i, "action": "apply" if model == PAIR[0] else "drop", "replacement": "",
+                               "reason": "Checked.", "missing_knowledge": "", "question": ""} for i in ids]}
+    calls.handler = answer
+    with pytest.raises(FixedWorkflowError, match="screen"):
+        flow._screen_candidates("typed", sites)
+    def correct(stage, model, payload, kwargs):
+        return {"decisions": [{"id": s["id"], "action": "apply" if model == PAIR[0] else "drop", "replacement": "",
+                               "reason": "Checked.", "missing_knowledge": "", "question": ""} for s in payload["sites"]]}
+    calls.handler = correct
+    agreed, disputed = flow._screen_candidates("typed", sites)
+    assert agreed == {} and [d["id"] for d in disputed] == [s["id"] for s in sites]
+    for site in disputed:
+        assert is_pair_disagreement(site)
+        assert {row["id"] for row in site["screening"].values()} == {site["id"]}
+    assert [h["label"] for h in flow.history if h["stage"] == "typed_screen"] == ["s01", "s02", "s03"]
