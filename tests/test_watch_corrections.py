@@ -14,22 +14,28 @@ model, and the model passes are off, so the whole round trip is deterministic.
 """
 from __future__ import annotations
 
+import json
+from dataclasses import replace
+from pathlib import Path
+
 import openpyxl
 import pytest
 
-from app.jobs import JobStore
+from app.jobs import JobRunner, JobStore
 from app.settings import Paths
 from app.watch import corrections as corrlib
 from app.watch import naming
 from app.watch import tick as ticklib
 from app.watch.drive import DriveFile, FOLDER_MIME
+from app.watch.hubspot import HubSpotError
 from app.watch.settings import WatchSettings
 from app.watch.stages import (CORRECTIONS_DONE, CORRECTIONS_FAILED,
                               CORRECTIONS_PROP, OUTPUT_PROP, SOURCE_PROP)
 from app.watch.state import WatchState
+from docproof.providers import ProviderResult
 
 from .conftest import FIXTURES
-from .fakes import drive_entry, fake_drive
+from .fakes import FakeProvider, drive_entry, fake_drive
 from .test_corrections_extract import make_tracked_docx
 
 FOLDER = "1AbCdEfGhIjKlMnOp"
@@ -57,7 +63,11 @@ def ws(**over) -> WatchSettings:
                   corrections_enabled=True,
                   hubspot_corrections_file_property="corr_file",
                   hubspot_corrections_text_property="corr_text",
-                  corrections_model_passes=False)
+                  corrections_model_passes=False,
+                  # A zero quiet period keeps every existing test's round trip
+                  # immediate, exactly as it ran before the hold existed; the
+                  # hold itself is exercised on its own below.
+                  corrections_quiet_seconds=0)
     fields.update(over)
     return WatchSettings(**fields)
 
@@ -160,6 +170,27 @@ def test_the_hand_off_is_recognised_as_output():
     assert not naming.is_idml_output_name("Johnson - Book 3.idml")
 
 
+@pytest.mark.parametrize("name,version", [
+    ("Smith - Book 4.indd", 4.0), ("Smith - Book4.indd", 4.0),
+    ("Smith — Book 10.indd", 10.0),
+])
+def test_indd_version_reads_the_designers_indd_series(name, version):
+    assert naming.indd_version(name) == ("smith", version)
+
+
+@pytest.mark.parametrize("name", [
+    "Smith - Book 4.idml", "Smith - Book Original.indd", "notes.indd",
+])
+def test_indd_version_ignores_what_is_not_an_indd_export(name):
+    assert naming.indd_version(name) is None
+
+
+def test_indd_source_is_an_integer_export_with_the_records_surname():
+    assert naming.is_indd_source_name("Smith - Book 4.indd", "SMITH")
+    assert not naming.is_indd_source_name("Smith - Book 4.5.indd", "Smith")
+    assert not naming.is_indd_source_name("Jones - Book 4.indd", "Smith")
+
+
 def _df(name, fid, props=None, mime="application/octet-stream"):
     return DriveFile(id=fid, name=name, mime_type=mime,
                      app_properties=props or {})
@@ -181,6 +212,29 @@ def test_pick_source_refuses_a_tie_and_reports_a_finished_latest():
     assert corrlib.pick_source(failed, "Johnson") == (None, "failed")
     assert corrlib.pick_source([_df("Johnson - Book 3.5.idml", "c")],
                                "Johnson") == (None, "none")
+
+
+def test_pick_source_spots_an_indd_with_no_idml_export():
+    listing = [_df("Johnson - Book 4.indd", "a")]
+    assert corrlib.pick_source(listing, "Johnson") == (None, "indd-only")
+
+
+def test_pick_source_spots_an_idml_behind_the_latest_indd():
+    listing = [_df("Johnson - Book 3.idml", "a"), _df("Johnson - Book 4.indd", "b")]
+    assert corrlib.pick_source(listing, "Johnson") == (None, "idml-stale")
+
+
+def test_pick_source_is_unbothered_by_an_indd_alongside_its_own_idml():
+    # The .idml is at the same number as the .indd (the ordinary case, the
+    # designer's export sitting right beside their working file) or ahead of
+    # it (a later export than the last .indd DocWatch happened to see) —
+    # either way this is not "stale" and the export is picked normally.
+    same = [_df("Johnson - Book 4.idml", "a"), _df("Johnson - Book 4.indd", "b")]
+    chosen, why = corrlib.pick_source(same, "Johnson")
+    assert chosen.id == "a" and why == ""
+    ahead = [_df("Johnson - Book 5.idml", "a"), _df("Johnson - Book 4.indd", "b")]
+    chosen, why = corrlib.pick_source(ahead, "Johnson")
+    assert chosen.id == "a" and why == ""
 
 
 def test_proof_pdf_is_the_one_under_the_same_stem():
@@ -250,6 +304,78 @@ def test_the_spreadsheet_accounts_for_every_correction_on_one_sheet_each(
     assert "the room was bare." in text and "the room was empty." not in text
 
 
+# --- delivery verification --------------------------------------------------------
+
+def test_uploads_are_read_back_from_drive_before_the_hand_off_counts(tmp_path):
+    opener = make_opener(tmp_path)
+    before = len(opener.calls)
+    report = run(tmp_path, ws(), opener)
+
+    assert not report.failed, report.failed
+    placed = uploads_in(opener)
+    # Every landed artifact's Drive id was read back with a GET — not just
+    # trusted because the upload's own response carried an id.
+    gets = [c for c in opener.calls[before:]
+           if c.get_method() == "GET"
+           and any(f"/drive/v3/files/{e['id']}" in c.full_url
+                   for e in placed.values())]
+    assert len(gets) >= len(HAND_OFF)
+    assert opener.hubspot["hs-Johnson"]["properties"]["docproof"] == \
+        "Corrections Applied"
+
+
+def test_a_bad_first_readback_is_reuploaded_and_then_succeeds(tmp_path, monkeypatch):
+    """One mismatch — Drive says the xlsx landed a different size than the file
+    on disk — earns one reupload, not an immediate failure. A dropped
+    connection or a stale id is often gone on a retry."""
+    opener = make_opener(tmp_path)
+    real_get_file = corrlib.drive.get_file
+    spoiled = {"done": False}
+
+    def flaky_get_file(token, file_id, *, opener, with_parents=False):
+        found = real_get_file(token, file_id, opener=opener,
+                              with_parents=with_parents)
+        if not spoiled["done"] and found.name.endswith("corrections.xlsx"):
+            spoiled["done"] = True
+            return replace(found, size=found.size + 1)
+        return found
+
+    monkeypatch.setattr(corrlib.drive, "get_file", flaky_get_file)
+    report = run(tmp_path, ws(), opener)
+
+    assert not report.failed, report.failed
+    assert spoiled["done"]                    # the bad reading really happened
+    placed = uploads_in(opener)
+    assert HAND_OFF <= set(placed)
+    assert opener.hubspot["hs-Johnson"]["properties"]["docproof"] == \
+        "Corrections Applied"
+
+
+def test_a_persistently_bad_readback_fails_before_hubspot_or_the_marker(
+        tmp_path, monkeypatch):
+    opener = make_opener(tmp_path)
+    real_get_file = corrlib.drive.get_file
+
+    def bad_get_file(token, file_id, *, opener, with_parents=False):
+        found = real_get_file(token, file_id, opener=opener,
+                              with_parents=with_parents)
+        if found.name.endswith("3.5.idml"):
+            return replace(found, md5_checksum="0" * 32)
+        return found
+
+    monkeypatch.setattr(corrlib.drive, "get_file", bad_get_file)
+    report = run(tmp_path, ws(), opener)
+
+    assert report.failed and "did not land intact" in report.failed[0][1]
+    # HubSpot never moved, and the source was never marked done.
+    assert opener.hubspot["hs-Johnson"]["properties"]["docproof"] == \
+        "Ready for Corrections"
+    assert CORRECTIONS_PROP not in opener.files["idml-3"]["appProperties"]
+    rec = WatchState.load(tmp_path / "state.json").get("idml-3")
+    assert rec.corrections_attempts == 1
+    assert "Johnson - Book 3.5.idml" not in rec.corrections_uploaded
+
+
 def test_a_second_pass_neither_re_applies_nor_re_uploads(tmp_path):
     opener = make_opener(tmp_path)
     run(tmp_path, ws(), opener)
@@ -294,6 +420,64 @@ def test_no_interior_design_folder_is_a_missing_source(tmp_path):
     opener = make_opener(tmp_path, files=files)
     report = run(tmp_path, ws(), opener)
     assert report.missing_source and "Interior Design" in report.missing_source[0][1]
+    assert uploads_in(opener) == {}
+
+
+def test_an_indd_with_no_idml_export_explains_what_to_export(tmp_path):
+    files = {AUTHOR: folder_entry("Quinton Johnson", FOLDER),
+             INTERIOR: folder_entry("Interior Design", AUTHOR),
+             "indd-4": in_folder("Johnson - Book 4.indd")}
+    opener = make_opener(tmp_path, files=files)
+    report = run(tmp_path, ws(), opener)
+    assert report.missing_source
+    reason = report.missing_source[0][1]
+    assert "File → Export" in reason and "InDesign Markup (IDML)" in reason
+    assert "Johnson - Book 4.idml" in reason
+    assert uploads_in(opener) == {}
+    assert report.corrected == []
+
+
+# --- multi-book authors ------------------------------------------------------
+
+RED_FOLDER, RED_INTERIOR, RED_IDML = "red-folder", "red-interior", "red-idml"
+BLUE_FOLDER, BLUE_INTERIOR, BLUE_IDML = "blue-folder", "blue-interior", "blue-idml"
+BOOK_HAND_OFF = {"Johnson - Book 1.5.idml", "Johnson - Book 1.5 - corrections.xlsx",
+                 "Johnson - Book 1.5 - notes.md"}
+
+
+def two_book_files() -> dict:
+    return {
+        AUTHOR: folder_entry("Quinton Johnson", FOLDER),
+        RED_FOLDER: folder_entry("The Red Book", AUTHOR),
+        RED_INTERIOR: folder_entry("Interior Design", RED_FOLDER),
+        RED_IDML: in_folder("Johnson - Book 3.idml", parent=RED_INTERIOR),
+        BLUE_FOLDER: folder_entry("Blue Tide", AUTHOR),
+        BLUE_INTERIOR: folder_entry("Interior Design", BLUE_FOLDER),
+        BLUE_IDML: in_folder("Johnson - Book 1.idml", parent=BLUE_INTERIOR),
+    }
+
+
+def test_a_multi_book_author_is_routed_by_the_records_book_title(tmp_path):
+    record = ready(book_title="Blue Tide")
+    opener = make_opener(tmp_path, files=two_book_files(),
+                         hubspot={"Johnson": record})
+    opener.content[BLUE_IDML] = IDML
+    report = run(tmp_path, ws(), opener)
+
+    assert not report.failed, report.failed
+    assert report.corrected and report.corrected[0].startswith(
+        "Johnson - Book 1.idml")
+    placed = uploads_in(opener)
+    assert BOOK_HAND_OFF <= set(placed)
+    for name in BOOK_HAND_OFF:
+        # In Blue Tide's own "Interior Design" folder, not the Red Book's.
+        assert placed[name]["parents"] == [BLUE_INTERIOR]
+
+
+def test_a_multi_book_author_with_no_title_needs_a_person(tmp_path):
+    opener = make_opener(tmp_path, files=two_book_files())    # no book_title
+    report = run(tmp_path, ws(), opener)
+    assert any("book_title" in reason for _, reason in report.needs_human)
     assert uploads_in(opener) == {}
 
 
@@ -351,3 +535,188 @@ def test_state_records_the_job_before_the_run_and_the_input_kind(tmp_path):
     assert rec.corrections_input_kind == "docx"
     assert rec.corrections_input_name == "Johnson corrections.docx"
     assert rec.subfolder_id == INTERIOR
+
+
+# --- the quiet period ------------------------------------------------------------
+
+def test_a_ready_record_is_held_and_then_released_past_its_quiet_period(
+        tmp_path):
+    opener = make_opener(tmp_path)
+    settings = ws(corrections_quiet_seconds=10800)          # three hours
+
+    held = run(tmp_path, settings, opener)
+    assert held.corrected == []
+    assert held.waiting >= 1
+    assert uploads_in(opener) == {}
+    state = WatchState.load(tmp_path / "state.json")
+    assert len(state.corrections_pending) == 1
+    entry = next(iter(state.corrections_pending.values()))
+    assert entry.author == "Quinton Johnson"
+    assert len(entry.submissions) == 1
+
+    # Back-date the hold past its own quiet period, the way waiting three
+    # hours would — a test cannot wait three hours, so it moves the clock the
+    # record's own state remembers instead.
+    for pending in state.corrections_pending.values():
+        pending.first_seen = pending.last_submission_at = \
+            "2020-01-01T00:00:00+00:00"
+    state.save()
+
+    released = run(tmp_path, settings, opener)
+    assert released.corrected and released.corrected[0].startswith(SOURCE)
+    assert "Johnson - Book 3.5.idml" in uploads_in(opener)
+
+
+def test_a_new_submission_during_the_hold_resets_the_quiet_period(tmp_path):
+    opener = make_opener(tmp_path)
+    settings = ws(corrections_quiet_seconds=10800)
+
+    run(tmp_path, settings, opener)
+    state = WatchState.load(tmp_path / "state.json")
+    record_id = next(iter(state.corrections_pending))
+    assert len(state.corrections_pending[record_id].submissions) == 1
+    # Back-dated so the two runs' clocks cannot land in the same second and
+    # make the "it moved" assertion below a coin flip.
+    state.corrections_pending[record_id].first_seen = "2020-01-01T00:00:00+00:00"
+    state.corrections_pending[record_id].last_submission_at = \
+        "2020-01-01T00:00:00+00:00"
+    state.save()
+    first_wait = corrlib.ready_at(state.corrections_pending[record_id], settings)
+
+    # A second submission — a different file — arrives before the hold ends.
+    opener.hubspot["hs-Johnson"]["properties"]["corr_file"] = FILE_URL + "&v=2"
+    run(tmp_path, settings, opener)
+    state2 = WatchState.load(tmp_path / "state.json")
+    assert len(state2.corrections_pending[record_id].submissions) == 2
+    second_wait = corrlib.ready_at(state2.corrections_pending[record_id], settings)
+    assert second_wait > first_wait
+
+
+def test_pending_summary_reports_the_authors_ready_at(tmp_path):
+    opener = make_opener(tmp_path)
+    settings = ws(corrections_quiet_seconds=10800)
+    report = run(tmp_path, settings, opener)
+    assert report.waiting
+
+    state = WatchState.load(tmp_path / "state.json")
+    rows = corrlib.pending_summary(state, settings)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["author"] == "Quinton Johnson"
+    assert row["submissions"] == 1
+    assert row["ready"] is False
+    assert row["ready_at"]                    # a real ISO timestamp, not blank
+
+
+def test_a_dry_run_reports_the_plan_and_applies_nothing(tmp_path):
+    opener = make_opener(tmp_path)
+    settings = ws()                            # corrections_quiet_seconds=0
+    state = WatchState(tmp_path / "state.json")
+    store = JobStore(Paths(tmp_path).ensure())
+    runner = JobRunner(store, settings.app_settings(tmp_path),
+                       config_path=ticklib.config_path(), notify_home=tmp_path)
+    report = ticklib.TickReport()
+
+    corrlib.run_stage("drive-token", tmp_path, settings, state, runner, store,
+                      mock=False, opener=opener, hs_token="hubspot-token",
+                      report=report, dry_run=True)
+
+    assert report.corrected and "would apply" in report.corrected[0]
+    assert report.corrected[0].startswith(SOURCE)
+    assert uploads_in(opener) == {}
+    assert store.all() == []
+    rec = WatchState.load(tmp_path / "state.json").get("idml-3")
+    assert not rec.corrections_job_id
+
+
+# --- form-poll mode ---------------------------------------------------------------
+
+def _form_row(when: str, **values) -> dict:
+    return {"submittedAt": when, "recordId": "hs-Johnson",
+            "values": [{"name": k, "value": v} for k, v in values.items()]}
+
+
+def test_form_poll_folds_every_submission_into_one_job(tmp_path, monkeypatch):
+    opener = make_opener(tmp_path)
+    opener.content["form-sub-1"] = submission(tmp_path)
+    rows = [
+        _form_row("2026-09-01T00:00:00Z",
+                 files=("https://api.hubapi.com/files/form-sub-1"
+                        "?filename=Round%201.docx")),
+        _form_row("2026-09-02T00:00:00Z", notes="Change 'gone' to 'here'."),
+    ]
+    monkeypatch.setattr(corrlib.hubspot, "form_submissions",
+                        lambda *a, **k: rows)
+    monkeypatch.setattr(corrlib, "extract_provider", lambda: (
+        FakeProvider(results=[ProviderResult(parsed={"edits": [
+            {"find": "gone", "replace": "here", "instruction": "swap"}]})]),
+        "fake-model"))
+    settings = ws(corrections_form_poll=True,
+                 corrections_form_file_property="files",
+                 corrections_form_notes_property="notes")
+
+    report = run(tmp_path, settings, opener)
+
+    assert not report.failed, report.failed
+    assert report.corrected
+    rec = WatchState.load(tmp_path / "state.json").get("idml-3")
+    assert len(rec.corrections_submissions) == 2
+
+    store = JobStore(Paths(tmp_path))
+    job = next(j for j in store.all() if j.kind == "corrections")
+    payload = json.loads(
+        (Path(job.results_dir) / "corrections.json").read_text("utf-8"))
+    sources = {o.get("source") for key in ("applied_items", "flagged", "no_op")
+              for o in payload["apply"][key] if o.get("source")}
+    # Every edit that survived to the report carries which of the two folded
+    # submissions it came from.
+    assert sources == set(rec.corrections_submissions)
+
+
+def test_form_poll_403_falls_back_to_the_records_own_properties(
+        tmp_path, monkeypatch):
+    opener = make_opener(tmp_path)
+
+    def boom(*a, **k):
+        raise HubSpotError("no forms scope on this token")
+
+    monkeypatch.setattr(corrlib.hubspot, "form_submissions", boom)
+    settings = ws(corrections_form_poll=True)
+
+    report = run(tmp_path, settings, opener)
+
+    assert not report.failed, report.failed
+    assert report.corrected and report.corrected[0].startswith(SOURCE)
+    assert "Johnson - Book 3.5.idml" in uploads_in(opener)
+
+
+def test_form_poll_leaves_rounds_before_the_start_date_alone(
+        tmp_path, monkeypatch):
+    """A submission older than `corrections_form_start_after` is a round the
+    press handled by hand before form-poll mode went live: it is never folded,
+    so the next job carries only what came in since."""
+    opener = make_opener(tmp_path)
+    opener.content["form-sub-1"] = submission(tmp_path)
+    rows = [
+        _form_row("2026-08-01T00:00:00Z",
+                 files=("https://api.hubapi.com/files/form-sub-1"
+                        "?filename=Old%20round.docx")),
+        _form_row("2026-09-02T00:00:00Z", notes="Change 'gone' to 'here'."),
+    ]
+    monkeypatch.setattr(corrlib.hubspot, "form_submissions",
+                        lambda *a, **k: rows)
+    monkeypatch.setattr(corrlib, "extract_provider", lambda: (
+        FakeProvider(results=[ProviderResult(parsed={"edits": [
+            {"find": "gone", "replace": "here", "instruction": "swap"}]})]),
+        "fake-model"))
+    settings = ws(corrections_form_poll=True,
+                 corrections_form_file_property="files",
+                 corrections_form_notes_property="notes",
+                 corrections_form_start_after="2026-08-15")
+
+    report = run(tmp_path, settings, opener)
+
+    assert not report.failed, report.failed
+    rec = WatchState.load(tmp_path / "state.json").get("idml-3")
+    assert len(rec.corrections_submissions) == 1
+    assert "Old round" not in rec.corrections_input_name

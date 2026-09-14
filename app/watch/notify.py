@@ -596,13 +596,39 @@ def completion_for_job(job) -> tuple[str, str, str]:
             ("Cache write", _int(job.cache_write_tokens), None),
         ]),
         _result_group(job),
-        ("Timing", [
-            ("Started", job.created_at or "—", None),
-            ("Finished", job.updated_at or "—", None),
-            ("Elapsed", _elapsed(job), None),
-        ]),
     ]
+    # A corrections job's deliverable is four files by a fixed name — the
+    # corrected IDML, the two-sheet spreadsheet, the notes and the InDesign
+    # check tour — none of which a job record otherwise says. Named here so
+    # the email is a checklist against what Drive should show, not just a
+    # count of what happened.
+    delivered = _hand_off_rows(job)
+    if delivered:
+        groups.append(("Delivered", delivered))
+    groups.append(("Timing", [
+        ("Started", job.created_at or "—", None),
+        ("Finished", job.updated_at or "—", None),
+        ("Elapsed", _elapsed(job), None),
+    ]))
     return subject, _text(title, groups), _html(title, groups)
+
+
+def _hand_off_rows(job) -> list | None:
+    """The four hand-off names a finished corrections job leaves beside the
+    designer's export, or `None` for any other kind (or a filename the naming
+    rules cannot base a hand-off name on)."""
+    if job.kind != "corrections" or not job.filename:
+        return None
+    try:
+        names = naming.corrections_hand_off_names(job.filename)
+    except ValueError:
+        return None
+    return [
+        ("Corrected IDML", names["idml"], None),
+        ("Corrections spreadsheet", names["sheet"], None),
+        ("Notes", names["notes"], None),
+        ("InDesign check tour", names["checks"], None),
+    ]
 
 
 def send_job_completion(watch_home, job, *, get_key=None,

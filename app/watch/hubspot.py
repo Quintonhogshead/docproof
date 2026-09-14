@@ -18,8 +18,10 @@ import contextlib
 import json
 import logging
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 log = logging.getLogger("docproof.app.watch.hubspot")
 
@@ -245,6 +247,74 @@ def download_file(token: str, url: str, dest_dir, *, opener=_open_url,
     target = folder / name
     target.write_bytes(body)
     return target
+
+
+def form_submissions(token: str, form_id: str, *, opener=_open_url,
+                     limit: int = 10000) -> list[dict]:
+    """Read the exact HubSpot form's submission events, oldest-page-first.
+
+    Used by any stage that folds several form submissions into one job rather
+    than trusting a single CRM property snapshot. A 403 (a missing `forms`
+    read scope) is surfaced as a `HubSpotError`, deliberately: a caller that
+    swallowed it could mistake "cannot read the form" for "the form is empty"
+    and silently reuse whatever it read last."""
+    if not form_id:
+        return []
+    rows: list[dict] = []
+    after = ""
+    while True:
+        # HubSpot's submissions endpoint accepts at most 50 per page even
+        # though other CRM APIs permit 100.
+        query = {"limit": str(min(limit, 50))}
+        if after:
+            query["after"] = after
+        params = urllib.parse.urlencode(query)
+        request = _request(
+            f"{API}/form-integrations/v1/submissions/forms/{form_id}?{params}",
+            token)
+        answer = _json_call(request, opener=opener,
+                            what=f"read submissions for form {form_id}")
+        page = answer.get("results") or answer.get("submissions") or []
+        rows.extend(row for row in page if isinstance(row, dict))
+        after = str((answer.get("paging") or {}).get("next", {}).get("after")
+                    or answer.get("after") or "")
+        if not after or not page:
+            return rows
+        if len(rows) >= limit:
+            raise HubSpotError(
+                f"The corrections form has more than {limit} submissions; "
+                f"raise the cap before running.")
+
+
+def timestamp_value(value) -> float:
+    """Normalize HubSpot's ISO or millisecond submission timestamps to a Unix
+    timestamp in seconds."""
+    text = str(value or "").strip()
+    if not text:
+        return 0.0
+    try:
+        number = float(text)
+        # HubSpot's form API returns submittedAt in epoch milliseconds. Keep
+        # accepting seconds for settings and older captured intake manifests.
+        return number / 1000.0 if number > 10_000_000_000 else number
+    except (TypeError, ValueError):
+        pass
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def row_marker(row: dict) -> str:
+    """A stable id for one form submission event — its timestamp and event id,
+    so the same submission read twice (a re-polled page) folds to one entry
+    rather than two."""
+    stamp = str(row.get("submittedAt") or "")
+    event_id = str(row.get("conversionId") or row.get("id") or "")
+    return f"{stamp}|{event_id}" if stamp and event_id else stamp or event_id
 
 
 def file_urls(value: str) -> list[str]:

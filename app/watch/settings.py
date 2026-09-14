@@ -352,6 +352,45 @@ class WatchSettings:
     # match manual mode; off is deterministic and free but flags more.
     corrections_model_passes: bool = True
 
+    # A ready record is held, not run immediately: an author who submits the
+    # form twice in an afternoon should get one job, not two half-corrected
+    # exports. The hold ends this many seconds after DocWatch first saw the
+    # record ready, or after its latest new submission — whichever is later —
+    # so every submission gets its own fresh quiet period. Three hours by
+    # default, the native adapter's own figure (`corrections_native_quiet_
+    # seconds`), so an install running both reads the same wait either way.
+    # See `corrections.hold_or_release`.
+    corrections_quiet_seconds: int = 10800
+    # Off by default, matching the native adapter's own switch: a ready record
+    # is read off the CRM properties the workflow copies the form into
+    # (`hubspot_corrections_file_property` / `_text_property`), one submission
+    # per record. On, DocWatch instead polls the form itself and folds every
+    # submission it finds for the record — several rounds of "one more thing" —
+    # into the one job. Needs HubSpot's forms read scope; a 403 falls back to
+    # property mode for that pass rather than stopping it.
+    corrections_form_poll: bool = False
+    # The form form-poll mode reads. Defaults to the same Pre-Proof Interior
+    # Design Corrections Form the native adapter polls
+    # (`corrections_native_form_id`) — one form, whichever engine is reading it.
+    corrections_form_id: str = "2be3b465-b0d6-4bab-b32e-6bd74dcca403"
+    # Which of the form's own fields carry the upload and the typed notes, read
+    # by field name rather than by the CRM property the workflow copies them
+    # into — a submission event has no property snapshot yet. Same defaults as
+    # the native adapter's pair, for the same form.
+    corrections_form_file_property: str = "interior_design_corrections_documents"
+    corrections_form_notes_property: str = "anything_else_"
+    # Submissions older than this (ISO date or datetime, UTC when bare) are
+    # never folded — set it the day form-poll mode goes live, so the rounds
+    # the press handled by hand before then stay out of the next job. Empty
+    # means no cut-off.
+    corrections_form_start_after: str = ""
+    # The Projects property naming the book. Read only for a multi-book author
+    # whose books each sit in their own subfolder (no single "Interior Design"
+    # directly under the author folder) — it is what tells DocWatch which of
+    # the author's book folders a ready record's round belongs to; see
+    # `corrections._match_book_folder`. A single-book author never needs it.
+    hubspot_corrections_book_property: str = "book_title"
+
     # The corrections stage originally operated on an exported IDML.  Native
     # InDesign files are opt-in so an existing watch configuration keeps the
     # old, deterministic behaviour.

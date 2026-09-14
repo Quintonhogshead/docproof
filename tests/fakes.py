@@ -4,6 +4,7 @@ every Drive call goes through an injected opener, so the fakes here cover both
 the synchronous and the batch path, and the folder the watcher watches."""
 from __future__ import annotations
 
+import hashlib
 import io
 import itertools
 import json
@@ -318,7 +319,12 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
                              "mimeType": DOCX_MIME,
                              "appProperties": meta.get("appProperties", {}),
                              "parents": meta.get("parents", []),
-                             "modifiedTime": "2026-01-02T03:04:05.000Z"}
+                             "modifiedTime": "2026-01-02T03:04:05.000Z",
+                             # Real, so a caller that reads a freshly-uploaded
+                             # file back (verify_uploads) checks against the
+                             # actual bytes rather than a fixture's own guess.
+                             "size": str(len(media)),
+                             "md5Checksum": hashlib.md5(media).hexdigest()}
             content[new_id] = media
             return Response(json.dumps({"id": new_id}).encode())
 
