@@ -24,7 +24,9 @@ editorial approval step.
    books use coverage-checked reading portions, never silent truncation. A source
    that fits in one call is read directly without an intermediate summary.
 3. The Fly web server calls `Qwen/Qwen3.6-27B` through DeepInfra, using the
-   key already stored in DocProof settings. Qwen only rephrases Sol's finished copy.
+   key already stored in DocProof settings. Qwen only rephrases Sol's finished copy,
+   with reasoning disabled for this language-only step using DeepInfra's
+   [reasoning switch](https://docs.deepinfra.com/chat/reasoning).
    Its input contains that complete copy and any previously approved rephrasings.
    It receives no open-ended writing brief, manuscript
    passages, private storysheet, ending details, protected-revelation list, raw
@@ -38,9 +40,12 @@ editorial approval step.
    short factual phrases or individual sentences. Each exact replacement needs
    manuscript evidence and is limited to 40 words/320 characters; a review can
    replace at most five spans and 80 words in total. The corrected package is saved
-   with its edit history and receives a complete fresh source check and approval.
-   Proposed edits cannot approve their own output. After two correction rounds,
-   Sol resolves remaining issues in the original copy before further rephrasing.
+   with its edit history. Sol can explicitly approve the corrected text in that
+   same pass; the server checks and applies the exact edits, then binds the approval
+   to the corrected text for immediate delivery. A name or sentence correction does
+   not itself trigger another model call. Only unresolved substantive concerns need
+   another pass. Older in-flight reviews that did not approve their corrections
+   still require an explicit approval before delivery.
 5. For larger revisions, Sol corrects the complete public copy itself and checks
    it for accuracy and spoilers before Qwen rephrases it. Qwen makes no editorial
    decisions and receives no ending or private review text. Previously passing

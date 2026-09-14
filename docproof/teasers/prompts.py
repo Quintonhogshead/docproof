@@ -182,11 +182,14 @@ The before text must occur exactly once in that field. Include a concise reason
 and manuscript paragraph_ids supporting each correction. Keep required word counts.
 Use edits only when these small replacements can resolve the remaining concerns.
 For broader problems, return edits=[] and precise private feedback for Sol. Never return
-a replacement package. Any proposed edits mean approved=false, and affected options
-or guidance must fail their relevant checks. The server applies valid corrections
-and requires a complete fresh manuscript review before upload. Return edits=[] when
-the saved copy is ready. Return the supplied draft hash exactly and list every
-source-review chunk ID exactly once. Set approved=false for any unresolved concern.
+a replacement package. When small edits resolve the remaining concerns, approve
+the corrected copy in THIS SAME PASS: set approved=true and report all option and
+guidance checks for the text AFTER the exact edits. The server applies your edits,
+checks their bounds and structure, and binds your approval to that corrected text.
+Do not require another full review just because you corrected a name or sentence.
+Return edits=[] when the saved copy already passes. Set approved=false only for
+substantive concerns remaining after your corrections. Return the supplied input
+draft hash exactly and list every covered manuscript chunk ID exactly once.
 A malformed or missing review is not approval.
 Your detailed feedback and edits remain private to Sol. Qwen receives neither the
 manuscript nor its ending, nor rejected copy or private review feedback. It receives

@@ -190,7 +190,7 @@ def approval_issues(draft: Draft, review: Review, chunk_ids: list[int]) -> list[
     if review.draft_sha256 != digest(draft):
         issues.append("The review does not match the saved draft.")
     if review.edits:
-        issues.append("Proposed corrections require a fresh review before approval.")
+        issues.append("Proposed corrections must be applied before this approval can publish.")
     if sorted(review.covered_chunk_ids) != sorted(chunk_ids):
         issues.append("The review did not account for the complete manuscript.")
     if not review.approved or not review.guidance_approved:

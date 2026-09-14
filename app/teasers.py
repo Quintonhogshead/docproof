@@ -1,7 +1,7 @@
 """Durable teaser queue shared by app formatting and DocWatch formatting.
 
 Only saved, reviewed drafts can reach Google. Sol corrections are bounded and
-rechecked against their new hash. Network and per-book writes have process-safe locks.
+approval is bound to their exact result. Network and per-book writes have process-safe locks.
 """
 from __future__ import annotations
 
@@ -235,7 +235,7 @@ def generate_draft(queue, task, *, provider=None):
         key = get_api_key("deepinfra")
         if not key:
             raise TeaserError("Add the DeepInfra key to DocProof's cloud settings.")
-        provider = DeepInfraProvider(api_key=key, max_retries=0, effort=None)
+        provider = DeepInfraProvider(api_key=key, max_retries=0, effort=None, reasoning_enabled=False)
         provider.client = provider.client.with_options(timeout=840)
     previous = task["drafts"][-1]["content"] if task["drafts"] else None
     retained = {}
@@ -326,6 +326,12 @@ def accept_review(queue, task, raw):
     review = Review.model_validate(raw)
     if not task["drafts"]:
         raise TeaserError("There is no saved draft to review.")
+    last = task["drafts"][-1]
+    if (task["state"] in ("approved", "complete") and last.get("operation") == "bounded_correction"
+            and last.get("review_sha256") == digest(review)
+            and last.get("base_sha256") == review.draft_sha256):
+        # The same edit-and-approve decision may be resent after a lost response.
+        return task
     same_review = (bool(task["reviews"]) and
                    digest(review) == digest(Review.model_validate(task["reviews"][-1])))
     if (task["state"] == "drafted" and same_review and
@@ -354,16 +360,32 @@ def accept_review(queue, task, raw):
             if (sorted(review.covered_chunk_ids) != [c["id"] for c in task["chunks"]] or
                     sorted(o.number for o in review.options) != [1, 2, 3, 4, 5]):
                 raise ValueError("Small corrections require a complete review of the manuscript and all five options.")
-            if task.get("small_edit_rounds", 0) >= 2:
+            if task.get("small_edit_rounds", 0) >= 2 and not review.approved:
                 raise ValueError("Two correction rounds have been used; ask Qwen for the remaining revisions.")
             corrected = apply_small_edits(draft, review.edits,
                 {p["id"] for c in task["chunks"] for p in c["paragraphs"]})
+            corrected_approval = None
+            if review.approved:
+                corrected_approval = review.model_copy(update={"draft_sha256": digest(corrected), "edits": []})
+                remaining = approval_issues(corrected, corrected_approval, [c["id"] for c in task["chunks"]])
+                if remaining:
+                    raise ValueError("Sol has unresolved concerns after its corrections: " + "; ".join(remaining))
             task["drafts"].append({"content": corrected.model_dump(), "sha256": digest(corrected),
                 "model": SOL_MODEL, "provider": "chatgpt-subscription", "operation": "bounded_correction",
                 "base_sha256": digest(draft), "review_sha256": digest(review),
                 "source_copy": task["drafts"][-1].get("source_copy"),
                 "edits": [e.model_dump() for e in review.edits]})
             task["small_edit_rounds"] = task.get("small_edit_rounds", 0) + 1
+            if corrected_approval is not None:
+                # Sol explicitly approved the result of these exact edits in
+                # this same pass. Rebind the decision to the applied text.
+                task.setdefault("correction_approvals", []).append(review.model_dump())
+                task["reviews"][-1] = corrected_approval.model_dump()
+                task["review_story_hashes"][digest(corrected_approval)] = digest(task["storysheet"])
+                task["feedback"] = []
+                task["progress"] = "Sol corrected and approved the copy; ready for Google Docs"
+                queue.save(task, "approved")
+                return queue.get(task["id"])
             task["progress"] = "Sol corrected small errors; checking the corrected package against the manuscript"
             queue.save(task, "drafted")
             return queue.get(task["id"])

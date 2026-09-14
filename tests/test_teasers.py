@@ -133,6 +133,18 @@ def test_wire_schema_preserves_book_title(story):
     _check_schema(schema)
 
 
+def test_rephrasing_requests_direct_responses_without_changing_provider_defaults():
+    from docproof.providers.deepinfra_provider import DeepInfraProvider
+    args = dict(model=QWEN_MODEL, system="Rephrase faithfully.", user="Finished copy.",
+                schema={"type": "object", "properties": {}, "additionalProperties": False},
+                schema_name="teaser", max_tokens=100)
+    direct = DeepInfraProvider(api_key="test-key", effort=None, reasoning_enabled=False)._body(**args)
+    assert direct["extra_body"] == {"reasoning": {"enabled": False}}
+    assert "reasoning_effort" not in direct
+    default = DeepInfraProvider(api_key="test-key")._body(**args)
+    assert "extra_body" not in default
+
+
 def test_qwen_never_receives_private_ending_or_rejected_copy(queued, story, draft):
     secret = "PRIVATE_ENDING_SENTINEL"
     for name, value in story.model_dump().items():
@@ -403,6 +415,34 @@ def test_small_sol_edit_is_exact_durable_and_requires_new_approval(queued, story
         deliver(queue, corrected, queue.root.parent)
     assert approval_issues(draft, review, [1])
     assert accept_review(queue, corrected, approved(result).model_dump())["state"] == "approved"
+
+
+def test_sol_can_correct_and_approve_in_one_pass(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    review = correction(draft)
+    review.approved = True
+    review.options[0].accurate = True
+    result = accept_review(queue, task, review.model_dump())
+    assert result["state"] == "approved"
+    corrected = Draft.model_validate(result["drafts"][-1]["content"])
+    final_review = Review.model_validate(result["reviews"][-1])
+    assert not approval_issues(corrected, final_review, [1])
+    assert len(result["reviews"]) == 1 and len(result["drafts"]) == 2
+    assert result["correction_approvals"] == [review.model_dump()]
+    assert result["drafts"][-1]["review_sha256"] == digest(review)
+    replay = accept_review(queue, result, review.model_dump())
+    assert replay["drafts"] == result["drafts"] and replay["state"] == "approved"
+    review.edits[0].after = "Unapproved different wording"
+    with pytest.raises(TeaserError):
+        accept_review(queue, result, review.model_dump())
+
+
+def test_edit_and_approve_cannot_hide_an_unresolved_option(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    review = correction(draft)
+    review.approved = True
+    result = accept_review(queue, task, review.model_dump())
+    assert result["state"] == "brief_ready" and len(result["drafts"]) == 1
 
 
 @pytest.mark.parametrize("change", [

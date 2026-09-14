@@ -43,7 +43,8 @@ class DeepInfraProvider:
     name = "deepinfra"
 
     def __init__(self, *, api_key: str | None = None, max_retries: int = 2,
-                 prompt_caching: bool = True, effort: str | None = "low"):
+                 prompt_caching: bool = True, effort: str | None = "low",
+                 reasoning_enabled: bool | None = None):
         key = api_key or os.environ.get("DEEPINFRA_API_KEY")
         if not key:
             raise ProviderError(
@@ -55,6 +56,7 @@ class DeepInfraProvider:
         # cached-input rate; there is no per-request flag, so prompt_caching
         # is accepted and ignored, as the OpenAI provider does.
         self.effort = effort
+        self.reasoning_enabled = reasoning_enabled
 
     def _body(self, *, model: str, system: str, user: str,
               schema: dict[str, Any], schema_name: str,
@@ -75,7 +77,11 @@ class DeepInfraProvider:
         # unknown model gets none: an unsupported parameter is a 400 here, not
         # a silently ignored field as it is at OpenAI.
         info = lookup(model)
-        if self.effort and info is not None and info.supports_effort:
+        if self.reasoning_enabled is not None:
+            # DeepInfra's explicit switch also supports direct, non-reasoning
+            # responses from Qwen when only faithful rephrasing is required.
+            body["extra_body"] = {"reasoning": {"enabled": self.reasoning_enabled}}
+        elif self.effort and info is not None and info.supports_effort:
             body["reasoning_effort"] = _EFFORT.get(self.effort, "low")
         return body
 
