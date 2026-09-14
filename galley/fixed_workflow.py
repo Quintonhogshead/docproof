@@ -267,6 +267,7 @@ class FixedWorkflow:
                          "policy_sha256": _hash(self.policy), "recipe": workflow_plan(),
                          "configuration": self.cfg.model_dump(mode="json")}
         self.identity["press_prompt_sha256"] = policy_identity()
+        self.identity["adjudication_policy"] = "explicit-sonnet-luna-disagreements-v1"
         if self.intake is not None:
             self.identity["intake"] = self.intake
         self.manifest = self.directory / "workflow.json"
@@ -336,6 +337,10 @@ class FixedWorkflow:
 
     def _ask(self, stage, model, system, payload, schema, *, effort="low", max_tokens=12000):
         self._cancel()
+        if model == OPUS and stage.endswith("_disputes"):
+            from galley.fixed_screening import is_pair_disagreement
+            if not payload.get("sites") or not all(is_pair_disagreement(s) for s in payload["sites"]):
+                raise FixedWorkflowError("Opus adjudication requires explicit Sonnet and Luna disagreement at every site")
         policy = self.base_policy if stage in {"poetry", "poetry_sections", "story_sheet"} else self.policy
         result = self.scheduler.run(model, partial(self.calls.ask, stage, model=model, system=policy + "\n\n" + system,
                               user=_json(payload), schema=schema, schema_name="galley_fixed",
@@ -495,7 +500,7 @@ class FixedWorkflow:
         return True
 
     def _local_candidates(self, rows, *, texts, prepared):
-        """Local signals enter the same anchored proposal queue as readers."""
+        """Local signals are anchored evidence for the Sonnet/Luna screen."""
         from galley.fixed_policy import DIAGNOSTIC_ONLY_TYPES
         candidates = []
         for row in rows:
@@ -545,10 +550,58 @@ class FixedWorkflow:
             prepared, self.original, snapshot, self.directory / "local",
             identity=self.identity, stage="completion", poetry_ids=self.poetry_ids, cfg=self.cfg)
         candidates = self._local_candidates(rows, texts=snapshot, prepared=prepared)
-        self._apply("local_completion", self._adjudicate("local_completion", candidates, (OPUS,), force=True))
+        self._apply("local_completion", self._adjudicate("local_completion", candidates))
         self._checks("local_completion_checks", snapshot)
         self._cancel()
         return evidence
+
+    def _screen_candidates(self, stage, sites):
+        from galley.fixed_screening import PAIR, decision_key, packet, windows
+        from galley.settle import xml_safe
+        batches = list(windows(sites))
+        jobs = [(model, partial(self._ask, stage + "_screen", model,
+            "Independently screen EVERY assigned site. Local heuristic signals are places to examine, not established errors. "
+            "Return exactly one decision for each site id, including drop for correct text, preferences and weak signals. "
+            "paragraphs holds shared current text and, when different, the original source; context holds related passages. "
+            "Offsets are in the current paragraph. Apply only a clear proofreading correction; replacement replaces exactly "
+            "the site's before span and preserves all unchanged text within it. Never include text outside that span. "
+            "For a sole formatting proposal, apply retains that proposed formatting and must leave before unchanged. "
+            "Query only a real proofreading problem requiring specific missing author knowledge. "
+            "Judge the text independently; another reader or a local flag is not proof of an error.",
+            {"story_sheet": self.context, **packet(batch)}, DECISIONS))
+            for batch in batches for model in PAIR]
+        answers = iter(self.scheduler.map(jobs))
+        agreed, disputed = {}, []
+        for batch in batches:
+            reviews = {}
+            for model in PAIR:
+                result = next(answers)
+                if result is None:
+                    reviews[model] = None
+                    continue
+                _exact_ids([d["id"] for d in result["decisions"]], [s["id"] for s in batch], stage + " screen")
+                reviews[model] = {d["id"]: d for d in result["decisions"]}
+            for site in batch:
+                pair = {m: reviews[m][site["id"]] for m in PAIR if reviews[m] is not None}
+                valid = len(pair) == 2
+                for model, decision in pair.items():
+                    if (any(xml_safe(decision.get(k, "")) != decision.get(k, "")
+                            for k in ("replacement", "question", "missing_knowledge"))
+                            or (decision["action"] == "query" and not
+                                (decision["question"].strip() and decision["missing_knowledge"].strip()))):
+                        valid = False
+                        self._reject_proposal(stage + "_screen", decision,
+                            {site["para_id"]: site["paragraph"]}, model,
+                            "Screening decision has unsafe text or lacks specific author knowledge")
+                self.history.append({"stage": stage + "_screen", "site": site, "screening": pair,
+                                     "complete": len(pair) == 2, "usable": bool(valid)})
+                if not valid:
+                    agreed[site["id"]] = self._drop_unreviewed([site])[0]
+                elif decision_key(pair[SONNET]) == decision_key(pair[LUNA]):
+                    agreed[site["id"]] = pair[SONNET]
+                else:
+                    disputed.append({**site, "screening": pair})
+        return agreed, disputed
 
     def _adjudicate(self, stage, candidates, expected_models=(), *, force=False):
         accepted, disputed = [], []
@@ -565,7 +618,7 @@ class FixedWorkflow:
                     self.history.append({"stage": stage, "dropped": group,
                                          "reason": "Poetry permits only unambiguous Sonnet spelling corrections"})
                 continue
-            if (not force and len(group) == 1 and row["action"] == "edit"
+            if (expected_models and not force and len(group) == 1 and row["action"] == "edit"
                     and set(expected_models).issubset(row["models"])):
                 accepted.append(row)
                 continue
@@ -574,43 +627,47 @@ class FixedWorkflow:
             disputed.append({"id": "d-" + _hash([x["id"] for x in group])[:20], "para_id": pid,
                              "start": lo, "end": hi, "before": self.current[pid][lo:hi],
                              "paragraph": self.current[pid], "source": self.original[pid], "proposals": group})
+        sites = disputed
+        agreed, disputed = self._screen_candidates(stage, sites)
         windows = list(_windows(disputed, 20000))
         jobs = [(OPUS, partial(self._ask,stage + "_disputes", OPUS,
-                "Settle EVERY disputed site. Apply only a clear proofreading correction supported by context; you may reject every proposal. replacement replaces exactly the before span: preserve all unchanged text inside that span, and do not include text outside it. The span may cover a word, several sentences, or the entire paragraph. Drop false alarms, stylistic preferences and resolved issues. Query only an actual textual problem whose missing fact or intended meaning requires the author. A disagreement alone is not a query. Preserve formatting proposals only when a house rule requires them.",
+                "Settle EVERY explicit disagreement between the Sonnet and Luna screening decisions. Both decisions are supplied in screening. Apply only a clear proofreading correction supported by context; you may reject every proposal. replacement replaces exactly the before span: preserve all unchanged text inside that span, and do not include text outside it. The span may cover a word, several sentences, or the entire paragraph. Drop false alarms, stylistic preferences and resolved issues. Query only an actual textual problem whose missing fact or intended meaning requires the author. A disagreement alone is not a query. Preserve formatting proposals only when a house rule requires them.",
                 {"story_sheet": self.context, "sites": window}, DECISIONS, effort="high")) for window in windows]
         for window, result in zip(windows, self.scheduler.map(jobs)):
             result = self._drop_unreviewed(window) if result is None else result["decisions"]
             _exact_ids([x["id"] for x in result], [x["id"] for x in window], "Opus adjudication")
-            by_id = {x["id"]: x for x in result}
-            for site in window:
-                decision = by_id[site["id"]]
-                self.history.append({"stage": stage + "_disputes", "site": site, "decision": decision})
-                if decision["action"] == "drop":
-                    continue
-                if decision["action"] == "query":
-                    self._question(site["para_id"], self.current[site["para_id"]], decision["question"],
-                                   decision["missing_knowledge"], decision["reason"], stage)
-                    continue
-                row = dict(site["proposals"][0])
-                row.update(start=site["start"], end=site["end"], before=site["before"],
-                           replacement=decision["replacement"], reason=decision["reason"], action="edit", models=[OPUS])
-                # A multi-proposal composite must be a text edit, not guessed formatting.
-                if len(site["proposals"]) > 1:
-                    row["format"] = ""
-                from galley.settle import xml_safe
-                if (xml_safe(row["replacement"]) != row["replacement"]
-                        or (row.get("format") and row["replacement"] != row["before"])):
-                    self._reject_proposal(stage + "_disputes", decision,
-                                          {site["para_id"]: self.current[site["para_id"]]}, OPUS,
-                                          "Adjudicated proposal has unsafe text or changes a formatting-only span")
-                    continue
-                accepted.append(row)
+            agreed.update({x["id"]: x for x in result})
+        disputed_ids = {s["id"] for s in disputed}
+        for site in sites:
+            decision = agreed[site["id"]]
+            models = [OPUS] if site["id"] in disputed_ids else [SONNET, LUNA]
+            self.history.append({"stage": stage + ("_disputes" if site["id"] in disputed_ids else "_screened"), "site": site, "decision": decision})
+            if decision["action"] == "drop":
+                continue
+            if decision["action"] == "query":
+                self._question(site["para_id"], self.current[site["para_id"]], decision["question"],
+                               decision["missing_knowledge"], decision["reason"], stage, model="/".join(models))
+                continue
+            row = dict(site["proposals"][0])
+            row.update(start=site["start"], end=site["end"], before=site["before"],
+                       replacement=decision["replacement"], reason=decision["reason"], action="edit", models=models)
+            # A multi-proposal composite must be a text edit, not guessed formatting.
+            if len(site["proposals"]) > 1:
+                row["format"] = ""
+            from galley.settle import xml_safe
+            if (xml_safe(row["replacement"]) != row["replacement"]
+                    or (row.get("format") and row["replacement"] != row["before"])):
+                self._reject_proposal(stage + "_screened", decision,
+                                      {site["para_id"]: self.current[site["para_id"]]}, "/".join(models),
+                                      "Adjudicated proposal has unsafe text or changes a formatting-only span")
+                continue
+            accepted.append(row)
         return accepted
 
-    def _question(self, pid, quote, question, missing, reason, stage):
+    def _question(self, pid, quote, question, missing, reason, stage, *, model=OPUS):
         row = {"para_id": pid, "quote": quote, "question": question,
                "missing_knowledge": missing, "reason": reason}
-        if not self._valid_question(stage, row, self.current, OPUS):
+        if not self._valid_question(stage, row, self.current, model):
             return
         key = "q-" + _hash([pid, quote, missing])[:20]
         if not any(q["id"] == key for q in self.questions):
@@ -907,10 +964,31 @@ class FixedWorkflow:
                     if d["verdict"] == "reject":
                         rejected.append({**sites[d["id"]], "rejection": d["reason"]})
                 if rejected:
+                    confirmation = self._ask(stage + "_" + kind + "_sonnet", SONNET,
+                        "Independently judge EVERY proposed paragraph change using before, after, source and format_proposals. "
+                        "Approve only when ALL changes " + ("preserve meaning, facts, voice, deliberate fragments and dialect. " if kind == "meaning" else
+                        "fix clear proofreading errors without new errors, rewriting or house-rule violations. ") +
+                        "Return one verdict per id. Do not infer correctness from a preceding proofreader. No new edits or comments.",
+                        {"story_sheet": self.context, "changes": [sites[x["id"]] for x in rejected]}, CHECK_SCHEMA)
+                    if confirmation is not None:
+                        _exact_ids([d["id"] for d in confirmation["decisions"]], [r["id"] for r in rejected], stage + " Sonnet check")
+                    sonnet = {d["id"]: d for d in confirmation["decisions"]} if confirmation else {}
+                    luna = {d["id"]: d for d in result}
+                    disagreements = []
+                    automatic = []
+                    for row in rejected:
+                        pid = row["id"]
+                        self.history.append({"stage": stage + "_" + kind + "_sonnet",
+                                             "decision": sonnet.get(pid, {"id": pid, "origin": "code", "verdict": "reject"})})
+                        if pid in sonnet and sonnet[pid]["verdict"] == "approve":
+                            disagreements.append({**row, "screening": {SONNET: sonnet[pid], LUNA: luna[pid]}})
+                        else:
+                            automatic.append({"id": pid, "action": "drop", "origin": "code",
+                                              "reason": "Both checks rejected the change or confirmation was unavailable."})
                     rulings = self._ask(stage + "_" + kind + "_disputes", OPUS,
-                        "Settle EVERY disagreement between the preceding proofreader and the Luna check. Each id names a paragraph, before and after show the complete proposed text, and format_proposals list pending formatting edits. Apply only if the complete result is a clear proofreading correction; replacement is the COMPLETE final paragraph. Apply retains the pending formatting; drop restores before and rejects those formatting proposals. You may give a minimal corrected paragraph when that resolves the dispute. Query only an actual unresolved error needing specific author knowledge; it restores before and removes the disputed formatting. Never turn a model disagreement or operational failure into a comment. This is the single final adjudication for this check; no recursive rereads.",
-                        {"story_sheet": self.context, "sites": rejected}, DECISIONS, effort="high")
-                    rulings = self._drop_unreviewed(rejected) if rulings is None else rulings["decisions"]
+                        "Settle EVERY explicit disagreement between Sonnet and Luna in screening. Each id names a paragraph, before and after show the complete proposed text, and format_proposals list pending formatting edits. Apply only if the complete result is a clear proofreading correction; replacement is the COMPLETE final paragraph. Apply retains the pending formatting; drop restores before and rejects those formatting proposals. You may give a minimal corrected paragraph when that resolves the dispute. Query only an actual unresolved error needing specific author knowledge; it restores before and removes the disputed formatting. Never turn a model disagreement or operational failure into a comment. This is the single final adjudication for this check; no recursive rereads.",
+                        {"story_sheet": self.context, "sites": disagreements}, DECISIONS, effort="high") if disagreements else {"decisions": []}
+                    rulings = automatic + (self._drop_unreviewed(disagreements) if rulings is None else rulings["decisions"])
                     _exact_ids([x["id"] for x in rulings], [x["id"] for x in rejected], stage + " dispute coverage")
                     for d in rulings:
                         pid = d["id"]
@@ -1035,7 +1113,7 @@ class FixedWorkflow:
                 self._stage(stage)
                 snapshot = dict(self.current)
                 rows, comments, read_coverage = self._read(stage, model, comments=True)
-                # Different overlapping suggestions are always settled by Opus.
+                # Overlapping proposals first require independent pair screening.
                 self._apply(stage, self._adjudicate(stage, rows, (model,)))
                 self._checks(stage + "_checks", snapshot)
                 self._comments(comments, stage, before=snapshot, model=model)

@@ -540,11 +540,15 @@ def test_nested_dispute_ids_reach_certified_book_and_resume_without_new_calls(tm
     def nested(model, user, schema):
         result = answer(model, user, schema)
         if "reviewed_paragraph_ids" in result and model == LUNA:
-            result["findings"] = []  # Force a genuine ensemble disagreement.
+            result["findings"] = []  # An omission needs explicit pair screening first.
         if "decisions" in result:
             payload = json.loads(user)
             sites = payload.get("sites", [])
             if sites and all(s.get("proposals") for s in sites):
+                if model in {SONNET, LUNA}:
+                    return {"decisions": [{"id": s["id"], "action": "apply" if model == SONNET else "drop",
+                        "replacement": s["proposals"][0]["replacement"], "reason": "Independent site review.",
+                        "missing_knowledge": "", "question": ""} for s in sites]}
                 result = {"decisions": [{"id": p["id"], "action": "apply" if p["category"] == "spelling" else "drop",
                     "replacement": p["replacement"] if p["category"] == "spelling" else "",
                     "reason": "Clear spelling correction." if p["category"] == "spelling" else "No clear error.",

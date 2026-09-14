@@ -94,14 +94,14 @@ def test_correction_chains_overlap_but_only_commit_checked_passages(tmp_path):
     flow.current = {pid: text + " wrong" for pid, text in before.items()}
     flow._checks("checks", before)
     assert flow.current == {pid: text + " right" for pid, text in before.items()}
-    assert [h["stage"] for h in flow.history] == ["checks_meaning", "checks_meaning_disputes"] * 2 + ["checks_correction"] * 2
+    assert [h["stage"] for h in flow.history] == ["checks_meaning", "checks_meaning_sonnet", "checks_meaning_disputes"] * 2 + ["checks_correction"] * 2
 
 
 @pytest.mark.parametrize("stage", ["numbers", "disputes", "read", "comments", "poetry_sections"])
 def test_independent_workflow_windows_really_overlap(tmp_path, stage):
     from docx import Document
     from galley.fixed_workflow import FixedWorkflow, _candidate, OPUS
-    from tests.test_galley_fixed_workflow import Readers, finding
+    from tests.test_galley_fixed_workflow import Readers, finding, ruling
     source = tmp_path / "book.docx"
     doc = Document()
     doc.add_paragraph("Placeholder.")
@@ -112,6 +112,9 @@ def test_independent_workflow_windows_really_overlap(tmp_path, stage):
     seen = []
     lock = threading.Lock()
     def answer(name, model, payload, kwargs):
+        if name == "typed_screen":
+            return {"decisions": [ruling(site, "apply" if model == SONNET else "drop", site["proposals"][0]["replacement"])
+                                  for site in payload["sites"]]}
         if stage == "poetry_sections" and name == "poetry":
             return {"classification": "mixed", "reason": "Mixed document."}
         if name == expected:
@@ -149,6 +152,9 @@ def test_parallel_check_questions_keep_meaning_then_correction_order(tmp_path):
     doc.add_paragraph("Placeholder.")
     doc.save(source)
     def answer(stage, model, payload, kwargs):
+        if stage.endswith("_sonnet"):
+            return {"decisions": [{"id": row["id"], "verdict": "approve", "reason": "Independent approval."}
+                                  for row in payload["changes"]]}
         if "changes" in payload:
             return {"decisions": [{"id": row["id"], "verdict": "reject" if
                     stage.endswith("correction") or row["id"] in {"p1", "p3"} else "approve", "reason": "Check intent."}

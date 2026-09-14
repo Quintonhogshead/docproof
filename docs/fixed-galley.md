@@ -23,8 +23,9 @@ The agreed sequence is:
    finishes without the prose stages or requiring a ChatGPT login.
 3. Luna creates the Story Sheet through the API.
 4. Sonnet and Luna independently run the typed detectors. The full local
-   checking pass supplies additional candidates. Opus reviews candidates that
-   lack agreement from both readers and adjudicates disagreements.
+   checking pass supplies additional candidates. Unresolved candidates receive
+   independent Sonnet and Luna screening; Opus receives only their explicit
+   conflicting decisions. An omitted finding is not a rejection vote.
 5. Code collects numerals, times, and spelled-out number expressions with their
    surrounding text. Luna and Sonnet check those extracts against the existing
    Galley number policy; Opus adjudicates disagreements. This dedicated sweep
@@ -33,13 +34,34 @@ The agreed sequence is:
 7. Luna checks meaning preservation and the correctness of proposed repairs
    through the API.
 8. Opus and Sol independently sweep every paragraph of the corrected book.
-   Sol uses the saved ChatGPT subscription login. Opus settles disagreements.
+   Sol uses the saved ChatGPT subscription login. Unresolved proposals go to
+   Sonnet and Luna screening, with Opus settling only disagreements from that pair.
 9. Fable 5.1 sweeps the resulting book and reviews every proposed Galley comment.
 10. Astra sweeps the Fable-corrected book and reviews every surviving comment.
 
+## Explicit disagreement gate
+
+Every Opus adjudication request must contain actual, conflicting decisions from
+both Sonnet and Luna for every assigned site. Code enforces this before transport.
+Agreement to drop needs no further review; agreement to apply proceeds to the
+normal correction checks. Different explanations for the same action and
+replacement do not count as disagreement. Missing, exhausted, or unsafe screening
+answers cause the affected suggestion to be dropped, not escalated to Opus.
+
+Local heuristic signals are review candidates, not established errors. The pair
+screens compact packets that share each full paragraph and relevant context once
+while preserving all site anchors and proposal explanations. Full generator
+metadata stays in the audit. All candidates remain covered; none are sampled or
+truncated to reduce the queue. Opus's scheduled broken-sentence repair and full-book
+sweep remain separate from adjudication and are unchanged.
+
+The workflow identity includes `explicit-sonnet-luna-disagreements-v1`. Runs made
+under the old routing policy require a fresh workspace; old adjudication receipts
+cannot silently resume under the new policy.
+
 ## Concurrent execution
 
-Independent windows run concurrently in typed detection, number review, Opus
+Independent windows run concurrently in typed detection, number review, paired screening, Opus
 adjudication, poetry-section classification, whole-book sweeps, and comment
 review. Separate provider pools prevent queued Claude calls from blocking Luna.
 The current configuration permits eight Claude subscription reads, 24 OpenAI
@@ -49,8 +71,9 @@ setting still enforces one call globally.
 
 Preparation overlaps Story Sheet generation. Local scans overlap typed reads,
 and embedded-poetry and prose detectors can run together. Each independent
-correction window advances through meaning review, any Opus adjudication,
-correction review, and its final adjudication without waiting for unrelated
+correction window advances through meaning review and correction review. A Luna
+rejection receives an independent Sonnet check, and only a Sonnet approval against
+a Luna rejection goes to Opus. These chains proceed without waiting for unrelated
 windows. Changes remain isolated until committed in manuscript order. Fable
 waits for the checked ensemble result; Astra waits for the checked Fable result
 and comment dispositions. These are genuine text dependencies.
@@ -178,7 +201,7 @@ excluded from the prose checking pass.
 
 After the main prose repairs, a bounded local completion pass checks residual
 house-rule errors and other occurrences of accepted word corrections. These
-are fresh proposals for Opus, followed by the usual correction checks. Local
+receive Sonnet and Luna screening, followed by the usual correction checks. Local
 rules never authorize an edit on their own. Their candidates pass the same
 proofreading and intent guards as the model readers; Fable and Astra still
 review any resulting comments.
