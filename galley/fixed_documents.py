@@ -251,9 +251,11 @@ def _verify_result(result, directory):
     expected = (["poetry", "typed", "poetry_complete"] if result["poetry_only"] else
                 ["poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks", "ensemble_sweep", "continuity", "fable", "astra"])
     names = [s["stage"] for s in stages]
-    # A completed run may be extended once by the receipted re-screening of
-    # its final readers' questions (galley.fixed_reinstate).
-    if names != expected and names != expected + ["walkthrough_questions"]:
+    # A completed run may be extended by receipted passes that put its final
+    # readers' dropped questions to Astra's review (galley.fixed_reinstate).
+    extra = names[len(expected):]
+    if (names[:len(expected)] != expected or
+            extra != [f"walkthrough_questions{'' if i == 0 else f'_{i + 1}'}" for i in range(len(extra))]):
         raise FixedDocumentError("A required fixed proofreading stage is missing or out of order")
     protected_poetry = set()
     for stage in stages:
@@ -315,7 +317,7 @@ def _report(result, details, receipt=None):
         "ensemble_sweep": "Opus and Sol complete readings", "continuity": "Fable whole-book continuity reading",
         "fable": "Fable final reading and comment review",
         "astra": "Astra final reading and comment review", "poetry_complete": "Spelling-only proofread complete",
-        "walkthrough_questions": "Final readers' questions re-screened in the walk-through scope"}
+        "walkthrough_questions": "Final readers' questions put to Astra's review"}
     lines = ["# Galley proofreading report", "", f"Scope: {scope}.", "",
              f"{len(edits)} tracked corrections across {paragraphs} paragraphs; {len(result['questions'])} author questions.", "",
              "## Corrections", ""]
@@ -333,7 +335,7 @@ def _report(result, details, receipt=None):
     lines += ["", "## Processing stages" if skipped else "## Completed reading stages", ""]
     if skipped:
         lines += [f"{len(skipped)} model reviews were unavailable and skipped. Unverified suggestions were discarded; review coverage is incomplete.", ""]
-    lines += [f"- {stage_labels[s['stage']]}" for s in result["stages"]]
+    lines += [f"- {stage_labels.get(s['stage'], stage_labels['walkthrough_questions'] + ' (pass ' + s['stage'].rsplit('_', 1)[-1] + ')' if s['stage'].startswith('walkthrough_questions') else s['stage'])}" for s in result["stages"]]
     rejected = [h for h in result["history"] if h.get("rejected_proposal")]
     if rejected:
         lines += ["", f"{len(rejected)} model suggestions were rejected because they failed proposal validation. "

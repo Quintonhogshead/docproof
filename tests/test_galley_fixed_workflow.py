@@ -1395,12 +1395,16 @@ def test_final_reader_questions_are_screened_in_the_walkthrough_scope(make_book,
                                    "question": "Which coast?", "missing_knowledge": "The intended coast"} for s in payload["sites"]]}
     readers = Readers(typed=typed, handler=handler)
     result = FixedWorkflow(book, tmp_path / "run", calls=readers).run()
-    screens = {r["stage"]: r["system"] for r in readers.events if r["stage"].endswith("_screen")}
-    assert "astra_screen" in screens and WALKTHROUGH_QUERY_RIDER in screens["astra_screen"]
-    assert all(WALKTHROUGH_QUERY_RIDER not in system for stage, system in screens.items()
-               if not stage.startswith(("fable", "astra")))
+    stages = [r["stage"] for r in readers.events]
+    # The fact/logic question never meets the paragraph-level pair screen; it
+    # goes to Astra's comment review, which carries the walk-through rider.
+    assert "astra_screen" not in stages and "astra_comment_review" in stages
+    review = next(r for r in readers.events if r["stage"] == "astra_comment_review")
+    from galley.press_prompt import WALKTHROUGH_COMMENT_RIDER
+    assert WALKTHROUGH_COMMENT_RIDER in review["system"]
+    assert [q["missing_knowledge"] for q in result["questions"]] == ["Which coast the sunset is seen from"]
+    assert any(h.get("stage") == "astra_frontier_question" for h in result["history"])
     assert FixedWorkflow._query_rider("typed") == "" and FixedWorkflow._query_rider("fable") == WALKTHROUGH_QUERY_RIDER
-    assert [q["question"] for q in result["questions"]] == ["Which coast?"]
 
 
 def test_completed_run_can_reinstate_dropped_walkthrough_questions(make_book, tmp_path):
@@ -1421,24 +1425,40 @@ def test_completed_run_can_reinstate_dropped_walkthrough_questions(make_book, tm
                     "comment_decisions": [comment_decision(q) for q in payload.get("comments", [])],
                     "editorial_verdict": "needs_human"}
         # The original run's screen drops both (the Readers default).
-    readers = Readers(handler=handler)
+    def dropping(stage, model, payload, kwargs):
+        if stage == "astra_comment_review":      # the old behaviour: everything dropped
+            return {"decisions": [comment_decision(q, "drop") for q in payload["comments"]]}
+        return handler(stage, model, payload, kwargs)
+    readers = Readers(handler=dropping)
     result = FixedWorkflow(book, workspace / "runs" / "fixed", calls=readers).run()
     assert result["questions"] == [] and result["editorial_verdict"] == "needs_human"
+    # Simulate a run made before the frontier-question route existed: the
+    # screen's drop rows are what reinstatement reads.
+    path = workspace / "runs/fixed/result.json"
+    saved = json.loads(path.read_text())
+    frontier = [h["candidate"] for h in saved["history"] if h.get("stage") == "astra_frontier_question"]
+    assert len(frontier) == 2
+    for row in frontier:
+        site = {"id": "d-" + row["id"][2:], "para_id": row["para_id"], "start": row["start"], "end": row["end"],
+                "before": row["before"], "paragraph": saved["accepted"][row["para_id"]], "source": saved["original"][row["para_id"]],
+                "proposals": [row]}
+        saved["history"].append({"stage": "astra_screened", "site": site,
+                                 "decision": {"id": site["id"], "action": "drop", "reason": "Out of scope."}})
+    path.write_text(json.dumps(saved))
     (workspace / "runs" / "driver").mkdir(parents=True)
     (workspace / "runs" / "driver" / "package.json").write_text("{}")
     (workspace / "handoff").mkdir()
 
     def reinstating(stage, model, payload, kwargs):
-        if stage == STAGE + "_screen":
-            return {"decisions": [{"id": s["id"], "action": "query" if "sun" in payload["paragraphs"][s["para_id"]]["text"] else "drop",
-                                   "replacement": "", "reason": "Geography a reader would notice.",
-                                   "question": "Which coast is the sunset seen from?", "missing_knowledge": "The intended coast"}
-                                  for s in payload["sites"]]}
+        if stage.startswith(STAGE) and stage.endswith("_comment_review"):
+            return {"decisions": [comment_decision(q, "retain" if "coast" in q["missing_knowledge"] else "drop")
+                                  for q in payload["comments"]]}
     again = Readers(handler=reinstating)
     out = reinstate_walkthrough_questions(book, workspace, calls=again)
-    assert out["candidates"] == 2 and [q["question"] for q in out["reinstated"]] == ["Which coast is the sunset seen from?"]
+    assert out["candidates"] == 2 and out["stage"] == STAGE
+    assert [q["missing_knowledge"] for q in out["reinstated"]] == ["The intended coast"]
     stages = {r["stage"] for r in again.events}
-    assert STAGE + "_screen" in stages and STAGE + "_comment_review" in stages
+    assert STAGE + "_screen" not in stages and STAGE + "_comment_review" in stages
     assert not any(r["stage"] in {"typed", "astra", "fable", "numbers"} for r in again.events), "nothing is re-read"
     saved = json.loads((workspace / "runs/fixed/result.json").read_text())
     assert [s["stage"] for s in saved["stages"]][-2:] == ["astra", STAGE]
@@ -1448,6 +1468,10 @@ def test_completed_run_can_reinstate_dropped_walkthrough_questions(make_book, tm
     assert not (workspace / "runs/driver/package.json").exists() and not (workspace / "handoff").exists()
     tracked, clean, details = write_manuscripts(book, tmp_path / "out", saved["accepted"], saved["questions"])
     comments = DocxPackage(tracked).tree("word/comments.xml")
-    assert any("Which coast" in "".join(t.text or "" for t in c.iter(qn("w:t"))) for c in comments if c.tag == qn("w:comment"))
-    with pytest.raises(FixedReinstateError, match="already"):
-        reinstate_walkthrough_questions(book, workspace, calls=Readers())
+    texts = ["".join(t.text or "" for t in c.iter(qn("w:t"))) for c in comments if c.tag == qn("w:comment")]
+    assert any(saved["questions"][0]["question"] in text for text in texts)
+    # A second pass is its own receipted stage and adds nothing already present.
+    second = reinstate_walkthrough_questions(book, workspace, calls=Readers(handler=reinstating))
+    assert second["stage"] == STAGE + "_2" and second["reinstated"] == []
+    final = json.loads(path.read_text())
+    assert [s["stage"] for s in final["stages"]][-3:] == ["astra", STAGE, STAGE + "_2"] and len(final["questions"]) == 1

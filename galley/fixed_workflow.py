@@ -31,6 +31,11 @@ WHOLE_BOOK_STAGES = frozenset({"ensemble_sweep_opus", "ensemble_sweep_sol", "fab
 # Below this many classified narration paragraphs a tense baseline is noise, and
 # every narrative-tense site is sent rather than only the deviating ones.
 TENSE_BASELINE_FLOOR = 20
+# A final reader's question in these categories rests on the whole book and
+# world knowledge the paragraph-level pair screen cannot see; on Wilder the
+# screen dropped every one as "not a mechanical error". Such a question goes
+# straight to Astra's comment review, which judges it in the reader's scope.
+FRONTIER_QUESTION_CATEGORIES = frozenset({"fact_logic", "continuity", "structure"})
 # Introduces the JSON block of context shared by every window of one read,
 # appended to that read's system prompt.
 SHARED_CONTEXT_MARKER = "\n\nSHARED CONTEXT, identical for every window of this read (JSON): "
@@ -710,6 +715,16 @@ class FixedWorkflow:
 
     def _adjudicate(self, stage, candidates, expected_models=(), *, force=False):
         accepted, disputed = [], []
+        if stage in {"fable", "astra"} or stage.startswith("walkthrough_questions"):
+            kept = []
+            for row in candidates:
+                if row["action"] == "query" and row["category"] in FRONTIER_QUESTION_CATEGORIES:
+                    self.history.append({"stage": stage + "_frontier_question", "candidate": row})
+                    self._question(row["para_id"], row["before"], row["reason"], row["missing_knowledge"],
+                                   row["reason"], stage, model="/".join(row["models"]))
+                else:
+                    kept.append(row)
+            candidates = kept
         for group in _groups(candidates):
             row = group[0]
             if row["para_id"] in self.poetry_ids:
@@ -1158,8 +1173,12 @@ class FixedWorkflow:
             changed_context = [{"para_id": pid, "before": before[pid], "after": self.current[pid]}
                                for pid in self.current if pid in changed_ids | rejected]
             windows = list(_windows(refresh, 16000))
+            comment_rider = ""
+            if stage in {"fable", "astra"} or stage.startswith("walkthrough_questions"):
+                from galley.press_prompt import WALKTHROUGH_COMMENT_RIDER
+                comment_rider = WALKTHROUGH_COMMENT_RIDER
             jobs = [(model, partial(self._ask,stage + "_comment_review", model,
-                    "Review EVERY assigned potential author comment against the FINAL CHECKED text, including changed_passages elsewhere in the book that may answer it. Prior edit proposals may have been rejected; do not rely on their proposed resolutions. Drop false positives, style preferences, resolved issues and questions answerable from context. Retain or replace only a specific unresolved proofreading question requiring missing author knowledge. Use an exact contextual quote occurring only once in the current paragraph for retained questions. Return one decision per assigned id. This final comment-only review cannot propose new edits or new questions.",
+                    "Review EVERY assigned potential author comment against the FINAL CHECKED text, including changed_passages elsewhere in the book that may answer it. Prior edit proposals may have been rejected; do not rely on their proposed resolutions. Drop false positives, style preferences, resolved issues and questions answerable from context. Retain or replace only a specific unresolved proofreading question requiring missing author knowledge. Use an exact contextual quote occurring only once in the current paragraph for retained questions. Return one decision per assigned id. This final comment-only review cannot propose new edits or new questions." + comment_rider,
                     {"story_sheet": self.context, "comments": window,
                      "paragraphs": {q["para_id"]: self.current[q["para_id"]] for q in window},
                      "source": {q["para_id"]: self.original[q["para_id"]] for q in window},

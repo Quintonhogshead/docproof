@@ -242,6 +242,14 @@ as a query when the reader names what only the author can supply and the text
 does not settle it. Drop it only when the book itself answers it or the concern
 is stylistic. """
 
+# Astra's comment review of the final readers' own questions.
+WALKTHROUGH_COMMENT_RIDER = """A question a final reader raised about a fact or
+logic a general reader would notice, a continuity contradiction, or a heading or
+running-head inconsistency, with the missing fact named, is a specific question
+requiring author knowledge: retain it unless the book itself answers it or the
+concern is stylistic. That the passage is grammatically correct is not a reason
+to drop it. """
+
 CONTINUITY_TASK = """WHOLE-BOOK CONTINUITY READ
 You hold the complete current manuscript in reading order (id, text, location).
 Find only statements the book contradicts ABOUT ITSELF. Do not compare it with
