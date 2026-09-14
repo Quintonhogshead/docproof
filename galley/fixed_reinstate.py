@@ -22,7 +22,7 @@ import json
 import shutil
 from pathlib import Path
 
-from galley.fixed_workflow import ASTRA, FixedWorkflow, FixedWorkflowError, VERSION
+from galley.fixed_workflow import ASTRA, FixedWorkflow, FixedWorkflowError, VERSION, _demoted_question
 
 STAGE = "walkthrough_questions"
 REINSTATED_CATEGORIES = frozenset({"fact_logic", "continuity", "structure"})
@@ -36,16 +36,20 @@ class FixedReinstateError(ValueError):
 def dropped_question_candidates(result, current):
     """The final readers' fact/logic, continuity and structure questions the
     screen dropped, re-anchored to the delivered text; rows that no longer
-    anchor are returned separately."""
+    anchor are returned separately. A dropped EDIT in those categories is
+    reinstated as the question it would now become during a run."""
     candidates, unanchored, seen = [], [], set()
     for entry in result["history"]:
         if entry.get("stage") not in SOURCE_STAGES or entry.get("decision", {}).get("action") != "drop":
             continue
         for row in entry["site"]["proposals"]:
-            if row.get("action") != "query" or row.get("category") not in REINSTATED_CATEGORIES or row["id"] in seen:
+            if row.get("action") not in {"query", "edit"} or row.get("category") not in REINSTATED_CATEGORIES or row["id"] in seen:
                 continue
             seen.add(row["id"])
             text = current.get(row["para_id"], "")
+            if row["action"] == "edit":
+                question, missing, _ = _demoted_question(row, entry["decision"].get("reason", ""), text)
+                row = {**row, "action": "query", "reason": question, "missing_knowledge": missing}
             lo, hi = row["start"], row["end"]
             if text[lo:hi] != row["before"]:
                 if text.count(row["before"]) == 1:

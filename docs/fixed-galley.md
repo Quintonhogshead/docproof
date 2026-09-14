@@ -78,7 +78,11 @@ The agreed sequence is:
    contradicts about itself. Every finding cites verbatim evidence elsewhere in
    the book, verified by code. Evidenced edits go straight to Opus adjudication
    with the cited paragraphs attached, then the usual Luna checks; unresolved
-   contradictions become author questions.
+   contradictions become author questions. Opus drops only an alias, nickname,
+   deliberate variation or in-world explanation; an evidenced edit it declines
+   is not discarded but demoted to an author question (Wilder 2026-09-14:
+   "Mad Crabber" for the Rusty Hook Tavern was dropped as "not settled by the
+   evidence" and never reached the author).
 10. Fable 5.1 sweeps the resulting book under the final walk-through scope and
     reviews every proposed Galley comment; the propagation and consistency
     sweep then carries its accepted decisions book-wide.
@@ -105,7 +109,15 @@ Header and footer paragraphs are owned, editable paragraphs. A deterministic
 does not know but whose joined form it does, or which the book writes
 unhyphenated elsewhere. Continuity findings from these readers must cite
 evidence like the continuity lane's; a continuity edit without verified
-evidence is discarded. Replacements must be plain manuscript text: a reader
+evidence is discarded. A citation of the finding's own paragraph is context
+the reader already holds, not evidence: it is ignored, and only the remaining
+citations are verified (Wilder 2026-09-14 lost sixteen walk-through findings,
+twelve of them page-split queries, to a self-citation beside a valid one).
+A fact/logic, continuity or structure edit these readers propose that the
+screen or the Luna checks then decline is demoted to an author question and
+judged, like the readers' own questions, by the comment reviews in the
+walk-through scope; the stage history records it as `<stage>_demoted`.
+Replacements must be plain manuscript text: a reader
 replacement that introduces Markdown or backslash characters, a line break or
 tab into a paragraph that has none, or whitespace at a paragraph boundary is
 rejected as `rejected_invalid_proposal`. The Luna meaning and correction checks
@@ -182,7 +194,9 @@ screened again with the rider, Astra reviews every surviving question, a
 checkpoint are rewritten so the driver packages and delivers again. Nothing is
 re-read; no correction is added or removed (an edit a screener proposes in this
 step is recorded unapplied, because the run's meaning and correction gates did
-not see it). The certificate accepts the extra trailing stage.
+not see it). A fact/logic, continuity or structure EDIT the screen dropped is
+reinstated as the question it would now become during a run. The certificate
+accepts the extra trailing stage.
 
 ## Explicit disagreement gate
 
