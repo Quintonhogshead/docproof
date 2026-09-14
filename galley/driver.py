@@ -3163,13 +3163,28 @@ def live_progress(workspace: str | Path, phase: str | None) -> dict[str, Any]:
     settlement.json (rounds). Cheap enough to call every minute."""
     ws = Path(workspace)
     out: dict[str, Any] = {}
-    fixed_calls = ws / "runs/fixed/calls"
-    if (fixed_calls / "budget.json").is_file():
+    fixed = ws / "runs/fixed"
+    fixed_calls = fixed / "calls"
+    budget = fixed_calls / "budget.json"
+    if budget.is_file():
         from galley.fixed_calls import fixed_usage_summary
         try:
             out["fixed_usage"] = fixed_usage_summary(fixed_calls)
         except (OSError, ValueError, RuntimeError):
             out["fixed_usage_error"] = "The fixed usage budget needs reconciliation."
+        # The fixed lane writes no session stream, so the phase-stream clock
+        # below never ticks for it and the drawer looks frozen for the length
+        # of a stage. The budget is rewritten on every reserved and reconciled
+        # read, which is the same thing measured a different way.
+        try:
+            out["last_activity_at"] = datetime.fromtimestamp(
+                budget.stat().st_mtime, timezone.utc).isoformat()
+        except OSError:
+            pass
+        try:
+            out["stages_done"] = sum(1 for p in (fixed / "stages").glob("*.json"))
+        except OSError:
+            pass
     if phase:
         stream = ws / "runs" / DRIVER_DIR / f"{phase}.stream.jsonl"
         try:

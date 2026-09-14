@@ -87,6 +87,50 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+#: Phase name -> (position, plan length, what the phase is doing), built once
+#: from both plans the agent can be running: the mechanical driver's phases
+#: and the fixed lane's stages. The two vocabularies do not overlap, so one
+#: lookup answers for either without the agent having to know which lane a
+#: book took. A phase missing from both (a one-off, or a plan this build does
+#: not know) simply has no position — the drawer then shows its name alone.
+_PHASE_PLAN: dict[str, tuple[int, int, str]] | None = None
+
+
+def phase_plan() -> dict[str, tuple[int, int, str]]:
+    global _PHASE_PLAN
+    if _PHASE_PLAN is not None:
+        return _PHASE_PLAN
+    plan: dict[str, tuple[int, int, str]] = {}
+    try:
+        from galley.fixed_workflow import workflow_plan
+
+        rows = list(workflow_plan())
+        for i, row in enumerate(rows, 1):
+            plan[str(row["stage"])] = (i, len(rows),
+                                       str(row.get("description") or ""))
+    except Exception:                                       # noqa: BLE001
+        log.debug("the fixed plan is unavailable to the heartbeat",
+                  exc_info=True)
+    try:
+        from galley.phases import ALL_PHASES, PHASE_WORK
+
+        for i, phase in enumerate(ALL_PHASES, 1):
+            plan.setdefault(phase, (i, len(ALL_PHASES),
+                                    PHASE_WORK.get(phase, "")))
+        for phase, work in PHASE_WORK.items():
+            plan.setdefault(phase, (0, 0, work))
+    except Exception:                                       # noqa: BLE001
+        log.debug("the driver plan is unavailable to the heartbeat",
+                  exc_info=True)
+    _PHASE_PLAN = plan
+    return plan
+
+
+def phase_position(phase: Any) -> tuple[int, int, str]:
+    """Where `phase` sits in its plan, and what it is doing, for the drawer."""
+    return phase_plan().get(str(phase or ""), (0, 0, ""))
+
+
 
 @dataclass(frozen=True)
 class AgentEnv:
@@ -319,6 +363,19 @@ def send_alert(env: AgentEnv, subject: str, body: str, *,
 
 
 
+#: Heartbeat keys that describe a book being read right now and nothing else.
+#: `Agent._rest_beat` drops them whenever the agent stops reading, so a
+#: finished run's phase, turn count, gate or spend can never be shown as live.
+RUN_KEYS: tuple[str, ...] = (
+    "phase", "phase_index", "phase_total", "phase_note", "phase_done",
+    "phase_ok", "last_phase_turns", "last_phase_limit", "model", "effort",
+    "phase_started_at", "turns", "settle_rounds", "gate", "step", "step_done",
+    "step_total", "recovery", "continuation", "last_activity_at",
+    "stream_bytes", "stages_done", "fixed_usage", "fixed_usage_error",
+    "resumed", "run_started_at", "slug", "book", "author",
+)
+
+
 CLAIMED, FINISHED, FAILED = "claimed", "finished", "failed"
 #: A claimed book's operational_status while it waits for a new version.
 HELD_FOR_CODE = "held_for_code"
@@ -493,6 +550,7 @@ class Agent:
         self._status.update({k: v for k, v in changes.items()})
         payload = {"agent": self.host, "version": __version__, "at": _now(),
                    "poll_interval_s": self.poll_interval_s,
+                   "heartbeat_interval_s": self.heartbeat_interval_s,
                    "app": self.env.awaiting_url, **self._status}
         try:
             if self.heartbeat is not None:
@@ -502,6 +560,18 @@ class Agent:
         except Exception:                                   # noqa: BLE001
             log.warning("heartbeat failed", exc_info=True)
         return payload
+
+    def _rest_beat(self, **changes: Any) -> dict[str, Any]:
+        """A heartbeat sent while no book is being read.
+
+        The status dict is cumulative, which is right inside a run and wrong
+        the moment one ends: a phase name, a turn count or a running total
+        left over from the last book reads, in the drawer, exactly like a
+        book being read right now. Drop them first, so "idle" means idle.
+        """
+        for key in RUN_KEYS:
+            self._status.pop(key, None)
+        return self._beat(**changes)
 
     def _alarm(self, subject: str, body: str) -> None:
         """One of the agent's own alerts. Never raises."""
@@ -515,22 +585,52 @@ class Agent:
             log.warning("alert failed: %s", subject, exc_info=True)
 
     def _on_progress(self, event: dict[str, Any]) -> None:
-        """The driver's phase-by-phase report, turned into a heartbeat."""
+        """The driver's phase-by-phase report, turned into a heartbeat.
+
+        Every event a phase can raise is reported, not only the boundaries:
+        a recovery, a continuation grant or a long local sweep is exactly
+        when somebody looks at the drawer, and a readout still showing the
+        phase's opening line is indistinguishable from a dead machine."""
         kind = str(event.get("event") or "")
         now = _now()
         if kind == "phase_start":
-            self._beat(state="running", phase=event.get("phase"),
+            phase = event.get("phase")
+            index, total, note = phase_position(phase)
+            self._beat(state="running", phase=phase,
+                       phase_index=index, phase_total=total, phase_note=note,
                        model=event.get("model"), effort=event.get("effort"),
-                       phase_started_at=now, turns=0, last_error="")
+                       phase_started_at=now, turns=0, last_error="",
+                       step="", step_done=None, step_total=None,
+                       recovery="", continuation=0)
         elif kind == "phase_end":
             self._beat(phase_done=event.get("phase"),
                        phase_ok=bool(event.get("ok")),
                        last_phase_turns=event.get("num_turns"),
-                       last_phase_limit=event.get("limit"))
+                       last_phase_limit=event.get("limit"),
+                       step="", step_done=None, step_total=None)
+        elif kind == "local_progress":
+            # A local sweep (LanguageTool over every paragraph) makes no
+            # session output for many minutes. Count paragraphs instead.
+            self._beat(step=str(event.get("check") or "local checks")[:80],
+                       step_done=event.get("completed"),
+                       step_total=event.get("total"))
+        elif kind == "recovery":
+            self._beat(recovery=str(event.get("reason") or "")[:400])
+        elif kind == "continuation":
+            self._beat(continuation=event.get("grant") or 0)
         elif kind == "gate":
             self._beat(gate=("approved" if event.get("approved")
                              else "escalated" if event.get("approved") is None
                              else "declined"))
+        elif kind == "blocked":
+            # Not a verdict: the run stopped on infrastructure or missing
+            # evidence and the claim stands. Say so while it is still true,
+            # rather than leaving the last phase line up until poll_once
+            # returns.
+            self._beat(state="stopping", last_outcome="blocked",
+                       last_reason=str(event.get("reason") or "")[:600])
+        elif kind == "timeline_failed":
+            self._beat(last_error=str(event.get("reason") or "")[:400])
         elif kind == "stopped":
             self._beat(state="stopping", last_outcome="needs_human",
                        last_reason=str(event.get("reason") or "")[:600])
@@ -589,9 +689,10 @@ class Agent:
             # A dead token would turn every awaiting book into needs_human,
             # one per poll. Hold the queue instead, and say so.
             report.halted = self._halt
-            self._beat(state="halted", awaiting=len(books),
-                       pending_deliveries=len(ledger.pending_deliveries()),
-                       credentials_error=self._halt[:600])
+            self._rest_beat(state="halted", awaiting=len(books),
+                            handled_here=0, handled_why=[],
+                            pending_deliveries=len(ledger.pending_deliveries()),
+                            credentials_error=self._halt[:600])
             if books:
                 self.log(f"{len(books)} book(s) awaiting; holding them until "
                          f"the subscription token works again.")
@@ -615,8 +716,16 @@ class Agent:
             return report                     # one book at a time, on purpose
         if books:
             self.log(f"{len(books)} book(s) awaiting; all already handled here.")
-        self._beat(state="idle", awaiting=len(books),
-                   pending_deliveries=len(ledger.pending_deliveries()))
+        # "1 book awaiting" beside "Idle" reads as a stuck queue. It usually
+        # is not: the server still lists a book this machine has already
+        # finished, because DocWatch has not picked the verdict up yet. Say
+        # which of the two it is, and why each one was passed over.
+        pending = len(ledger.pending_deliveries())
+        self._rest_beat(state="idle", awaiting=len(books),
+                        handled_here=len(report.skipped),
+                        handled_why=list(report.skipped)[:6],
+                        pending_deliveries=pending,
+                        **({} if pending else {"delivery_error": ""}))
         return report
 
     def _poll_health(self, error: str) -> None:
@@ -643,8 +752,11 @@ class Agent:
                         f"The Galley agent on {self.host} is polling "
                         f"{self.env.awaiting_url} normally again (the last "
                         f"failure was: {self._poll_error}).")
+        # A poll that worked retires the last one's complaint. Without this
+        # a single crashed poll left a red line in the drawer for the life of
+        # the process, long after the machine was working normally again.
         self._poll_error = ""
-        self._beat(last_poll_at=now, last_poll_error="")
+        self._beat(last_poll_at=now, last_poll_error="", last_error="")
 
     def _reload_env(self) -> None:
         """Pick up a rotated token from the credentials file, if there is one
@@ -670,7 +782,7 @@ class Agent:
 
     def _usage_beat(self, pause: dict[str, Any]) -> None:
         reason = str(pause.get("reason") or "Claude subscription usage limit")
-        self._beat(state="halted", phase=None, credentials_error="",
+        self._rest_beat(state="halted", credentials_error="",
                    usage_limit=reason[:800], last_error=reason[:800],
                    usage_resets_at=datetime.fromtimestamp(
                        pause["resume_after"], timezone.utc).isoformat(),
@@ -744,13 +856,13 @@ class Agent:
         Alerts once per failure, not once per poll."""
         first = not self._halt
         self._halt = reason
-        fields: dict[str, Any] = {"state": "halted", "phase": None,
+        fields: dict[str, Any] = {"state": "halted",
                                   "credentials_error": reason[:600],
                                   "last_error": reason[:400]}
         if book:
             fields.update(last_book=book, held_book=book, held_slug=slug,
                           last_outcome="held", last_reason=reason[:600])
-        self._beat(**fields)
+        self._rest_beat(**fields)
         self.log(f"HALTED: {reason[:300]}")
         if first:
             held = (f"{book} is claimed and untouched; it resumes from the "
@@ -772,7 +884,7 @@ class Agent:
             except Exception as e:                          # noqa: BLE001
                 # Keep polling after unexpected failures.
                 log.exception("The poll failed; trying again next interval.")
-                self._beat(state="idle", last_error=f"poll crashed: {e}"[:400])
+                self._rest_beat(state="idle", last_error=f"poll crashed: {e}"[:400])
             self.sleep(self.poll_interval_s)
 
     def announce(self) -> None:
@@ -783,7 +895,7 @@ class Agent:
         started = _now()
         ledger = self.ledger()
         pending = ledger.pending()
-        self._beat(state="starting", started_at=started, awaiting=0,
+        self._rest_beat(state="starting", started_at=started, awaiting=0,
                    pending_deliveries=len(ledger.pending_deliveries()),
                    last_error="")
         # Find out now whether the token signs in, not after a book's first
@@ -812,7 +924,7 @@ class Agent:
             + "Progress shows under Admin → Automations → Proofread.")
         if problem:
             self._halt = problem
-            self._beat(state="halted", credentials_error=problem[:600],
+            self._rest_beat(state="halted", credentials_error=problem[:600],
                        last_error=problem[:400])
 
 
@@ -835,6 +947,7 @@ class Agent:
                         if k in ("started_at", "last_poll_at",
                                  "last_poll_error")}
         self._beat(state="running", book=book.name, slug=slug,
+                   author=book.author_last or "",
                    resumed=resume, run_started_at=_now(), phase=None)
 
         try:
@@ -891,7 +1004,7 @@ class Agent:
                     verified_publication=True, delivery_attempts=1,
                     next_delivery_at=time.time() + self.poll_interval_s,
                     delivery_error=reason[:300], uploaded_names={})
-                self._beat(state="idle", phase=None, last_outcome="blocked",
+                self._rest_beat(state="idle", last_outcome="blocked",
                            last_reason=reason[:600], last_book=book.name,
                            delivery="pending")
             else:
@@ -910,14 +1023,14 @@ class Agent:
                     verified_publication=True, delivery_attempts=1,
                     next_delivery_at=time.time() + self.poll_interval_s,
                     delivery_error="The verified driver upload is pending.", uploaded_names={})
-                self._beat(state="idle", phase=None, last_outcome=outcome,
+                self._rest_beat(state="idle", last_outcome=outcome,
                            last_reason=reason[:600], last_book=book.name, delivery="pending")
                 return
             # Queue a failed handoff upload before marking the book
             # finished.
             self.owe_delivery(book, ledger, slug, folder, outcome, reason,
                               handoff, why="the driver's upload failed")
-            self._beat(state="idle", phase=None, last_outcome=outcome,
+            self._rest_beat(state="idle", last_outcome=outcome,
                        last_reason=reason[:600], last_book=book.name,
                        delivery="pending")
             return
@@ -926,7 +1039,7 @@ class Agent:
                       outcome=outcome, reason=reason[:400],
                       uploaded=uploaded)
         self.log(f"{book.name}: {outcome} — {reason[:200]}")
-        self._beat(state="idle", phase=None, last_outcome=outcome,
+        self._rest_beat(state="idle", last_outcome=outcome,
                    last_reason=reason[:600], last_book=book.name,
                    finished_at=_now(), delivery="uploaded" if uploaded
                    else "none")
@@ -938,7 +1051,7 @@ class Agent:
         ledger.record(book.file_id, CLAIMED, name=book.name, slug=slug,
                       folder_id=folder, operational_status="blocked",
                       reason=reason[:400])
-        self._beat(state="idle", phase=None, last_outcome="blocked",
+        self._rest_beat(state="idle", last_outcome="blocked",
                    last_reason=reason[:600], last_book=book.name,
                    delivery="pending")
 
@@ -955,7 +1068,7 @@ class Agent:
         ledger.record(book.file_id, CLAIMED, name=book.name, slug=slug,
                       folder_id=folder, operational_status=HELD_FOR_CODE,
                       held_version=code_id(), reason=reason[:400])
-        self._beat(state="idle", phase=None, last_outcome="blocked",
+        self._rest_beat(state="idle", last_outcome="blocked",
                    last_reason=reason[:600], last_book=book.name,
                    delivery="pending")
         self._alarm(f"{book.name}: automatic recovery could not finish",
@@ -1121,7 +1234,7 @@ class Agent:
         retried without rerunning the proofread.
         """
         report.outcome, report.reason = "needs_human", reason
-        self._beat(state="idle", phase=None, last_outcome="needs_human",
+        self._rest_beat(state="idle", last_outcome="needs_human",
                    last_reason=reason[:600], last_book=book.name,
                    finished_at=_now(), last_error=reason[:400])
         try:
@@ -1290,7 +1403,7 @@ class Agent:
                     + "".join(f"  - {f.name}\n" for f in files)
                     + f"Last error: {entry.get('delivery_error') or '?'}\n"
                     f"DocWatch is still waiting on this book.")
-                self._beat(last_error=f"{name}: delivery still pending")
+                self._beat(delivery_error=f"{name}: delivery still pending")
             uploaded_names = dict(entry.get("uploaded_names") or {})
             if entry.get("verified_publication"):
                 ok = self._retry_verified_publication(entry, folder, uploaded_names)
