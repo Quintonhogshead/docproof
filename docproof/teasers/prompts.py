@@ -83,6 +83,9 @@ Never turn an offer into acceptance, a request into a deadline, a possibility in
 a fact, an intention into an event, or a distance into an object's length.
 Keep a phrase unchanged when rephrasing it would risk changing its meaning.
 Do not invent details, metaphors, dramatic stakes, examples, advice or promises.
+Use ordinary, natural language. Avoid thesaurus substitutions, inflated synonyms,
+clinical wording or extra formality. Keep financial, mechanical and other precise
+terms unchanged. Rephrase lightly; do not change every word just to make it different.
 Apply the same fidelity to hooks, labels, the note and every part of the guide.
 Return the same JSON structure, item counts and numbering as the supplied copy.
 Each teaser remains 140–190 words; each hook 5–18 words; the note at most 180 words.
@@ -174,8 +177,12 @@ modification checklist for factual fidelity, usefulness and spoiler safety too.
 All deterministic issues below must be resolved before approval. Recommend the
 strongest option by number. For a small localized error, directly propose an exact
 replacement in edits: a name, short factual phrase, or one sentence. Do not rewrite
-an option or polish already sound prose. At most five replacements, each before
-and after at most 40 words and 320 characters, at most 80 words total on each side.
+an option or polish already sound prose. Repeated instances of a wrong name, phrase
+or terminology are localized corrections, not a reason to restart the package.
+Fix each affected location. At most forty short replacements across the entire
+five-option package and guide, each before/after at most 40 words and 320 characters,
+at most 320 words total on each side. These limits permit scattered repairs while
+preserving the existing copy; do not rewrite entire options.
 Use field=teaser for prose, index=option number (1–5), paragraph=one-based paragraph.
 Other fields use a one-based item index and paragraph=1; editorial_note uses index=1.
 The before text must occur exactly once in that field. Include a concise reason

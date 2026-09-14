@@ -363,7 +363,8 @@ def accept_review(queue, task, raw):
             if task.get("small_edit_rounds", 0) >= 2 and not review.approved:
                 raise ValueError("Two correction rounds have been used; ask Qwen for the remaining revisions.")
             corrected = apply_small_edits(draft, review.edits,
-                {p["id"] for c in task["chunks"] for p in c["paragraphs"]})
+                {p["id"] for c in task["chunks"] for p in c["paragraphs"]},
+                max_edits=40, max_words=320)
             corrected_approval = None
             if review.approved:
                 corrected_approval = review.model_copy(update={"draft_sha256": digest(corrected), "edits": []})

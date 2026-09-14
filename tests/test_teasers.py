@@ -445,6 +445,17 @@ def test_edit_and_approve_cannot_hide_an_unresolved_option(queued, story, draft)
     assert result["state"] == "brief_ready" and len(result["drafts"]) == 1
 
 
+def test_repeated_phrase_corrections_do_not_force_a_rewrite(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    review = approved(draft)
+    review.edits = [SmallEdit(field="teaser", index=n, paragraph=p,
+        before="Mara returns", after="Mara comes back", reason="Clarify the return.", paragraph_ids=[1])
+        for n, p in [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (1, 2)]]
+    result = accept_review(queue, task, review.model_dump())
+    assert result["state"] == "approved" and len(result["reviews"]) == 1
+    assert len(result["correction_approvals"][0]["edits"]) == 6
+
+
 @pytest.mark.parametrize("change", [
     {"before": "not in draft"}, {"before": "the"}, {"paragraph_ids": [999]},
     {"paragraph_ids": []}, {"index": 0}, {"paragraph": 99},

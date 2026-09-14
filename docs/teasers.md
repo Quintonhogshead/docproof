@@ -39,7 +39,9 @@ editorial approval step.
    and the complete list of manuscript portions. Sol can directly correct names,
    short factual phrases or individual sentences. Each exact replacement needs
    manuscript evidence and is limited to 40 words/320 characters; a review can
-   replace at most five spans and 80 words in total. The corrected package is saved
+   replace at most forty short spans and 320 words across the complete five-option
+   package and guide. Repeated occurrences of a wrong name or term can all be
+   corrected in one pass. The corrected package is saved
    with its edit history. Sol can explicitly approve the corrected text in that
    same pass; the server checks and applies the exact edits, then binds the approval
    to the corrected text for immediate delivery. A name or sentence correction does
