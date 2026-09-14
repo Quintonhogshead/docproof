@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from dataclasses import asdict
@@ -21,7 +22,8 @@ from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import RedirectResponse, FileResponse
-from pydantic import BaseModel, Field, SecretStr, StrictFloat, StrictInt, StrictStr, field_validator
+from pydantic import (BaseModel, ConfigDict, Field, SecretStr, StrictFloat,
+                      StrictInt, StrictStr, field_validator)
 
 from docproof.providers import lookup
 
@@ -72,6 +74,23 @@ class WatchUpdate(BaseModel):
     hubspot_corrections_text_property: str | None = None
     corrections_folder_name: str | None = None
     corrections_model_passes: bool | None = None
+    # The quiet period a ready record is held for, and form-poll mode — the
+    # plain IDML stage's own pair, not the native adapter's (below): how long
+    # to hold a ready record after it was first seen or its latest new
+    # submission, and whether to read the form's own events instead of the
+    # record's properties. `hubspot_corrections_book_property` is unused until
+    # a later phase; accepted now so it saves with the rest of this block.
+    corrections_quiet_seconds: int | None = Field(default=None, ge=0, le=604800)
+    corrections_form_poll: bool | None = None
+    corrections_form_id: str | None = None
+    corrections_form_file_property: str | None = None
+    corrections_form_notes_property: str | None = None
+    corrections_form_start_after: str | None = None
+    hubspot_corrections_book_property: str | None = None
+    corrections_intake: str | None = None
+    corrections_form_first_property: str | None = None
+    corrections_form_last_property: str | None = None
+    corrections_form_book_property: str | None = None
     corrections_engine: str | None = None
     corrections_native_auto_upload: bool | None = None
     corrections_native_partial_upload: bool | None = None
@@ -184,6 +203,25 @@ class ClearMarker(BaseModel):
 class ResetFlag(ClearMarker):
     stage: Literal["format", "proof", "promo", "plan", "corrections"]
     updated_at: str = Field(min_length=1, max_length=100)
+
+
+class CorrectionsRehearse(BaseModel):
+    """Try the corrections stage on one HubSpot record, from the panel's
+    "Waiting for corrections" table or its own inline form."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    record_id: str = Field(min_length=1, max_length=40)
+    dry_run: bool = True
+    now: bool = False
+
+    @field_validator("record_id")
+    @classmethod
+    def _record_id(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", value):
+            raise ValueError("record_id must be 1-40 characters of letters, "
+                             "digits, underscores or hyphens.")
+        return value
 
 
 class NativeBook(BaseModel):
@@ -418,6 +456,10 @@ def register(app: FastAPI) -> None:
             status.update(interior_computer=computer,
                           corrections_enabled=computer['desired']['enabled'],
                           corrections_engine='native')
+        # The last per-record rehearsal (see `WatchRunner.rehearse_corrections`)
+        # rides here rather than in `watchlib.status`, which has no runner to
+        # read it off — it lives on the one `WatchRunner` this server holds.
+        status["corrections_rehearsal"] = watch.last_rehearsal
         return {
             "watch": status,
             "run": watch.state(),
@@ -512,6 +554,12 @@ def register(app: FastAPI) -> None:
             if update.corrections_engine not in ("idml", "native"):
                 raise HTTPException(400, "Choose IDML or native InDesign corrections.")
             ws.corrections_engine = update.corrections_engine
+        if update.corrections_intake is not None:
+            intake = update.corrections_intake.strip().lower()
+            if intake not in ("form", "hubspot"):
+                raise HTTPException(400, "corrections_intake must be 'form' "
+                                         "or 'hubspot'.")
+            ws.corrections_intake = intake
         for name in WatchUpdate.model_fields:
             if name.startswith("corrections_native_"):
                 value = getattr(update, name)
@@ -528,13 +576,21 @@ def register(app: FastAPI) -> None:
                      "hubspot_corrections_done_value",
                      "hubspot_corrections_file_property",
                      "hubspot_corrections_text_property",
-                     "corrections_folder_name"):
+                     "corrections_folder_name",
+                     "corrections_form_id", "corrections_form_file_property",
+                     "corrections_form_notes_property",
+                     "corrections_form_start_after",
+                     "hubspot_corrections_book_property",
+                     "corrections_form_first_property",
+                     "corrections_form_last_property",
+                     "corrections_form_book_property"):
             value = getattr(update, name)
             if value is not None:
                 setattr(ws, name, value.strip())
         for name in ("upload_failure_note",
                      "require_source_label", "proofing_enabled",
                      "corrections_enabled", "corrections_model_passes",
+                     "corrections_quiet_seconds", "corrections_form_poll",
                      "max_files_per_tick", "auto_ticks", "tick_every_minutes",
                      "archive_enabled", "archive_include_source"):
             value = getattr(update, name)
@@ -805,6 +861,34 @@ def register(app: FastAPI) -> None:
         # pass runs, so this is only ever a double click, and answering "it is
         # already doing what you asked" in red would be the wrong noise.
         return {"started": started, **watch_payload()}
+
+    @app.post("/api/watch/corrections/rehearse", dependencies=[Depends(may_manage)])
+    def rehearse_corrections(body: CorrectionsRehearse) -> dict:
+        """Try the corrections stage on one HubSpot record, in the background —
+        the panel's equivalent of `docproof-watch corrections rehearse`. Refused
+        the same three ways a CLI rehearsal is (`_corrections_refusal`), in the
+        app's own words, plus the one thing only a live app can hit: a pass —
+        a real one or another rehearsal — already using the folder lock."""
+        watch: WatchRunner = app.state.watch
+        ws = WatchSettings.load(watch.home)
+        watch_needs(ws)
+        if not ws.corrections_enabled:
+            raise HTTPException(
+                409, "Interior corrections are off. Turn them on in the "
+                     "Interior corrections workflow card first.")
+        if not ws.hubspot_enabled:
+            raise HTTPException(
+                409, "HubSpot is off, and corrections are gated on a HubSpot "
+                     "record. Turn it on first.")
+        if ws.corrections_engine == "native":
+            raise HTTPException(
+                409, "Corrections are running on the native InDesign engine; "
+                     "this rehearsal only drives the IDML engine's own stage.")
+        started = watch.rehearse_corrections(
+            body.record_id, dry_run=body.dry_run, ignore_timer=body.now)
+        if not started:
+            raise HTTPException(409, "A pass is already running.")
+        return {"started": True, **watch_payload()}
 
     @app.post("/api/watch/test-email", dependencies=[Depends(may_manage)])
     def test_watch_email() -> dict:

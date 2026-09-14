@@ -1899,3 +1899,89 @@ def test_a_bad_format_intake_value_is_refused(tmp_path, provider):
     opener = fake_drive({}, docx=MANUSCRIPT, hubspot={})
     with pytest.raises(ticklib.NotConfigured, match="format_intake"):
         run(tmp_path, ws, opener)
+
+
+# --- interior corrections (IDML engine): intake preflight ------------------
+
+def corrections_ws(**over):
+    """A watcher with the HubSpot gate, per-author subfolders and interior
+    corrections all switched on — the posture `corrections_enabled` needs
+    regardless of intake mode. `corrections_intake` and its three form-name
+    siblings are being added to `WatchSettings` by a change landing alongside
+    this one, so they are never passed to the constructor here (that would
+    raise `TypeError` before the field exists) — set them with plain
+    attribute assignment afterward instead, which works whether or not the
+    dataclass field is declared yet."""
+    fields = dict(folder_id=FOLDER, model="claude-haiku-4-5",
+                  client_id="client-1", client_secret="secret-1",
+                  hubspot_enabled=True, hubspot_object="0-970",
+                  hubspot_key_property="author_last_name",
+                  hubspot_status_property="docproof",
+                  hubspot_format_ready_value="Ready for Formatting",
+                  hubspot_format_done_value="Formatting Complete",
+                  subfolders_enabled=True, hubspot_first_property="first_name",
+                  hubspot_last_property="author_last_name",
+                  corrections_enabled=True)
+    fields.update(over)
+    return WatchSettings(**fields)
+
+
+def test_corrections_form_intake_preflight_passes_without_file_or_text_props(
+        tmp_path, provider):
+    """Form intake (the default): the form's own submission starts the
+    stage, so nothing here has to name a HubSpot ready value or either of
+    the properties a workflow would have copied the form into."""
+    ws = corrections_ws()
+    ws.corrections_intake = "form"
+    ws.hubspot_corrections_file_property = ""
+    ws.hubspot_corrections_text_property = ""
+    assert ws.corrections_form_id           # ships with a real default
+    assert ws.corrections_folder_name       # ships with a real default
+    opener = fake_drive({}, docx=MANUSCRIPT, hubspot={})
+
+    run(tmp_path, ws, opener)                # must not raise NotConfigured
+
+
+def test_corrections_form_intake_preflight_needs_the_form_id(tmp_path, provider):
+    ws = corrections_ws()
+    ws.corrections_intake = "form"
+    ws.corrections_form_id = ""
+    opener = fake_drive({}, docx=MANUSCRIPT, hubspot={})
+
+    with pytest.raises(ticklib.NotConfigured, match="corrections_form_id"):
+        run(tmp_path, ws, opener)
+
+
+def test_corrections_hubspot_intake_preflight_still_needs_file_or_text_property(
+        tmp_path, provider):
+    """The old gate keeps its original contract: a ready value, a done
+    value, a folder name, and at least one of the two properties the
+    workflow copies the form's answers into."""
+    ws = corrections_ws()
+    ws.corrections_intake = "hubspot"
+    ws.hubspot_corrections_file_property = ""
+    ws.hubspot_corrections_text_property = ""
+    opener = fake_drive({}, docx=MANUSCRIPT, hubspot={})
+
+    with pytest.raises(ticklib.NotConfigured,
+                       match="hubspot_corrections_file_property"):
+        run(tmp_path, ws, opener)
+
+
+def test_corrections_hubspot_intake_preflight_passes_with_a_file_property(
+        tmp_path, provider):
+    ws = corrections_ws()
+    ws.corrections_intake = "hubspot"
+    ws.hubspot_corrections_file_property = "corrections_file"
+    opener = fake_drive({}, docx=MANUSCRIPT, hubspot={})
+
+    run(tmp_path, ws, opener)                # must not raise NotConfigured
+
+
+def test_a_bad_corrections_intake_value_is_refused(tmp_path, provider):
+    ws = corrections_ws()
+    ws.corrections_intake = "sometimes"
+    opener = fake_drive({}, docx=MANUSCRIPT, hubspot={})
+
+    with pytest.raises(ticklib.NotConfigured, match="corrections_intake"):
+        run(tmp_path, ws, opener)

@@ -118,24 +118,83 @@ class FileRecord:
     # outputs go back into (the "Interior Design" folder the IDML was found in).
     corrections_job_id: str = ""
     corrections_hubspot_id: str = ""     # the ready record it matched
+    # The pending-ledger key the job was released from
+    # (`corrections.hold_or_release`'s own key — a HubSpot record id in
+    # hubspot-gate mode, `form:<first>|<last>` in form mode) — the durable
+    # link back to `state.corrections_pending` and, in form mode, the only
+    # thing `_drop_finished_pending` and a resumed pass have to find this
+    # book by, since `corrections_hubspot_id` may never be set at all. Empty
+    # on a record written before form intake existed, or one hubspot-gate
+    # mode never touches.
+    corrections_pending_key: str = ""
     corrections_hubspot_done: bool = False
     corrections_marked: str = ""         # "" | "done" | "failed"
     corrections_attempts: int = 0
     corrections_uploaded: dict[str, str] = field(default_factory=dict)
     # What the author sent, so `status` can say it without re-reading HubSpot:
-    # "pdf" | "docx" | "text" and the file it was saved as.
+    # "pdf" | "docx" | "text" and the file it was saved as. Comma-joined when
+    # the job folded more than one submission.
     corrections_input_kind: str = ""
     corrections_input_name: str = ""
+    # Every submission's marker that has been folded into this file's job, so a
+    # later pass (or a pending record reconsidered after the job is terminal)
+    # never counts the same submission twice. See `corrections.hold_or_release`.
+    corrections_submissions: list[str] = field(default_factory=list)
     flag_resets: dict[str, str] = field(default_factory=dict)
     flag_reset_history: list[dict] = field(default_factory=list)
     modified_time: str = ""
     updated_at: str = ""
 
 
+@dataclass
+class PendingCorrections:
+    """One author's round of corrections, held inside its quiet period: every
+    submission (a form event, or — hubspot-gate mode only — the record's own
+    properties) seen for it so far, and the two timestamps that decide when
+    the hold ends.
+
+    Kept apart from `FileRecord` because a book has not been matched to a
+    Drive export yet while it is only pending — that match, and everything
+    after it, happens once `corrections.hold_or_release` says the quiet
+    period is over. See `corrections.PendingCorrections` usage in
+    `corrections.py` for the full lifecycle.
+
+    `record_id` is whichever mode's own pending-ledger key: a HubSpot record
+    id in hubspot-gate mode, or `corrections._form_key(first, last)` — a name,
+    not a HubSpot id — in form mode, since a round can start, run and be
+    delivered without HubSpot ever being asked about it."""
+
+    record_id: str
+    author: str = ""
+    first_seen: str = ""             # ISO UTC — when DocWatch first saw it ready
+    last_submission_at: str = ""     # ISO UTC — the most recent new submission
+    # Each entry: {"marker", "submitted_at", "urls": [...], "text"}. Markers
+    # already here are never re-counted as new, so a submission read twice
+    # (a re-polled form page, a second tick before release) never resets the
+    # clock a second time.
+    submissions: list[dict] = field(default_factory=list)
+    # The export this record resolved to, once it has — filled in only so
+    # `pending_summary` can name the book a person is waiting on without
+    # re-reading Drive.
+    source_name: str = ""
+    # Form mode only: the author's own name and the book title their round
+    # named, read off the form itself rather than a HubSpot record — the
+    # first value seen wins, like `author`. Empty in hubspot-gate mode, where
+    # the record's properties are read fresh every pass instead.
+    first: str = ""
+    last: str = ""
+    title: str = ""
+
+
 class WatchState:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.files: dict[str, FileRecord] = {}
+        # Records HubSpot has flagged ready for corrections that are still
+        # inside their quiet period — see `corrections.hold_or_release`. Keyed
+        # by the HubSpot record id, not the file id: a book has not been
+        # matched to a Drive export yet while it sits here.
+        self.corrections_pending: dict[str, "PendingCorrections"] = {}
 
     @classmethod
     def load(cls, path: str | Path) -> "WatchState":
@@ -163,6 +222,22 @@ class WatchState:
             except TypeError as e:
                 log.warning("Skipping malformed state entry %s (%s)",
                             file_id, e)
+        # Absent entirely on a state file written before the quiet period
+        # existed, which is how those load with nothing pending — exactly as
+        # a fresh install would.
+        pending_known = {f.name for f in fields(PendingCorrections)}
+        for record_id, entry in (raw.get("corrections_pending") or {}).items():
+            if not isinstance(entry, dict):
+                log.warning("Skipping malformed pending-corrections entry %s",
+                            record_id)
+                continue
+            data = {k: v for k, v in entry.items() if k in pending_known}
+            data["record_id"] = record_id
+            try:
+                state.corrections_pending[record_id] = PendingCorrections(**data)
+            except TypeError as e:
+                log.warning("Skipping malformed pending-corrections entry "
+                            "%s (%s)", record_id, e)
         return state
 
     def get(self, file_id: str) -> FileRecord:
@@ -205,6 +280,8 @@ class WatchState:
         body = json.dumps({
             "version": VERSION,
             "files": {k: asdict(v) for k, v in self.files.items()},
+            "corrections_pending": {k: asdict(v)
+                                    for k, v in self.corrections_pending.items()},
         }, indent=2)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         staging = self.path.with_name(self.path.name + ".writing")

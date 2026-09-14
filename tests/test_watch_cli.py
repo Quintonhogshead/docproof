@@ -17,9 +17,10 @@ import pytest
 
 from app.lock import FolderLock
 from app.watch import cli
+from app.watch import corrections
 from app.watch import schedule as schedulelib
 from app.watch import tick as ticklib
-from app.watch.settings import WatchSettings
+from app.watch.settings import WATCH_SETTINGS, WatchSettings
 from app.watch.stages import (AT_PROP, FAILED, FORMATTED, JOB_PROP,
                               REASON_PROP, STATE_PROP)
 from app.watch.state import FileRecord, WatchState
@@ -55,6 +56,9 @@ def configured(home, **over) -> WatchSettings:
 def signed_in(monkeypatch, token="refresh-1"):
     monkeypatch.setattr("app.watch.cli.get_api_key", lambda name: token)
     monkeypatch.setattr("app.watch.tick.get_api_key", lambda name: token)
+    # `corrections.rehearse` (the CLI's rehearsal delegates to it) reads
+    # through its own imported name, same as every other module here.
+    monkeypatch.setattr("app.watch.corrections.get_api_key", lambda name: token)
 
 
 def run(home, *argv) -> int:
@@ -536,6 +540,296 @@ def test_status_says_when_nothing_is_scheduled(home, capsys, agent):
     run(home, "status")
 
     assert "only when you say so" in capsys.readouterr().out
+
+
+# --- interior corrections: intake mode ------------------------------------
+
+def hubspot_and_subfolders_configured(home, **over):
+    """A watcher with the HubSpot gate and per-author subfolders fully filled
+    in, so `init` never has to fall back to an interactive `_ask()` prompt —
+    every field `_apply_hubspot` / `_apply_subfolders` would otherwise ask
+    for is already set."""
+    return configured(
+        home, hubspot_enabled=True, subfolders_enabled=True,
+        hubspot_object="deals", hubspot_key_property="key",
+        hubspot_status_property="status",
+        hubspot_format_ready_value="Ready", hubspot_format_done_value="Done",
+        hubspot_first_property="firstname", hubspot_last_property="lastname",
+        **over)
+
+
+def saved_settings(home) -> dict:
+    """The raw settings file, read as JSON rather than through
+    `WatchSettings.load` — which drops any key that is not (yet) a declared
+    dataclass field. `corrections_intake` and its three form-name siblings
+    are being added to `WatchSettings` by another change alongside this one;
+    reading the file directly lets this test assert the CLI wrote them
+    whether or not that field is declared yet."""
+    return json.loads((home / WATCH_SETTINGS).read_text())
+
+
+def test_init_corrections_intake_defaults_to_form(home, capsys, monkeypatch):
+    hubspot_and_subfolders_configured(home)
+    signed_in(monkeypatch)
+
+    assert run(home, "init", "--enable-corrections") == cli.OK
+
+    out = capsys.readouterr().out
+    assert "kicked off by the form's own submissions" in out
+    assert saved_settings(home).get("corrections_intake", "form") == "form"
+
+
+def test_init_corrections_intake_hubspot(home, capsys, monkeypatch):
+    hubspot_and_subfolders_configured(home)
+    signed_in(monkeypatch)
+
+    assert run(home, "init", "--enable-corrections",
+               "--corrections-intake", "hubspot",
+               "--hubspot-corrections-file-property",
+               "corrections_file") == cli.OK
+
+    out = capsys.readouterr().out
+    assert "kicked off by HubSpot 'Ready for Corrections'" in out
+    assert saved_settings(home)["corrections_intake"] == "hubspot"
+
+
+def test_init_corrections_intake_round_trips_back_to_form(home):
+    hubspot_and_subfolders_configured(home)
+    run(home, "init", "--enable-corrections", "--corrections-intake", "hubspot",
+        "--hubspot-corrections-file-property", "corrections_file")
+
+    run(home, "init", "--corrections-intake", "form")
+
+    assert saved_settings(home)["corrections_intake"] == "form"
+
+
+def test_init_corrections_form_name_properties_round_trip(home):
+    hubspot_and_subfolders_configured(home)
+
+    run(home, "init", "--enable-corrections",
+        "--corrections-form-first-property", "author_first",
+        "--corrections-form-last-property", "author_last",
+        "--corrections-form-book-property", "book_field")
+
+    data = saved_settings(home)
+    assert data["corrections_form_first_property"] == "author_first"
+    assert data["corrections_form_last_property"] == "author_last"
+    assert data["corrections_form_book_property"] == "book_field"
+
+
+def test_corrections_status_shows_first_last_and_title_when_present(
+        home, capsys, monkeypatch):
+    configured(home)
+    rows = [{
+        "record_id": "rec-3",
+        "first": "Jamie",
+        "last": "Rivera",
+        "title": "The Long Road",
+        "first_seen": "2026-09-14T10:00:00+00:00",
+        "last_submission_at": "2026-09-14T10:00:00+00:00",
+        "ready_at": "2026-09-14T13:00:00+00:00",
+        "ready": False,
+        "submissions": 1,
+        "source_name": "Rivera - Book 2.idml",
+    }]
+    monkeypatch.setattr(corrections, "pending_summary",
+                        lambda state, ws, **kw: rows, raising=False)
+
+    assert run(home, "corrections", "status") == cli.OK
+
+    out = capsys.readouterr().out
+    assert "Jamie Rivera" in out
+    assert "The Long Road" in out
+
+
+# --- interior corrections: status and rehearsal --------------------------------
+
+def test_corrections_status_with_nothing_waiting(home, capsys, monkeypatch):
+    configured(home)
+    monkeypatch.setattr(corrections, "pending_summary",
+                        lambda state, ws, **kw: [], raising=False)
+
+    assert run(home, "corrections", "status") == cli.OK
+    assert "Nothing is waiting for corrections." in capsys.readouterr().out
+
+
+def test_corrections_status_lists_a_holding_record(home, capsys, monkeypatch):
+    configured(home)
+    rows = [{
+        "record_id": "rec-1",
+        "author": "Quinton Johnson",
+        "first_seen": "2026-09-14T10:00:00+00:00",
+        "last_submission_at": "2026-09-14T10:00:00+00:00",
+        "ready_at": "2026-09-14T13:00:00+00:00",
+        "ready": False,
+        "submissions": 1,
+        "source_name": "Johnson - Book 3.idml",
+    }]
+    monkeypatch.setattr(corrections, "pending_summary",
+                        lambda state, ws, **kw: rows, raising=False)
+
+    assert run(home, "corrections", "status") == cli.OK
+    out = capsys.readouterr().out
+    assert "Quinton Johnson" in out
+    assert "rec-1" in out
+    assert "1 submission(s)" in out
+    assert "holding for" in out
+
+
+def test_corrections_status_says_a_record_is_ready(home, capsys, monkeypatch):
+    configured(home)
+    rows = [{
+        "record_id": "rec-2",
+        "author": "Jane Smith",
+        "first_seen": "2026-09-14T10:00:00+00:00",
+        "last_submission_at": "2026-09-14T10:00:00+00:00",
+        "ready_at": "2026-09-14T13:00:00+00:00",
+        "ready": True,
+        "submissions": 2,
+        "source_name": "Smith - Book 1.idml",
+    }]
+    monkeypatch.setattr(corrections, "pending_summary",
+                        lambda state, ws, **kw: rows, raising=False)
+
+    assert run(home, "corrections", "status") == cli.OK
+    out = capsys.readouterr().out
+    assert "Jane Smith" in out
+    assert "ready" in out
+    assert "holding for" not in out
+
+
+def corrections_configured(home, **over):
+    """A watcher ready for a corrections rehearsal: HubSpot and corrections
+    both on, signed in, everything `_corrections_refusal` checks for."""
+    return configured(home, corrections_enabled=True, hubspot_enabled=True,
+                      **over)
+
+
+def fake_stage(monkeypatch, effect=None):
+    """Stand in for `corrections.run_stage`, capturing exactly what the CLI
+    passed it and, optionally, mutating the report the way a real stage
+    would. Also stubs the Drive token refresh so no network is reached."""
+    calls = {}
+    monkeypatch.setattr("app.watch.drive.refresh_access_token",
+                        lambda *a, **k: "tok-1")
+
+    def fake(token, home_, ws, state, runner, store, *, mock, opener, hs_token,
+             report, only_record=None, ignore_timer=False, dry_run=False):
+        calls.update(token=token, mock=mock, hs_token=hs_token,
+                     only_record=only_record, ignore_timer=ignore_timer,
+                     dry_run=dry_run)
+        if effect is not None:
+            effect(report)
+
+    monkeypatch.setattr(corrections, "run_stage", fake, raising=False)
+    return calls
+
+
+def test_corrections_rehearse_passes_the_flags_through(home, capsys,
+                                                        monkeypatch):
+    corrections_configured(home)
+    signed_in(monkeypatch)
+    calls = fake_stage(monkeypatch)
+
+    code = run(home, "corrections", "rehearse", "--record", "rec-1",
+              "--now", "--dry-run")
+
+    assert code == cli.OK
+    assert calls["only_record"] == "rec-1"
+    assert calls["ignore_timer"] is True
+    assert calls["dry_run"] is True
+    assert calls["mock"] is False
+    assert calls["hs_token"] == "refresh-1"
+
+
+def test_corrections_rehearse_defaults_the_flags_off(home, capsys,
+                                                      monkeypatch):
+    corrections_configured(home)
+    signed_in(monkeypatch)
+    calls = fake_stage(monkeypatch)
+
+    assert run(home, "corrections", "rehearse", "--record", "rec-1") == cli.OK
+
+    assert calls["only_record"] == "rec-1"
+    assert calls["ignore_timer"] is False
+    assert calls["dry_run"] is False
+
+
+def test_corrections_rehearse_exits_one_on_needs_human(home, capsys,
+                                                        monkeypatch):
+    corrections_configured(home)
+    signed_in(monkeypatch)
+    fake_stage(monkeypatch, effect=lambda report: report.needs_human.append(
+        ("Johnson - Book 3.idml", "no 'Interior Design' subfolder")))
+
+    code = run(home, "corrections", "rehearse", "--record", "rec-1")
+
+    assert code == cli.REHEARSAL_FLAGGED
+    assert "Needs a person" in capsys.readouterr().err
+
+
+def test_corrections_rehearse_exits_one_on_failed(home, capsys, monkeypatch):
+    corrections_configured(home)
+    signed_in(monkeypatch)
+    fake_stage(monkeypatch, effect=lambda report: report.failed.append(
+        ("Johnson - Book 3.idml", "the model call errored")))
+
+    code = run(home, "corrections", "rehearse", "--record", "rec-1")
+
+    assert code == cli.REHEARSAL_FLAGGED
+    assert "Could not apply corrections" in capsys.readouterr().err
+
+
+def test_corrections_rehearse_prints_what_it_corrected(home, capsys,
+                                                        monkeypatch):
+    corrections_configured(home)
+    signed_in(monkeypatch)
+
+    def effect(report):
+        report.corrected.append("Johnson - Book 3.idml: 41 of 58 applied")
+        report.uploaded.append("Johnson - Book 3.5.idml")
+    fake_stage(monkeypatch, effect=effect)
+
+    assert run(home, "corrections", "rehearse", "--record", "rec-1") == cli.OK
+
+    out = capsys.readouterr().out
+    assert "41 of 58 applied" in out
+    assert "Johnson - Book 3.5.idml" in out
+
+
+def test_corrections_rehearse_refuses_when_corrections_are_off(home, capsys,
+                                                                monkeypatch):
+    configured(home, hubspot_enabled=True)          # corrections left off
+    signed_in(monkeypatch)
+
+    code = run(home, "corrections", "rehearse", "--record", "rec-1")
+
+    assert code == cli.UNUSABLE
+    err = capsys.readouterr().err
+    assert "corrections are off" in err
+    assert "--enable-corrections" in err
+
+
+def test_corrections_rehearse_refuses_when_hubspot_is_off(home, capsys,
+                                                           monkeypatch):
+    configured(home, corrections_enabled=True)       # hubspot left off
+    signed_in(monkeypatch)
+
+    code = run(home, "corrections", "rehearse", "--record", "rec-1")
+
+    assert code == cli.UNUSABLE
+    assert "HubSpot is off" in capsys.readouterr().err
+
+
+def test_corrections_rehearse_refuses_the_native_engine(home, capsys,
+                                                         monkeypatch):
+    corrections_configured(home, corrections_engine="native")
+    signed_in(monkeypatch)
+
+    code = run(home, "corrections", "rehearse", "--record", "rec-1")
+
+    assert code == cli.UNUSABLE
+    assert "native" in capsys.readouterr().err
 
 
 # --- the home -----------------------------------------------------------------
