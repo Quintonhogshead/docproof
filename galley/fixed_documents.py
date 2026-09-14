@@ -129,11 +129,32 @@ def write_manuscripts(source, destination, accepted, questions=(), formats=()):
                     format=row["format"], silent=True)
         findings.append(f)
         details.append({**dataclasses.asdict(f), "applied": True, "queried": False})
+    # Word keeps comments in the body only. A question about a running head,
+    # footer or note paragraph is carried by the first body paragraph, saying
+    # where it really points, rather than blocking the whole delivery.
+    where = {p.para_id: (p.part, p.location) for p in walked}
+    body_ids = [p.para_id for p in walked if p.location == "body" and p.part.endswith("document.xml")
+                and original[p.para_id].strip()]
     for q in questions:
         pid = q["para_id"]
         if not q.get("missing_knowledge") or not q.get("question"):
             raise FixedDocumentError("A final author query lacks its required evidence")
         lo, hi = _locate(accepted[pid], q["quote"], q.get("occurrence", 1))
+        text = q["question"]
+        relocated = None
+        part, location = where[pid]
+        if location != "body" or not part.endswith("document.xml"):
+            if not body_ids:
+                raise FixedDocumentError("A final author question about a header, footer or note has no body paragraph to carry it")
+            place = {"header": "the running head", "footer": "the footer", "footnote": "a footnote",
+                     "endnote": "an endnote", "textbox": "a text box"}.get(location, location)
+            if part.startswith("word/header"):
+                place = "the running head"
+            elif part.startswith("word/footer"):
+                place = "the footer"
+            text = f"About {place} \u201c{q['quote']}\u201d: {q['question']}"
+            relocated, pid = pid, body_ids[0]
+            lo, hi = 0, len(accepted[pid])
         start, end = _back_span(original[pid], accepted[pid], lo, hi)
         if start == end:
             # A question about inserted text needs a real source anchor.
@@ -143,10 +164,11 @@ def write_manuscripts(source, destination, accepted, questions=(), formats=()):
         quote = original[pid][start:end]
         occurrence = sum(original[pid].startswith(quote, offset) for offset in range(start)) + 1
         f = Finding(q["id"], "fixed-final", pid, "author_question", quote, occurrence,
-                    original[pid][start:end], q["question"], "high", "query",
+                    original[pid][start:end], text, "high", "query",
                     anchor=Anchor(start, end, original[pid][start:end], original[pid][start:end]), force_query=True)
         findings.append(f)
-        details.append({**dataclasses.asdict(f), "applied": False, "queried": True})
+        details.append({**dataclasses.asdict(f), "applied": False, "queried": True,
+                        **({"relocated_from": relocated} if relocated else {})})
     stats = apply_tracked_changes(pkg, doc, findings, cfg)
     expected_edits = {f.finding_id for f in findings if f.status == "validated"}
     actual_edits = set(stats.applied) | set(stats.already_set)
@@ -297,7 +319,12 @@ def _report(result, details, receipt=None):
         change = ("Set in italics" if x.get("format") == "italic" else json.dumps(x['corrected_text'], ensure_ascii=False))
         lines += [f"- {labels[x['para_id']]}: {json.dumps(x['original_text'], ensure_ascii=False)} → {change}"]
     lines += ["", "## Author questions", ""]
-    lines += [f"- {labels[q['para_id']]}: {q['question']}" for q in result["questions"]] or ["None."]
+    carried = {x["finding_id"]: x for x in details if x.get("relocated_from")}
+    lines += [f"- {labels[q['para_id']]}: {q['question']}"
+              + (f" (about {labels.get(carried[q['id']]['relocated_from'], 'a header, footer or note paragraph')}; "
+                 f"the comment sits on {labels[carried[q['id']]['para_id']]} because Word keeps comments in the body)"
+                 if q["id"] in carried else "")
+              for q in result["questions"]] or ["None."]
     skipped = result.get("skipped_reads", [])
     lines += ["", "## Processing stages" if skipped else "## Completed reading stages", ""]
     if skipped:
