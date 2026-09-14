@@ -59,6 +59,8 @@ def test_is_output_name_knows_the_stage_token(name, want):
     # forgiveness the HubSpot key match gives — the file carries only the first.
     ("Lichtenstein - Book Original.docx",
      "Lichtenstein (and Dolores DelBello)", True),
+    # A multi-book author's later book carries a series number on the surname.
+    ("Dalton 2 - Book Original.docx", "Dalton", True),
     ("Grest - book 0.docx", "Grest", False),              # the deliverable, not it
     ("Grest - Draft.docx", "Grest", False),              # a draft, not it
     ("Grest - Book Original.docx", "Smith", False),       # wrong surname
@@ -158,6 +160,11 @@ def test_is_output_name_claims_book_2_and_never_book_1(name, want):
     ("St Denis - Book 1.docx", "St Denis", True),       # a spaced surname
     ("Lichtenstein - Book 1.docx",
      "Lichtenstein (and Dolores DelBello)", True),      # co-author parenthetical
+    # A multi-book author's later book: "Dalton 2 - Book 1" is Chantal Dalton's
+    # dev-edited second book, whether HubSpot says "Dalton" or "Dalton 2".
+    ("Dalton 2 - Book 1.docx", "Dalton", True),
+    ("Dalton 2 - book 1.docx", "Dalton 2", True),
+    ("Dalton 2 - Book 1.docx", "Smith", False),
     ("Grest - Book 2.docx", "Grest", False),            # the deliverable
     ("Grest - Book Original.docx", "Grest", False),     # the author's own file
     ("Grest - Book 1.docx", "Smith", False),            # wrong surname
@@ -182,6 +189,15 @@ def test_is_proof_source_name_matches_only_that_authors_dev_edit(name, last,
 ])
 def test_has_proof_source_label_knows_the_dev_edit_without_a_surname(name, want):
     assert naming.has_proof_source_label(name) is want
+
+
+def test_a_series_number_stays_in_the_hand_off_names():
+    """The number is set aside only for the author match; every name DocWatch
+    writes or looks for keeps it, so the second book's set is its own."""
+    assert naming.proof_base("Dalton 2 - Book 1") == "Dalton 2 - Book 2"
+    assert naming.proof_outcome_name("Dalton 2 - Book 1.docx") == \
+        f"Dalton 2 - Book 2{naming.OUTCOME_SUFFIX}.json"
+    assert naming.is_output_name(f"Dalton 2 - Book 2{naming.LETTER_SUFFIX}.md")
 
 
 def test_the_hand_off_names_all_hang_off_one_base():

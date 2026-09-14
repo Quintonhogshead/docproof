@@ -178,10 +178,19 @@ def _fold(text: str) -> str:
     return " ".join(text.split()).casefold()
 
 
+# A second (third...) book from the same author is filed with a series number
+# on the surname — "Dalton 2 - Book 1" in Chantal Dalton's folder, beside the
+# earlier "Dalton - Book 1" in its own project folder — and the hand-off keeps
+# that number ("Dalton 2 - Book 2"). The number is part of the file's name,
+# never of the author's identity, so the surname match sets it aside.
+_SERIES_RE = re.compile(r"\s+\d{1,2}$")
+
+
 def _surname_key(text: str) -> str:
     """A surname reduced to what an author-identity comparison cares about:
-    folded, with any trailing co-author parenthetical set aside."""
-    return _COAUTHOR_RE.sub("", _fold(text))
+    folded, with any trailing co-author parenthetical and any trailing series
+    number set aside."""
+    return _SERIES_RE.sub("", _COAUTHOR_RE.sub("", _fold(text)))
 
 
 def _stage_surname(name: str, stage: str) -> str | None:
