@@ -116,6 +116,18 @@ def word_count(text: str) -> int:
     return len(re.findall(r"\b[\w]+(?:[’'−-][\w]+)*\b", text))
 
 
+def teaser_issues(teaser: Teaser) -> list[str]:
+    issues = []
+    text = "\n\n".join(teaser.paragraphs)
+    if not 2 <= len(teaser.paragraphs) <= 4 or any(not p.strip() for p in teaser.paragraphs):
+        issues.append(f"Option {teaser.number} needs two to four nonempty paragraphs.")
+    if not 140 <= word_count(text) <= 190:
+        issues.append(f"Option {teaser.number} has {word_count(text)} words; use 140–190.")
+    if not teaser.angle.strip():
+        issues.append(f"Option {teaser.number} needs an accurate angle label.")
+    return issues
+
+
 def draft_issues(draft: Draft) -> list[str]:
     issues = []
     if sorted(t.number for t in draft.teasers) != [1, 2, 3, 4, 5]:
@@ -127,12 +139,7 @@ def draft_issues(draft: Draft) -> list[str]:
         if key in normalized:
             issues.append(f"Option {t.number} duplicates another option.")
         normalized.add(key)
-        if not 2 <= len(t.paragraphs) <= 4 or any(not p.strip() for p in t.paragraphs):
-            issues.append(f"Option {t.number} needs two to four nonempty paragraphs.")
-        if not 140 <= word_count(text) <= 190:
-            issues.append(f"Option {t.number} has {word_count(text)} words; use 140–190.")
-        if not t.angle.strip():
-            issues.append(f"Option {t.number} needs an accurate angle label.")
+        issues.extend(teaser_issues(t))
     if len(draft.opening_hooks) != 3 or any(not 5 <= word_count(h) <= 18 for h in draft.opening_hooks):
         issues.append("Supply three opening hooks, each 5–18 words.")
     if not draft.editorial_note.strip() or word_count(draft.editorial_note) > 180:

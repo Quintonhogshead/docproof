@@ -61,7 +61,12 @@ from the verified storysheet and original manuscript evidence below. Return exac
 five distinct teasers, numbered 1–5, plus three optional hooks, one editorial note,
 teaser elements, best practices, and an author modification checklist. The schema
 is the output contract. Each teaser is 140–190 words in 2–4 paragraphs. Do not count
-the external angle label or optional hooks toward that limit.
+the external angle label or optional hooks toward that limit. Aim for 155–170 words
+per teaser to leave room within the hard limits. Prefer plain, precise sentences
+and restrained stakes over embellished metaphors or dramatic extrapolation. The
+editing guide must describe the actual finished options: do not assert that every
+option includes a detail unless every option does, or impose every possible detail
+on every option. Never refer to earlier drafts, review feedback, or this workflow.
 Explain the opening, narrative center, disruption, response/pressure, stakes, and
 unresolved ending in the elements guide, adapting these to the actual book. Each
 element needs a purpose and concrete book-specific editing advice. Give at least

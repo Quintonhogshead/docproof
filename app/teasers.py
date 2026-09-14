@@ -19,7 +19,7 @@ from docproof.promo.ingest import read_manuscript
 from docproof.providers import strict_json_schema
 from docproof.teasers import QWEN_MODEL, SOL_MODEL, VERSION
 from docproof.teasers.models import (Draft, Review, Storysheet, approval_issues,
-                                    apply_small_edits, draft_issues, digest)
+                                    apply_small_edits, draft_issues, teaser_issues, digest)
 from docproof.teasers.pipeline import chunks, evidence_for, validate_story
 from docproof.teasers.prompts import writer_prompt
 
@@ -238,15 +238,18 @@ def generate_draft(queue, task, *, provider=None):
     if previous and task["reviews"]:
         prior = Draft.model_validate(previous)
         review = Review.model_validate(task["reviews"][-1])
-        if (review.draft_sha256 == digest(prior) and not draft_issues(prior) and
+        if (review.draft_sha256 == digest(prior) and
+                sorted(t.number for t in prior.teasers) == [1, 2, 3, 4, 5] and
                 sorted(review.covered_chunk_ids) == [c["id"] for c in task["chunks"]] and
                 sorted(o.number for o in review.options) == [1, 2, 3, 4, 5]):
             passed = {o.number for o in review.options if all((o.accurate, o.spoiler_safe,
                        o.clear, o.faithful_voice, o.distinct_angle))}
             passed -= {e.index for e in review.edits if e.field in ("teaser", "angle")}
-            retained = {o.number: o for o in prior.teasers if o.number in passed}
+            retained = {o.number: o for o in prior.teasers if o.number in passed and not teaser_issues(o)}
             retain_guidance = review.guidance_approved and not any(
                 e.field not in ("teaser", "angle") for e in review.edits)
+            retain_guidance = retain_guidance and not any(
+                not issue.startswith("Option ") for issue in draft_issues(prior))
     system, user = writer_prompt(story.model_dump(), evidence_for(story.public_facts, task["chunks"]),
                                 previous, task.get("feedback"), sorted(retained))
     task["progress"] = "Qwen is writing five teasers and author guidance"

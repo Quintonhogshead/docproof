@@ -321,6 +321,25 @@ def test_small_edit_cannot_skip_manuscript_coverage(queued, story, draft):
     assert result["state"] == "story_ready" and len(result["drafts"]) == 1
 
 
+def test_valid_option_survives_unrelated_length_errors(queued, story, draft):
+    draft.teasers[0].paragraphs[0] += " extra" * 70
+    draft.opening_hooks[0] += " extra" * 20
+    queue, task = drafted(queued, story, draft)
+    review = approved(draft)
+    review.approved = False
+    review.options[0].clear = False
+    review.guidance_approved = False
+    task = accept_review(queue, task, review.model_dump())
+    class Revision:
+        def complete_structured(self, **kw):
+            assert "APPROVED OPTIONS TO PRESERVE:\n[2, 3, 4, 5]" in kw["user"]
+            replacement = draft.model_copy(deep=True)
+            replacement.teasers[1].paragraphs[0] += " Changed."
+            return ProviderResult(parsed=replacement.model_dump())
+    result = generate_draft(queue, task, provider=Revision())
+    assert result["drafts"][-1]["content"]["teasers"][1:] == draft.model_dump()["teasers"][1:]
+
+
 def test_provider_failure_retries_and_does_not_publish(queued, story):
     queue, _, task = queued
     task = accept_story(queue, task, story.model_dump())
