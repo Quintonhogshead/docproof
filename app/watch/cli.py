@@ -265,6 +265,14 @@ def main(argv=None) -> int:
     ini.add_argument("--hubspot-write-back", dest="hubspot_write_back",
                      action="store_true", default=None,
                      help="(default) move the record on once the file is back")
+    ini.add_argument("--proof-read-only", dest="proof_write_back",
+                     action="store_false", default=None,
+                     help="run proofreads and deliver them, but never move the "
+                          "record on — formatting's write-back is untouched")
+    ini.add_argument("--proof-write-back", dest="proof_write_back",
+                     action="store_true", default=None,
+                     help="(default) move the record on once a proofread has "
+                          "a verdict")
 
     ht = sub.add_parser("hubspot-token",
                         help="store the HubSpot private-app token")
@@ -503,7 +511,9 @@ def cmd_init(args, home: Path) -> int:
               f"'{ws.hubspot_proof_ready_value or '— not set'}' → "
               f"'{ws.hubspot_proof_done_value or '— not set'}' (or "
               f"'{ws.hubspot_proof_needs_human_value or '— not set'}') "
-              f"({who})")
+              f"({who})"
+              + ("  (READ-ONLY: the verdict is delivered, the record is not "
+                 "moved)" if not ws.proof_write_back else ""))
         print("  reading '<surname> - Book 1', handing back "
               "'<surname> - Book 2'")
         if ws.proof_runner == "app":
@@ -640,6 +650,8 @@ def _apply_proofing(args, ws: WatchSettings) -> None:
             print("note: --proof-budget cannot be negative; leaving it alone.")
         else:
             ws.proof_budget_usd = float(args.proof_budget)
+    if getattr(args, "proof_write_back", None) is not None:
+        ws.proof_write_back = args.proof_write_back
     if getattr(args, "enable_proofing", False):
         ws.proofing_enabled = True
     if not ws.proofing_enabled:

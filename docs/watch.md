@@ -257,8 +257,26 @@ mode — unlike promo, which stands aside in subfolder mode.
 docproof-watch init --enable-proofing
 ```
 
+**Running proofing without moving anybody's record.** `--proof-read-only` keeps
+the whole stage working — the gate is still read, the book is still proofread,
+the hand-off is still uploaded and the Drive manuscript is still marked — and
+skips only the CRM write, so the record stays at `Ready for Proofing` for a
+person. The verdict is unaffected: `outcome.json` still records `done` or
+`needs_human`, and the alert email still carries the reason (it says the record
+was left alone rather than claiming a move).
+
+```bash
+docproof-watch init --proof-read-only     # and --proof-write-back to undo it
+```
+
+This is deliberately narrower than `--hubspot-read-only`, which silences *every*
+stage's write-back. With `format_intake` set to `folder`, moving the record to
+`Formatting Complete` is the only thing formatting still uses HubSpot for, so
+the global switch is usually too blunt when the thing you want quiet is proofing.
+
 Or in the app: **Automations → Workflows → Proofread**. That drawer has the
-switch, who reads the book, and all three HubSpot values — plus three read-only
+switch, who reads the book, all three HubSpot values and the write-back
+checkbox above — plus three read-only
 readouts the CLI has no equivalent for: what the practitioner machine is doing
 right now, which books are out with it and how long they have been, and the
 last few verdicts with the reason behind each. It is the only place a

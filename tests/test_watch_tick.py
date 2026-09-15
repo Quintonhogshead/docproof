@@ -14,6 +14,7 @@ import logging
 import urllib.error
 import urllib.parse
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1985,3 +1986,60 @@ def test_a_bad_corrections_intake_value_is_refused(tmp_path, provider):
 
     with pytest.raises(ticklib.NotConfigured, match="corrections_intake"):
         run(tmp_path, ws, opener)
+
+
+def _proof_rec():
+    """A real record, not a stub: the write path banks it through
+    `state.record`, which saves the file as dataclasses."""
+    from app.watch.state import FileRecord
+    return FileRecord(file_id="f-1", name="Wolves.docx",
+                      proof_hubspot_id="hs-Wolves", proof_hubspot_done=False)
+
+
+def test_proof_read_only_delivers_the_verdict_but_never_moves_the_record(tmp_path):
+    """`proof_write_back` off is the narrow brake: a proofread still runs and
+    still hands its files back, the CRM is simply left where it was, so the
+    book waits at the ready value for a person."""
+    ws = hs_ws(proofing_enabled=True, proof_write_back=False)
+    opener = fake_drive(hubspot={"Wolves": ready("Wolves")})
+    rec = _proof_rec()
+
+    ticklib._finish_hubspot_proof(
+        "tok-1", ws, SimpleNamespace(name="Wolves.docx"), rec,
+        WatchState.load(tmp_path / "state.json"),
+        value=ws.hubspot_proof_done_value, opener=opener)
+
+    assert not any(c.get_method() == "PATCH" for c in opener.calls)
+    assert hs_props(opener)["docproof"] == "Ready for Formatting"  # untouched
+    # Not banked as written: flipping the switch back on must let the next
+    # pass make the write, not skip it as already done.
+    assert rec.proof_hubspot_done is False
+
+
+def test_proof_read_only_leaves_formattings_write_back_alone(tmp_path, provider):
+    """The reason this is its own switch rather than `hubspot_write_back`:
+    silencing proofing must not stop formatting moving a book to complete."""
+    ws = hs_ws(proof_write_back=False)
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
+                        hubspot={"Wolves": ready("Wolves")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.ok and report.prepped == ["Wolves.docx"]
+    assert hs_props(opener)["docproof"] == "Formatting Complete"
+
+
+def test_proofing_moves_the_record_by_default(tmp_path):
+    """The switch defaults on, so an install that never hears of it behaves
+    exactly as it did before — the guard above is opt-in, not a new default."""
+    ws = hs_ws(proofing_enabled=True)
+    opener = fake_drive(hubspot={"Wolves": ready("Wolves")})
+    rec = _proof_rec()
+
+    ticklib._finish_hubspot_proof(
+        "tok-1", ws, SimpleNamespace(name="Wolves.docx"), rec,
+        WatchState.load(tmp_path / "state.json"),
+        value=ws.hubspot_proof_done_value, opener=opener)
+
+    assert hs_props(opener)["docproof"] == "Proofing Complete"
+    assert rec.proof_hubspot_done is True

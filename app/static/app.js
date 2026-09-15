@@ -7815,6 +7815,9 @@ function renderWatch(body, quiet) {
   $('proof-ready').value = w.hubspot_proof_ready_value ?? '';
   $('proof-done').value = w.hubspot_proof_done_value ?? '';
   $('proof-needs-human').value = w.hubspot_proof_needs_human_value ?? '';
+  // Defaults on, like the setting: an older payload without the field must not
+  // draw the box unticked and then save that back as "never move the record".
+  $('proof-write-back').checked = w.proof_write_back ?? true;
   applyProofRunnerHint();
   $('corrections-enabled').checked = !!w.corrections_enabled;
   $('corrections-intake').value = w.corrections_intake || 'form';
@@ -10928,6 +10931,7 @@ $('wf-proof-save').addEventListener('click', async () => {
         // Sent even when blank: an empty box is a real choice here — that
         // verdict then writes nothing and the book waits for a person.
         hubspot_proof_needs_human_value: $('proof-needs-human').value,
+        proof_write_back: $('proof-write-back').checked,
       }),
     });
     renderWatch(body);

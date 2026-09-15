@@ -1101,3 +1101,26 @@ def test_the_status_carries_a_finished_rehearsal(client):
     assert w["corrections_rehearsal"]["record_id"] == "rec-1"
     assert w["corrections_rehearsal"]["corrected"] == \
         ["Johnson - Book 3.idml: 41 of 58 applied"]
+
+
+def test_the_panel_can_stop_proofing_writing_back(client):
+    """The narrow brake has to be reachable from the panel, not only over ssh:
+    it is the switch an admin reaches for when a run should be watched without
+    moving anybody's record."""
+    configured(client)
+
+    body = client.put("/api/watch", json={"proof_write_back": False}).json()
+
+    assert WatchSettings.load(client.home).proof_write_back is False
+    assert body["watch"]["proof_write_back"] is False
+
+
+def test_stopping_proofings_write_back_leaves_formattings_alone(client):
+    """The two switches are independent by design — that is the whole reason
+    this one exists rather than reusing `hubspot_write_back`."""
+    configured(client)
+
+    client.put("/api/watch", json={"proof_write_back": False})
+
+    ws = WatchSettings.load(client.home)
+    assert ws.proof_write_back is False and ws.hubspot_write_back is True

@@ -123,6 +123,7 @@ def status(home: str | Path, *, get_key=None,
         "hubspot_proof_ready_value": ws.hubspot_proof_ready_value,
         "hubspot_proof_done_value": ws.hubspot_proof_done_value,
         "hubspot_proof_needs_human_value": ws.hubspot_proof_needs_human_value,
+        "proof_write_back": ws.proof_write_back,
         # The interior-corrections stage, whole, for the panel's drawer.
         "corrections_enabled": ws.corrections_enabled,
         "corrections_engine": ws.corrections_engine,
