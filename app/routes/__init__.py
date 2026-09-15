@@ -11,7 +11,7 @@ from fastapi import FastAPI
 
 from . import (admin, canvas, compare, cover, files, jobs, models, presets,
                promo, prompts, quest, sapling, settings, styles, version,
-               watch)
+               watch, teasers)
 
 
 def register(app: FastAPI) -> None:
@@ -25,6 +25,7 @@ def register(app: FastAPI) -> None:
     prompts.register(app)
     watch.register(app)
     promo.register(app)
+    teasers.register(app)
     quest.register(app)
     sapling.register(app)
     settings.register(app)

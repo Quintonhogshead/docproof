@@ -2364,6 +2364,10 @@ class JobRunner:
         artifacts (an audit or verification failure keeps its notes). The email
         step no-ops on anything but a finished job, so a failed-with-artifacts
         job is archived here without being announced as done."""
+        job = self.store.get(job_id)
+        if self.notify_home and job and job.is_prep and job.state == "done":
+            from .teasers import enqueue_completed
+            enqueue_completed(self.notify_home, job)
         self._archive_done(job_id)
         self._notify_done(job_id)
 

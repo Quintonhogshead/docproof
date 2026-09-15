@@ -45,7 +45,10 @@ LOCAL_OWNER = "local"
 # is configured. `/api/watch/agent` is that same machine's heartbeat — the one
 # thing it may write, and only ever one bounded JSON file in the watch home,
 # behind the same gate. Nothing else writable belongs in this set.
-_OPEN_PATHS = {"/api/login", "/api/watch/awaiting", "/api/watch/agent"}
+_OPEN_PATHS = {"/api/login", "/api/watch/awaiting", "/api/watch/agent",
+               # Exact path only, with the existing agent bearer gate before
+               # body parsing. Author content and settings remain session-gated.
+               "/api/teasers/worker"}
 
 
 class Credentials(BaseModel):
