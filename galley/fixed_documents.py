@@ -418,6 +418,7 @@ def package_result(driver, result):
     from galley.verify import build_fingerprints
     from galley.fixed_calls import validate_fixed_call_evidence
     from galley.driver import handoff_base
+    from app.watch.naming import PRE_PROOFREAD_SUFFIX
     directory = driver.workspace / "runs/fixed"
     package_path = driver.workspace / "runs/driver/package.json"
     if package_path.exists():
@@ -469,11 +470,15 @@ def package_result(driver, result):
     out.mkdir(parents=True, exist_ok=True)
     artifacts = []
     base = handoff_base(source.name)
-    sources = [("tracked", tracked, f"{base}.docx"),
-               ("clean", clean, f"{base} - clean.docx"),
+    # The fixed lane hands back a pre-proofread, not a finished stage: a person
+    # reads the redline before the author does. So the verdict file DocWatch
+    # commits on — "<base> - outcome.json", the thing that moves the HubSpot
+    # property — is deliberately NOT delivered, and neither is the clean
+    # reading copy, which is for an author and not for the proofreader. Both
+    # are still built and certified in `runs/final`; they simply stay there.
+    sources = [("tracked", tracked, f"{base}{PRE_PROOFREAD_SUFFIX}.docx"),
                ("report", report, f"{base} - proofreading report.md"),
                ("evidence", evidence, f"{base} - review evidence.json"),
-               ("outcome", outcome, f"{base} - outcome.json"),
                ("certificate", certificate_path, f"{base} - fixed certificate.json")]
     for role, path, name in sources:
         target = out / name
@@ -539,9 +544,11 @@ def validate_delivery_package(package):
     if build_fingerprints(run)["build_sha256"] != package["build_sha256"]:
         raise FixedDocumentError("Fixed final build changed")
     source = Path(result["source"])
-    expected_origins = {"tracked": Path(certificate["tracked"]["path"]), "clean": Path(certificate["clean"]["path"]),
+    # The delivered set, which is not the built set: the clean copy and the
+    # outcome are certified in `runs/final` and stay there (see package_result).
+    expected_origins = {"tracked": Path(certificate["tracked"]["path"]),
         "report": run / f"{source.stem} - Proofreading report.md", "evidence": run / f"{source.stem} - Review evidence.json",
-        "outcome": run / f"{source.stem} - outcome.json", "certificate": certificate_path}
+        "certificate": certificate_path}
     artifacts = package.get("artifacts", [])
     if (len(artifacts) != len(expected_origins) or {x.get("role") for x in artifacts} != set(expected_origins)
             or len({x["path"] for x in artifacts}) != len(artifacts)

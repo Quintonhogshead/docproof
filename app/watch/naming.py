@@ -100,6 +100,12 @@ OUTCOME_SUFFIX = " - outcome"
 # redline — the record the author accepts or rejects — so this is the
 # companion, the mirror of prep's `- tracked changes` beside a clean primary.
 CLEAN_SUFFIX = " - clean"
+# What the fixed lane calls its redline. The press's own proofreaders have
+# always handed back a "<book> - Pre-Proofread.docx", so a machine pass that
+# goes to a person before the author reads it is named the same way — and
+# `stages.OUTPUT_STEM_SUFFIXES` already recognises the suffix, so the file is
+# never mistaken for a manuscript to work on.
+PRE_PROOFREAD_SUFFIX = " - Pre-Proofread"
 
 # The dashes a " - " separator turns up as in the wild: a plain hyphen-minus,
 # the hyphen and non-breaking hyphen, the figure/en/em dashes, the horizontal

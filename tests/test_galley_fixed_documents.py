@@ -156,8 +156,12 @@ def test_package_has_watch_compatible_names_and_reuses_exact_bytes(completed, mo
     driver, result = completed
     package = fd.package_result(driver, result)
     assert package["source_id"] == "drive-source" and package["outcome"] == "done" and package["reason"]
-    assert {row["name"] for row in package["artifacts"]} >= {
-        "Writer - Book 2.docx", "Writer - Book 2 - clean.docx", "Writer - Book 2 - outcome.json"}
+    # A pre-proofread goes to a proofreader, not to the author and not to
+    # HubSpot: no clean reading copy, and no outcome.json for DocWatch to
+    # commit on.
+    assert {row["name"] for row in package["artifacts"]} == {
+        "Writer - Book 2 - Pre-Proofread.docx", "Writer - Book 2 - proofreading report.md",
+        "Writer - Book 2 - review evidence.json", "Writer - Book 2 - fixed certificate.json"}
     assert fd.validate_delivery_package(package)["delivery_ready"] is True
     original = {row["path"]: Path(row["path"]).read_bytes() for row in package["artifacts"]}
     monkeypatch.setattr(fd, "write_manuscripts", lambda *a, **kw: pytest.fail("rebuilt completed documents"))

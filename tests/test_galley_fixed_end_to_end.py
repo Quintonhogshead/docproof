@@ -110,11 +110,15 @@ def test_real_fixed_driver_delivers_and_resumes_without_new_generations(tmp_path
     assert result.outcome == "done", result.reason
     package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
     assert validate_delivery_package(package)["delivery_ready"] is True
+    # One manuscript is delivered — the pre-proofread redline. The clean
+    # reading copy is still built and certified, it just stays in runs/final.
     documents = [p for p in result.handoff if p.suffix == ".docx"]
-    assert len(documents) == 2
-    for path in documents:
+    assert [p.name for p in documents] == ["Writer - Book 2 - Pre-Proofread.docx"]
+    corrected = documents[0]
+    clean = Path(json.loads(Path(package["certificate"]).read_text())["clean"]["path"])
+    assert clean.parent == Path(package["run"])
+    for path in (corrected, clean):
         assert list(paragraph_views(path).values()) == ["She received two letters."]
-    corrected = next(p for p in documents if "Clean" not in p.name)
     assert paragraph_views(corrected, "reject") == paragraph_views(source)
     models = {model for model, _ in readers.requests}
     assert models == ({SONNET} if poetry else {SONNET, LUNA, OPUS, SOL, FABLE, ASTRA})
