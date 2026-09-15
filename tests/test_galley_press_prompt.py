@@ -51,7 +51,7 @@ def test_extraction_preserves_exceptions_and_resolves_conflicts_explicitly():
         else:
             assert required.casefold() in text.casefold()
     assert "silent exceptions\ndo not apply" in text
-    assert "Poetry receives spelling only" in text
+    assert "never the poem's STRUCTURE" in text and "receives house mechanics only" in text
     assert "never mechanically convert" in text
     assert "reviewed_check_ids" in press_prompt.FRONTIER_TASK
 

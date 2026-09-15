@@ -17,10 +17,11 @@ phase prompt. Write findings and rules; the engine writes the manuscript.
   Record intent zones with `locked` / `punctuation` / `open` permissions;
   Scripture, liturgy, and historical quotations keep their wording protected.
   Zones guard every channel, including imported edits and boundary insertions.
-- **Poetry is the explicit exception:** `--genre poetry --stage poetry-touch`,
-  real-word misspellings only. Line breaks, capitals, fragments, punctuation,
-  ellipses, dashes, repetition, coinages, numerals, and dialect remain the poet's.
-  Religious/theological nonfiction uses `religious`, never a business preset.
+- **Poetry takes house MECHANICS, never its STRUCTURE** (poetry-touch):
+  dashes, ellipses, ’bout, spaces, spelling, compounds, serial comma, role
+  case, times, numbers, quote pairs as in prose; line breaks, line-head case,
+  fragments, terminal marks, repetition, dialect are the poet's: no rewording
+  for grammar or flow. Theology uses `religious`, never a business preset.
   Otherwise Chicago mechanics are not softened by genre. Keep the book's detected
   English variant (`variant: auto`); do not silently Americanize British text.
 - Queries are an absolute LAST resort. Decide a supported mechanical correction,

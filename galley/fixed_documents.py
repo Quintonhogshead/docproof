@@ -217,7 +217,15 @@ _LOCAL_EVIDENCE_VERSIONS = {
     # site labels for screening and number reads; local evidence is v3's.
     "fixed-proofreading-v5": {"typed": "initial", "ensemble_sweep": "completion",
                               "fable": "completion_fable", "astra": "completion_astra"},
+    # v6: verse takes house mechanics — Sonnet and Luna typed passes, the
+    # deterministic verse sweep packet (stage "verse"), the number stage and
+    # the checks — never a change to its structure; local evidence is v3's.
+    "fixed-proofreading-v6": {"typed": "initial", "ensemble_sweep": "completion",
+                              "fable": "completion_fable", "astra": "completion_astra"},
 }
+# From v6 a book with any poetry carries a verse sweep packet on its typed
+# stage, and a poetry-only book runs the number stage and the checks.
+_VERSE_EVIDENCE_VERSIONS = {"fixed-proofreading-v6"}
 
 
 def _verify_result(result, directory):
@@ -248,7 +256,9 @@ def _verify_result(result, directory):
             or marker.get("status") != "completed" or marker.get("result_sha256") != result["result_sha256"]):
         raise FixedDocumentError("The fixed workflow checkpoint does not match its completed result")
     stages = result["stages"]
-    expected = (["poetry", "typed", "poetry_complete"] if result["poetry_only"] else
+    verse_version = result["identity"].get("version") in _VERSE_EVIDENCE_VERSIONS
+    expected = ((["poetry", "typed", "numbers", "checks", "poetry_complete"] if verse_version
+                 else ["poetry", "typed", "poetry_complete"]) if result["poetry_only"] else
                 ["poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks", "ensemble_sweep", "continuity", "fable", "astra"])
     names = [s["stage"] for s in stages]
     # A completed run may be extended by receipted passes that put its final
@@ -274,6 +284,17 @@ def _verify_result(result, directory):
             protected_poetry = set(poetry_ids)
             if result["poetry_only"] != (protected_poetry == set(result["original"])):
                 raise FixedDocumentError("The fixed result disagrees with its poetry classification")
+        if version in _VERSE_EVIDENCE_VERSIONS and stage["stage"] == "typed" and protected_poetry:
+            from galley.fixed_local import validate_local_evidence
+            verse = payload.get("evidence", {}).get("verse_local")
+            if not isinstance(verse, dict) or verse.get("stage") != "verse":
+                raise FixedDocumentError("Required verse sweep evidence is missing")
+            packet = validate_local_evidence(verse, Path(directory) / "local", result["identity"])
+            request = packet["request"]
+            reviewed = {p["para_id"]: p["text"] for p in request["paragraphs"]}
+            if (request.get("stage") != "verse" or request.get("verse_ids") != sorted(protected_poetry)
+                    or reviewed != {pid: result["original"][pid] for pid in protected_poetry}):
+                raise FixedDocumentError("Verse sweep evidence does not cover the classified poetry")
         if (version in _LOCAL_EVIDENCE_VERSIONS and not result["poetry_only"]
                 and stage["stage"] in _LOCAL_EVIDENCE_VERSIONS[version]):
             from galley.fixed_local import validate_local_evidence
@@ -309,14 +330,14 @@ def _verify_result(result, directory):
 def _report(result, details, receipt=None):
     edits = [x for x in details if x["applied"]]
     paragraphs = len({x["para_id"] for x in edits})
-    scope = "Spelling only (poetry)" if result["poetry_only"] else "Clear proofreading errors only"
+    scope = "House mechanics only, never structure (poetry)" if result["poetry_only"] else "Clear proofreading errors only"
     labels = {pid: f"Paragraph {index}" for index, pid in enumerate(paragraph_views(result["source"]), 1)}
     stage_labels = {"poetry": "Poetry classification", "story_sheet": "Story Sheet",
         "typed": "Proofreading detectors", "numbers": "Number style review",
         "broken_repair": "Broken sentence repair", "checks": "Meaning and correction checks",
         "ensemble_sweep": "Opus and Sol complete readings", "continuity": "Fable whole-book continuity reading",
         "fable": "Fable final reading and comment review",
-        "astra": "Astra final reading and comment review", "poetry_complete": "Spelling-only proofread complete",
+        "astra": "Astra final reading and comment review", "poetry_complete": "Verse mechanics proofread complete",
         "walkthrough_questions": "Final readers' questions put to Astra's review"}
     lines = ["# Galley proofreading report", "", f"Scope: {scope}.", "",
              f"{len(edits)} tracked corrections across {paragraphs} paragraphs; {len(result['questions'])} author questions.", "",
@@ -375,7 +396,7 @@ def _report(result, details, receipt=None):
         stages = {s["stage"]: json.loads(Path(s["path"]).read_text())["evidence"] for s in result["stages"]}
         sheet = stages.get("story_sheet", {}).get("sheet", {})
         lines += ["", "## Story Sheet and style assumptions", "",
-                  sheet.get("narration", "Story Sheet unavailable." if skipped else "Poetry: prose style and tense passes do not apply.")]
+                  sheet.get("narration", "Story Sheet unavailable." if skipped else "Poetry: house mechanics only; prose style and tense passes do not apply.")]
         lines += ["- " + note for note in sheet.get("notes", [])]
         if sheet and not sheet.get("notes"):
             lines.append("No additional variant or register assumptions were recorded; no independent authority lookup is claimed.")

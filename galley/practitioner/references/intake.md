@@ -30,7 +30,9 @@ House numbers spell through one hundred, use `4:00 AM` and `40 percent`. Preserv
 quoted facts and detect the book's English variant. Protect author-declared caps,
 wordplay/meta-text, dialect, coined names, personified capitals, Scripture/liturgy/
 historical quotations. Use the dedicated religious preset for theology; verse
-uses poetry-touch and real-word misspellings only. Headings/labels are structural,
+uses poetry-touch: house mechanics at the character and word level, never the
+poem's structure (line breaks, line-head capitals, fragments, terminal marks,
+repetition). Headings/labels are structural,
 not necessarily Word Heading style. An incorrect numbered heading is mechanics.
 
 Produce profile.json (genre, word count, chapter map, tense/person/exceptions,

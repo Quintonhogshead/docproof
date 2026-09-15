@@ -74,7 +74,7 @@ def reinstate_walkthrough_questions(book, workspace, *, progress=None, max_api_u
     passes = sum(1 for s in result["stages"] if s["stage"].startswith(STAGE))
     stage = STAGE if passes == 0 else f"{STAGE}_{passes + 1}"
     if result.get("poetry_only"):
-        raise FixedReinstateError("A spelling-only run has no walk-through questions")
+        raise FixedReinstateError("A verse-only run has no walk-through questions")
     flow = FixedWorkflow(book, directory, calls=calls, progress=progress, max_api_usd=max_api_usd)
     if flow.identity != result["identity"] or flow.identity["version"] != VERSION:
         raise FixedWorkflowError("The completed run belongs to a different source or fixed recipe")

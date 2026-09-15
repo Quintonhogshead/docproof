@@ -144,7 +144,9 @@ def configuration(poetry: bool = False) -> Config:
         DetectorSpec(model="claude-sonnet-5", effort="low"),
         DetectorSpec(model="gpt-5.6-luna", effort="low"),
     ])
-    cfg.error_types = ["spelling"] if poetry else _without_number_types(cfg.error_types)
+    # Both recipes hand number and currency style to the dedicated number
+    # stage; verse keeps the poetry-touch stage's own mechanics passes.
+    cfg.error_types = _without_number_types(cfg.error_types)
     cfg.spellcheck.enabled = True
     # The fixed runner anchors every candidate to the original package and
     # writes tracked deltas itself; even prose cannot move before that happens.
@@ -152,11 +154,74 @@ def configuration(poetry: bool = False) -> Config:
     cfg.normalize.spaces = False
     cfg.speaker_split.enabled = False
     if poetry:
-        cfg.sweeps = []
+        # The stage's sweep list stands: verse gets the glyph, spacing and
+        # word sweeps and none of the sentence-level ones.
         cfg.style.unclosed_quote_queries = False
         cfg.style.heading_title_case = False
         cfg.style.heading_vocab_queries = False
     return cfg
+
+
+# What a proposal in a verse paragraph may be about. Verse takes the house
+# mechanics at the character and word level and never a change to its
+# structure (see press_prompt EDITORIAL_RULES["verse"]). Categories are the
+# fixed readers' vocabulary plus the typed-pass keys and the sweep keys that
+# reach verse; anything else — grammar, broken_sentence, continuity, usage,
+# structure — is a sentence-level judgment that stays out of a poem.
+VERSE_CATEGORIES = frozenset({
+    "spelling", "punctuation", "number_style", "currency_style",
+    "homophone_confusion", "apostrophe_error", "capitalization", "serial_comma",
+    "missing_word", "ly_adverb_hyphen",
+    "sweep_ellipsis", "sweep_dash", "sweep_elision_apostrophe", "sweep_quote_pair",
+    "sweep_trailing_space", "sweep_time_of_day", "sweep_compound_number",
+    "sweep_century", "sweep_decade_apostrophe", "sweep_initialism",
+})
+
+_TERMINAL = ".!?…"
+
+
+def _line_heads(text: str) -> list[int]:
+    """Offsets of the first letter on each line of a paragraph."""
+    heads = []
+    at = 0
+    for line in text.split("\n"):
+        i = 0
+        while i < len(line) and not line[i].isalpha():
+            i += 1
+        if i < len(line):
+            heads.append(at + i)
+        at += len(line) + 1
+    return heads
+
+
+def verse_safe(row: Mapping, text: str) -> str | None:
+    """Why an accepted edit may not be applied to a verse paragraph, or None.
+
+    `row` carries start/end/before/replacement/category against `text`, the
+    paragraph as it currently reads. The structure a poem owns is checked on
+    the paragraph as it would read after the edit: no line gained or lost, no
+    line head recased, no terminal mark added at a line end where the poet
+    set none.
+    """
+    if row.get("format"):
+        return "Verse takes no formatting changes"
+    if row.get("category") not in VERSE_CATEGORIES:
+        return "Verse takes house mechanics only; sentence-level judgments stay out"
+    lo, hi = row["start"], row["end"]
+    after = text[:lo] + row["replacement"] + text[hi:]
+    if after.count("\n") != text.count("\n"):
+        return "Verse keeps its line breaks"
+    before_heads, after_heads = _line_heads(text), _line_heads(after)
+    if len(before_heads) != len(after_heads) or any(
+            text[i] != after[j] and text[i].casefold() == after[j].casefold()
+            for i, j in zip(before_heads, after_heads)):
+        return "Verse keeps the case of its line heads"
+    for old_line, new_line in zip(text.split("\n"), after.split("\n")):
+        old_end, new_end = old_line.rstrip(), new_line.rstrip()
+        if (new_end[-1:] in tuple(_TERMINAL) and old_end[-1:] not in tuple(_TERMINAL)
+                and old_end.rstrip("\"”’'") == new_end.rstrip("\"”’'").rstrip(_TERMINAL).rstrip("\"”’'")):
+            return "Verse takes no terminal mark the poet did not set"
+    return None
 
 
 # Match surface forms broadly. Whether "one" is a quantity, a pronoun, or part
@@ -348,5 +413,5 @@ def poetry_samples(paragraphs: Mapping[str, str], count: int = 6,
 
 
 __all__ = ["configuration", "EXCLUDED_LOCAL_TYPES", "LOCAL_CANDIDATE_TYPES",
-           "NUMBER_POLICY", "PROOFREADING_POLICY",
-           "extract_numbers", "poetry_samples"]
+           "NUMBER_POLICY", "PROOFREADING_POLICY", "VERSE_CATEGORIES",
+           "extract_numbers", "poetry_samples", "verse_safe"]

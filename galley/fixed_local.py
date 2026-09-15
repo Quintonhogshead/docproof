@@ -62,7 +62,8 @@ def _versions():
             for name in _IMPLEMENTATIONS if (_ROOT / name).is_file()}
 
 
-def _paragraphs(prepared, texts, poetry_ids):
+def _paragraphs(prepared, texts, poetry_ids, *, verse=False):
+    """The prose paragraphs of `texts` — or, with `verse`, only its poetry."""
     if not isinstance(texts, Mapping) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in texts.items()):
         raise FixedLocalError("Local checks require a complete paragraph-id/text mapping")
     known = {p.para_id: p for p in prepared.doc.paragraphs}
@@ -76,16 +77,17 @@ def _paragraphs(prepared, texts, poetry_ids):
                                                    texts.get(p.para_id, ""), style))
     return [replace(known[pid], text=text) if pid in known else
             ParagraphRef(pid, "word/document.xml", "body", text, "Normal")
-            for pid, text in texts.items() if pid not in set(poetry_ids)]
+            for pid, text in texts.items() if (pid in set(poetry_ids)) == verse]
 
 
-def _request(prepared, texts, identity, cfg, poetry_ids, stage, **extra):
+def _request(prepared, texts, identity, cfg, poetry_ids, stage, *, verse=False, **extra):
     from galley.local_assets import local_asset_identity
-    paragraphs = _paragraphs(prepared, texts, poetry_ids)
+    paragraphs = _paragraphs(prepared, texts, poetry_ids, verse=verse)
     request = {"version": VERSION, "stage": stage, "identity": identity,
         "configuration": cfg.model_dump(mode="json"), "implementations": _versions(),
         "paragraphs": [asdict(p) for p in paragraphs],
-        "excluded_poetry_ids": sorted(set(texts) & set(poetry_ids)),
+        "excluded_poetry_ids": [] if verse else sorted(set(texts) & set(poetry_ids)),
+        "verse_ids": sorted(set(texts) & set(poetry_ids)) if verse else [],
         "lexicon": list(getattr(prepared.spell, "lexicon", ())),
         "near_duplicates": [asdict(p) for p in getattr(prepared.spell, "near_duplicates", ())],
         "variant": asdict(prepared.variant),
@@ -132,7 +134,8 @@ def _packet(directory, request, build):
         "marker_path": str(marker_path), "marker_sha256": hashlib.sha256(marker_path.read_bytes()).hexdigest(),
         "request_sha256": sha, "identity_sha256": _hash(request["identity"]),
         "paragraph_ids": [p["para_id"] for p in request["paragraphs"]],
-        "excluded_poetry_ids": request["excluded_poetry_ids"], "checks": saved["checks"],
+        "excluded_poetry_ids": request["excluded_poetry_ids"], "verse_ids": request.get("verse_ids", []),
+        "checks": saved["checks"],
         "proposal_count": len(saved["findings"]), "diagnostic_count": len(saved["diagnostics"])}
     return saved["findings"], evidence
 
@@ -182,7 +185,8 @@ def _validate_packet(saved, request):
     paragraphs = {p["para_id"]: p["text"] for p in request["paragraphs"]}
     if len(paragraphs) != len(request["paragraphs"]):
         raise FixedLocalError("Local-check paragraph inventory is duplicated")
-    expected = ({"house_sweeps", "consistency", "residuals", "recurrences", "calendar", "normalization_and_speakers"}
+    expected = ({"verse_sweeps"} if request.get("verse_ids") else
+                {"house_sweeps", "consistency", "residuals", "recurrences", "calendar", "normalization_and_speakers"}
                 if request.get("completion") else
                 {"sweeps", "consistency", "genre", "calendar", "dictionary", "candidate_generators", "normalization_and_speakers", "languagetool"}) if paragraphs else set()
     checks = saved.get("checks", [])
@@ -224,6 +228,7 @@ def validate_local_evidence(evidence, directory, identity):
             evidence.get("stage") != request.get("stage") or
             evidence.get("paragraph_ids") != [p["para_id"] for p in request["paragraphs"]] or
             evidence.get("excluded_poetry_ids") != request.get("excluded_poetry_ids") or
+            evidence.get("verse_ids", []) != request.get("verse_ids", []) or
             evidence.get("checks") != saved["checks"] or evidence.get("proposal_count") != len(saved["findings"]) or
             evidence.get("diagnostic_count") != len(saved["diagnostics"])):
         raise FixedLocalError("Local-check certificate does not match its source packet")
@@ -612,6 +617,30 @@ def _recurrence_seeds(original, current, excluded):
                 old, 1, new, "Previously accepted minimal word correction.", "high", status="validated",
                 anchor=Anchor(b[k].start(), b[l - 1].end(), old, new)))
     return seeds
+
+
+def collect_verse_candidates(prepared, texts, directory, *, identity, verse_ids, cfg=None):
+    """The deterministic house sweeps over the poetry paragraphs only.
+
+    Verse takes house mechanics at the character and word level — the glyph,
+    spacing and word sweeps the poetry-touch stage lists — and nothing that
+    judges a sentence: no LanguageTool, no dictionary generators, no
+    consistency or residual queries, no speaker boundaries. Every row is
+    screened by the readers like any other local signal.
+    """
+    cfg = _config(cfg)
+    paragraphs, request = _request(prepared, texts, identity, cfg, verse_ids, "verse", verse=True)
+
+    def build():
+        by_id = {p.para_id: p for p in paragraphs}
+        if not paragraphs:
+            return [], [], [], {"skipped": "no_verse"}
+        house, reports = _house_findings(paragraphs, prepared, cfg)
+        rows = [row for row in (_finding(f, by_id, "local:verse") for f in house) if row]
+        checks = [_check("verse_sweeps", paragraphs, len(rows), sweeps=list(cfg.sweeps))]
+        return _deduplicate(rows), checks, [], {"sweep_reports": reports}
+
+    return _packet(directory, request, build)
 
 
 def collect_completion_candidates(prepared, original, current, directory, *, identity, stage,
