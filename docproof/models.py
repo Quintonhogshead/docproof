@@ -39,7 +39,7 @@ STATUSES = (
     "rejected_duplicates_neighbour",
     # The configured house sweeps would re-fire inside the changed span of the
     # paragraph as it would read — the row undoes house style (a typed pass
-    # lowercasing "2:30 AM"). Carries the sweep key after a colon.
+    # restyling "2:30 a.m."). Carries the sweep key after a colon.
     "rejected_undoes_house_style",
     "skipped_low_confidence",
 )

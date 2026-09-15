@@ -6,7 +6,9 @@ detection_prompt: |
   The Atmosphere house guide spells out one through one hundred in prose and
   uses numerals from 101 up. Ordinals in prose are spelled out too. Centuries
   are always spelled out. Cancer stages are set in ROMAN numerals. Clock times
-  are set as digits with minutes and a capital meridiem ("11:00 AM"). Simple
+  are set as digits with minutes and a lowercase meridiem — "3:00 p.m." with
+  periods in a U.S.-oriented book, "3:00 pm" without in a U.K.-oriented one.
+  Simple
   fractions are spelled out and hyphenated when adjectival. Thousands take a
   comma.
 
@@ -43,11 +45,12 @@ detection_prompt: |
   Do NOT flag — these are legitimate numeral contexts and the house guide
   leaves them alone:
   - Dates and years: "July 14, 1989", "in 1997", "the 1990s".
-  - Times, including a BARE clock hour: "8:30 AM", "at 5:00", "around 4",
+  - Times, including a BARE clock hour: "8:30 a.m.", "at 5:00", "around 4",
     "the meeting starts at 8". The house time form is digits with minutes and
-    a capital meridiem ("11:00 AM") — a deterministic sweep normalizes the
-    meridiem and the whole-book consistency scan owns bare hours, so never
-    spell a clock time out and never restyle one yourself.
+    a lowercase meridiem ("3:00 p.m." U.S.; "3:00 pm" U.K.) — a deterministic
+    sweep normalizes the meridiem and the whole-book consistency scan owns
+    bare hours, so never spell a clock time out and never restyle one
+    yourself.
   - Money, which the currency_style type owns entirely.
   - Percentages: "40 percent".
   - Addresses, house and room numbers: "12 Oak Street", "room 4".

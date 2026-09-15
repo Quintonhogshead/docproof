@@ -939,27 +939,28 @@ def test_a_failed_second_look_keeps_todays_revert(tmp_path, monkeypatch):
 # --- Georgis: house style is not up for settlement ------------------------------
 
 def test_a_settlement_the_sweeps_would_undo_is_dropped(tmp_path):
-    """The walk, prompted Chicago, flagged the house "4:00 AM" and settle
-    wrote "4:00 a.m."; `sweep_time_of_day` fired straight back. Now the
-    candidate paragraph is swept before the settlement lands."""
-    paras = list(PARAGRAPHS) + ["The train left at 4:00 AM and we slept."]
+    """On Georgis the walk flagged the house time form and settle wrote the
+    other one; `sweep_time_of_day` fired straight back. Now the candidate
+    paragraph is swept before the settlement lands. (The house form is
+    "4:00 a.m." since the 2026-09-15 guide; the walker here wants "4:00 AM".)"""
+    paras = list(PARAGRAPHS) + ["The train left at 4:00 a.m. and we slept."]
     src = _manuscript(tmp_path, paras)
     ids, _doc = _para_ids(src)
     p5 = ids[5]
     run = _build(tmp_path, src, [
         {"para_id": ids[0], "original_text": "teh", "corrected_text": "the",
          "confidence": "high"}])
-    _walk(run, [{"para_id": p5, "quote": "4:00 AM",
-                 "problem": "Chicago uses lowercase periods for a.m.",
-                 "suggestion": "4:00 a.m.", "severity": "medium"},
+    _walk(run, [{"para_id": p5, "quote": "4:00 a.m.",
+                 "problem": "The house sets a capital meridiem.",
+                 "suggestion": "4:00 AM", "severity": "medium"},
                 {"para_id": p5, "quote": "we slept", "problem": "tense",
                  "suggestion": "we sleep", "severity": "low"}])
     assert _settle(tmp_path, run, src) == 0
     recs, st = _records(run)
-    r = recs[residual_id(p5, "4:00 AM")]
+    r = recs[residual_id(p5, "4:00 a.m.")]
     assert r.action == "drop"
     assert r.reason == "undoes_house_style:sweep_time_of_day"
-    assert "4:00 AM" in _accepted(run)[p5]
+    assert "4:00 a.m." in _accepted(run)[p5]
     # an ordinary settlement in the same paragraph still lands
     assert recs[residual_id(p5, "we slept")].action == "add"
     assert "we sleep" in _accepted(run)[p5]

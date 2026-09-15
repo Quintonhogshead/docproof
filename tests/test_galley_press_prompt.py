@@ -42,7 +42,7 @@ def test_extraction_preserves_exceptions_and_resolves_conflicts_explicitly():
     text = press_prompt.editorial_policy()
     source = json.loads(press_prompt.SOURCE.read_text())
     assert len(text + press_prompt.FRONTIER_TASK + press_prompt.STORY_TASK) < len(source["prompt_text"]) / 2
-    for required in ("Oxford", "Macquarie", "Canadian", "capital AM/PM", "no invented",
+    for required in ("Oxford", "Macquarie", "Canadian", "3:00 p.m.", "3:00 pm", "no invented",
                      "NBSP", "interrobangs", "verbatim", "BOTH comma and lowercase",
                      "Never lowercase I", "She continued typing", "multi-paragraph",
                      "scientific truths", "internally consistent scene", "No majority"):

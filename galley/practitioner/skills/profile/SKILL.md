@@ -54,7 +54,7 @@ book.
    as age / date / year / time / sum / count / distance / other. This file is
    the NUMBER AUDIT's input (Quinton, 2026-09-04: Galley audits every number
    in the text): wave 1 reviews it for house style (spell out to one hundred,
-   `4:00 AM`, `40 percent`), internal consistency (ages vs. years, running
+   `3:00 p.m.` / `3:00 pm` UK, `40 percent`), internal consistency (ages vs. years, running
    totals, weekday vs. date), and arithmetic against the rest of the book.
    A contradiction is an author QUERY, never an edit. Record the count in the
    profile (`numbers: {count, by_kind}`).
