@@ -5,7 +5,7 @@
   const toggle = document.getElementById('author-teasers-enabled');
   const note = document.getElementById('author-teasers-note');
   const jobs = document.getElementById('author-teasers-jobs');
-  if (!card) return;
+  if (!card || card.hidden) return;   // switched off: no polling, no toggle
   let saving = false;
   async function request(path, options) {
     const response = await fetch(path, options);

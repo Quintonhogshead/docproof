@@ -1,5 +1,11 @@
 # Automatic author teasers
 
+> **Switched off since 2026-09-15.** `AVAILABLE = False` in `app/teasers.py`
+> makes the formatting hook enqueue nothing, the cloud worker poll return no
+> task, and the settings route refuse to enable the feature; the formatting
+> panel's card is hidden. Nothing below was removed. Set `AVAILABLE = True`
+> and drop the card's `hidden` attribute to bring it back.
+
 Every successful formatting job can create one native Google Doc containing five
 distinct back-cover teasers, three optional hooks, a short editorial note, and
 “Teaser elements & best practices” with a modification checklist. All books use
