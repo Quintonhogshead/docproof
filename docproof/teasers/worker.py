@@ -1,4 +1,4 @@
-"""Fly-only worker. Sol uses the cloud ChatGPT login; Qwen and Drive stay on the web machine."""
+"""Fly-only worker. Sol uses the cloud ChatGPT login; the writer and Drive stay on the web machine."""
 from __future__ import annotations
 
 import argparse
@@ -13,9 +13,10 @@ import urllib.request
 from urllib.parse import urlparse
 import uuid
 
-from app.teasers import lock, current_writer_brief
+from app.teasers import lock
+from galley.astra_review import AstraReviewError
 from . import pipeline
-from .models import Draft, Storysheet, Review, digest
+from .models import Draft, Storysheet, draft_issues
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +46,11 @@ class Client:
                     detail = "The cloud task must retry."
                 raise ValueError(str(detail)) from exc
             raise
+
+
+def transient(exc) -> bool:
+    """A busy subscription lock is a yield, not a failure of this book."""
+    return isinstance(exc, AstraReviewError) and "busy" in str(exc)
 
 
 def process(task, client, home, *, runner=None):
@@ -77,23 +83,16 @@ def process(task, client, home, *, runner=None):
             story = pipeline.analyze(task["chunks"], work, runner=runner, progress=progress,
                                      feedback=task.get("feedback"), attempt=task.get("failures", 0))
             task = client.call("story", task["id"], story.model_dump())["task"]
-        while task["state"] in ("brief_ready", "story_ready", "drafted", "approved"):
-            if task["state"] == "brief_ready":
-                story = Storysheet.model_validate(task["storysheet"])
-                brief = pipeline.revise_writer_brief(story, current_writer_brief(task), task.get("feedback", []),
-                    task["chunks"], work, runner=runner, progress=progress, attempt=task.get("failures", 0))
-                task = client.call("brief", task["id"], {"brief": brief.model_dump(),
-                    "draft_sha256": task["drafts"][-1]["sha256"],
-                    "review_sha256": digest(Review.model_validate(task["reviews"][-1]))})["task"]
-            elif task["state"] == "story_ready":
-                progress("Qwen is rephrasing Sol's finished teasers and guide")
+        while task["state"] in ("story_ready", "drafted", "approved"):
+            if task["state"] == "story_ready":
+                progress("The writer is drafting five teasers and the author guide")
                 task = client.call("draft", task["id"])["task"]
             elif task["state"] == "drafted":
                 story = Storysheet.model_validate(task["storysheet"])
-                story.writer_brief = current_writer_brief(task)
                 draft = Draft.model_validate(task["drafts"][-1]["content"])
-                review = pipeline.review(story, draft, task["chunks"], work,
-                                         runner=runner, progress=progress, attempt=task.get("failures", 0))
+                review = pipeline.review(story, draft, task["chunks"], work, runner=runner,
+                                         progress=progress, attempt=task.get("failures", 0),
+                                         issues=draft_issues(draft))
                 task = client.call("review", task["id"], review.model_dump())["task"]
             elif task["state"] == "approved":
                 progress("Uploading and verifying the author Google Doc")
@@ -134,10 +133,13 @@ def main():
                 # the durable state before deciding whether anything must retry.
                 log.exception("The teaser server connection was interrupted")
             except Exception as exc:
-                log.exception("Teaser task will retry automatically")
+                if transient(exc):
+                    log.info("The subscription reviewer is busy; the teaser task will wait")
+                else:
+                    log.exception("Teaser task will retry automatically")
                 if task:
                     try:
-                        client.call("error", task["id"], {"error": str(exc)})
+                        client.call("error", task["id"], {"error": str(exc), "transient": transient(exc)})
                     except Exception:
                         log.exception("Could not save the teaser error")
             if args.once:

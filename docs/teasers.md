@@ -8,70 +8,64 @@ The recommended option appears first. Teasers are 140–190 words each in two to
 four paragraphs. The guide is optional reading for authors; there is no human
 editorial approval step.
 
+## Who writes what
+
+The delivered document is written entirely by an open-weight model. That is the
+point of the design, and every stage protects it:
+
+- **Sol** (`gpt-5.6-sol` at `high`, the cloud ChatGPT subscription) reads the
+  whole manuscript, keeps the ending and the protected-revelation list private,
+  writes a public-safe editorial brief, checks that brief, and judges each draft.
+  Sol never produces published text. A review carries findings only — private
+  feedback for the record and public-safe *writer notes* — and the schema has no
+  field for replacement wording.
+- **The writer** (`deepseek-ai/DeepSeek-V4-Pro` through DeepInfra, the strongest
+  open-weight writer in DocProof's catalog, with its default reasoning on) writes
+  the five teasers, hooks, note and guide from the brief alone. It never sees the
+  manuscript, the private storysheet, the ending, or Sol's private feedback. It
+  revises from the writer notes; options Sol passed come back word for word.
+
+The model that wrote each draft is recorded on the draft (`model`, `provider`);
+every entry in `drafts` is the writer's.
+
 ## Cloud workflow
 
 1. Both manual and watched formatting jobs enqueue the same accepted manuscript
    before archiving. The queue freezes its complete text and source identity.
-2. The Fly agent sidecar reads every contiguous manuscript portion through
-   `gpt-5.6-sol` at `high`, using the existing cloud ChatGPT subscription login.
-   Sol creates a private storysheet and writes the complete five teasers, hooks,
-   note and author guide. It makes every editorial and factual decision, then
-   checks and makes localized corrections to the finished public copy before
-   rephrasing. This copy edit can replace at most ten exact spans and 160 words;
-   the normal post-Qwen source review remains required. Saved finished writing
-   survives retries, so a small correction does not restart the writing pass.
-   Large paragraphs and long
-   books use coverage-checked reading portions, never silent truncation. A source
-   that fits in one call is read directly without an intermediate summary.
-3. The Fly web server calls `Qwen/Qwen3.6-27B` through DeepInfra, using the
-   key already stored in DocProof settings. Qwen only rephrases Sol's finished copy,
-   with reasoning disabled for this language-only step using DeepInfra's
-   [reasoning switch](https://docs.deepinfra.com/chat/reasoning).
-   Its input contains that complete copy and any previously approved rephrasings.
-   It receives no open-ended writing brief, manuscript
-   passages, private storysheet, ending details, protected-revelation list, raw
-   review feedback or rejected draft. The actual public handoff is recorded for
-   audit. Older tasks without finished Sol copy rebuild it automatically before any
-   further writer call.
-4. Sol compares the exact rephrasing with its finished baseline and every source
-   portion, checking all five options and the author guide. A source that fits in
-   one call is included directly in this review. Approval is bound to the saved draft hash
-   and the complete list of manuscript portions. Sol can directly correct names,
-   short factual phrases or individual sentences. Each exact replacement needs
-   manuscript evidence and is limited to 40 words/320 characters; a review can
-   replace at most forty short spans and 320 words across the complete five-option
-   package and guide. Repeated occurrences of a wrong name or term can all be
-   corrected in one pass. The corrected package is saved
-   with its edit history. Sol can explicitly approve the corrected text in that
-   same pass; the server checks and applies the exact edits, then binds the approval
-   to the corrected text for immediate delivery. A name or sentence correction does
-   not itself trigger another model call. Only unresolved substantive concerns need
-   another pass. Older in-flight reviews that did not approve their corrections
-   still require an explicit approval before delivery.
-5. For larger revisions, Sol corrects the complete public copy itself and checks
-   it for accuracy and spoilers before Qwen rephrases it. Qwen makes no editorial
-   decisions and receives no ending or private review text. Previously passing
-   options retain their exact text only when Sol's corresponding baseline remains
-   unchanged. The complete assembled
-   package still receives a fresh, source-bound review; retained prose has an
-   internal provenance link to its original draft. After five unsuccessful Qwen drafts,
-   Sol refreshes the brief. Temporary failures retry with increasing delays, up
-   to six hours; completed, validated Sol answers are reused. At most twelve Qwen
-   submissions per book per rolling day are allowed; work resumes automatically
-   when that allowance becomes available. There is no editor queue or paid OpenAI
-   API fallback. A service credential that expires still needs normal account
-   maintenance; the job keeps retrying rather than publishing unverified copy.
-   Qwen receives a 16,000-token output allowance, automatically increasing to
-   32,000 after truncation. Incomplete packages never replace a valid draft;
-   generation receipts include usage for unsuccessful responses too.
-6. Only a passing package is formatted as DOCX, converted to a native Google Doc,
-   and read back to verify all five options and every guidance section. Delivery
-   uses the formatting workflow's Google OAuth connection. The upload session and
-   document identity survive retries. Existing author documents are never replaced.
+2. The Fly agent sidecar reads every contiguous manuscript portion through Sol
+   (coverage-checked portions, never silent truncation; a source that fits in one
+   call is read directly). Sol writes the private storysheet and the public brief,
+   then checks the brief for accuracy and spoilers. A rejected brief is rebriefed
+   once from the checker's findings within the same attempt; a second rejection
+   discards those answers so the next attempt asks afresh. Validated readings and
+   briefs are cached and survive retries. A brief prepared for different review
+   findings is never reused, so a rebrief after a stalled cycle really rebriefs.
+3. The Fly web server calls the writer with the brief, the previous draft (if
+   any), the writer notes and the list of approved options. Word and item counts
+   are enforced in a tight loop on the writer — up to three cheap writer calls —
+   before Sol ever sees a draft. The writer gets a 32,000-token output allowance
+   (its reasoning shares it), doubling once to 64,000 after truncation. At most
+   thirty writer calls per book per rolling day.
+4. Sol reviews the saved draft against every manuscript portion (per-portion
+   source reviews for long books, the original text directly for short ones) and
+   returns a verdict bound to the draft hash and the full list of portions:
+   per-option accuracy, spoiler safety, clarity, voice and distinctness, plus
+   guidance approval, a recommended option, private feedback and writer notes.
+5. A rejected draft goes back to the writer with the notes. After four rejected
+   drafts under one brief, Sol rebriefs from its own private findings and the
+   writer starts clean. Transport failures back off from one minute to at most
+   fifteen; a busy subscription lock is a yield, not a failure, and never counts
+   against the book. Errors are shown in the panel and are never fed to Sol as
+   editorial feedback.
+6. Only an approved package is formatted as DOCX, converted to a native Google
+   Doc, and read back to verify all five options and every guidance section.
+   Delivery uses the formatting workflow's Google OAuth connection. The upload
+   session and document identity survive retries. Existing author documents are
+   never replaced.
 
-The program does not add a text watermark. It records the actual generation
-provider and review path internally. It does not certify DeepInfra's implementation
-or promise that a probabilistic watermark detector can never flag the output.
+The program does not add a text watermark and records the actual generation
+provider internally. It does not certify DeepInfra's implementation or promise
+that a probabilistic detector can never flag the output.
 
 ## Operation
 
@@ -84,27 +78,28 @@ Server state lives at `<watch-home>/teasers/queue.sqlite3`, alongside settings,
 progress receipts, approved DOCX files, and revision history. The agent's validated
 Sol answers and transport receipts live at `/data/docproof-teasers/books`.
 Authentication remains in `/data/galley-codex`; no Mac files or processes are used.
+The sidecar shares that login's serialization lock with the Galley proofing
+worker, so the two take turns on the subscription; the sidecar waits rather than
+failing when the lock is held.
 
 The existing Fly `galley-agent` entrypoint launches a supervisor that keeps the
 teaser sidecar running beside the existing proofing poller. It restarts the sidecar
 if it exits and stops both children cleanly at machine shutdown. A process lock
 prevents two copies of the sidecar from working on the same persistent queue.
-The cloud login is serialized using the existing Codex transport.
 
 The exact `/api/teasers/worker` route requires the existing long agent bearer
 credential before reading its bounded request body. It accepts only queue, draft,
 review, heartbeat and delivery operations for the claimed task. It does not accept
-arbitrary model names, destination URLs, file paths or replacement final prose.
+arbitrary model names, destination URLs, file paths or replacement prose.
 Settings and status endpoints require an administrator on the hosted build.
 
 ## Prompt maintenance and validation
 
-`config/teasers/editorial-standard.md` adapts the supplied manuscript-to-back-cover
-prompt. It retains source verification, whole-book understanding, truthful reader
-promise, functional spoiler boundaries, genre-specific positioning, sentence-level
-craft, and final accuracy checks. Its old two-option deliverable is replaced with
-five options and the author guide. `docproof/teasers/prompts.py` assigns the
-stage-specific responsibilities and structured outputs.
+`config/teasers/editorial-standard.md` is the shared craft standard; its section
+13 states the two models' responsibilities. `docproof/teasers/prompts.py` assigns
+the stage-specific tasks and structured outputs. To change the writer, edit
+`WRITER_MODEL` in `docproof/teasers/__init__.py`; it must be a DeepInfra model
+in `docproof/providers/catalog.py`.
 
 Run the teaser suite together with formatting, watcher and subscription-runner
 tests before release. Also run a cloud-only end-to-end test with fictional source
