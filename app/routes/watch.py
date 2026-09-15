@@ -64,6 +64,10 @@ class WatchUpdate(BaseModel):
     # refuses an empty value rather than blanking the status property — so the
     # book stays at the ready value for a person. The panel says so.
     hubspot_proof_needs_human_value: str | None = None
+    # Off, a proofread still runs, delivers and marks Drive — it just never
+    # moves the CRM record. Narrower than `hubspot_write_back`, which would
+    # silence formatting's write-back too.
+    proof_write_back: bool | None = None
     # Interior corrections: the switch, the two dropdown values, the two form
     # properties the workflow copies the submission into, the designer's
     # subfolder name, and whether the run buys the model passes.
@@ -589,6 +593,7 @@ def register(app: FastAPI) -> None:
                 setattr(ws, name, value.strip())
         for name in ("upload_failure_note",
                      "require_source_label", "proofing_enabled",
+                     "proof_write_back",
                      "corrections_enabled", "corrections_model_passes",
                      "corrections_quiet_seconds", "corrections_form_poll",
                      "max_files_per_tick", "auto_ticks", "tick_every_minutes",

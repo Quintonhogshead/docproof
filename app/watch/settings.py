@@ -231,6 +231,19 @@ class WatchSettings:
     # can be watched end to end without changing a record. A book still marks
     # itself done in Drive, so it is not prepared twice.
     hubspot_write_back: bool = True
+    # The same brake, narrowed to proofing. On by default, so nothing changes
+    # for an install that never touches it. Turned off, a finished proofread
+    # still reads its gate, still uploads the hand-off and still marks the
+    # Drive manuscript — it just never moves the status property, so the book
+    # stays at `hubspot_proof_ready_value` for a person to move by hand.
+    #
+    # A separate switch rather than `hubspot_write_back` because that one is
+    # global: turning it off to keep proofing quiet would also stop formatting
+    # flipping "Formatting Complete", which is the only thing formatting still
+    # uses HubSpot for now that `format_intake` is "folder". The verdict itself
+    # is unaffected — `outcome.json` still records done/needs_human, and the
+    # owner still gets the email — this governs the CRM write alone.
+    proof_write_back: bool = True
 
     # The mechanical proofread: the docproof review ladder, its sweeps, verify
     # and settle, delivered as a tracked-changes manuscript with an editorial

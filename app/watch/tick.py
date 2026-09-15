@@ -992,10 +992,17 @@ def _apply_proof_outcome(hs_token: str | None, token: str, ws: WatchSettings,
     _finish_hubspot_proof(hs_token, ws, file, rec, state,
                           value=ws.hubspot_proof_needs_human_value,
                           opener=opener)
-    moved = (f"HubSpot was moved to '{ws.hubspot_proof_needs_human_value}'."
-             if ws.hubspot_proof_needs_human_value
-             else f"No value is configured for that verdict, so HubSpot was "
-                  f"left at '{ws.hubspot_proof_ready_value}' for a person.")
+    if not (ws.hubspot_write_back and ws.proof_write_back):
+        # Say what actually happened. The email is the only place a person sees
+        # this verdict before opening the CRM, so it must not claim a move the
+        # switches forbade.
+        moved = (f"Proofing write-back is off, so HubSpot was left at "
+                 f"'{ws.hubspot_proof_ready_value}' for a person.")
+    else:
+        moved = (f"HubSpot was moved to '{ws.hubspot_proof_needs_human_value}'."
+                 if ws.hubspot_proof_needs_human_value
+                 else f"No value is configured for that verdict, so HubSpot was "
+                      f"left at '{ws.hubspot_proof_ready_value}' for a person.")
     report.needs_human.append(
         (file.name,
          f"was proofread and needs a human proofreader: {reason} {moved}"))
@@ -1027,6 +1034,13 @@ def _finish_hubspot_proof(hs_token: str | None, ws: WatchSettings,
     if not ws.hubspot_write_back:
         log.info("HubSpot is read-only: leaving %s at its current status.",
                  file.name)
+        return
+    if not ws.proof_write_back:
+        # Deliberately NOT recorded as `proof_hubspot_done`: the write did not
+        # happen, so turning the switch back on should let the next pass make
+        # it rather than skip it as already written.
+        log.info("Proofing write-back is off: leaving %s at '%s' for a person.",
+                 file.name, ws.hubspot_proof_ready_value)
         return
     if not value:
         log.warning("The HubSpot value for this proofing verdict is empty: "
