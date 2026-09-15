@@ -97,6 +97,21 @@ def test_ellipsis_closed_mode_closes_up_a_house_style_ellipsis():
     # it up. (The proofreader in the field does exactly this by hand.)
     ("Hannah — only nineteen — smiled.", "Hannah—only nineteen—smiled."),
     ("He turned — and stopped.", "He turned—and stopped."),
+    # Mixed runs — a hyphen beside an en dash, whichever came first — are a
+    # typed sentence dash too (Dalton, 2026-09-15).
+    ("if her child would be born -– born alive?", "if her child would be born—born alive?"),
+    ("I watch my mother –- artist, teacher", "I watch my mother—artist, teacher"),
+    ("until I recover my poise –--", "until I recover my poise—"),
+    ("---- have trouble drawing", "—have trouble drawing"),
+    # An en dash spaced on one side only, including at a line end.
+    ("Am I ‘in spite of’ –or ‘because of’---", "Am I ‘in spite of’—or ‘because of’—"),
+    ("that makes me tremble –", "that makes me tremble—"),
+    ("the shadows under my eyes, sunken breasts ---", "the shadows under my eyes, sunken breasts—"),
+    # A comma has no business before a sentence dash.
+    ("and basically, -- still in my right mind.", "and basically—still in my right mind."),
+    # A day range after a month name is a date range.
+    ("Aug 13-26", "Aug 13–26"),
+    ("from September 3-14 that year", "from September 3–14 that year"),
 ])
 def test_dash_conversions(before, after):
     assert swept("sweep_dash", before) == after
@@ -108,6 +123,9 @@ def test_dash_conversions(before, after):
     "post–World War II era",                  # open-compound modifier
     "The forest—quiet—waited.",              # a correct tight em dash
     "* * *",                                  # a scene divider, not prose
+    "– a bulleted line",                      # an en dash opening a paragraph
+    "10 –12 people came",                     # a sloppy range: a reader's call
+    "the score was 3-4 at the half",          # digits without a month: not a range
 ])
 def test_dash_leaves_correct_punctuation_alone(text):
     assert unchanged("sweep_dash", text)
@@ -789,3 +807,50 @@ def test_heading_vocab_leaves_ordinary_headings_alone():
     ps = [ParagraphRef("body-0000", "word/document.xml", "body",
                        "The Long Road Home", "Heading1")]
     assert heading_vocab_findings(ps, Config().skip) == []
+
+
+# --- dropped-letter apostrophes ---------------------------------------------
+#
+# An apostrophe standing for missing letters curls right. The author's own
+# wrong curl ("‘bout") is the case; straight marks are the intake's business.
+
+@pytest.mark.parametrize("before,after", [
+    ("1 instance of ‘bout", "1 instance of ’bout"),
+    ("rock ‘n’ roll", "rock ’n’ roll"),
+    ("‘em all, ‘cause I said so", "’em all, ’cause I said so"),
+    ("it’s ‘bout time", "it’s ’bout time"),
+])
+def test_elision_apostrophe_curls_right(before, after):
+    assert swept("sweep_elision_apostrophe", before) == after
+
+
+@pytest.mark.parametrize("text", [
+    "‘Til death do us part",        # capitalized: may open a quotation
+    "‘round the corner",            # a word in its own right
+    "‘way out there",
+    "‘is that so?’ she asked",      # a quoted clause, not dialect
+    "the ’bout is already right",
+    "‘boutique’",                   # not a whole word
+])
+def test_elision_apostrophe_leaves_quotations_alone(text):
+    assert unchanged("sweep_elision_apostrophe", text)
+
+
+# --- a single-opened quotation closes single ---------------------------------
+
+@pytest.mark.parametrize("before,after", [
+    ("I am the one you mean when you say, ‘We”:", "I am the one you mean when you say, ‘We’:"),
+    ("‘Happy Birthday to You.”", "‘Happy Birthday to You.’"),
+])
+def test_quote_pair_closes_a_single_opener_single(before, after):
+    assert swept("sweep_quote_pair", before) == after
+
+
+@pytest.mark.parametrize("text", [
+    "“He said ‘hi” to me,” she said.",  # the double close belongs to the outer quotation
+    "‘fine’ and “done”",
+    "“don’t”",
+    "‘We’ll go,’ she said.",
+])
+def test_quote_pair_leaves_balanced_marks_alone(text):
+    assert unchanged("sweep_quote_pair", text)

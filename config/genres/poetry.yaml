@@ -1,16 +1,20 @@
 # Posture preset: poetry.
 #
-# The softest posture on the shelf. Poetry is never run under a prose stage:
-# pair this genre with `--stage poetry-touch`, which holds every lane but
-# spelling shut and locked. This overlay only sets what a genre may set — the
-# stylistic posture — and sets all of it to "offer nothing": strict flights,
-# no smoothing, no rewrite. Mechanics rules do not apply to verse at all; the
-# stage, not the genre, is what enforces that.
+# The softest posture on the shelf, paired with `--stage poetry-touch`. Verse
+# takes the house MECHANICS at the character and word level (dashes,
+# ellipses, apostrophes, spaces, spelling, compounds, serial comma, role
+# capitals, times, ranges, spelled-out numbers, quote pairs) and never a
+# change to its STRUCTURE (line breaks, line-head capitals, fragments,
+# terminal punctuation, repetition, coinages, dialect). This overlay only sets
+# what a genre may set — the stylistic posture — and sets all of it to "offer
+# nothing": strict flights, no smoothing, no rewrite. Which lanes run is the
+# stage's business, not the genre's.
 name: poetry
 description: >
-  Feather-soft: verse is proofread for real-word misspellings only. Strict
-  flights posture, no smoothing, no rewrite — and always composed with
-  `--stage poetry-touch`, which locks every other lane off.
+  Verse posture: house mechanics only, never the poem's structure. Strict
+  flights, no smoothing, no rewrite — and always composed with
+  `--stage poetry-touch`, which runs the mechanics passes and locks the
+  sentence-level lanes off.
 
 overlay:
   flights.posture: strict

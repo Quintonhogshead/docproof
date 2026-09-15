@@ -365,31 +365,65 @@ def test_real_footnote_and_endnote_parts_reach_final_readers_and_reject_audit(ma
     assert "word/footnotes.xml: 1" in report and "word/endnotes.xml: 1" in report
 
 
-def test_poetry_runs_only_classification_and_sonnet_spelling(make_book, tmp_path):
-    source = "teh Moon\n  waits, 20 times\n—quiet"
+def test_poetry_takes_house_mechanics_from_both_typed_readers_and_the_verse_sweep(make_book, tmp_path):
+    """Verse is proofread for house mechanics — spelling, the number stage,
+    the deterministic glyph sweeps — by Sonnet and Luna, with the checks, and
+    never enters the prose-only stages (story sheet, repair, whole-book reads)."""
+    source = "teh Moon\n  waits, 20 times -- quiet\n‘bout now"
     book = make_book(source)
 
     def typed(stage, model, paragraphs, keys):
+        assert stage == "verse"
+        assert "subject_verb_agreement" not in keys and "number_style" not in keys
+        if "spelling" not in keys:
+            return []
         return [_typed_row(pid, text, "teh", "the", "spelling") for pid, text in paragraphs.items()]
 
-    readers = Readers(poetry=True, typed=typed)
+    def handler(stage, model, payload, kwargs):
+        if stage == "typed_screen":
+            # The verse sweep's dash and apostrophe rows reach the pair screen
+            # like any other local signal; both readers apply them.
+            assert all(p["models"] == ["local:verse"] for site in payload["sites"] for p in site["proposals"])
+            return {"decisions": [ruling(site, "apply", site["proposals"][0]["replacement"]) for site in payload["sites"]]}
+        if stage == "numbers":
+            assert payload["verse_ids"] == [x["para_id"] for x in payload["sites"]][:1]
+            pid = payload["sites"][0]["para_id"]
+            return {"reviewed_ids": [x["id"] for x in payload["sites"]],
+                    "findings": [finding(pid, "20", "twenty", "number_style")],
+                    "comment_decisions": [], "editorial_verdict": "ready"}
+
+    readers = Readers(poetry=True, typed=typed, handler=handler)
     result = FixedWorkflow(book, tmp_path / "poetry", calls=readers).run()
-    assert list(result["accepted"].values()) == [source.replace("teh", "the")]
+    assert list(result["accepted"].values()) == ["the Moon\n  waits, twenty times—quiet\n’bout now"]
     assert result["poetry_only"]
-    assert {x["stage"] for x in readers.events} == {"poetry", "spelling"}
-    assert {x["model"] for x in readers.events} == {SONNET}
-    assert all("type 2 diabetes" not in x["system"] for x in readers.events)
+    assert [row["stage"] for row in result["stages"]] == ["poetry", "typed", "numbers", "checks", "poetry_complete"]
+    stages = {x["stage"] for x in readers.events}
+    assert {"poetry", "verse", "typed_screen", "numbers", "checks_meaning", "checks_correction"} <= stages
+    assert not stages & {"story_sheet", "broken_repair", "ensemble_sweep_opus", "ensemble_sweep_sol", "fable", "astra"}
+    assert {x["model"] for x in readers.events if x["stage"] == "verse"} == {SONNET, LUNA}
+    assert {x["model"] for x in readers.events} <= {SONNET, LUNA}
+    # The number policy heads the number stage (and the checks that carry its
+    # proposal); verse readers and the screen get the editorial brief alone.
+    assert all("type 2 diabetes" not in x["system"] for x in readers.events
+               if x["stage"] in {"poetry", "verse", "typed_screen"})
+    assert all("type 2 diabetes" in x["system"] for x in readers.events if x["stage"] == "numbers")
+    verse_policy = [x["system"] for x in readers.events if x["stage"] == "verse"][0]
+    assert "never the poem's STRUCTURE" in verse_policy
+    saved = json.loads((tmp_path / "poetry/stages/typed.json").read_text())
+    verse_local = saved["evidence"]["verse_local"]
+    assert verse_local["stage"] == "verse" and verse_local["verse_ids"] == ["body-0000"]
+    assert [c["check"] for c in verse_local["checks"]] == ["verse_sweeps"]
 
 
-def test_embedded_poetry_spelling_never_enters_luna_or_opus_change_checks(make_book, tmp_path):
+def test_embedded_verse_takes_mechanics_from_any_reader_but_never_grammar(make_book, tmp_path):
     verse = "teh Moon\n  waits"
 
     def typed(stage, model, paragraphs, keys):
         rows = []
         for pid, text in paragraphs.items():
-            if stage == "spelling":
+            if stage == "verse" and "spelling" in keys:
                 rows.append(_typed_row(pid, text, "teh", "the", "spelling"))
-            elif "subject_verb_agreement" in keys:
+            elif stage == "typed" and "subject_verb_agreement" in keys:
                 rows.append(_typed_row(pid, text, "They was", "They were", "subject_verb_agreement"))
         return rows
 
@@ -398,16 +432,32 @@ def test_embedded_poetry_spelling_never_enters_luna_or_opus_change_checks(make_b
             return {"classification": "mixed", "reason": "Verse and prose."}
         if stage == "poetry_sections":
             return {"paragraphs": [{"id": row["id"], "poetry": "\n" in row["text"]} for row in payload]}
-        if "changes" in payload:
-            assert all("Moon" not in row["before"] for row in payload["changes"])
         if stage == "typed_disputes":
-            pytest.fail("The poem must not trigger an Opus dispute")
+            pytest.fail("Agreed readers must not trigger an Opus dispute")
+        if stage in {"ensemble_sweep_opus", "ensemble_sweep_sol", "fable", "astra"}:
+            poem = payload["paragraphs"][0]
+            assert payload["poetry_ids"] == [poem["id"]]
+            # A grammar "repair" of the poem is a sentence-level judgment and
+            # is dropped; a house-mechanics fix from the same reader stands.
+            rows = [finding(poem["id"], "waits", "wait", "grammar")]
+            if stage == "fable":
+                rows.append(finding(poem["id"], "Moon", "Moon.", "punctuation"))
+            if stage == "astra":
+                rows.append(finding(poem["id"], " waits", " waits", "spelling"))
+            return {"reviewed_ids": [x["id"] for x in payload["paragraphs"]], "findings": rows,
+                    "comment_decisions": [], "editorial_verdict": "ready"}
 
     readers = Readers(typed=typed, handler=handler)
     result = FixedWorkflow(make_book(verse, "They was here."), tmp_path / "mixed", calls=readers).run()
     assert list(result["accepted"].values()) == [verse.replace("teh", "the"), "They were here."]
     assert not result["poetry_only"]
-    assert len([row for row in readers.events if row["stage"] == "spelling"]) == 1
+    assert {row["model"] for row in readers.events if row["stage"] == "verse"} == {SONNET, LUNA}
+    dropped = [h for h in result["history"] if h.get("dropped")]
+    reasons = {h["reason"] for h in dropped}
+    assert "Verse takes house mechanics only, never a change to its structure" in reasons
+    checks = [row for row in readers.events if row["stage"] == "checks_meaning"]
+    assert checks and checks[0]["payload"]["verse_ids"] == ["body-0000"]
+    assert "Moon." not in result["accepted"]["body-0000"]
 
 
 def _flow(make_book, tmp_path, readers=None, text="He waited for someone."):
@@ -432,16 +482,30 @@ def test_story_sheet_preserves_interleaved_manuscript_order(make_book, tmp_path)
         {"id": "body-0001", "text": "Following text."}]
 
 
-def test_conflicting_poetry_findings_do_not_call_opus_or_create_comments(make_book, tmp_path):
-    flow = _flow(make_book, tmp_path, text="teh Moon")
+def test_verse_edits_are_screened_like_prose_but_never_touch_structure(make_book, tmp_path):
+    flow = _flow(make_book, tmp_path, text="teh Moon\n  waits")
     flow.poetry_ids = {"p"}
+    # Conflicting spelling proposals go to the ordinary pair screen (which
+    # drops them here) and never straight to Opus or into a comment.
     candidates = [_candidate(finding("p", "teh", fix, "spelling"), flow.current, SONNET)
                   for fix in ("the", "ten")]
-    assert flow._adjudicate("typed", candidates, (SONNET,)) == []
-    assert flow.calls.events == [] and flow.questions == []
-    case = _candidate(finding("p", "Moon", "moon", "spelling"), flow.current, SONNET)
-    flow._apply("typed", [case])
-    assert flow.current["p"] == "teh Moon"
+    assert flow._adjudicate("typed", candidates, (SONNET, LUNA)) == []
+    assert {x["stage"] for x in flow.calls.events} == {"typed_screen"}
+    assert {x["model"] for x in flow.calls.events} == {SONNET, LUNA} and flow.questions == []
+    # A sentence-level category never reaches the screen for a poem.
+    grammar = _candidate(finding("p", "waits", "wait", "grammar"), flow.current, SONNET)
+    assert flow._adjudicate("typed", [grammar], (SONNET, LUNA)) == []
+    assert flow.history[-1]["reason"] == "Verse takes house mechanics only, never a change to its structure"
+    # Structure is the poet's: a recased line head, an added terminal mark and
+    # a lost line break are all dropped at application, whatever the category.
+    for before, after in (("waits", "Waits"), ("waits", "waits."), ("\n  ", " ")):
+        case = _candidate(finding("p", before, after, "spelling"), flow.current, SONNET)
+        flow._apply("typed", [case])
+        assert flow.current["p"] == "teh Moon\n  waits", (before, after)
+    # A mid-line recase and a real misspelling are mechanics and apply.
+    for before, after in (("Moon", "moon"), ("teh", "the")):
+        flow._apply("typed", [_candidate(finding("p", before, after, "spelling"), flow.current, SONNET)])
+    assert flow.current["p"] == "the moon\n  waits"
 
 
 @pytest.mark.parametrize("answer", [ProviderResult(stop_reason="refusal"),
@@ -751,9 +815,9 @@ def test_fable_edit_is_propagated_by_the_post_fable_completion_pass(make_book, t
     assert json.loads((tmp_path / "propagate/stages/fable.json").read_text())["evidence"]["local"] == {"seeded": 1}
 
 
-def test_poetry_never_invokes_local_collectors(make_book, tmp_path, monkeypatch):
+def test_poetry_runs_the_verse_sweep_and_no_prose_collector(make_book, tmp_path, monkeypatch):
     def forbidden(*args, **kwargs):
-        pytest.fail("Poetry must not enter a local proofreading collector")
+        pytest.fail("Poetry must not enter a prose proofreading collector")
 
     monkeypatch.setattr("galley.fixed_local.collect_local_candidates", forbidden)
     monkeypatch.setattr("galley.fixed_local.collect_completion_candidates", forbidden)
@@ -761,7 +825,9 @@ def test_poetry_never_invokes_local_collectors(make_book, tmp_path, monkeypatch)
     result = FixedWorkflow(make_book("The Moon\n  waits, 20 times\n—quiet"),
                            tmp_path / "poetry-local", calls=readers).run()
     assert result["accepted"] == result["original"]
-    assert {row["stage"] for row in readers.events} == {"poetry", "spelling"}
+    assert {row["stage"] for row in readers.events} == {"poetry", "verse", "numbers"}
+    saved = json.loads((tmp_path / "poetry-local/stages/typed.json").read_text())
+    assert saved["evidence"]["verse_local"]["proposal_count"] == 0
 
 
 def test_local_collector_cannot_emit_a_candidate_in_embedded_poetry(
@@ -1374,7 +1440,7 @@ def test_number_policy_travels_only_with_number_work(make_book, tmp_path):
     assert flow._policy_for("continuity", "{}") == flow.base_policy
     assert flow.identity["policy_sha256"] == flow.identity["policy_sha256"]
     # The identity covers every contract, so a change to any of them starts a fresh workspace.
-    assert flow.identity["version"] == "fixed-proofreading-v5"
+    assert flow.identity["version"] == "fixed-proofreading-v6"
 
 
 def test_checks_carry_the_categories_of_accepted_corrections(make_book, tmp_path):

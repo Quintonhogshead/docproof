@@ -121,7 +121,7 @@ def test_real_fixed_driver_delivers_and_resumes_without_new_generations(tmp_path
         assert list(paragraph_views(path).values()) == ["She received two letters."]
     assert paragraph_views(corrected, "reject") == paragraph_views(source)
     models = {model for model, _ in readers.requests}
-    assert models == ({SONNET} if poetry else {SONNET, LUNA, OPUS, SOL, FABLE, ASTRA})
+    assert models == ({SONNET, LUNA} if poetry else {SONNET, LUNA, OPUS, SOL, FABLE, ASTRA})
     count = len(readers.requests)
     assert local_transport == ([] if poetry else ["She recieved two letters."])
     hashes = {x["name"]: x["sha256"] for x in package["artifacts"]}

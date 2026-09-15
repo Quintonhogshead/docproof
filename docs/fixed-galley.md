@@ -55,8 +55,13 @@ The agreed sequence is:
 1. Preserve and identify the incoming manuscript, accept its revisions and
    rejoin its page-runover paragraphs.
 2. Sonnet reads small samples distributed across the manuscript to determine
-   whether it is poetry. Poetry follows the existing spelling-only route and
-   finishes without the prose stages or requiring a ChatGPT login.
+   whether it is poetry. Poetry follows the verse route — house mechanics at
+   the character and word level, never a change to the poem's structure: the
+   Sonnet and Luna verse typed passes, the deterministic verse sweep packet,
+   the number stage and the meaning/correction checks — and finishes without
+   the prose stages or requiring a ChatGPT login. In a mixed book the
+   whole-book readers see the verse too, and their verse proposals pass the
+   same mechanics-only gate.
 3. Luna creates the Story Sheet through the API.
 4. Sonnet and Luna independently run the typed detectors. The full local
    checking pass supplies additional candidates. Unresolved candidates receive
@@ -355,8 +360,10 @@ cannot establish that a contents entry is missing; only supported wording or
 numbering mismatches qualify for proofreading review.
 Anachronism checks require an explicitly stated era. Reading-level and word-echo
 measurements stay in internal diagnostics and cannot justify edits or author
-questions. Poetry stays on its spelling-only route, including poetry sections
-excluded from the prose checking pass.
+questions. Poetry stays on its verse route: house mechanics only, with poetry
+sections excluded from the prose checking pass and swept by the verse packet
+instead; an edit that would add a terminal mark, recase a line head or change
+a line break is dropped at application whatever reader proposed it.
 
 After the ensemble sweep, and again after each of the Fable and Astra reads,
 the deterministic propagation and consistency sweep runs over the current book

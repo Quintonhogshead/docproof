@@ -1,29 +1,50 @@
-# Stage preset: poetry touch — feather-soft. Spelling only.
+# Stage preset: poetry touch — house mechanics, never structure.
 #
-# Verse is not prose. Line breaks, capitals at line heads, sentence fragments,
-# absent or unconventional punctuation, ellipses, dashes, repeated words,
-# invented compounds, numerals, dialect — every one of those is a poet's choice
-# and none of them is an error. The only thing a proofreader may touch in a
-# poem without the poet is a misspelling of a real word. So this stage runs the
-# spelling typed pass and the deterministic spell scan and nothing else: no
-# comma rules, no number style, no capitalization, no sweeps, no LanguageTool,
-# no repair, no smoothing, no rewrite, no consistency queries, no gates that
-# would have nothing to gate. Every lane is LOCKED so a genre applied on top
-# cannot reopen it.
+# Verse is not prose, but it is set in the same house. What the head
+# proofreader actually does to a poetry manuscript (Dalton, 2026-09-15) is a
+# full mechanical proofread at the character and word level — dashes,
+# ellipses, apostrophe direction, double spaces, spelling and closed
+# compounds, serial comma, role capitalization, clock times, number ranges,
+# spelled-out numbers, mismatched quote pairs, a clearly missing word — while
+# leaving the poem's STRUCTURE alone: line breaks, capitals at line heads,
+# fragments, absent terminal punctuation, repetition, coinages, dialect and
+# the author's own quote-mark convention. So this stage runs the typed passes
+# and deterministic sweeps that govern glyphs, spacing and words, and holds
+# off every lane that judges sentences: no terminal-period sweep, no
+# doubled-word or stacked-punctuation sweep, no dialogue rules, no
+# LanguageTool, no repair, no smoothing, no rewrite, no consistency queries.
+# The copy-edit lanes are LOCKED so a genre applied on top cannot reopen them.
 #
 # Compose:  docproof galley genre-pack poetry --stage poetry-touch --out runs/book/poetry.yaml
-# The practitioner's own pen follows the same rule: a real-word misspelling is a
-# row; anything else is at most one gentle query, and usually silence.
+# The practitioner's pen follows the same line: a house-mechanics slip is a
+# row; a structural choice is the poet's, and a word insertion (an article)
+# is made only when it does not disturb the line.
 name: poetry-touch
 description: >
-  Feather-soft proofread for verse: the spelling pass and the spell scan only.
-  Punctuation, capitalization, line breaks, fragments, repetition, numerals and
-  dialect are the poet's; every other lane is off and locked.
+  Proofread for verse: house mechanics at the character and word level
+  (dashes, ellipses, apostrophes, spaces, spelling, compounds, serial comma,
+  role capitals, times, ranges, spelled-out numbers, quote pairs), never the
+  poem's structure (line breaks, line-head capitals, fragments, terminal
+  punctuation, repetition). Sentence-level lanes are off and locked.
 
 patch:
   error_types:
-    - spelling
-  sweeps: []
+    - [spelling, homophone_confusion, apostrophe_error, capitalization]
+    - [serial_comma]
+    - [number_style]
+    - [missing_word]
+    - [ly_adverb_hyphen]
+  sweeps:
+    - sweep_ellipsis
+    - sweep_dash
+    - sweep_elision_apostrophe
+    - sweep_quote_pair
+    - sweep_trailing_space
+    - sweep_time_of_day
+    - sweep_compound_number
+    - sweep_century
+    - sweep_decade_apostrophe
+    - sweep_initialism
   ensemble:
     detectors: []
     verify_policy: none

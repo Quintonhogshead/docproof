@@ -17,7 +17,7 @@ from functools import partial
 
 from docproof.utils.files import write_atomic
 
-VERSION = "fixed-proofreading-v5"
+VERSION = "fixed-proofreading-v6"
 SONNET = "claude-sonnet-5"
 LUNA = "gpt-5.6-luna"
 OPUS = "claude-opus-5"
@@ -56,7 +56,7 @@ class RejectedModelProposal(FixedWorkflowError):
 def workflow_plan():
     return [
         {"stage": "intake", "model": "code", "description": "Freeze the original manuscript and paragraph identities"},
-        {"stage": "poetry", "model": SONNET, "description": "Classify fixed samples; poetry receives spelling only"},
+        {"stage": "poetry", "model": SONNET, "description": "Classify fixed samples; verse receives house mechanics, never a change to its structure"},
         {"stage": "story_sheet", "model": LUNA, "description": "Read the manuscript for the Story Sheet through the API"},
         {"stage": "typed", "model": f"{SONNET} + {LUNA}; disputes: {OPUS}", "description": "Local proofreading checks, including LanguageTool, plus the typed ensemble; number and currency review remains separate"},
         {"stage": "numbers", "model": f"{SONNET} + {LUNA}; disputes: {OPUS}", "description": "Review every extracted number in context against the existing house policy"},
@@ -67,6 +67,11 @@ def workflow_plan():
         {"stage": "fable", "model": FABLE, "description": "Read the corrected book and decide every proposed Galley comment, then propagate its accepted corrections and casing decisions book-wide"},
         {"stage": "astra", "model": ASTRA, "description": "Read the Fable-corrected book and review every surviving comment, then run the final propagation and consistency sweep"},
     ]
+
+
+def configuration_for_verse():
+    from galley.fixed_policy import configuration
+    return configuration(poetry=True)
 
 
 def _submit(pool, operation, *args, **kwargs):
@@ -369,8 +374,13 @@ class FixedWorkflow:
         # bespoke number instructions on every narrow detector request.
         self.typed_policy = PROOFREADING_POLICY + "\n\n" + "\n\n".join(
             EDITORIAL_RULES[key] for key in ("scope", "authority", "punctuation"))
+        # Verse readers get the same guards headed by the verse rule: house
+        # mechanics at the character and word level, never the poem's structure.
+        self.verse_policy = PROOFREADING_POLICY + "\n\n" + "\n\n".join(
+            f"{key.upper()}\n{EDITORIAL_RULES[key]}" for key in ("verse", "scope", "authority", "punctuation"))
         self.identity = {"version": VERSION, "source_sha256": sha256_file(self.source),
                          "policy_sha256": _hash({"base": self.base_policy, "typed": self.typed_policy,
+                                                 "verse": self.verse_policy,
                                                  "editorial": self.editorial_policy, "numbers": self.policy}),
                          "recipe": workflow_plan(),
                          "configuration": self.cfg.model_dump(mode="json")}
@@ -429,12 +439,12 @@ class FixedWorkflow:
         # Freeze their diagnostic inventory in a stable order at the stage gate.
         rejected = [h for h in self.history if h.get("rejected_proposal") and
                     (h["stage"] == stage or h["stage"].startswith(stage + "_") or
-                     stage == "typed" and h["stage"] == "spelling")]
+                     stage == "typed" and h["stage"] == "verse")]
         if rejected:
             evidence["rejected_proposals"] = sorted(rejected, key=_json)
         skipped = [h["skipped_read"] for h in self.history if h.get("skipped_read") and
                    (h["stage"] == stage or h["stage"].startswith(stage + "_") or
-                    stage == "typed" and h["stage"] == "spelling")]
+                    stage == "typed" and h["stage"] == "verse")]
         if skipped:
             evidence["skipped_reads"] = sorted(skipped, key=_json)
         payload = {"stage": stage, "accepted_sha256": _hash(self.current),
@@ -486,7 +496,7 @@ class FixedWorkflow:
             {"samples": samples}, schema)
         if result is None:
             self.poetry_ids = set(self.original)
-            result = {"classification": "unavailable", "reason": "Protect all text with spelling-only processing."}
+            result = {"classification": "unavailable", "reason": "Protect all text with the verse route: house mechanics only."}
         if result["classification"] == "poetry":
             self.poetry_ids = set(self.original)
         elif result["classification"] in {"mixed", "uncertain"}:
@@ -526,15 +536,16 @@ class FixedWorkflow:
         from galley.fixed_policy import configuration
         cfg = configuration(poetry)
         ids = itertools.count(1)
-        models = [(SONNET, "low")] if poetry else [(SONNET, "low"), (LUNA, "low")]
+        stage = "verse" if poetry else "typed"
+        models = [(SONNET, "low"), (LUNA, "low")]
         plan = prepared.effective_pass_plan
         work, all_candidates, coverage = [], [], []
         for model, effort in models:
             local = cfg.model_copy(deep=True)
             local.api.model, local.api.effort = model, effort
-            analyzers = build_analyzers(local, prepared.pass_types, self.calls.provider("spelling" if poetry else "typed", local),
+            analyzers = build_analyzers(local, prepared.pass_types, self.calls.provider(stage, local),
                                        ids, prepared.vocabulary, prepared.conventions,
-                                       (self.base_policy if poetry else self.typed_policy) + "\n" + self.context)
+                                       (self.verse_policy if poetry else self.typed_policy) + "\n" + self.context)
             for analyzer in analyzers:
                 analyzer.output_model = build_output_model(analyzer.keys,
                     explanations=cfg.report_explanations, explicit_verdicts=True)
@@ -555,8 +566,7 @@ class FixedWorkflow:
         for (model, index, chunk, analyzer), raw in zip(work, responses):
             self._cancel()
             if raw.stop_reason == "skipped":
-                self.history.append({"stage": "spelling" if poetry else "typed",
-                                     "skipped_read": raw.parsed["_skipped_read"]})
+                self.history.append({"stage": stage, "skipped_read": raw.parsed["_skipped_read"]})
                 coverage.append({"model": model, "pass": index, "chunk": chunk.chunk_id,
                     "paragraph_ids": [], "assigned_paragraph_ids": [p.para_id for p in chunk.paragraphs],
                     "status": "skipped"})
@@ -567,7 +577,7 @@ class FixedWorkflow:
                 raise FixedWorkflowError("A typed detector did not complete its assigned reading")
             texts = {p.para_id: p.text for p in chunk.paragraphs}
             for f in found:
-                row = self._reader_candidate("spelling" if poetry else "typed", dataclasses.asdict(f), texts, model,
+                row = self._reader_candidate(stage, dataclasses.asdict(f), texts, model,
                                  query_types=prepared.query_types, format_types=prepared.format_types)
                 if row:
                     row["confidence"] = f.confidence
@@ -626,13 +636,16 @@ class FixedWorkflow:
             return False
         return True
 
-    def _local_candidates(self, rows, *, texts, prepared):
-        """Local signals are anchored evidence for the Sonnet/Luna screen."""
+    def _local_candidates(self, rows, *, texts, prepared, verse=False):
+        """Local signals are anchored evidence for the Sonnet/Luna screen.
+        The prose scan and the verse sweep each stay on their own side of the
+        poetry classification."""
         from galley.fixed_policy import DIAGNOSTIC_ONLY_TYPES
         candidates = []
         for row in rows:
-            if row.get("para_id") in self.poetry_ids:
-                raise FixedWorkflowError("A local proofreading check crossed into protected poetry")
+            if (row.get("para_id") in self.poetry_ids) != verse:
+                raise FixedWorkflowError("A local verse sweep crossed into prose" if verse else
+                                         "A local proofreading check crossed into protected poetry")
             if row.get("category") in DIAGNOSTIC_ONLY_TYPES:
                 raise FixedWorkflowError("A stylistic diagnostic entered the proofreading queue")
             candidate = _candidate(row, texts, row["source"],
@@ -664,6 +677,17 @@ class FixedWorkflow:
             progress=lambda done, total: self._local_progress(done, total))
         self._cancel()
         return self._local_candidates(rows, texts=self.original, prepared=prepared), evidence
+
+    def _local_verse(self, prepared):
+        """The house sweeps over the poetry paragraphs: glyphs, spacing and
+        words, nothing that judges a sentence."""
+        from galley.fixed_local import collect_verse_candidates
+        self._cancel()
+        rows, evidence = collect_verse_candidates(
+            prepared, self.original, self.directory / "local", identity=self.identity,
+            verse_ids=self.poetry_ids, cfg=configuration_for_verse())
+        self._cancel()
+        return self._local_candidates(rows, texts=self.original, prepared=prepared, verse=True), evidence
 
     def _local_progress(self, done, total):
         self._cancel()
@@ -779,16 +803,18 @@ class FixedWorkflow:
         for group in _groups(candidates):
             row = group[0]
             if row["para_id"] in self.poetry_ids:
-                # Verse has one spelling reader, not an implicit Opus route
-                # whenever that reader reports an uncertain or overlapping fix.
-                if (len(group) == 1 and row["action"] == "edit"
-                        and row["category"] == "spelling" and SONNET in row["models"]
-                        and row.get("confidence", "high") != "low"):
-                    accepted.append(row)
-                else:
-                    self.history.append({"stage": stage, "dropped": group,
-                                         "reason": "Poetry permits only unambiguous Sonnet spelling corrections"})
-                continue
+                # Verse takes house mechanics from any reader; a sentence-level
+                # judgment, a question or a low-confidence guess never reaches
+                # the screen for a poem.
+                from galley.fixed_policy import VERSE_CATEGORIES
+                kept = [x for x in group if x["action"] == "edit" and x["category"] in VERSE_CATEGORIES
+                        and x.get("confidence", "high") != "low"]
+                if len(kept) != len(group):
+                    self.history.append({"stage": stage, "dropped": [x for x in group if x not in kept],
+                                         "reason": "Verse takes house mechanics only, never a change to its structure"})
+                if not kept:
+                    continue
+                group, row = kept, kept[0]
             if (expected_models and not force and len(group) == 1 and row["action"] == "edit"
                     and set(expected_models).issubset(row["models"])):
                 accepted.append(row)
@@ -875,7 +901,7 @@ class FixedWorkflow:
 
     def _continuity_candidate(self, stage, row, texts, model, book):
         if row.get("para_id") in self.poetry_ids and row.get("action") == "edit":
-            self._reject_proposal(stage, row, texts, model, "Poetry receives spelling only")
+            self._reject_proposal(stage, row, texts, model, "Verse takes no continuity rewording")
             return None
         verified = self._verified_evidence(stage, row, texts, model, book, required=True)
         if verified is None:
@@ -1001,16 +1027,14 @@ class FixedWorkflow:
             if len(group) != 1:
                 raise FixedWorkflowError("Unsettled overlapping corrections cannot be applied")
             unique.append(group[0])
+        from galley.fixed_policy import verse_safe
         for row in sorted(unique, key=lambda x: (x["para_id"], x["start"], x["end"]), reverse=True):
             pid, lo, hi = row["para_id"], row["start"], row["end"]
-            spelling_characters = row["before"] + row["replacement"]
-            spelling_only = (row["category"] == "spelling" and not row.get("format")
-                and any(c.isalpha() for c in spelling_characters)
-                and all(c.isalpha() or c in "'’‐‑-" for c in spelling_characters)
-                and row["before"].casefold() != row["replacement"].casefold())
-            if pid in self.poetry_ids and not spelling_only:
-                self.history.append({"stage": stage, "dropped": row, "reason": "Poetry is spelling only"})
-                continue
+            if pid in self.poetry_ids and pid in self.current:
+                problem = verse_safe(row, self.current[pid])
+                if problem:
+                    self.history.append({"stage": stage, "dropped": row, "reason": problem})
+                    continue
             if pid not in before or type(lo) is not int or type(hi) is not int or not 0 <= lo <= hi <= len(before[pid]):
                 raise FixedWorkflowError("Correction has invalid source coordinates")
             if before[pid][lo:hi] != row["before"]:
@@ -1030,7 +1054,7 @@ class FixedWorkflow:
 
     def _numbers(self):
         from galley.fixed_policy import extract_numbers
-        sites = extract_numbers({k: v for k, v in self.current.items() if k not in self.poetry_ids})
+        sites = extract_numbers(self.current)
         results = []
         work = [(model, window) for model in (SONNET, LUNA) for window in _windows(sites, 16000)]
         # Sites are read under short per-request names (n01, n02, ...) for the
@@ -1042,6 +1066,7 @@ class FixedWorkflow:
         jobs = [(model, partial(self._ask,"numbers", model,
                     "Check EVERY numbered site against the supplied existing number and currency policy. reviewed_ids must contain every site id (n01, n02, ...), even when correct. Findings quote the paragraph verbatim and specify para_id. Never change numerical values or invent AM/PM. Preserve all policy exceptions. Only report clear errors or evidence-backed author questions. No comment decisions are needed.",
                     {"story_sheet": self.context, "sites": named(window),
+                     "verse_ids": sorted(self.poetry_ids & {x["para_id"] for x in window}),
                      "paragraphs": {x["para_id"]: self.current[x["para_id"]] for x in window}}, READ_SCHEMA)) for model, window in work]
         for (model, window), answer in zip(work, self.scheduler.map(jobs)):
             if answer is None:
@@ -1181,7 +1206,7 @@ class FixedWorkflow:
                           "and capitalization or punctuation preferences. Findings still belong only to owned paragraphs. ")
             windows.append((owned, questions, assigned, omitted))
             jobs.append((model, partial(self._ask, stage, model,
-                scope + "Context paragraphs are read-only. Preserve poetry except demonstrable misspellings. Return reviewed_ids for all owned paragraphs. For EVERY assigned comment explicitly drop, retain, or replace it: answer from the book where possible, remove false/stale/duplicate/style concerns, and retain only specific questions requiring author knowledge. Retained comments must use an exact contextual quote that occurs only once in its paragraph. To resolve with an edit return the edit plus a drop decision. Do not invent or omit comment IDs. New questions require missing_knowledge. needs_human means substantive unresolved damage/meaning beyond a proofread, never an operational failure. Findings must quote their exact current paragraph. Never retype clean paragraphs." + shared_text,
+                scope + "Context paragraphs are read-only. Verse paragraphs (poetry_ids) take house mechanics only, never a change to their structure (VERSE). Return reviewed_ids for all owned paragraphs. For EVERY assigned comment explicitly drop, retain, or replace it: answer from the book where possible, remove false/stale/duplicate/style concerns, and retain only specific questions requiring author knowledge. Retained comments must use an exact contextual quote that occurs only once in its paragraph. To resolve with an edit return the edit plus a drop decision. Do not invent or omit comment IDs. New questions require missing_knowledge. needs_human means substantive unresolved damage/meaning beyond a proofread, never an operational failure. Findings must quote their exact current paragraph. Never retype clean paragraphs." + shared_text,
                 payload,
                 FRONTIER_SCHEMA if frontier else READ_SCHEMA, effort="high", max_tokens=16000)))
         for (owned, questions, assigned, omitted), result in zip(windows, self.scheduler.map(jobs)):
@@ -1294,8 +1319,8 @@ class FixedWorkflow:
                     "format_proposals": [f for f in pending_formats if f["para_id"] == pid],
                     **({"evidence": [{**e, "text": self.current.get(e["para_id"], "")} for e in evidence[pid]]}
                        if evidence.get(pid) else {})}
-                   for pid, text in self.current.items() if pid not in self.poetry_ids
-                   and (text != before[pid] or any(f["para_id"] == pid for f in pending_formats))]
+                   for pid, text in self.current.items()
+                   if text != before[pid] or any(f["para_id"] == pid for f in pending_formats)]
         self.pending_categories = {}
         frontier, self.pending_frontier = self.pending_frontier, {}
         windows = list(_windows(changed, 16000))
@@ -1357,7 +1382,8 @@ class FixedWorkflow:
                      "Judge whether ALL text AND formatting changes fix clear proofreading errors without new errors, stylistic rewriting, unnecessary changes or violations of house rules. ") +
                     "Return one verdict per paragraph id. Approve only when the complete after paragraph is justified; otherwise reject. No new corrections or author comments. "
                     "categories names the proofreading categories of the corrections accepted in that paragraph. " + rider,
-                    {"story_sheet": self.context, "changes": active}, CHECK_SCHEMA)
+                    {"story_sheet": self.context, "changes": active,
+                     "verse_ids": sorted(self.poetry_ids & {x["id"] for x in active})}, CHECK_SCHEMA)
                 if result is None:
                     for row in active:
                         pid = row["id"]
@@ -1381,7 +1407,8 @@ class FixedWorkflow:
                         "Approve only when ALL changes " + ("preserve meaning, facts, voice, deliberate fragments and dialect. " if kind == "meaning" else
                         "fix clear proofreading errors without new errors, rewriting or house-rule violations. ") +
                         "Return one verdict per id. Do not infer correctness from a preceding proofreader. No new edits or comments. " + rider,
-                        {"story_sheet": self.context, "changes": [sites[x["id"]] for x in rejected]}, CHECK_SCHEMA)
+                        {"story_sheet": self.context, "changes": [sites[x["id"]] for x in rejected],
+                         "verse_ids": sorted(self.poetry_ids & {x["id"] for x in rejected})}, CHECK_SCHEMA)
                     if confirmation is not None:
                         _exact_ids([d["id"] for d in confirmation["decisions"]], [r["id"] for r in rejected], stage + " Sonnet check")
                     sonnet = {d["id"]: d for d in confirmation["decisions"]} if confirmation else {}
@@ -1478,28 +1505,42 @@ class FixedWorkflow:
                 self._story()
             prepared_modes = list(zip(modes, [future.result() for future in preparations]))
         self._stage("typed")
-        candidates, coverage, local_evidence = [], [], None
+        candidates, coverage, local_evidence, verse_evidence = [], [], None, None
         prose_prepared = next((prepared for poetry, prepared in prepared_modes if not poetry), None)
+        verse_prepared = next((prepared for poetry, prepared in prepared_modes if poetry), None)
         self.prose_prepared = prose_prepared
-        # Poetry/prose detectors and the independent local scan share no edits.
+        # Poetry/prose detectors and the independent local scans share no edits.
         # Their findings are committed below in the original deterministic order.
-        with ThreadPoolExecutor(max_workers=len(modes) + 1) as pool:
+        with ThreadPoolExecutor(max_workers=len(modes) + 2) as pool:
             local_future = _submit(pool, self._local_initial, prose_prepared) if prose_prepared else None
+            verse_future = _submit(pool, self._local_verse, verse_prepared) if verse_prepared else None
             readings = [_submit(pool, self._typed, prepared, poetry=poetry) for poetry, prepared in prepared_modes]
             if local_future is not None:
                 local, local_evidence = local_future.result()
                 candidates.extend(local)
+            if verse_future is not None:
+                verse_rows, verse_evidence = verse_future.result()
+                candidates.extend(verse_rows)
             for reading in readings:
                 found, covered = reading.result()
                 candidates.extend(found)
                 coverage.extend(covered)
         initial = dict(self.current)
-        accepted = self._adjudicate("typed", candidates, (SONNET,) if all_poetry else (SONNET, LUNA))
+        accepted = self._adjudicate("typed", candidates, (SONNET, LUNA))
         self._apply("typed", accepted)
-        self._record("typed", coverage=coverage, candidates=candidates, local=local_evidence)
+        self._record("typed", coverage=coverage, candidates=candidates, local=local_evidence,
+                     **({"verse_local": verse_evidence} if verse_evidence is not None else {}))
         if all_poetry:
-            # Preserve the existing spelling-only route; no grammar, number or frontier sweeps.
-            self._record("poetry_complete", skipped=[x["stage"] for x in workflow_plan()[2:] if x["stage"] != "typed"])
+            # Verse takes house mechanics: the typed passes and sweeps above,
+            # the number stage and the meaning/correction checks. No sentence
+            # repair, no whole-book prose readers, no ChatGPT login required.
+            self._stage("numbers")
+            self._numbers()
+            self._stage("checks")
+            self._checks("checks", initial)
+            self._record("checks")
+            self._record("poetry_complete", skipped=[x["stage"] for x in workflow_plan()[2:]
+                                                     if x["stage"] not in {"typed", "numbers", "checks"}])
         else:
             self._stage("numbers")
             self._numbers()

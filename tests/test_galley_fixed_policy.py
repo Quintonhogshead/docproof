@@ -55,12 +55,16 @@ def test_number_read_replaces_typed_number_group_without_pruning_other_mechanics
     assert configuration().sweeps  # no mutable config shared between manuscripts
 
 
-def test_poetry_is_spelling_only_including_silent_and_structural_changes():
+def test_poetry_is_house_mechanics_without_sentence_level_lanes():
     cfg = configuration(poetry=True)
-    assert cfg.error_types == ["spelling"]
+    flat = [key for group in cfg.error_types for key in ([group] if isinstance(group, str) else group)]
+    assert flat == ["spelling", "homophone_confusion", "apostrophe_error", "capitalization",
+                    "serial_comma", "missing_word", "ly_adverb_hyphen"]
+    assert "number_style" not in flat            # the number stage reads verse too
     assert not cfg.ensemble.enabled
     assert cfg.api.model == "claude-sonnet-5"
-    assert cfg.sweeps == []
+    assert "sweep_dash" in cfg.sweeps and "sweep_elision_apostrophe" in cfg.sweeps
+    assert "sweep_terminal_period" not in cfg.sweeps and "sweep_doubled_word" not in cfg.sweeps
     assert not cfg.languagetool.enabled and not cfg.consistency.enabled
     assert not cfg.style.heading_title_case
     assert not cfg.style.heading_vocab_queries
@@ -210,3 +214,29 @@ def test_poetry_samples_mark_truncation_and_preserve_short_paragraphs():
     assert poetry_samples({}) == []
     with pytest.raises(ValueError):
         poetry_samples(paragraphs, char_budget=0)
+
+
+@pytest.mark.parametrize("before,after,category,reason", [
+    ("teh", "the", "spelling", None),
+    ("Moon", "moon", "spelling", None),                         # mid-line recase is mechanics
+    ("smokey", "smoky", "spelling", None),
+    (" -- ", "—", "sweep_dash", None),
+    ("waits", "Waits", "spelling", "Verse keeps the case of its line heads"),
+    ("quiet", "quiet.", "punctuation", "Verse takes no terminal mark the poet did not set"),
+    ("\n  ", " ", "punctuation", "Verse keeps its line breaks"),
+    ("waits", "wait", "grammar", "Verse takes house mechanics only; sentence-level judgments stay out"),
+    ("waits", "waits", "continuity", "Verse takes house mechanics only; sentence-level judgments stay out"),
+])
+def test_verse_safe_guards_structure_and_category(before, after, category, reason):
+    from galley.fixed_policy import verse_safe
+    text = "teh Moon\n  waits, smokey -- quiet"
+    lo = text.index(before)
+    row = {"start": lo, "end": lo + len(before), "before": before, "replacement": after,
+           "category": category, "format": ""}
+    assert verse_safe(row, text) == reason
+
+
+def test_verse_safe_refuses_formatting():
+    from galley.fixed_policy import verse_safe
+    row = {"start": 0, "end": 3, "before": "The", "replacement": "The", "category": "spelling", "format": "italic"}
+    assert verse_safe(row, "The Moon") == "Verse takes no formatting changes"

@@ -7,7 +7,7 @@ All 120 indexed rules and all accompanying prose/table instructions are accounte
 - Clear proofreading errors only; no speculative rewrites, correction quotas, or automatic conversion of an intentionally present-tense scene.
 - Galley’s existing clock/number/currency policy wins over the source’s lowercase a.m./am examples. Established regional quotation, spelling and punctuation conventions are protected; the Story Sheet records evidence and uncertainty. Local US-configured rules remain proposals, not proof that a regional form is wrong.
 - Smart-quote and internal-space corrections remain tracked. Rejecting all changes restores the exact original; there are no silent-edit audit exceptions.
-- Poetry remains spelling-only. Ambiguity, model disagreement and unsupported structural operations do not become author comments.
+- Poetry takes house mechanics at the character and word level and never a change to its structure (see the Verse section of the brief). Ambiguity, model disagreement and unsupported structural operations do not become author comments.
 - The fixed sequence supplies three successive whole-book reading stages (Opus/Sol, Fable, Astra), dedicated typed/local/number work and Luna edit checks. The source does not schedule extra agents, a supervising Brain, or recursive passes.
 - Native Galley keeps its tracked/clean Word outputs, existing filenames, Markdown report and certified evidence rather than adopting the pasted-chat two-file/Word-log format. The report adds recorded assumptions, focused-site acknowledgments, final raw pattern counts, note coverage and limits.
 - Final counts describe actual signals on the final text, not automatic errors or imaginary zeroes. The final audit does not repeat LanguageTool or buy another model sweep.

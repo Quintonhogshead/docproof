@@ -59,9 +59,12 @@ Three separate axes compose onto a base config. Precedence, strict-to-loose:
   fiction`, `literary_memoir`, `fantasy_sf`, `general_nonfiction`, `academic`,
   `historical`, `religious`, `self_help_business`, `poetry`. Run theological non-fiction
   under `religious`, never `self_help_business` (that one turns edits + rewrite
-  on). Run verse ONLY as `--genre poetry --stage poetry-touch`: the stage keeps
-  `error_types: [spelling]` + the spell scan and locks every other lane, sweep,
-  and gate off — feather-soft, spelling only.
+  on). Run verse ONLY as `--genre poetry --stage poetry-touch`: the stage runs
+  the character- and word-level typed passes (spelling, homophones, apostrophes,
+  capitalization, serial comma, number style, missing word, -ly hyphen) and the
+  glyph/spacing/word sweeps (ellipsis, dash, elision apostrophe, quote pair,
+  trailing space, time of day, compound number, century, decade, initialism),
+  and locks every sentence-level lane off — house mechanics, never structure.
 - **`docproof galley approve`** freezes the composed config into `approval.json`
   (source + config hashes, allowed models/providers, stage, lanes, budget, and
   `mechanical_only` when `--mechanical-only` is given).

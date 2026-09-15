@@ -173,7 +173,19 @@ def _sweep_ellipsis(text: str, variant=None, style: str = "nbsp") -> list[Hit]:
 
 
 
-_DASHES = re.compile(r"(?P<pre>[ \t\u00a0]*)(?P<run>-{2,}|–|—|-)(?P<post>[ \t\u00a0]*)")
+# A "run" is two or more hyphens/en dashes in any mixture ("--", "---", "-–",
+# "–-", "–--"): a typed sentence dash whatever keys were reached for. Dalton
+# (2026-09-15): "born -– born alive?" and "‘because of’---" sat untouched
+# because the old pattern read "-–" as a hyphen beside an en dash.
+_DASHES = re.compile(r"(?P<pre>[ \t\u00a0]*)(?P<run>[-–]{2,}|—|–|-)(?P<post>[ \t\u00a0]*)")
+
+# "Aug 13-26": a hyphen between two day numbers after a month name is a date
+# range and takes an en dash. Only this shape is certain enough for a sweep;
+# a bare "3-4" may be a score, a ratio or arithmetic.
+_MONTH_DAY = re.compile(
+    r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?[ \u00a0]+\d{1,2}$")
+_DAY_AFTER = re.compile(r"\d{1,2}(?![\d:])")
+
 
 
 # Closed-class words: a one-sided hyphen beside one of these ("us- well",
@@ -227,10 +239,15 @@ def _sweep_dash(text: str, variant=None) -> list[Hit]:
             # drops the ones that are already tight.
             replacement, why = "—", "House style sets an em dash unspaced."
         elif run == "–":
-            # An en dash tight between numbers is a correct range. Spaced, it
-            # is being used as a sentence break, which house style sets as an
-            # unspaced em dash.
-            if not (m.group("pre") and m.group("post")):
+            # An en dash tight on both sides is a range or an open-compound
+            # modifier and correct. With a space on EITHER side it is being
+            # used as a sentence break — "tremble –" at a line end, "‘of’ –or"
+            # — which house style sets as an unspaced em dash. Between digits
+            # ("10 –12") it is a sloppy range, left to a reader; at a
+            # paragraph start it is a bullet.
+            if not (m.group("pre") or m.group("post")):
+                continue
+            if not before or (before.isdigit() and after.isdigit()):
                 continue
             replacement, why = "—", ("House style sets a sentence-break dash "
                                      "as an unspaced em dash.")
@@ -244,6 +261,11 @@ def _sweep_dash(text: str, variant=None) -> list[Hit]:
             # it is arithmetic or a loose range, both judgment calls; at a
             # line edge it is a bullet or a dangling mark.
             if not (m.group("pre") or m.group("post")):
+                if (before.isdigit() and after.isdigit()
+                        and _MONTH_DAY.search(text[:m.start("run")])
+                        and _DAY_AFTER.match(text[m.end("run"):])):
+                    hits.append(Hit(m.start(), m.end(), "–",
+                                    "A range of dates takes an unspaced en dash."))
                 continue
             if not (m.group("pre") and m.group("post")):
                 if _broken_compound(text, m):
@@ -267,9 +289,65 @@ def _sweep_dash(text: str, variant=None) -> list[Hit]:
         else:
             replacement, why = "—", ("A typed hyphen run used as a sentence "
                                      "break becomes an unspaced em dash.")
-        if m.group(0) == replacement:
+        start = m.start()
+        # "basically, -- still": a comma has no business before a sentence
+        # dash; the dash takes over its job. Dropped along with the run.
+        if replacement == "—" and before == "," and text[:start - 1][-1:].isalnum():
+            start -= 1
+        if text[start:m.end()] == replacement:
             continue
-        hits.append(Hit(m.start(), m.end(), replacement, why))
+        hits.append(Hit(start, m.end(), replacement, why))
+    return hits
+
+
+
+# A dropped-letter word set with an OPENING single quote: "‘bout", "‘cause",
+# "‘em", "rock ‘n’ roll". The mark stands for missing letters, so it is an
+# apostrophe and curls right (’bout). Only the elisions that are not also
+# English words are listed: "‘round the corner" and "‘way" could open a
+# quotation in a single-quote manuscript, "‘is" could be dialect or a quoted
+# clause, and a sweep must never guess. The word must be lowercase — "‘Til
+# death" at a sentence head may be a quotation opening — and stand alone.
+# Straight marks are the intake's business (docproof.normalize curls them by
+# variant); this sweep repairs the curl the author already got wrong.
+_ELISION_WORDS = ("tis twas twere til bout cause em nother gainst neath "
+                  "ello appen aven alf ope n").split()
+_ELISION_OPENER = re.compile(
+    r"(?<![A-Za-z0-9’'])‘(?=(?:" + "|".join(_ELISION_WORDS) + r")(?![A-Za-z]))")
+
+
+def _sweep_elision_apostrophe(text: str, variant=None) -> list[Hit]:
+    return [Hit(m.start(), m.end(), "’",
+                "An apostrophe standing for dropped letters curls right "
+                "(’bout, ’em), not as an opening quote.")
+            for m in _ELISION_OPENER.finditer(text)]
+
+
+
+# "‘We”": a quotation opened with a single mark and closed with a double one.
+# The closing mark is the typo when it is the very next quote mark after the
+# opener and no double quotation is open in the paragraph, so nothing else
+# it could be closing. The opposite mismatch (“…’) is left alone: a right
+# single quote inside a double quotation is usually an apostrophe.
+_QUOTE_MARKS = re.compile(r"[‘’“”]")
+
+
+def _sweep_quote_pair(text: str, variant=None) -> list[Hit]:
+    hits: list[Hit] = []
+    doubles_open = 0
+    marks = list(_QUOTE_MARKS.finditer(text))
+    for i, m in enumerate(marks):
+        ch = m.group(0)
+        if ch == "“":
+            doubles_open += 1
+        elif ch == "”":
+            doubles_open = max(0, doubles_open - 1)
+        elif ch == "‘" and i + 1 < len(marks) and marks[i + 1].group(0) == "”" \
+                and doubles_open == 0:
+            nxt = marks[i + 1]
+            hits.append(Hit(nxt.start(), nxt.end(), "’",
+                            "A quotation opened with a single mark closes "
+                            "with a single mark."))
     return hits
 
 
@@ -1256,6 +1334,10 @@ SWEEPS: tuple[Sweep, ...] = (
           _sweep_decade_apostrophe),
     Sweep("sweep_trailing_space", "Paragraph-trailing whitespace",
           _sweep_trailing_space),
+    Sweep("sweep_elision_apostrophe", "Dropped-letter apostrophes curl right (’bout)",
+          _sweep_elision_apostrophe),
+    Sweep("sweep_quote_pair", "A single-opened quotation closes single",
+          _sweep_quote_pair),
 )
 
 SWEEPS_BY_KEY = {s.key: s for s in SWEEPS}

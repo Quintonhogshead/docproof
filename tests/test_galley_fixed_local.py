@@ -429,3 +429,26 @@ def test_completion_seed_suppresses_the_case_split_scan_for_that_term(tmp_path):
     recurrence = [r for r in rows if r["source"] == "local:completion:recurrences"]
     assert {r["para_id"] for r in recurrence} == {f"l{i}" for i in range(1, 6)}
     assert all("Easy Speed" in r["replacement"] for r in recurrence)
+
+
+def test_verse_packet_runs_the_glyph_sweeps_over_poetry_only(tmp_path, monkeypatch):
+    """The verse sweep touches only the classified poetry, runs no
+    LanguageTool, dictionary or sentence-level check, and records its own
+    check name so certification can tell it from the prose scan."""
+    from galley.fixed_policy import configuration
+    source = prepared(para("p1", "She waited -- and waited."),
+                      para("verse", "teh Moon\n  waits -- quiet\n‘bout now\n‘We”"))
+    # The prose scan still excludes the poem and never sees the verse sweep's checks.
+    prose, prose_evidence = collect(tmp_path, source, poetry_ids={"verse"})
+    assert prose_evidence["paragraph_ids"] == ["p1"] and prose_evidence["verse_ids"] == []
+    monkeypatch.setattr(local, "_dictionary_rows", lambda *a, **k: pytest.fail("Dictionary generator started"))
+    monkeypatch.setattr(local, "_language_tool", lambda *a, **k: pytest.fail("LanguageTool started"))
+    texts = {p.para_id: p.text for p in source.doc.paragraphs}
+    findings, evidence = local.collect_verse_candidates(source, texts, tmp_path / "local", identity=IDENTITY,
+                                                        verse_ids={"verse"}, cfg=configuration(poetry=True))
+    assert evidence["stage"] == "verse" and evidence["verse_ids"] == ["verse"]
+    assert evidence["paragraph_ids"] == ["verse"] and evidence["excluded_poetry_ids"] == []
+    assert [c["check"] for c in evidence["checks"]] == ["verse_sweeps"]
+    assert all(f["para_id"] == "verse" and f["source"] == "local:verse" for f in findings)
+    assert {f["category"] for f in findings} == {"sweep_dash", "sweep_elision_apostrophe", "sweep_quote_pair"}
+    assert local.validate_local_evidence(evidence, tmp_path / "local", IDENTITY)["request"]["verse_ids"] == ["verse"]
