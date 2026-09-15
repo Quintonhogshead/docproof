@@ -79,6 +79,13 @@ def approved(draft, chunk_ids=(1,)):
                                        faithful_voice=True, distinct_angle=True, feedback="") for i in range(1, 6)])
 
 
+@pytest.fixture(autouse=True)
+def feature_available(monkeypatch):
+    """The engine tests run with the kill switch lifted; the switch itself is
+    covered by test_switched_off_*."""
+    monkeypatch.setattr("app.teasers.AVAILABLE", True)
+
+
 @pytest.fixture
 def queued(tmp_path):
     path = tmp_path / "manuscript.docx"
@@ -626,6 +633,32 @@ def test_single_portion_review_reads_original_and_brief_in_one_call(tmp_path, st
         return approved(draft).model_dump()
     assert pipeline.review(story, draft, source, tmp_path, runner=runner).approved
     assert len(calls) == 1
+
+
+def test_switched_off_hook_enqueues_nothing_and_settings_read_off(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.teasers.AVAILABLE", False)
+    queue = Queue(tmp_path / "watch")
+    (queue.root / "settings.json").write_text(json.dumps({"enabled": True, "folder_id": "f1"}))
+    assert queue.settings()["enabled"] is False and queue.settings()["available"] is False
+    job = Job(id="format-2", filename="Smith - Book Original.docx", source_path="x.docx",
+              model="test", mode="now", kind="prep", state="done", owner_id="owner")
+    assert queue.add(job) is None and queue.list() == []
+    assert queue.claim("worker") is None
+    with pytest.raises(TeaserError):
+        queue.configure(enabled=True)
+    queue.configure(enabled=False)                     # turning it off still works
+
+
+def test_switched_off_routes_refuse_enable_and_hand_the_worker_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.teasers.AVAILABLE", False)
+    monkeypatch.setenv("DOCPROOF_AGENT_TOKEN", "secret-long-enough-for-the-agent-gate")
+    app = create_app(tmp_path, start_runner=False, web=False)
+    with TestClient(app) as client:
+        assert client.put("/api/teasers/settings", json={"enabled": True}).status_code == 409
+        assert client.get("/api/teasers").json()["settings"]["enabled"] is False
+        response = client.post("/api/teasers/worker", headers={"Authorization": "Bearer secret-long-enough-for-the-agent-gate"},
+                               json={"action": "poll", "worker": "fly-test"})
+        assert response.json() == {"task": None}
 
 
 def test_completion_hook_queues_before_archiving(queued, tmp_path, monkeypatch):

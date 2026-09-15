@@ -52,6 +52,15 @@ class TeaserError(ValueError):
     pass
 
 
+# The kill switch. Author teasers were switched off on 2026-09-15: the
+# formatting hook enqueues nothing, the cloud worker is handed nothing, the
+# settings route refuses to turn the feature on, and the formatting panel hides
+# the card. Everything below stays intact so flipping this back to True is the
+# whole re-enablement. Tests that exercise the engine set it on themselves.
+AVAILABLE = False
+UNAVAILABLE_MESSAGE = "Author teasers are switched off in this build."
+
+
 @contextmanager
 def lock(path):
     path = Path(path)
@@ -82,9 +91,17 @@ class Queue:
 
     def settings(self):
         path = self.root / "settings.json"
-        return json.loads(path.read_text()) if path.exists() else {"enabled": False}
+        settings = json.loads(path.read_text()) if path.exists() else {"enabled": False}
+        if not AVAILABLE:
+            # A stored "enabled" from before the switch-off stays on disk (so
+            # re-enabling restores it) but reads as off everywhere.
+            settings["enabled"] = False
+            settings["available"] = False
+        return settings
 
     def configure(self, **values):
+        if values.get("enabled") and not AVAILABLE:
+            raise TeaserError(UNAVAILABLE_MESSAGE)
         with lock(self.root / "settings.lock"):
             settings = self.settings()
             if values.get("enabled") and not settings.get("enabled"):

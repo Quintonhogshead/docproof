@@ -49,6 +49,8 @@ def dispatch(app, message):
     home = app.state.watch.home
     queue = teasers.Queue(home)
     if message.action == "poll":
+        if not teasers.AVAILABLE:
+            return {"task": None}
         queue.recover()
         recover_new_jobs(app, queue)
         return {"task": queue.claim(message.worker)}
@@ -103,6 +105,8 @@ def register(app):
         if update.folder_id is not None and update.folder_id and not all(
                 c.isalnum() or c in "_-" for c in update.folder_id):
             raise HTTPException(400, "Invalid Google folder ID.")
+        if update.enabled and not teasers.AVAILABLE:
+            raise HTTPException(409, teasers.UNAVAILABLE_MESSAGE)
         values = {"enabled": update.enabled}
         if update.folder_id is not None:
             values["folder_id"] = update.folder_id
