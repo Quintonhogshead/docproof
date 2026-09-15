@@ -25,7 +25,7 @@ must not be used to fabricate or overrule an enrolled verdict.
   is no longer in the paragraph — the engine's own answer, never a hand edit.
 - **Settle guards (v0.185.0, from the Georgis run).** (1) The walk, the
   change verifier, and the settle judge all carry ONE house-rule block
-  (`galley/house_style.py`) and are told a house form (`4:00 AM`, `40
+  (`galley/house_style.py`) and are told a house form (`3:00 p.m.`, `40
   percent`, unspaced em dash, serial comma, punctuation inside quotes,
   singles inside dialogue, numbers spelled to one hundred) is never an
   error; settle additionally sweeps the candidate paragraph and DROPS any

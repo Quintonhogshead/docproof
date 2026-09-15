@@ -99,9 +99,9 @@ def test_a_second_comma_at_the_same_seam_loses_to_the_first_lane():
 def test_the_time_sweep_and_the_number_audit_do_not_both_insert_00():
     src = "The shift ran from 7 AM until noon."
     doc = _doc(src)
-    sweep = _f("s-1", "from 7 AM until", "from 7:00 AM until",
+    sweep = _f("s-1", "from 7 AM until", "from 7:00 a.m. until",
                etype="sweep_time_of_day")
-    audit = _f("i-2", "7 AM", "7 :00 AM")
+    audit = _f("i-2", "7 AM", "7 :00 a.m.")
     out = validate_findings([sweep, audit], doc, "medium")
     assert sorted(f.status for f in out) == ["rejected_overlap", "validated"]
 

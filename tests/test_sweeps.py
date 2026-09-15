@@ -292,29 +292,57 @@ def test_dialogue_tag_leaves_an_action_beat_gerund_alone():
 
 # --- times of day ------------------------------------------------------------
 
+# The house guide (2026-09-15): U.S.-oriented books take Chicago's lowercase
+# meridiem WITH periods ("3:00 p.m."); U.K.-oriented books take Oxford's
+# lowercase meridiem WITHOUT periods ("3:00 pm"). No variant means U.S.
 @pytest.mark.parametrize("before,after", [
-    ("It was 3:40AM.", "It was 3:40 AM."),
-    ("at 4:15pm.", "at 4:15 PM."),
-    ("reached the tree at 1:53am.", "reached the tree at 1:53 AM."),
-    ("already 3:40 a.m. now", "already 3:40 AM now"),
-    ("by 2 PM sharp", "by 2:00 PM sharp"),            # bare hour gains :00
-    ("at 3 p.m. yesterday", "at 3:00 PM yesterday"),  # abbreviation dot drops
-    ("home by 3 p.m.", "home by 3:00 PM."),           # paragraph-final period kept
-    ("“I'll come at 3 p.m.”", "“I'll come at 3:00 PM.”"),  # quote-final too
+    ("It was 3:40AM.", "It was 3:40 a.m."),
+    ("at 4:15pm.", "at 4:15 p.m."),
+    ("reached the tree at 1:53am.", "reached the tree at 1:53 a.m."),
+    ("already 3:40 AM now", "already 3:40 a.m. now"),
+    ("by 2 PM sharp", "by 2:00 p.m. sharp"),            # bare hour gains :00
+    ("at 3 p.m. yesterday", "at 3:00 p.m. yesterday"),
+    ("home by 3 PM.", "home by 3:00 p.m."),             # one period, not two
+    ("“I'll come at 3 PM.”", "“I'll come at 3:00 p.m.”"),
+    ("at 3 p.m. He was already gone.", "at 3:00 p.m. He was already gone."),
+    ("8.30 am tomorrow", "8:30 a.m. tomorrow"),         # Chicago: colon separator
 ])
 def test_time_of_day_meridiem(before, after):
     assert swept("sweep_time_of_day", before) == after
 
 
 @pytest.mark.parametrize("text", [
-    "already 3:40 AM now",            # correct: left alone
+    "already 3:40 a.m. now",          # correct: left alone
     "I AM here and you are not.",     # "AM" not attached to a digit
     "listening to AM radio",
-    "at 3 p.m. He was already gone.", # dot may be the sentence period: skipped
-    "at 9 a.m. Eastern time",         # or the abbreviation's own: skipped too
+    "the crowd at 3 amid the rain",   # a meridiem glued to a longer word
 ])
 def test_time_of_day_leaves_these_alone(text):
     assert unchanged("sweep_time_of_day", text)
+
+
+@pytest.mark.parametrize("before,after", [
+    ("It was 3:40AM.", "It was 3:40 am."),
+    ("already 3:40 a.m. now", "already 3:40 am now"),
+    ("by 2 PM sharp", "by 2:00 pm sharp"),              # colon when adding :00
+    ("8.30 AM tomorrow", "8.30 am tomorrow"),           # the author's point is kept
+    ("home by 3 p.m.", "home by 3:00 pm."),             # paragraph-final period kept
+    ("“I'll come at 3 p.m.”", "“I'll come at 3:00 pm.”"),
+])
+def test_time_of_day_oxford_form(before, after):
+    from docproof.variants import load_variant
+    uk = load_variant("uk")
+    assert apply_hits(before, SWEEPS_BY_KEY["sweep_time_of_day"].scan(before, uk)) == after
+
+
+@pytest.mark.parametrize("text", [
+    "already 3:40 pm now",
+    "at 3 p.m. He was already gone.", # dot may be the sentence period: skipped
+    "at 9 a.m. Eastern time",         # or the abbreviation's own: skipped too
+])
+def test_time_of_day_oxford_leaves_these_alone(text):
+    from docproof.variants import load_variant
+    assert not SWEEPS_BY_KEY["sweep_time_of_day"].scan(text, load_variant("uk"))
 
 
 # --- the deity capital -------------------------------------------------------
@@ -782,6 +810,21 @@ def test_decade_apostrophe_added(before, after):
 ])
 def test_decade_apostrophe_leaves_these_alone(text):
     assert unchanged("sweep_decade_apostrophe", text)
+
+
+# Oxford (U.K./Australian) books set the decade bare: 80s, never ’80s or 80's.
+@pytest.mark.parametrize("before,after", [
+    ("the ’80s were wild.", "the 80s were wild."),
+    ("music that only the 80's could appreciate.",
+     "music that only the 80s could appreciate."),
+    ("her mid-’80s perm.", "her mid-80s perm."),
+    ("the early 80s already right.", "the early 80s already right."),
+    ("temps in the ’60s today.", "temps in the ’60s today."),   # not years
+])
+def test_decade_oxford_form(before, after):
+    from docproof.variants import load_variant
+    uk = load_variant("uk")
+    assert apply_hits(before, SWEEPS_BY_KEY["sweep_decade_apostrophe"].scan(before, uk)) == after
 
 
 # --- heading vocabulary (AFTERWARD -> AFTERWORD) ------------------------------

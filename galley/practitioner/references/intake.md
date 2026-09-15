@@ -26,7 +26,8 @@ piecemeal. Zero tense findings on a novel is not proof that the baseline was hel
 For nonfiction/academic work run report-only `docproof cites` and decide unresolved
 citations/cross-references from evidence; missing scaffolding auto-skips its checks.
 
-House numbers spell through one hundred, use `4:00 AM` and `40 percent`. Preserve
+House numbers spell through one hundred, use `3:00 p.m.` (`3:00 pm` UK) and `40 percent`
+(`40 per cent` UK). Preserve
 quoted facts and detect the book's English variant. Protect author-declared caps,
 wordplay/meta-text, dialect, coined names, personified capitals, Scripture/liturgy/
 historical quotations. Use the dedicated religious preset for theology; verse

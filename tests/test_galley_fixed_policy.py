@@ -126,7 +126,7 @@ def test_preparation_really_runs_local_consistency_and_citation_checks(tmp_path)
 
 def test_full_house_number_exceptions_are_carried_to_readers():
     for phrase in ("type 2 diabetes", "stage four liver cancer", "ten thousand",
-                   "4:00 AM", "a five-dollar", "two cents", "45 BC", "a quarter"):
+                   "3:00 p.m.", "a five-dollar", "two cents", "45 BC", "a quarter"):
         assert phrase in NUMBER_POLICY
     assert "decimal only when" in NUMBER_POLICY
     assert "not an error" in NUMBER_POLICY

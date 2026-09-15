@@ -59,8 +59,8 @@ terminal punctuation, repetition, the single-quote convention, dialect.
   and the trailing-line `---`. It misses mixed runs (`-–`, `–--`) and an
   en dash spaced on one side only (`’ –or`): 3 of the 25 dash sites.
 - `sweep_ellipsis`, `sweep_trailing_space`: covered (and already applied at intake).
-- `sweep_time_of_day`: `3pm` matches and becomes `3:00 PM`. House style
-  (`11:00 AM`) wins over the proofreader's `3:00 p.m.`.
+- `sweep_time_of_day`: `3pm` matches and becomes `3:00 p.m.` (`3:00 pm` on a
+  U.K. book), the house-guide form.
 - Hyphen between digits (`13-26`): the dash sweep deliberately skips it.
   Needs the numbers stage (which excludes poetry today) or a month-name range rule.
 - Wrong-direction curly elision (`‘bout`): nothing handles it. Normalization

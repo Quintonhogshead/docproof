@@ -1020,38 +1020,60 @@ def unclosed_quote_findings(paragraphs: Sequence[ParagraphRef],
 
 
 
-# A clock time with an AM/PM meridiem attached to a digit: "3:40AM", "2:00 a.m.",
-# "4:15PM", "at 2 PM". The digit requirement is what keeps the sweep off the
-# stray capital pair — "I AM here", an "AM" radio band — that is not a time at
-# all. Already-correct "3:40 AM" matches too, but the replacement equals the
-# text, so no hit is emitted and the sweep stays idempotent. The meridiem's
-# trailing dot is captured separately: on a dotted form ("3 p.m.") that dot may
-# be the abbreviation's own or the sentence's period, and the two need
-# different replacements.
+# A clock time with a meridiem attached to a digit: "3:40AM", "2:00 a.m.",
+# "4:15PM", "at 2 PM", "8.30 am". The digit requirement is what keeps the
+# sweep off the stray capital pair — "I AM here", an "AM" radio band — that is
+# not a time at all. An already-correct form matches too, but the replacement
+# equals the text, so no hit is emitted and the sweep stays idempotent. The
+# meridiem's trailing dot is captured separately: on the U.K. form (no
+# periods) that dot may be the sentence's period, and the two need different
+# replacements.
 # Every typed form of a clock time with a meridiem — "2:30 am", "11PM",
-# "7AM", "9:00am", "8:00pm", "3 p.m." — with or without a space, minutes, or
-# periods, in either case. The trailing lookahead keeps "3 amid" and "at 7
-# ambulances" from reading as times (they did: "3:00 AMid").
+# "7AM", "9:00am", "8:00pm", "3 p.m.", "8.30 am" — with or without a space,
+# minutes, or periods, in either case. The trailing lookahead keeps "3 amid"
+# and "at 7 ambulances" from reading as times (they did: "3:00 AMid").
 _TIME_MERIDIEM = re.compile(
-    r"(?<![.\d])(\d{1,2})(:\d{2})?[  ]*([AaPp])[  ]*\.?[  ]*([Mm])(\.?)"
+    r"(?<![.\d])(\d{1,2})(?:([:.])(\d{2}))?[  ]*([AaPp])[  ]*\.?[  ]*([Mm])(\.?)"
     r"(?![A-Za-z])")
 
 
+def _oxford(variant) -> bool:
+    """Whether the run proofs to the Oxford (U.K./Australian) conventions.
+    Canadian manuscripts take U.S. punctuation, so only the two single-quote
+    variants are Oxford here; no variant means U.S."""
+    return getattr(variant, "key", None) in ("uk", "au")
+
+
 def _sweep_time_of_day(text: str, variant=None) -> list[Hit]:
-    """House style sets a clock time as digits with minutes and a capital
-    meridiem, no periods: "11:00 AM", not "11:00 a.m." or "11AM". A bare hour
-    with a meridiem gains its ":00" here ("2 PM" -> "2:00 PM") — the meridiem
-    is what makes it unambiguously a time; a meridiem-less "around 4" stays
-    the whole-book consistency scan's question. A dotted form whose final
-    period is followed by a capitalized word is skipped, not guessed: that dot
-    may close the sentence ("at 3 p.m. He left") or belong to the abbreviation
-    ("3 p.m. Eastern"), and a sweep must never decide that blind."""
+    """The house guide sets a clock time as digits with minutes and a
+    LOWERCASE meridiem: with periods and a colon for a U.S.-oriented
+    manuscript ("3:00 p.m.", never "3:00 PM" or "3 pm"), without periods for
+    a U.K.-oriented one ("3:00 pm"; an author's point separator, "8.30 am",
+    is kept). A bare hour with a meridiem gains its ":00" here ("2 PM" ->
+    "2:00 p.m.") — the meridiem is what makes it unambiguously a time; a
+    meridiem-less "around 4" stays the whole-book consistency scan's
+    question. In the U.S. form the abbreviation's own period doubles as the
+    sentence's, so a dotted source form is never ambiguous. In the U.K. form
+    a dotted source ("at 3 p.m. He left") whose final period is followed by
+    a capitalized word is skipped, not guessed: that dot may close the
+    sentence or belong to the abbreviation ("3 p.m. Eastern"), and a sweep
+    must never decide that blind."""
     hits: list[Hit] = []
+    oxford = _oxford(variant)
     for m in _TIME_MERIDIEM.finditer(text):
-        canonical = f"{m.group(1)}{m.group(2) or ':00'} {m.group(3).upper()}M"
-        if m.group(5):                      # the matched form ended with "."
+        hour, sep, minutes, ap = m.group(1), m.group(2), m.group(3), m.group(4).lower()
+        if oxford:
+            sep = sep or ":"
+            canonical = f"{hour}{sep}{minutes or '00'} {ap}m"
+            why = ("House style sets clock times as digits with minutes and a "
+                   "lowercase meridiem without periods: “3:00 pm”.")
+        else:
+            canonical = f"{hour}:{minutes or '00'} {ap}.m."
+            why = ("House style sets clock times as digits with minutes and a "
+                   "lowercase meridiem with periods: “3:00 p.m.”.")
+        if m.group(6) and oxford:           # the matched form ended with "."
             tail = text[m.end():]
-            stripped = tail.lstrip(" \t ")
+            stripped = tail.lstrip(" \t ")
             if not tail or tail[0] in "”’\"'":
                 canonical += "."            # paragraph- or quote-final: the
                                             # dot is the sentence's period
@@ -1064,9 +1086,7 @@ def _sweep_time_of_day(text: str, variant=None) -> list[Hit]:
             # abbreviation's own, and the replacement drops it.
         if m.group(0) == canonical:
             continue
-        hits.append(Hit(m.start(), m.end(), canonical,
-                        "House style sets clock times as digits with minutes "
-                        "and a capital meridiem: “11:00 AM”."))
+        hits.append(Hit(m.start(), m.end(), canonical, why))
     return hits
 
 
@@ -1229,6 +1249,12 @@ _DECADE = re.compile(
     r"\b(?P<lead>[Tt]he|[Ee]arly|[Ll]ate|[Mm]id)(?P<gap>[  -])"
     r"(?P<dec>[1-9]0)(?P<mid>['’]?)s\b")
 
+# The Oxford form is the bare "80s": the same anchored shape, with an
+# apostrophe either before the digits ("’80s") or before the s ("80's").
+_DECADE_OXFORD = re.compile(
+    r"\b(?P<lead>[Tt]he|[Ee]arly|[Ll]ate|[Mm]id)(?P<gap>[  -])"
+    r"(?P<pre>['’]?)(?P<dec>[1-9]0)(?P<mid>['’]?)s\b")
+
 # "temps in the 60s", "scores in the 90s": two-digit ranges that are not years
 # at all. One look-behind window is enough — the marker sits close by.
 _DECADE_NOT_YEARS = re.compile(
@@ -1237,11 +1263,23 @@ _DECADE_NOT_YEARS = re.compile(
 
 
 def _sweep_decade_apostrophe(text: str, variant=None) -> list[Hit]:
-    """Insert the apostrophe a two-digit decade drops and move a misplaced one:
-    "the early 80s" and "the 80's" both -> "the early ’80s" / "the ’80s".
-    Idempotent — the correct leading apostrophe breaks the match — and four-digit
-    decades ("the 1980s") never match at all."""
+    """Set a two-digit decade the way the house guide does for the run's
+    English. U.S. (Chicago): insert the apostrophe the decade drops and move
+    a misplaced one — "the early 80s" and "the 80's" both -> "the early ’80s"
+    / "the ’80s". U.K. (Oxford): no apostrophe at all — "the ’80s" and "the
+    80's" both -> "the 80s". Idempotent either way, and four-digit decades
+    ("the 1980s") never match at all."""
     hits: list[Hit] = []
+    if _oxford(variant):
+        for m in _DECADE_OXFORD.finditer(text):
+            if not (m.group("pre") or m.group("mid")):
+                continue
+            if _DECADE_NOT_YEARS.search(text[:m.start()]):
+                continue
+            hits.append(Hit(m.start("pre"), m.end(), f"{m.group('dec')}s",
+                            "Oxford style sets a two-digit decade without an "
+                            "apostrophe: 80s."))
+        return hits
     for m in _DECADE.finditer(text):
         if _DECADE_NOT_YEARS.search(text[:m.start()]):
             continue
@@ -1323,14 +1361,15 @@ SWEEPS: tuple[Sweep, ...] = (
           _sweep_quote_punctuation),
     Sweep("sweep_nested_quote", "Nested quotations set in singles",
           _sweep_nested_quote),
-    Sweep("sweep_time_of_day", "Times of day (11:00 AM)", _sweep_time_of_day),
+    Sweep("sweep_time_of_day", "Times of day (3:00 p.m. / 3:00 pm)",
+          _sweep_time_of_day),
     Sweep("sweep_deity_capital", "Deity capitalized in set expressions",
           _sweep_deity_capital),
     Sweep("sweep_dialogue_splice", "An action beat mistaken for a dialogue tag",
           _sweep_dialogue_splice),
     Sweep("sweep_initialism", "Initialisms set in capitals (TV)",
           _sweep_initialism),
-    Sweep("sweep_decade_apostrophe", "Two-digit decades take an apostrophe",
+    Sweep("sweep_decade_apostrophe", "Two-digit decades (’80s U.S.; 80s U.K.)",
           _sweep_decade_apostrophe),
     Sweep("sweep_trailing_space", "Paragraph-trailing whitespace",
           _sweep_trailing_space),

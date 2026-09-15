@@ -1181,7 +1181,7 @@ def decide(res: Residual, em: emap.EditMap, accepted: Mapping[str, str],
                                                               comp.src_end]):
             return Decision("drop", "duplicate")
     # House style is not up for settlement: a replacement the sweeps would
-    # re-fire on ("4:00 a.m." over the house "4:00 AM") is dropped, recorded.
+    # re-fire on ("4:00 PM" over the house "4:00 p.m.") is dropped, recorded.
     if sweeps is not None:
         after = acc[:comp.acc_start] + comp.text + acc[comp.acc_end:]
         bad = sweeps.refires(acc, (comp.acc_start, comp.acc_end), after,

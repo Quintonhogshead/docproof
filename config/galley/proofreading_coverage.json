@@ -740,7 +740,7 @@
     {
       "source_id": "u-s-cmos-and-canadian-cmos-punctuation/times",
       "source_text_sha256": "0638cc39343438bae8b37eb0504f5bbb0adb150411fd27a1d363fdc6d3f52857",
-      "disposition": "explicit_override",
+      "disposition": "editorial",
       "policy_sections": [
         "authority",
         "numbers_compounds"
@@ -751,7 +751,7 @@
         "opus_adjudication",
         "luna_checks"
       ],
-      "handling": "Existing Galley house policy wins: digits, minutes, capital AM/PM without periods; never infer a missing meridiem. Source lowercase a.m./am examples are not imported."
+      "handling": "Adopted as the house form (Atmosphere Press House Style Guide, 2026-09-15): digits, minutes, colon, lowercase a.m./p.m. with periods for US/Canada (8:30 a.m. / 3:00 p.m.); ranges take an unspaced en dash. The deterministic time sweep and the number stage enforce it; a missing meridiem is never inferred."
     },
     {
       "source_id": "u-s-cmos-and-canadian-cmos-punctuation/dates",
@@ -884,7 +884,7 @@
     {
       "source_id": "u-k-oxford-and-australian-oxford-macquarie/times",
       "source_text_sha256": "7f22706c09f3de8ac7026ab23df384754595e5646e5c313f7eba79646c12fb9a",
-      "disposition": "explicit_override",
+      "disposition": "editorial",
       "policy_sections": [
         "authority",
         "numbers_compounds"
@@ -895,7 +895,7 @@
         "opus_adjudication",
         "luna_checks"
       ],
-      "handling": "Existing Galley house policy wins: digits, minutes, capital AM/PM without periods; never infer a missing meridiem. Source lowercase a.m./am examples are not imported."
+      "handling": "Adopted as the house form (Atmosphere Press House Style Guide, 2026-09-15): digits, minutes, lowercase am/pm without periods for UK/Australia (8.30 am / 3:00 pm); the author's point or colon separator is kept consistent, and a colon is used when minutes are added. The deterministic time sweep and the number stage enforce it; a missing meridiem is never inferred."
     },
     {
       "source_id": "u-k-oxford-and-australian-oxford-macquarie/dates",

@@ -1064,7 +1064,7 @@ class FixedWorkflow:
         def named(window):
             return [{**x, "id": f"n{i + 1:02d}"} for i, x in enumerate(window)]
         jobs = [(model, partial(self._ask,"numbers", model,
-                    "Check EVERY numbered site against the supplied existing number and currency policy. reviewed_ids must contain every site id (n01, n02, ...), even when correct. Findings quote the paragraph verbatim and specify para_id. Never change numerical values or invent AM/PM. Preserve all policy exceptions. Only report clear errors or evidence-backed author questions. No comment decisions are needed.",
+                    "Check EVERY numbered site against the supplied existing number and currency policy. reviewed_ids must contain every site id (n01, n02, ...), even when correct. Findings quote the paragraph verbatim and specify para_id. Never change numerical values or invent a meridiem. Preserve all policy exceptions. Only report clear errors or evidence-backed author questions. No comment decisions are needed.",
                     {"story_sheet": self.context, "sites": named(window),
                      "verse_ids": sorted(self.poetry_ids & {x["para_id"] for x in window}),
                      "paragraphs": {x["para_id"]: self.current[x["para_id"]] for x in window}}, READ_SCHEMA)) for model, window in work]

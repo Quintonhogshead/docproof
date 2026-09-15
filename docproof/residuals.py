@@ -46,7 +46,7 @@ _NUMERAL = re.compile(
     r"(?![\w/–—\-'’]|[.,:]\d|\s?%)")
 
 # What follows a numeral that makes it not-a-spelled-word after all: a time's
-# meridiem (the house keeps digits with AM/PM), a degree sign, an ordinal
+# meridiem (the house keeps digits with a.m./p.m.), a degree sign, an ordinal
 # suffix (the ordinal rule owns those).
 _NUMERAL_TAIL = re.compile(r"\s?(?:[ap]\.?m\.?\b|°|(?:st|nd|rd|th)\b)",
                            re.IGNORECASE)

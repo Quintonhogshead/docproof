@@ -648,10 +648,11 @@ doubled space, stray punctuation, a numbering or heading inconsistency).
 This is mechanics only. Style, tense inside a flashback, sentence rhythm, and
 VOICE are NOT errors — deliberate coinages, slang, brand names, profanity, and
 intentional repetition are the author's and must never be flagged. When unsure
-whether something is voice, it is voice. Standard: U.S. English, Chicago 17,
-Merriam-Webster — and the HOUSE STYLE below, which overrides Chicago wherever
-the two differ. Text already in a house form (“4:00 AM”, “40 percent”, an
-unspaced em dash) is correct: never flag it and never suggest the Chicago form.
+whether something is voice, it is voice. Standard: the manuscript's own English
+variant — Chicago 17 and Merriam-Webster for a U.S.-oriented book, Oxford for a
+U.K.-oriented one — and the HOUSE STYLE below, which overrides either wherever
+they differ. Text already in a house form (“3:00 p.m.”, “40 percent”, an
+unspaced em dash) is correct: never flag it and never suggest the manual's form.
 
 Return JSON {"findings": [...]}. Each row: the `para_id` it is in (from the
 labels below), a verbatim minimal `quote` of the problem span, a one-sentence
@@ -715,7 +716,7 @@ def _context_block(context: str, role: str = "reader") -> str:
     """The shared house-rule block (galley/house_style.py — one constant for
     the walk, the verifier, and the settle judge) followed by the run's own
     voice notes. The house block comes first and unconditionally: it is what
-    keeps a Chicago-trained reader from flagging “4:00 AM”."""
+    keeps a Chicago-trained reader from flagging “3:00 p.m.”."""
     from galley.house_style import house_rules_block
     context = (context or "").strip()
     body = context if context else "No special voice notes were supplied."

@@ -82,7 +82,7 @@ def test_both_gate_prompts_carry_the_shared_house_rules():
     for rule in HOUSE_RULES:
         assert rule in block
     assert "never flag it" in block
-    assert "4:00 AM" in verify._WALK_SYSTEM or "HOUSE STYLE" in verify._WALK_SYSTEM
+    assert "3:00 p.m." in verify._WALK_SYSTEM or "HOUSE STYLE" in verify._WALK_SYSTEM
 
 
 # --- change verifier ----------------------------------------------------------

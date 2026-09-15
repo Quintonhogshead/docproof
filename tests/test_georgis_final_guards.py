@@ -30,16 +30,16 @@ def _f(fid, original, corrected, *, etype="imported_edit", para="body-0000"):
 
 # --- (13) the sweep guard refuses a lane's row the house sweeps would undo ---
 
-GEORGIS_230 = ("It was 2:30 AM the next morning when Aunt Paraskevi woke me "
+GEORGIS_230 = ("It was 2:30 a.m. the next morning when Aunt Paraskevi woke me "
                "and uncle Anastasi up.")
 
 
-def test_a_capitalization_row_that_lowercases_a_house_time_is_refused():
+def test_a_capitalization_row_that_restyles_a_house_time_is_refused():
     cfg = load_config("config/default.yaml")
     guard = SweepGuard.from_config(cfg, None)
     doc = _doc(GEORGIS_230)
     out = validate_findings(
-        [_f("c-1", GEORGIS_230, GEORGIS_230.replace("2:30 AM", "2:30 am"),
+        [_f("c-1", GEORGIS_230, GEORGIS_230.replace("2:30 a.m.", "2:30 AM"),
             etype="capitalization")], doc, "medium", sweep_guard=guard)
     assert out[0].status == "rejected_undoes_house_style:sweep_time_of_day"
     # the same row's OTHER fix in the sentence still lands on its own
@@ -49,7 +49,7 @@ def test_a_capitalization_row_that_lowercases_a_house_time_is_refused():
     assert out[0].status == "validated"
     # without a guard the validator behaves as before
     out = validate_findings(
-        [_f("c-3", GEORGIS_230, GEORGIS_230.replace("2:30 AM", "2:30 am"),
+        [_f("c-3", GEORGIS_230, GEORGIS_230.replace("2:30 a.m.", "2:30 AM"),
             etype="capitalization")], doc, "medium")
     assert out[0].status == "validated"
 
@@ -128,11 +128,11 @@ def test_ambiguous_one_sided_hyphens_are_left_alone(text):
 
 
 @pytest.mark.parametrize("before,after", [
-    ("It was 2:30 am the next morning", "It was 2:30 AM the next morning"),
-    ("by 11PM tonight", "by 11:00 PM tonight"),
-    ("up at 7AM.", "up at 7:00 AM."),
-    ("at 9:00am sharp", "at 9:00 AM sharp"),
-    ("home at 8:00pm", "home at 8:00 PM"),
+    ("It was 2:30 AM the next morning", "It was 2:30 a.m. the next morning"),
+    ("by 11PM tonight", "by 11:00 p.m. tonight"),
+    ("up at 7AM.", "up at 7:00 a.m."),
+    ("at 9:00am sharp", "at 9:00 a.m. sharp"),
+    ("home at 8:00pm", "home at 8:00 p.m."),
 ])
 def test_every_typed_time_form_becomes_the_house_form(before, after):
     assert _swept("sweep_time_of_day", before) == after

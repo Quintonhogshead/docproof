@@ -299,8 +299,9 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
 
     `sweep_guard` (a docproof.sweepguard.SweepGuard built from the run's
     configured sweeps) refuses any edit the house sweeps would re-fire on
-    inside its changed span — the typed `capitalization` pass lowercasing
-    "2:30 AM" to "2:30 am" (Georgis, 2026-09-04) — with status
+    inside its changed span — the typed `capitalization` pass restyling
+    "2:30 a.m." as "2:30 AM" (Georgis, 2026-09-04, when the house form was
+    the capital one) — with status
     `rejected_undoes_house_style:<sweep key>`. None (the default) skips the
     check, so a bare call behaves as before.
 
@@ -479,7 +480,7 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
         # 2.44 — house style is not a lane's to undo. The configured sweeps
         # are run over the paragraph AS IT WOULD READ; a sweep that fires
         # inside the changed span and did not fire there before is the row
-        # writing a form the house removes ("2:30 AM" -> "2:30 am").
+        # writing a form the house removes ("2:30 a.m." -> "2:30 AM").
         if sweep_guard is not None and getattr(sweep_guard, "sweeps", None):
             key = sweep_guard.refires(para.text, (start, end), composed,
                                       (start, start + len(inserted)))

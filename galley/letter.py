@@ -287,7 +287,7 @@ def certificate_checks(src: JournalSources | None
 #: are error types (typed passes, sweeps, import rows); anything unlisted is
 #: shown as its key with the underscores spaced out.
 FAMILY_LABELS: dict[str, str] = {
-    "sweep_time_of_day": "clock times in the house form (h:mm AM/PM)",
+    "sweep_time_of_day": "clock times in the house form (3:00 p.m. / 3:00 pm)",
     "sweep_ellipsis": "ellipses set the house way",
     "sweep_dash": "dashes (unspaced em dash; en dash in ranges)",
     "sweep_stacked_punctuation": "stacked terminal punctuation (one mark)",

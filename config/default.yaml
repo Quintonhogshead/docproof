@@ -151,7 +151,7 @@ consistency:
   deity_pronouns: true
   deity_min_capitalized: 8
   # Bare clock hours ("around 4", "at 8") in a book whose own style writes
-  # times with minutes ("11:00 AM"). Query-only, self-gating on the book
+  # times with minutes ("11:00 a.m."). Query-only, self-gating on the book
   # carrying time_min_with_minutes H:MM times — the whole-book inconsistency
   # the Purpura head-proofreader pass fixed by hand.
   time_style: true
@@ -772,11 +772,11 @@ sweeps:
   - sweep_terminal_period
   - sweep_quote_punctuation   # . and , inside a closing double quote (US)
   - sweep_nested_quote        # doubles inside dialogue demote to singles
-  - sweep_time_of_day         # 3:40am -> 3:40 AM; 2 PM -> 2:00 PM (house: 11:00 AM)
+  - sweep_time_of_day         # 3:40AM -> 3:40 a.m.; 2 PM -> 2:00 p.m. (U.K.: 3:40 am, 2:00 pm)
   - sweep_deity_capital       # oh my god -> oh my God (set interjections only)
   - sweep_dialogue_splice     # an action beat mistaken for a dialogue tag
   - sweep_initialism          # whitelisted initialisms capitalized (tv -> TV)
-  - sweep_decade_apostrophe   # the 80s -> the ’80s (the/early/late/mid leads only)
+  - sweep_decade_apostrophe   # the 80s -> the ’80s; U.K.: the ’80s -> the 80s (the/early/late/mid leads only)
   - sweep_trailing_space      # paragraph-trailing spaces deleted (tracked)
 
 # After every gate has settled which edits stand, re-scan the reviewed text

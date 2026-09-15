@@ -7,7 +7,8 @@ Redding, Purpura, Paik, and Georgis precedents; full examples remain in history.
 ## Chicago mechanics and protected voice
 
 - Spell numbers through one hundred; use numerals above one hundred. House clock
-  form is `4:00 AM` / `11:00 AM`, and percentages are `40 percent`. Equivalent
+  form is `3:00 p.m.` (US/Canada) or `3:00 pm` (UK/Australia) — digits, minutes,
+  lowercase meridiem — and percentages are `40 percent` (`40 per cent` UK). Equivalent
   number/time formatting is mechanics; changed values are facts. Leave stage,
   type, grade, and display labels protected from ordinary number conversion.
   Chapter/part label numbering and case/style drift are the explicit exception:
@@ -29,7 +30,7 @@ Redding, Purpura, Paik, and Georgis precedents; full examples remain in history.
 - Do not rewrite a dangling modifier or gerund into a clause as line editing
   under a mechanical brief. Query only when actor attribution genuinely needs
   author knowledge. Do not make unsupported meaning changes to pronouns/direction
-  words. `a.m.`/`p.m.` and `five-hundred-pound` must not undo the house time/number
+  words. `3:00 PM` and `five-hundred-pound` must not undo the house time/number
   forms. Protect deliberate fragments, rhetorical repetition, dialect, coined
   language, character voice, interior monologue, and intentional tense exceptions.
 - Protect attribution/copyright template/display lines structurally before the

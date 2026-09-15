@@ -2,9 +2,10 @@
 
 The deterministic sweeps (docproof/sweeps.py) are the house rules as code and
 run FIRST on every build. A row from any other lane that writes a form a sweep
-exists to remove — the typed `capitalization` pass lowercasing "2:30 AM" to
-"2:30 am" (three rows on Georgis, 2026-09-04), a settle composite writing
-"4:00 a.m." — is either re-fired on at the next build or rejected as an
+exists to remove — a typed `capitalization` pass restyling "2:30 a.m." as
+"2:30 AM" (three rows on Georgis, 2026-09-04, under the house form of the
+day), a settle composite writing "4:00 PM" — is either re-fired on at the
+next build or rejected as an
 overlap: a round of churn either way. Settle grew this guard first
 (galley/settle.py); the main finish()/validator path had no such check, so the
 ladder's own rows could undo house style. It lives here so the validator can
@@ -20,7 +21,7 @@ class SweepGuard:
 
     The sweeps (docproof/sweeps.py) are the house rules as code, and the
     rebuild runs them first with first claim on every span: a composite that
-    writes "4:00 a.m." over the house "4:00 AM" is either re-fired on at the
+    writes "4:00 PM" over the house "4:00 p.m." is either re-fired on at the
     next build or rejected as an overlap — a round of churn either way, and
     on the Georgis run sixty-seven of them. So before a settlement is
     applied, the paragraph AS IT WOULD READ is scanned with the run's own

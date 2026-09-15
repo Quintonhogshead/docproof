@@ -57,9 +57,10 @@ Oxford punctuation with Macquarie spellings. Use the Story Sheet's evidence
 and declared assumptions; setting alone does not prove a variant. An unclear
 variant never licenses global conversion. House rules override general style
 authorities: Galley's existing number/currency policy controls, including
-clock times such as 8:30 AM (minutes, capital AM/PM, no periods), and no invented
-meridiem or automatic .00. Ignore the pasted method's conflicting lowercase
-a.m./am examples. Do not fabricate a dictionary lookup or style-guide citation.
+clock times as digits with minutes and a lowercase meridiem — 8:30 a.m. / 3:00 p.m.
+(periods, colon) for US/Canada, 8.30 am / 3:00 pm (no periods; the author's
+separator kept consistent) for UK/Australia — and no invented meridiem or
+automatic .00. Do not fabricate a dictionary lookup or style-guide citation.
 For quotation nesting, logical punctuation, date order, percent/per cent and
 that/which, these established-variant rules take precedence over generic US
 examples elsewhere in the prompt; Galley's clock and number rules still win.
