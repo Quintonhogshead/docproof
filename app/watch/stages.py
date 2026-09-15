@@ -44,11 +44,12 @@ OUTPUT_PREFIXES = ("book_", "tagged_", "tracked_", "reviewed_", "prep_notes",
 # the press hands to an author: "<book> - Atmosphere Press Proofreader.docx"
 # sorts next to the book. Taken from the format so the two cannot drift.
 #
-# The legacy " - Pre-Proofread" names are kept here too: books proofread before
-# the rename already sit in Drive under the old suffix, and the watcher must
-# still recognise them as finished output — otherwise a rename would make every
-# one of them look like a fresh manuscript and reprocess it, which is exactly
-# the costly mistake this recognition exists to prevent.
+# " - Pre-Proofread" is here for two reasons: books proofread before the rename
+# already sit in Drive under that suffix, and it is what the fixed lane calls
+# the redline it hands a proofreader today (`naming.PRE_PROOFREAD_SUFFIX`). The
+# watcher must recognise both as finished output — otherwise one of them looks
+# like a fresh manuscript and is reprocessed, which is exactly the costly
+# mistake this recognition exists to prevent.
 _LEGACY_STEM_SUFFIXES = (" - pre-proofread", " - pre-proofread change log")
 OUTPUT_STEM_SUFFIXES = tuple(
     s.lower() for s in (DocumentFormat.REVIEWED_SUFFIX,
