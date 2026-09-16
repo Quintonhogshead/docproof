@@ -191,21 +191,21 @@ def test_package_has_watch_compatible_names_and_reuses_exact_bytes(completed, mo
     driver, result = completed
     package = fd.package_result(driver, result)
     assert package["source_id"] == "drive-source" and package["outcome"] == "done" and package["reason"]
-    # The redline alone goes to the author folder, always spelled "Book Two";
+    # The redline alone goes to the author folder, always spelled "Book One";
     # the record — report, evidence, certificate, the verdict DocWatch commits
     # on, and the clean reading copy — is filed in the Drive archive only.
     by_role = {row["role"]: row for row in package["artifacts"]}
     assert {row["name"] for row in package["artifacts"]} == {
-        "Writer - Book Two - Pre-Proofread.docx", "Writer - Book Two - proofreading report.md",
-        "Writer - Book Two - review evidence.json", "Writer - Book Two - fixed certificate.json",
-        "Writer - Book Two - outcome.json", "Writer - Book Two - clean.docx"}
+        "Writer - Book One - Pre-Proofread.docx", "Writer - Book One - proofreading report.md",
+        "Writer - Book One - review evidence.json", "Writer - Book One - fixed certificate.json",
+        "Writer - Book One - outcome.json", "Writer - Book One - clean.docx"}
     assert by_role["tracked"]["destination"] == "handoff"
     assert {role for role, row in by_role.items() if row["destination"] == "archive"} == {
         "report", "evidence", "certificate", "outcome", "clean"}
     assert Path(by_role["tracked"]["path"]).parent == driver.workspace / "handoff"
     assert Path(by_role["outcome"]["path"]).parent == driver.workspace / "handoff" / "archive"
     assert json.loads(Path(by_role["outcome"]["path"]).read_text())["outcome"] == "done"
-    assert package["archive_name"] == "Writer - Book Two"
+    assert package["archive_name"] == "Writer - Book One"
     assert fd.validate_delivery_package(package)["delivery_ready"] is True
     original = {row["path"]: Path(row["path"]).read_bytes() for row in package["artifacts"]}
     monkeypatch.setattr(fd, "write_manuscripts", lambda *a, **kw: pytest.fail("rebuilt completed documents"))
