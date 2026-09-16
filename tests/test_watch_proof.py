@@ -658,6 +658,56 @@ def test_app_needs_human_run_reuses_results_when_delivery_retries(
 
 # --- the external runner ------------------------------------------------------
 
+def test_a_finished_book_in_the_author_folder_never_sends_the_pass_into_old_book_folders(
+        tmp_path, galley):
+    """Bill Gunn, 2026-09-16. His current "Gunn - Book 1" had been proofread
+    and marked; HubSpot still said ready (write-back off). Finding no unfinished
+    book at the top level, the pass descended into "Walls Came Tumbling Down",
+    his published previous book, and proofread its 2025 "Gunn - Book 1.docx".
+    A finished intake at the top level is a stuck record for a person; the
+    subfolders beside it are history, not more books."""
+    ws = sub_proof_ws(proof_runner="external")
+    opener = fake_drive({SUB: author_folder("Quinton Johnson"),
+                         "m-1": in_sub(BOOK, props={PROOF_PROP: PROOF_HUMAN}),
+                         "bf-1": author_folder("Walls Came Tumbling Down", parent=SUB),
+                         "old-1": in_sub("Johnson - Book 1.docx", sub="bf-1")},
+                        docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_to_proof()})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.awaiting_proof == [] and galley == []
+    assert opener.files["old-1"]["appProperties"].get(PROOF_PROP) is None
+    assert opener.files["m-1"]["appProperties"][PROOF_PROP] == PROOF_HUMAN
+    assert [name for name, _ in report.stuck_ready] == ["Quinton Johnson"]
+    assert WatchState.load(tmp_path / "state.json").files.get("old-1") is None
+
+
+def test_an_old_book_folder_with_its_book_2_beside_the_book_1_is_left_alone(
+        tmp_path, galley):
+    """A multi-book author with nothing at the top level: the book folder that
+    already holds a "Book 2" is a published book, whatever its unmarked
+    "Book 1" says. Only the folder with a bare "Book 1" is a book to do."""
+    ws = sub_proof_ws(proof_runner="external")
+    opener = fake_drive({SUB: author_folder("Quinton Johnson"),
+                         "bf-old": author_folder("Walls Came Tumbling Down", parent=SUB),
+                         "old-1": in_sub("Johnson - Book 1.docx", sub="bf-old"),
+                         "old-2": in_sub("Johnson - Book 2.docx", sub="bf-old"),
+                         "bf-new": author_folder("Ravens at Dawn", parent=SUB),
+                         "new-1": in_sub("Johnson - Book 1.docx", sub="bf-new")},
+                        docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_to_proof()})
+
+    report = run(tmp_path, ws, opener)
+
+    assert [name for name, _ in report.awaiting_proof] == ["Johnson - Book 1.docx"]
+    assert opener.files["new-1"]["appProperties"][PROOF_PROP] == PROOF_AWAITING
+    assert opener.files["old-1"]["appProperties"].get(PROOF_PROP) is None
+    assert report.already_formatted == [("Johnson - Book 1.docx", "Johnson - Book 2.docx")]
+    rec = WatchState.load(tmp_path / "state.json").get("new-1")
+    assert rec.subfolder_id == "bf-new"
+
+
 def test_external_mode_waits_and_says_so(tmp_path, galley):
     """DocWatch runs nothing: it notices the book, marks it, and tells the owner
     where to find it. The Mac-side practitioner does the reading."""
