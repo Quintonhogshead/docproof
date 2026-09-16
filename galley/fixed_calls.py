@@ -31,7 +31,12 @@ PROTOCOL_VERSION = 1
 _LOCKS: dict[str, threading.RLock] = {}
 _LOCKS_GUARD = threading.Lock()
 _MAX_FILE_BYTES = 32 * 1024 * 1024
-_SUBSCRIPTION_MODELS = {"gpt-5.6-sol", "gpt-6-astra"}
+# Every OpenAI model the fixed lane reads with goes through the worker's
+# ChatGPT subscription login (the Codex transport), Luna included since
+# 2026-09-16. The API is not a default for any model; a caller may still
+# request it explicitly for Luna (tests and diagnostics), never as a fallback.
+_SUBSCRIPTION_MODELS = {"gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra"}
+_API_ON_REQUEST = {"gpt-5.6-luna"}
 
 
 class FixedCallError(RuntimeError):
@@ -319,11 +324,12 @@ def _check_schema_definition(schema):
 
 def _transport(model: str, requested: str | None) -> str:
     expected = ("codex_subscription" if model in _SUBSCRIPTION_MODELS else
-                "claude_subscription" if model.startswith("claude-") else
-                "api" if model == "gpt-5.6-luna" else None)
+                "claude_subscription" if model.startswith("claude-") else None)
     aliases = {"codex": "codex_subscription", "subscription": expected,
                "subagent": "claude_subscription", "openai": "api"}
     requested = aliases.get(requested, requested)
+    if requested == "api" and model in _API_ON_REQUEST:
+        return "api"
     if expected is None or requested is not None and requested != expected:
         raise FixedCallError(f"Unsupported fixed-call transport for {model}; no fallback was submitted.")
     return expected

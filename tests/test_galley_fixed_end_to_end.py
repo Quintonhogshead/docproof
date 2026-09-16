@@ -91,8 +91,11 @@ class ScriptedReaders:
 
     def subscription(self, prompt, schema, directory, **options):
         assert options["no_tools"] is True
-        assert options["model"] in {SOL, ASTRA}
-        return self.answer(options["model"], prompt.rsplit("\n\n", 1)[-1], schema)
+        assert options["model"] in {LUNA, SOL, ASTRA}
+        # The runner receives system + "\n\n" + user. Paragraph reads are
+        # matched by regex over the whole prompt; JSON payloads are the tail.
+        user = prompt if "reviewed_paragraph_ids" in schema["properties"] else prompt.rsplit("\n\n", 1)[-1]
+        return self.answer(options["model"], user, schema)
 
 
 @pytest.mark.parametrize("poetry", [False, True])

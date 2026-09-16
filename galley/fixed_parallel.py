@@ -21,8 +21,8 @@ class ReadScheduler:
 
     @staticmethod
     def lane(model):
-        from galley.fixed_workflow import SOL, ASTRA
-        return "claude" if model.startswith("claude-") else "codex" if model in {SOL, ASTRA} else "api"
+        from galley.fixed_calls import _SUBSCRIPTION_MODELS
+        return "claude" if model.startswith("claude-") else "codex" if model in _SUBSCRIPTION_MODELS else "api"
 
     def run(self, model, operation):
         lane = self.lane(model)

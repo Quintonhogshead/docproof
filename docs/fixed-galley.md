@@ -62,7 +62,7 @@ The agreed sequence is:
    the prose stages or requiring a ChatGPT login. In a mixed book the
    whole-book readers see the verse too, and their verse proposals pass the
    same mechanics-only gate.
-3. Luna creates the Story Sheet through the API.
+3. Luna creates the Story Sheet through the ChatGPT subscription.
 4. Sonnet and Luna independently run the typed detectors. The full local
    checking pass supplies additional candidates. Unresolved candidates receive
    independent Sonnet and Luna screening; Opus receives only their explicit
@@ -73,7 +73,7 @@ The agreed sequence is:
    replaces the number group in the typed pass.
 6. Opus repairs clearly broken sentences while preserving intended meaning.
 7. Luna checks meaning preservation and the correctness of proposed repairs
-   through the API.
+   through the ChatGPT subscription.
 8. Opus and Sol independently sweep every paragraph of the corrected book.
    Sol uses the saved ChatGPT subscription login. Unresolved proposals go to
    Sonnet and Luna screening, with Opus settling only disagreements from that pair.
@@ -228,8 +228,11 @@ cannot silently resume under the new policy.
 Independent windows run concurrently in typed detection, number review, paired screening, Opus
 adjudication, poetry-section classification, whole-book sweeps, and comment
 review. Separate provider pools prevent queued Claude calls from blocking Luna.
-The current configuration permits eight Claude subscription reads, 24 OpenAI
-API reads, and eight ChatGPT subscription reads in flight. Concurrent batches
+The current configuration permits eight Claude subscription reads and eight
+ChatGPT subscription reads in flight; since 2026-09-16 every OpenAI model,
+Luna included, reads through the ChatGPT subscription, so no OpenAI API pool
+is used by default (the 24-wide API pool remains only for an explicitly
+requested API read). Concurrent batches
 share these ceilings; they do not multiply them. The explicit serial diagnostic
 setting still enforces one call globally.
 
