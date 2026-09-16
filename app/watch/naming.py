@@ -108,10 +108,28 @@ CLEAN_SUFFIX = " - clean"
 PRE_PROOFREAD_SUFFIX = " - Pre-Proofread"
 # The stage token the fixed lane WRITES on that redline. Unlike the legacy
 # `Book 2` series it does not mirror the source's spelling: the press asked
-# (2026-09-16) for every pre-proofread to be "<surname> - Book Two -
-# Pre-Proofread.docx", digits or not on the way in. Recognition is unchanged —
-# `is_output_name` and `is_proof_outcome_name` still accept both spellings.
-PRE_PROOFREAD_STAGE = "Book Two"
+# (2026-09-16) for every pre-proofread to be "<surname> - Book One -
+# Pre-Proofread.docx", digits or not on the way in.
+#
+# `Book One` is proofing's INPUT spelling, deliberately absent from
+# `OUTPUT_STAGES` — the pre-proofread is a redline OF Book One, not a Book Two,
+# and the press names it that way. So the stage token can no longer be the tell
+# that this file is DocProof's own: the suffixes below are, and `is_output_name`
+# reads them. Recognition of the older `Book Two` hand-offs is unchanged —
+# `Book Two` is still an output stage, and `is_proof_outcome_name` still accepts
+# both spellings of the legacy verdict.
+PRE_PROOFREAD_STAGE = "Book One"
+
+# What the fixed lane writes, by tail. Every file it produces carries one — the
+# redline in the author folder, and the five companions filed in the archive
+# (see `galley/fixed_documents.py`) — and nothing a person hands in does. This
+# is what makes them recognisable as output now that their base carries
+# proofing's input token. A bare "<surname> - Book One" is untouched: that is
+# the dev-edited manuscript, and hiding it would starve the stage that reads it.
+PRE_PROOFREAD_TAILS = (PRE_PROOFREAD_SUFFIX,
+                       f"{PRE_PROOFREAD_SUFFIX} Change Log",
+                       " - proofreading report", " - review evidence",
+                       " - fixed certificate", OUTCOME_SUFFIX, CLEAN_SUFFIX)
 
 # The dashes a " - " separator turns up as in the wild: a plain hyphen-minus,
 # the hyphen and non-breaking hyphen, the figure/en/em dashes, the horizontal
@@ -198,6 +216,11 @@ def _fold(text: str) -> str:
 _SERIES_RE = re.compile(r"\s+\d{1,2}$")
 
 
+# The same tails as `PRE_PROOFREAD_TAILS`, folded once, because `is_output_name`
+# is called for every file in every folder on every pass.
+_PRE_PROOFREAD_TAILS_FOLDED = tuple(_fold(tail) for tail in PRE_PROOFREAD_TAILS)
+
+
 def _surname_key(text: str) -> str:
     """A surname reduced to what an author-identity comparison cares about:
     folded, with any trailing co-author parenthetical and any trailing series
@@ -269,7 +292,7 @@ def proof_base(stem: str) -> str:
 
 
 def pre_proofread_base(stem: str) -> str:
-    """The fixed lane's hand-off base — "Smith - Book Two", whatever stage
+    """The fixed lane's hand-off base — "Smith - Book One", whatever stage
     token and spelling the source carried ("Smith - Book 1", "Smith - Book
     One", a bare "Smith - Book Original"). Idempotent, like every `*_base`."""
     author, _index = _split_stage(stem)
@@ -278,7 +301,7 @@ def pre_proofread_base(stem: str) -> str:
 
 def pre_proofread_name(stem: str) -> str:
     """What the fixed lane calls its redline — "Smith - Book 1.docx" ->
-    "Smith - Book Two - Pre-Proofread.docx". The companions filed in the
+    "Smith - Book One - Pre-Proofread.docx". The companions filed in the
     archive share the same base (see `galley/fixed_documents.py`)."""
     return f"{pre_proofread_base(Path(stem).stem)}{PRE_PROOFREAD_SUFFIX}.docx"
 
@@ -300,11 +323,18 @@ def is_proof_outcome_name(name: str, source_stem: str) -> bool:
     mirroring in `stage_base` is what DocProof writes; this is what it will
     accept, and the two differ on purpose — a practitioner who typed
     "Book 2 - outcome.json" for a "Book One" source has still answered, and a
-    book must not sit unread because of a house-style disagreement."""
+    book must not sit unread because of a house-style disagreement.
+
+    `PRE_PROOFREAD_STAGE` counts too, because that is what the fixed lane files
+    in the archive today — "<surname> - Book One - outcome.json". Without it the
+    verdict `proof.outcome_in_archive` goes looking for would never be
+    recognised and the book would wait for a hand-off that had already
+    landed."""
     author, _index = _split_stage(Path(source_stem).stem)
     folded = _fold(name)
+    spellings = (*spellings_of(PROOF_STAGE), PRE_PROOFREAD_STAGE)
     return any(folded == _fold(f"{author} - {spelling}{OUTCOME_SUFFIX}.json")
-               for spelling in spellings_of(PROOF_STAGE))
+               for spelling in spellings)
 
 
 def has_source_label(name: str) -> bool:
@@ -512,8 +542,16 @@ def is_output_name(name: str) -> bool:
 
     " - Book 1" is deliberately NOT one of these. It is the dev-edited book —
     proofing's input, and promo's — so calling it an output would hide it from
-    the stage whose whole job is to read it."""
+    the stage whose whole job is to read it.
+
+    The fixed lane's hand-off is the one thing the stage token cannot answer
+    for: its base is "<surname> - Book One" (see `PRE_PROOFREAD_STAGE`), which
+    is that same input token. Its files are recognised by the tail they all
+    carry instead — a whole tail at the end of the stem, so a bare
+    "<surname> - Book One" is still the manuscript proofing reads."""
     stem = _fold(Path(name).stem)
+    if stem.endswith(_PRE_PROOFREAD_TAILS_FOLDED):
+        return True
     return any(pattern.search(stem) for stage in OUTPUT_STAGES
                for pattern in _TOKEN[stage])
 
@@ -526,7 +564,7 @@ __all__ = ["CHECKS_SUFFIX", "CLEAN_SUFFIX", "CORRECTIONS_SHEET_SUFFIX",
            "DECISION_LOG_SUFFIX", "INDESIGN_SUFFIX",
            "LETTER_SUFFIX",
            "NOTES_SUFFIX", "OUTCOME_SUFFIX", "OUTPUT_STAGE", "OUTPUT_STAGES",
-           "PRE_PROOFREAD_STAGE", "PRE_PROOFREAD_SUFFIX",
+           "PRE_PROOFREAD_STAGE", "PRE_PROOFREAD_SUFFIX", "PRE_PROOFREAD_TAILS",
            "pre_proofread_base", "pre_proofread_name",
            "PROOF_SOURCE_STAGE", "PROOF_STAGE", "SOURCE_STAGE", "SPELLINGS",
            "STAGE_TOKENS", "STYLE_SHEET_SUFFIX", "TRACKED_SUFFIX",
