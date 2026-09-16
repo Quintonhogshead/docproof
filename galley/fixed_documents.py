@@ -222,10 +222,31 @@ _LOCAL_EVIDENCE_VERSIONS = {
     # the checks — never a change to its structure; local evidence is v3's.
     "fixed-proofreading-v6": {"typed": "initial", "ensemble_sweep": "completion",
                               "fable": "completion_fable", "astra": "completion_astra"},
+    # v7: a second Astra reading closes the book. It is the only needs_human
+    # gate (more than 25 core mechanical corrections still found, or a verified
+    # publication blocker), it carries the press-method final audit, and its
+    # own propagation pass is the last local evidence.
+    "fixed-proofreading-v7": {"typed": "initial", "ensemble_sweep": "completion",
+                              "fable": "completion_fable", "astra": "completion_astra",
+                              "final_astra": "completion_final_astra"},
 }
 # From v6 a book with any poetry carries a verse sweep packet on its typed
 # stage, and a poetry-only book runs the number stage and the checks.
-_VERSE_EVIDENCE_VERSIONS = {"fixed-proofreading-v6"}
+_VERSE_EVIDENCE_VERSIONS = {"fixed-proofreading-v6", "fixed-proofreading-v7"}
+# The prose stage list, by recipe version, and which stage carries the
+# press-method final audit (the last reading stage: its accepted text must be
+# the delivered text).
+_PROSE_STAGES = ["poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks",
+                 "ensemble_sweep", "continuity", "fable", "astra"]
+_FINAL_GATE_VERSIONS = {"fixed-proofreading-v7"}
+
+
+def _prose_stages(version):
+    return _PROSE_STAGES + (["final_astra"] if version in _FINAL_GATE_VERSIONS else [])
+
+
+def _audit_stage(version):
+    return "final_astra" if version in _FINAL_GATE_VERSIONS else "astra"
 
 
 def _verify_result(result, directory):
@@ -259,7 +280,7 @@ def _verify_result(result, directory):
     verse_version = result["identity"].get("version") in _VERSE_EVIDENCE_VERSIONS
     expected = ((["poetry", "typed", "numbers", "checks", "poetry_complete"] if verse_version
                  else ["poetry", "typed", "poetry_complete"]) if result["poetry_only"] else
-                ["poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks", "ensemble_sweep", "continuity", "fable", "astra"])
+                _prose_stages(result["identity"].get("version")))
     names = [s["stage"] for s in stages]
     # A completed run may be extended by receipted passes that put its final
     # readers' dropped questions to Astra's review (galley.fixed_reinstate).
@@ -314,7 +335,7 @@ def _verify_result(result, directory):
                     or (initial and reviewed != original_prose)
                     or (not initial and request.get("original") != result["original"])):
                 raise FixedDocumentError("Deterministic proofreading evidence does not cover its assigned stage and source")
-        if result["identity"].get("press_prompt_sha256") and stage["stage"] == "astra":
+        if result["identity"].get("press_prompt_sha256") and stage["stage"] == _audit_stage(version):
             audit = payload.get("evidence", {}).get("press_audit", {})
             expected_prose = set(result["original"]) - protected_poetry
             if (audit.get("accepted_sha256") != _hash(result["accepted"])
@@ -324,6 +345,16 @@ def _verify_result(result, directory):
     last_stage = json.loads(Path(stages[-1]["path"]).read_text())
     if last_stage.get("accepted_sha256") != _hash(result["accepted"]):
         raise FixedDocumentError("The last reviewed manuscript differs from the final accepted text")
+    if result["identity"].get("version") in _FINAL_GATE_VERSIONS and not result["poetry_only"]:
+        gate = json.loads((Path(directory) / "stages" / "final_astra.json").read_text())
+        recorded = gate.get("evidence", {}).get("final_review")
+        review = result.get("final_review")
+        if (not isinstance(review, dict) or review != recorded
+                or review.get("verdict") != result["editorial_verdict"]
+                or (review["verdict"] == "needs_human") is not (
+                    review.get("core_mechanical_errors", 0) > review.get("ceiling", 0)
+                    or bool(review.get("publication_blockers")))):
+            raise FixedDocumentError("The editorial verdict does not follow from the second Astra reading's recorded evidence")
     return source
 
 
@@ -337,7 +368,9 @@ def _report(result, details, receipt=None):
         "broken_repair": "Broken sentence repair", "checks": "Meaning and correction checks",
         "ensemble_sweep": "Opus and Sol complete readings", "continuity": "Fable whole-book continuity reading",
         "fable": "Fable final reading and comment review",
-        "astra": "Astra final reading and comment review", "poetry_complete": "Verse mechanics proofread complete",
+        "astra": "Astra final reading and comment review",
+        "final_astra": "Second Astra reading: remaining errors, publication blockers, verdict",
+        "poetry_complete": "Verse mechanics proofread complete",
         "walkthrough_questions": "Final readers' questions put to Astra's review"}
     lines = ["# Galley proofreading report", "", f"Scope: {scope}.", "",
              f"{len(edits)} tracked corrections across {paragraphs} paragraphs; {len(result['questions'])} author questions.", "",
@@ -357,6 +390,17 @@ def _report(result, details, receipt=None):
     if skipped:
         lines += [f"{len(skipped)} model reviews were unavailable and skipped. Unverified suggestions were discarded; review coverage is incomplete.", ""]
     lines += [f"- {stage_labels.get(s['stage'], stage_labels['walkthrough_questions'] + ' (pass ' + s['stage'].rsplit('_', 1)[-1] + ')' if s['stage'].startswith('walkthrough_questions') else s['stage'])}" for s in result["stages"]]
+    review = result.get("final_review")
+    if isinstance(review, dict):
+        verdict = "Needs human proofreader" if review["verdict"] == "needs_human" else "Proofread complete"
+        lines += ["", "## Second Astra reading and verdict", "", f"Verdict: {verdict}.", "", review["reason"], "",
+                  f"- Core mechanical errors still found: {review['core_mechanical_errors']} (ceiling {review['ceiling']}).",
+                  f"- Publication blockers: {len(review['publication_blockers'])}."]
+        for blocker in review["publication_blockers"]:
+            lines.append(f"  - {labels.get(blocker['para_id'], blocker['para_id'])}: {blocker['problem']} "
+                         f"({json.dumps(blocker['quote'], ensure_ascii=False)})")
+        if review.get("skipped_windows"):
+            lines.append(f"- {review['skipped_windows']} reading window(s) were unavailable and are recorded as skipped.")
     rejected = [h for h in result["history"] if h.get("rejected_proposal")]
     if rejected:
         lines += ["", f"{len(rejected)} model suggestions were rejected because they failed proposal validation. "
@@ -405,13 +449,13 @@ def _report(result, details, receipt=None):
         for name, label in stage_labels.items():
             if name in stages:
                 lines.append(f"- {label}: {applied[name]} accepted proposals at that stage (later reviews may revise them).")
-        for name in ("fable", "astra"):
+        for name in ("fable", "astra", "final_astra"):
             counts = Counter()
             for window in stages.get(name, {}).get("coverage", []):
                 counts.update(window.get("focused_counts", {}))
             if counts:
-                lines.append(f"- {name.title()} acknowledged focused sites: " + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) + ".")
-        audit = stages.get("astra", {}).get("press_audit", {})
+                lines.append(f"- {name.replace('_', ' ').title()} acknowledged focused sites: " + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) + ".")
+        audit = stages.get(_audit_stage(result["identity"].get("version")), {}).get("press_audit", {})
         if audit:
             lines += ["", "## Final scripted signals", "", audit["interpretation"]]
             lines += [f"- {key}: {value}" for key, value in sorted(audit["raw_signal_counts"].items())]
@@ -433,22 +477,43 @@ def _report(result, details, receipt=None):
     return "\n".join(lines) + "\n"
 
 
+# Where each fixed-lane artifact goes. The author folder receives the redline
+# alone; everything else — the report, the review evidence, the certificate,
+# the verdict DocWatch reads, and the clean reading copy — is DocProof's own
+# record and is filed in the Drive archive only (Quinton, 2026-09-16).
+HANDOFF = "handoff"
+ARCHIVE = "archive"
+ARTIFACT_DESTINATIONS = {"tracked": HANDOFF, "report": ARCHIVE, "evidence": ARCHIVE,
+                         "certificate": ARCHIVE, "outcome": ARCHIVE, "clean": ARCHIVE}
+# Pre-split packages (four artifacts, all beside the book) are still validated
+# and delivered as they were frozen; a release must never re-cut a delivery
+# that is already half uploaded.
+_LEGACY_ROLES = ("tracked", "report", "evidence", "certificate")
+ARCHIVE_SUBDIR = "archive"
+
+
+def artifact_destination(row):
+    return row.get("destination", HANDOFF)
+
+
 def package_result(driver, result):
     """Build once, freeze artifact hashes, and preserve exact package on resume."""
     from galley.state_machine import RunStateMachine
     from galley.verify import build_fingerprints
     from galley.fixed_calls import validate_fixed_call_evidence
-    from galley.driver import handoff_base
-    from app.watch.naming import PRE_PROOFREAD_SUFFIX
+    from app.watch.naming import (CLEAN_SUFFIX, OUTCOME_SUFFIX, pre_proofread_base,
+                                  pre_proofread_name)
     directory = driver.workspace / "runs/fixed"
     package_path = driver.workspace / "runs/driver/package.json"
     if package_path.exists():
         package = json.loads(package_path.read_text())
         if package.get("packet_sha256") != result["result_sha256"]:
             raise FixedDocumentError("A different corrected manuscript is already packaged")
-        if driver.handoff_dir and any(Path(row["path"]).resolve().parent != Path(driver.handoff_dir).resolve()
-                                      for row in package.get("artifacts", [])):
-            raise FixedDocumentError("This proofread already has a frozen handoff directory; resume with its original --handoff setting")
+        if driver.handoff_dir:
+            frozen = Path(driver.handoff_dir).resolve()
+            allowed = {frozen, frozen / ARCHIVE_SUBDIR}
+            if any(Path(row["path"]).resolve().parent not in allowed for row in package.get("artifacts", [])):
+                raise FixedDocumentError("This proofread already has a frozen handoff directory; resume with its original --handoff setting")
         validate_delivery_package(package)
         return package
     source = _verify_result(result, directory)
@@ -466,12 +531,25 @@ def package_result(driver, result):
     _save(evidence, result)
     outcome = run / f"{source.stem} - outcome.json"
     outcome_value = "needs_human" if result["editorial_verdict"] == "needs_human" else "done"
-    reason = ("Fixed proofreading finished with skipped model reviews; unverified suggestions were discarded and output checks passed."
-              if result.get("skipped_reads") else "Fixed proofreading complete; every required reading and output check passed.")
-    _save(outcome, {"schema_version": 1, "outcome": outcome_value,
-                    "reason": reason,
-                    "set_by": "Galley fixed proofreading", "execution_mode": "fixed",
-                    "author_questions": len(result["questions"])})
+    review = result.get("final_review") if isinstance(result.get("final_review"), dict) else None
+    if review:
+        reason = review["reason"]
+    elif result.get("skipped_reads"):
+        reason = "Fixed proofreading finished with skipped model reviews; unverified suggestions were discarded and output checks passed."
+    else:
+        reason = "Fixed proofreading complete; every required reading and output check passed."
+    from galley.outcome import hubspot_fields
+    record = {"schema_version": 1, "outcome": outcome_value, "reason": reason,
+              "set_by": "Galley fixed proofreading", "execution_mode": "fixed",
+              "author_questions": len(result["questions"]),
+              # DocWatch's own default values; the watcher substitutes its
+              # configured ones when it applies the verdict.
+              "hubspot": hubspot_fields(outcome_value)}
+    if review:
+        record["final_review"] = {k: review[k] for k in ("stage", "verdict", "core_mechanical_errors", "ceiling",
+                                                          "skipped_windows")}
+        record["final_review"]["publication_blockers"] = len(review["publication_blockers"])
+    _save(outcome, record)
     _save(run / "outcome.json", json.loads(outcome.read_text()))
     certificate_path = run / "fixed-certificate.json"
     certificate = {"schema_version": 1, "execution_mode": "fixed", "delivery_ready": True,
@@ -483,32 +561,42 @@ def package_result(driver, result):
                    "call_evidence": call_evidence,
                    "tracked": {"path": str(tracked), "sha256": sha256_file(tracked)},
                    "clean": {"path": str(clean), "sha256": sha256_file(clean)},
-                   "review": {"editorial_verdict": result["editorial_verdict"]},
+                   "review": {"editorial_verdict": result["editorial_verdict"],
+                              **({"final_review": {k: review[k] for k in ("verdict", "core_mechanical_errors", "ceiling")}}
+                                 if review else {})},
                    "checks": ["complete stage evidence", "source identity", "reject-all original text",
                               "accept-all corrected text", "clean-copy equality", "comment placement", "protected package members"]}
     _save(certificate_path, certificate)
     out = Path(driver.handoff_dir) if driver.handoff_dir else driver.workspace / "handoff"
-    out.mkdir(parents=True, exist_ok=True)
+    archive_out = out / ARCHIVE_SUBDIR
+    archive_out.mkdir(parents=True, exist_ok=True)
     artifacts = []
-    base = handoff_base(source.name)
+    base = pre_proofread_base(source.stem)
     # The fixed lane hands back a pre-proofread, not a finished stage: a person
-    # reads the redline before the author does. So the verdict file DocWatch
-    # commits on — "<base> - outcome.json", the thing that moves the HubSpot
-    # property — is deliberately NOT delivered, and neither is the clean
-    # reading copy, which is for an author and not for the proofreader. Both
-    # are still built and certified in `runs/final`; they simply stay there.
-    sources = [("tracked", tracked, f"{base}{PRE_PROOFREAD_SUFFIX}.docx"),
+    # reads the redline before the author does. The author folder therefore
+    # receives the redline ALONE — "<surname> - Book Two - Pre-Proofread.docx".
+    # The report, the review evidence, the certificate, the verdict DocWatch
+    # reads to move the HubSpot property, and the clean reading copy are the
+    # press's record: they are filed in the Drive archive only (`handoff/
+    # archive/` locally), under the same base.
+    sources = [("tracked", tracked, pre_proofread_name(source.name)),
                ("report", report, f"{base} - proofreading report.md"),
                ("evidence", evidence, f"{base} - review evidence.json"),
-               ("certificate", certificate_path, f"{base} - fixed certificate.json")]
+               ("certificate", certificate_path, f"{base} - fixed certificate.json"),
+               ("outcome", outcome, f"{base}{OUTCOME_SUFFIX}.json"),
+               ("clean", clean, f"{base}{CLEAN_SUFFIX}.docx")]
     for role, path, name in sources:
-        target = out / name
+        destination = ARTIFACT_DESTINATIONS[role]
+        target = (out if destination == HANDOFF else archive_out) / name
         shutil.copyfile(path, target)
         artifacts.append({"role": role, "name": target.name, "path": str(target.resolve()),
-                          "origin": str(path.resolve()), "sha256": sha256_file(target)})
+                          "origin": str(path.resolve()), "sha256": sha256_file(target),
+                          "destination": destination})
     fingerprints = build_fingerprints(run)
     package = {"schema_version": 1, "execution_mode": "fixed", "kind": "human_review" if outcome_value == "needs_human" else "proofread",
                "source_id": driver.source_id or driver.slug, "outcome": outcome_value, "reason": reason,
+               # The archive folder the record is filed under (Proofing/<month>/<this>).
+               "archive_name": base,
                "packet_sha256": result["result_sha256"], "build_sha256": fingerprints["build_sha256"],
                "run": str(run.resolve()), "certificate": str(certificate_path.resolve()),
                "certificate_sha256": sha256_file(certificate_path), "artifacts": artifacts}
@@ -565,12 +653,17 @@ def validate_delivery_package(package):
     if build_fingerprints(run)["build_sha256"] != package["build_sha256"]:
         raise FixedDocumentError("Fixed final build changed")
     source = Path(result["source"])
-    # The delivered set, which is not the built set: the clean copy and the
-    # outcome are certified in `runs/final` and stay there (see package_result).
+    artifacts = package.get("artifacts", [])
+    legacy = artifacts and all("destination" not in row for row in artifacts)
+    # The redline goes to the author folder; the record goes to the archive
+    # (see package_result). A pre-split package delivered its four files beside
+    # the book and is validated as it was frozen.
     expected_origins = {"tracked": Path(certificate["tracked"]["path"]),
         "report": run / f"{source.stem} - Proofreading report.md", "evidence": run / f"{source.stem} - Review evidence.json",
         "certificate": certificate_path}
-    artifacts = package.get("artifacts", [])
+    if not legacy:
+        expected_origins.update({"outcome": run / f"{source.stem} - outcome.json",
+                                 "clean": Path(certificate["clean"]["path"])})
     if (len(artifacts) != len(expected_origins) or {x.get("role") for x in artifacts} != set(expected_origins)
             or len({x["path"] for x in artifacts}) != len(artifacts)
             or len({x["name"] for x in artifacts}) != len(artifacts)):
@@ -581,4 +674,12 @@ def validate_delivery_package(package):
                 or sha256_file(row["path"]) != row["sha256"]
                 or sha256_file(row["origin"]) != row["sha256"]):
             raise FixedDocumentError("A fixed handoff artifact changed")
+        if not legacy and artifact_destination(row) != ARTIFACT_DESTINATIONS[row["role"]]:
+            raise FixedDocumentError("A fixed handoff artifact is routed to the wrong Drive folder")
+    if not legacy:
+        for row in artifacts:
+            if row["role"] == "outcome":
+                verdict = json.loads(Path(row["path"]).read_text())
+                if verdict.get("outcome") != expected_outcome or verdict.get("reason") != package.get("reason"):
+                    raise FixedDocumentError("The delivered verdict contradicts the package")
     return certificate

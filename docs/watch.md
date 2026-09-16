@@ -422,6 +422,16 @@ it. An outcome file that is half-written, or says something DocProof does not
 recognise, is treated as "not there yet" — the book waits and the next pass
 looks again.
 
+The Galley agent's fixed lane (see [fixed-galley.md](fixed-galley.md)) hands
+the author folder the redline alone — `<surname> - Book Two - Pre-Proofread.docx`
+— and files the record, including `<surname> - Book Two - outcome.json`, in the
+[output archive](archive.md) under `Proofing/<month>/<book>`, tagged with the
+Book 1's Drive id. When the folder holds no verdict, the pass looks in the
+archive by that tag (`proof.outcome_in_archive`) and applies what it finds the
+same way. The awaiting list carries `archive_folder_id` so the agent knows
+where to file; with the archive off, the record cannot be filed and the agent
+keeps the delivery pending.
+
 Either way the book is read **once**: the marker on the manuscript and the
 watcher's own state file both record it, and the CRM is written exactly once
 however many passes run.

@@ -1033,6 +1033,10 @@ def _galley_parser(sub) -> None:
     gag.add_argument("--drive-folder-id", default="",
                      help="deliver every hand-off HERE instead of the author "
                           "folder the app names — for a rehearsal")
+    gag.add_argument("--archive-folder-id", default="",
+                     help="file every proofread's record (everything but the "
+                          "redline) HERE instead of the Drive archive the app "
+                          "names — for a rehearsal")
     gag.add_argument("--once", action="store_true",
                      help="poll once and exit, instead of running forever")
     gag.add_argument("--status", action="store_true",
@@ -1108,6 +1112,10 @@ def _galley_parser(sub) -> None:
                      help="also upload the hand-off to this Google Drive "
                           "folder, with the watcher's own sign-in "
                           "(`docproof-watch auth`)")
+    gdr.add_argument("--archive-folder-id", default="",
+                     help="the DocWatch Drive archive root; the fixed lane "
+                          "files everything but the redline under "
+                          "Proofing/<month>/<book> there")
     gdr.add_argument("--copyedit", action="store_true",
                      help="allow the copy-edit phases (flights, reread). OFF "
                           "by default: go-live Galley is mechanical "

@@ -83,6 +83,9 @@ def reinstate_walkthrough_questions(book, workspace, *, progress=None, max_api_u
     flow.questions, flow.formats = list(result["questions"]), list(result["formats"])
     flow.history, flow.stages = list(result["history"]), list(result["stages"])
     flow.needs_human = result["editorial_verdict"] == "needs_human"
+    # The second Astra reading's counted verdict stands; reinstatement adds
+    # questions only and never re-decides needs_human.
+    flow.final_review = result.get("final_review")
     poetry = json.loads((directory / "stages" / "poetry.json").read_text("utf-8"))
     flow.poetry_ids = set(poetry["evidence"]["poetry_ids"])
     sheet = json.loads((directory / "stages" / "story_sheet.json").read_text("utf-8"))["evidence"].get("sheet")

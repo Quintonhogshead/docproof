@@ -33,8 +33,8 @@ REASON_LIMIT = 90
 DEFAULT_BUDGET = GALLEY_DEFAULT_BUDGET
 
 __all__ = ["Verdict", "artifacts", "assess", "budget_for", "fetch",
-           "hand_off_names", "make_job", "mark_source", "outcome_in_folder",
-           "read_outcome", "run_job", "upload_outputs"]
+           "hand_off_names", "make_job", "mark_source", "outcome_in_archive",
+           "outcome_in_folder", "read_outcome", "run_job", "upload_outputs"]
 
 
 @dataclass(frozen=True)
@@ -226,6 +226,39 @@ def outcome_in_folder(listing: list[DriveFile], source_name: str
         if naming.is_proof_outcome_name(candidate.name, stem):
             return candidate
     return None
+
+
+def outcome_in_archive(token: str, ws: WatchSettings, file: DriveFile, rec,
+                       *, opener=drive._open_url) -> DriveFile | None:
+    """The fixed lane's verdict, read back from DocWatch's own Drive archive.
+
+    The Galley agent hands the author folder the redline alone and files the
+    record — including "<surname> - Book Two - outcome.json" — under
+    `Proofing/<month>/<book>` in the archive, tagging every file with the
+    source Book 1's Drive id (`galley_source`). That tag, not a folder, is how
+    the verdict is found: one Drive query for outcome files carrying this
+    file's id, whichever month folder they sit in and whatever a person has
+    since renamed. Only a name the house recognises as this book's outcome
+    counts, only one written after any explicit re-run reset, and the newest
+    of those wins. None when the archive is off or nothing has landed."""
+    from . import archive, flags
+    if not archive.is_enabled(ws):
+        return None
+    q = (f"appProperties has {{ key='{archive.SOURCE_PROP}' and "
+         f"value='{drive._q_escape(file.id)}' }} and trashed = false "
+         f"and name contains '{drive._q_escape(naming.OUTCOME_SUFFIX)}'")
+    try:
+        hits = drive.search_files(token, q, opener=opener)
+    except drive.DriveError as e:
+        log.warning("Could not look for %s's verdict in the archive: %s",
+                    file.name, e)
+        return None
+    stem = Path(file.name).stem
+    hits = [h for h in hits if naming.is_proof_outcome_name(h.name, stem)]
+    hits = flags.current_outputs(hits, rec, "proof", file)
+    if not hits:
+        return None
+    return max(hits, key=lambda h: (h.modified_time, h.id))
 
 
 def read_outcome(token: str, file: DriveFile, *, opener=drive._open_url
