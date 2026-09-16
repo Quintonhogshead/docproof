@@ -176,13 +176,14 @@ def test_skipped_model_reviews_never_certify_as_done(completed):
                                            "status": "completed", "result_sha256": result["result_sha256"]})
     assert result["editorial_verdict"] == "ready"
     package = fd.package_result(driver, result)
-    assert package["outcome"] == "needs_human" and package["kind"] == "human_review"
-    assert "1 skipped model review" in package["reason"] and "needs a person" in package["reason"]
+    # A skipped review never decides: the verdict is the editorial one.
+    assert package["outcome"] == "done" and package["kind"] == "proofread"
+    assert "1 model review(s) were unavailable and skipped" in package["reason"]
     assert fd.validate_delivery_package(package)["delivery_ready"] is True
     outcome = json.loads((driver.workspace / "runs/final/outcome.json").read_text())
-    assert outcome["outcome"] == "needs_human"
+    assert outcome["outcome"] == "done"
     # The recorded package is checked against the same rule on every resume.
-    tampered = dict(package, outcome="done", kind="proofread")
+    tampered = dict(package, outcome="needs_human", kind="human_review")
     with pytest.raises(fd.FixedDocumentError, match="contradicts"):
         fd.validate_delivery_package(tampered)
 
