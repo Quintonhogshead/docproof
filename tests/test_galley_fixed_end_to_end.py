@@ -642,7 +642,10 @@ def test_unattended_default_finishes_and_resumes_after_exhausted_reads(tmp_path,
     monkeypatch.setattr(codex_runner, "run_structured", readers.subscription)
     worker = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode="fixed")
     result = worker.run()
-    assert result.outcome == "done", result.reason
+    # Delivered, but never as a finished proofread: a skipped review means
+    # paragraphs nobody read, so the redline goes to a person.
+    assert result.outcome == "needs_human", result.reason
+    assert "skipped model review" in result.reason and "needs a person" in result.reason
     packet = json.loads((worker.workspace / "runs/fixed/result.json").read_text())
     assert packet["review_complete"] is False and packet["skipped_reads"]
     assert packet["questions"] == [] and source.read_bytes() == original
@@ -656,7 +659,7 @@ def test_unattended_default_finishes_and_resumes_after_exhausted_reads(tmp_path,
     assert "All required paragraph reads completed" not in report
     assert "incomplete" in report
     count = len(readers.requests)
-    assert worker.run().outcome == "done"
+    assert worker.run().outcome == "needs_human"
     assert len(readers.requests) == count
 
 

@@ -854,3 +854,48 @@ def test_claude_subscription_read_has_a_bounded_timeout(monkeypatch):
     provider = fc._default_provider(Config(), model="claude-sonnet-5")
     with pytest.raises(TimeoutError):
         asyncio.run(provider._turn(evidence={}))
+
+
+@pytest.mark.parametrize("wrapped", ["context", "cause", "text"])
+def test_a_masked_subscription_limit_pauses_the_queue_instead_of_skipping(tmp_path, wrapped):
+    """2026-09-16: the SDK turn raised UsageLimitError, asyncio.run() replaced
+    it with "aclose(): asynchronous generator is already running", and the
+    unattended lane read the wrapper as a plain failure — skipping every
+    remaining review and certifying an untouched manuscript. The pause must
+    be recognised wherever the limit is in the chain."""
+    from docproof.subscription_limits import UsageLimitError
+    limit = UsageLimitError("You've hit your session limit · resets 12pm (UTC)")
+    error = RuntimeError("aclose(): asynchronous generator is already running")
+    if wrapped == "context":
+        error.__context__ = limit
+    elif wrapped == "cause":
+        error.__cause__ = limit
+    else:
+        error = RuntimeError("turn failed: You've hit your session limit · resets 12pm (UTC)")
+    provider = FakeProvider([error])
+    caller = calls(tmp_path, provider, continue_on_model_failure=True)
+    with pytest.raises(UsageLimitError, match="session limit"):
+        ask(caller)
+    folder = next((caller.directory / "calls").iterdir())
+    assert not (folder / "skipped.json").exists()
+    receipt = json.loads((folder / "receipt.json").read_text())
+    assert receipt["status"] == "failed" and receipt["retryable"] is True
+    assert receipt["failure_category"] == "subscription_limit"
+    assert len(provider.requests) == 1
+
+
+def test_queue_pause_reads_the_whole_cause_chain():
+    from docproof.subscription_limits import UsageLimitError
+    from galley.driver import CredentialsError
+    limit = UsageLimitError("weekly limit reached")
+    outer = RuntimeError("shutdown noise")
+    outer.__context__ = limit
+    assert fc._queue_pause(outer) is limit
+    token = CredentialsError("401 token revoked")
+    wrapped = RuntimeError("shutdown noise")
+    wrapped.__cause__ = token
+    assert fc._queue_pause(wrapped) is token
+    assert fc._queue_pause(RuntimeError("an ordinary failure")) is None
+    loop = RuntimeError("cyclic")
+    loop.__context__ = loop
+    assert fc._queue_pause(loop) is None

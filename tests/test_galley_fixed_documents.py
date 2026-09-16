@@ -152,6 +152,41 @@ def completed(manuscript, tmp_path):
     return driver, result
 
 
+def test_skipped_model_reviews_never_certify_as_done(completed):
+    """Kyler 2 - Book 1, 2026-09-16: every review skipped on a quota outage,
+    zero edits, delivered as "done". A skipped read means paragraphs nobody
+    read; the package goes to a person and says so."""
+    driver, result = completed
+    directory = driver.workspace / "runs/fixed"
+    cfg = configuration(True)
+    calls = FixedCalls(directory / "calls", result["identity"], cfg,
+                       provider_factory=lambda *a, **kw: OfflineReader(), continue_on_model_failure=True)
+
+    def unavailable(*a, **kw):
+        raise RuntimeError("Provider unavailable")
+    calls.provider_factory = unavailable
+    schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": False}
+    skipped = calls.ask("continuity", model="claude-opus-5", system="Offline proofread fixture",
+                        user="Read this fixture.", schema=schema, schema_name="fixture")["_skipped_read"]
+    result = {k: v for k, v in result.items() if k not in {"result_sha256", "usage"}}
+    result.update(review_complete=False, skipped_reads=[skipped], usage=calls.usage_summary())
+    result["result_sha256"] = fd._hash({k: v for k, v in result.items() if k != "usage"})
+    fd._save(directory / "result.json", result)
+    fd._save(directory / "workflow.json", {"identity": result["identity"], "execution_mode": "fixed",
+                                           "status": "completed", "result_sha256": result["result_sha256"]})
+    assert result["editorial_verdict"] == "ready"
+    package = fd.package_result(driver, result)
+    assert package["outcome"] == "needs_human" and package["kind"] == "human_review"
+    assert "1 skipped model review" in package["reason"] and "needs a person" in package["reason"]
+    assert fd.validate_delivery_package(package)["delivery_ready"] is True
+    outcome = json.loads((driver.workspace / "runs/final/outcome.json").read_text())
+    assert outcome["outcome"] == "needs_human"
+    # The recorded package is checked against the same rule on every resume.
+    tampered = dict(package, outcome="done", kind="proofread")
+    with pytest.raises(fd.FixedDocumentError, match="contradicts"):
+        fd.validate_delivery_package(tampered)
+
+
 def test_package_has_watch_compatible_names_and_reuses_exact_bytes(completed, monkeypatch):
     driver, result = completed
     package = fd.package_result(driver, result)
