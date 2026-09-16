@@ -73,7 +73,8 @@ class ScriptedReaders:
             ids = ([x["id"] for x in payload["sites"]] if "sites" in payload else [x["id"] for x in owned])
             return {"reviewed_ids": ids, "findings": [], "comment_decisions": [], "editorial_verdict": "ready",
                     **({"reviewed_check_ids": [s["id"] for s in payload["focused_sites"]]}
-                       if "reviewed_check_ids" in fields else {})}
+                       if "reviewed_check_ids" in fields else {}),
+                    **({"publication_blockers": []} if "publication_blockers" in fields else {})}
         if "decisions" in fields:
             if "changes" in payload:
                 return {"decisions": [{"id": x["id"], "verdict": "approve", "reason": "The spelling correction preserves meaning."}
@@ -113,14 +114,19 @@ def test_real_fixed_driver_delivers_and_resumes_without_new_generations(tmp_path
     assert result.outcome == "done", result.reason
     package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
     assert validate_delivery_package(package)["delivery_ready"] is True
-    # One manuscript is delivered — the pre-proofread redline. The clean
-    # reading copy is still built and certified, it just stays in runs/final.
+    # The author folder gets the pre-proofread redline alone, spelled "Book
+    # Two"; the clean reading copy and the record go to the archive.
     documents = [p for p in result.handoff if p.suffix == ".docx"]
-    assert [p.name for p in documents] == ["Writer - Book 2 - Pre-Proofread.docx"]
-    corrected = documents[0]
+    assert [p.name for p in documents] == ["Writer - Book Two - Pre-Proofread.docx", "Writer - Book Two - clean.docx"]
+    corrected, archived_clean = documents
+    assert corrected.parent == worker.workspace / "handoff"
+    assert archived_clean.parent == worker.workspace / "handoff" / "archive"
+    destinations = {row["role"]: row["destination"] for row in package["artifacts"]}
+    assert destinations == {"tracked": "handoff", "report": "archive", "evidence": "archive",
+                            "certificate": "archive", "outcome": "archive", "clean": "archive"}
     clean = Path(json.loads(Path(package["certificate"]).read_text())["clean"]["path"])
     assert clean.parent == Path(package["run"])
-    for path in (corrected, clean):
+    for path in (corrected, clean, archived_clean):
         assert list(paragraph_views(path).values()) == ["She received two letters."]
     assert paragraph_views(corrected, "reject") == paragraph_views(source)
     models = {model for model, _ in readers.requests}
@@ -167,7 +173,7 @@ def test_interrupted_stage_resumes_from_paid_read_receipts(tmp_path, monkeypatch
     monkeypatch.setattr(FixedWorkflow, "_stage", stage_start)
     resumed = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode=None).run()
     assert resumed.outcome == "done", resumed.reason
-    assert [model for model, _ in readers.requests[count:]] == [FABLE, ASTRA]
+    assert [model for model, _ in readers.requests[count:]] == [FABLE, ASTRA, ASTRA]
     package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
     assert validate_delivery_package(package)["delivery_ready"] is True
 
@@ -375,7 +381,7 @@ def _rehash_stage_and_result(directory, result, name, payload):
     _write_json(directory / "workflow.json", marker)
 
 
-@pytest.mark.parametrize("donor,target", [("typed", "ensemble_sweep"), ("ensemble_sweep", "fable"), ("fable", "astra")])
+@pytest.mark.parametrize("donor,target", [("typed", "ensemble_sweep"), ("ensemble_sweep", "fable"), ("fable", "astra"), ("astra", "final_astra")])
 def test_a_local_receipt_cannot_certify_another_stage(completed_prose_review, donor, target):
     from galley.fixed_documents import FixedDocumentError, _verify_result
     from galley.fixed_local import validate_local_evidence
@@ -443,9 +449,9 @@ def test_self_consistent_local_packet_must_match_the_reviewed_source(
 def test_press_method_final_scan_cannot_be_omitted_from_delivery(completed_prose_review):
     from galley.fixed_documents import FixedDocumentError, _verify_result
     directory, result = completed_prose_review
-    stage = json.loads((directory / "stages/astra.json").read_text())
+    stage = json.loads((directory / "stages/final_astra.json").read_text())
     del stage["evidence"]["press_audit"]
-    _rehash_stage_and_result(directory, result, "astra", stage)
+    _rehash_stage_and_result(directory, result, "final_astra", stage)
     with pytest.raises(FixedDocumentError, match="press-method final scan"):
         _verify_result(result, directory)
 
@@ -527,7 +533,7 @@ def test_invalid_suggestions_across_all_reader_stages_preserve_valid_edits_and_r
     assert result.outcome == "done", result.reason
     final = json.loads((worker.workspace / "runs/fixed/result.json").read_text())
     rejected = [h for h in final["history"] if h.get("rejected_proposal")]
-    assert {h["stage"] for h in rejected} == {"typed", "numbers", "ensemble_sweep_opus", "ensemble_sweep_sol", "fable", "astra"}
+    assert {h["stage"] for h in rejected} == {"typed", "numbers", "ensemble_sweep_opus", "ensemble_sweep_sol", "fable", "astra", "final_astra"}
     assert {h["rejected_proposal"]["model"] for h in rejected} == {SONNET, LUNA, OPUS, SOL, FABLE, ASTRA}
     assert final["questions"] == [] and source.read_bytes() == original_bytes
     assert list(final["accepted"].values()) == ["She received 20 letters while waiting in the quiet room."]
@@ -613,7 +619,7 @@ def test_nested_dispute_ids_reach_certified_book_and_resume_without_new_calls(tm
     assert len(readers.requests) == count and all(p.read_bytes() == data for p, data in raw.items())
 
 
-@pytest.mark.parametrize("failure", ["poetry", "story", "typed", "numbers", "dispute", "check", "opus", "sol", "continuity", "fable", "astra"])
+@pytest.mark.parametrize("failure", ["poetry", "story", "typed", "numbers", "dispute", "check", "opus", "sol", "continuity", "fable", "astra", "final_gate"])
 def test_unattended_default_finishes_and_resumes_after_exhausted_reads(tmp_path, monkeypatch, failure):
     source = tmp_path / "Writer.docx"
     doc = Document()
@@ -638,7 +644,8 @@ def test_unattended_default_finishes_and_resumes_after_exhausted_reads(tmp_path,
                 failure == "sol" and model == SOL or
                 failure == "continuity" and "reading_notes" in fields or
                 failure == "fable" and model == FABLE and "reading_notes" not in fields or
-                failure == "astra" and model == ASTRA)
+                failure == "astra" and model == ASTRA or
+                failure == "final_gate" and "publication_blockers" in fields)
         return {} if fail else body
     readers.answer = failing
     monkeypatch.setattr(fc, "_default_provider", lambda *a, **k: readers)
@@ -656,6 +663,10 @@ def test_unattended_default_finishes_and_resumes_after_exhausted_reads(tmp_path,
         assert packet["accepted"] == packet["original"]
     if failure != "poetry":
         assert any(model == ASTRA for model, _ in readers.requests)
+    if failure == "final_gate":
+        # An unavailable second reading is an operational failure, not a
+        # verdict: the book is not written off as needs_human.
+        assert packet["editorial_verdict"] == "ready" and packet["final_review"]["skipped_windows"] == 1
     package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
     assert validate_delivery_package(package)["delivery_ready"] is True
     report = next((worker.workspace / "runs/final").glob("*Proofreading report.md")).read_text()

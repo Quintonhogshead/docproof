@@ -94,6 +94,56 @@ The agreed sequence is:
 11. Astra sweeps the Fable-corrected book under the same scope and reviews
     every surviving comment, followed by the final propagation and
     consistency sweep.
+12. Astra reads the finished book a second time (`final_astra`), under the
+    same scope plus the last-gate brief: it corrects every clear mechanical
+    error that still remains, reviews every surviving comment, and lists
+    **publication blockers** — problems a proofread cannot repair (missing,
+    duplicated or garbled passages, placeholder text, a chapter out of order,
+    damage an earlier correction did), each anchored to an exact paragraph
+    and verbatim quote that code verifies. Its propagation pass and the
+    press-method final audit run on the resulting text.
+
+## The verdict
+
+The second Astra reading is the **only** stage that can send a book to a
+human proofreader, and the rule is code's, not the reader's
+(`galley.fixed_workflow.final_review_verdict`):
+
+- more than **25** core mechanical corrections still found by that reading
+  (spelling, grammar, punctuation, number and currency style, broken
+  sentences — never a title italic, a usage or typesetting note, or a
+  question), **or**
+- any verified publication blocker
+
+is `needs_human`; otherwise the proofread is complete (`done`). A reader's own
+window verdict, an earlier stage's verdict, and a skipped (unavailable) window
+are recorded as evidence and never decide: an operational failure is not an
+editorial judgment. The counts, the blockers, the ceiling and the reason are
+recorded in `final_astra.json`, in `result.json` (`final_review`), in the
+outcome file and in the report; certification refuses a result whose verdict
+does not follow from that recorded evidence.
+
+## What is handed back, and where
+
+The author folder receives the redline alone, always named
+`<surname> - Book Two - Pre-Proofread.docx` (spelled out whatever the source
+carried; `app.watch.naming.pre_proofread_name`). Everything else is the press's
+record and is filed in DocWatch's Drive **archive** only, under
+`Proofing/<YYYY-MM>/<surname> - Book Two/` (tagged with the Book 1's Drive id):
+
+```
+<surname> - Book Two - proofreading report.md
+<surname> - Book Two - review evidence.json
+<surname> - Book Two - fixed certificate.json
+<surname> - Book Two - outcome.json        the verdict DocWatch reads
+<surname> - Book Two - clean.docx          every change accepted, comments removed
+```
+
+Locally the same split is `handoff/` and `handoff/archive/`. The redline is
+uploaded first; if DocWatch names no archive folder the run is kept and
+delivery stays pending until it does. DocWatch's ticker finds the verdict in
+the archive by the source tag (`proof.outcome_in_archive`) and applies it as
+it always has — the HubSpot write still obeys `proof_write_back`.
 
 ## Final walk-through scope
 
@@ -386,7 +436,7 @@ against Mom) are excluded; a casing the run has already decided by an edit
 outranks the counts. Residual house-rule errors are rechecked in the same pass.
 Every candidate receives Sonnet and Luna screening, Opus on disagreement, and
 the usual correction checks; each pass has its own local receipt
-(`completion`, `completion_fable`, `completion_astra`). Local rules never
+(`completion`, `completion_fable`, `completion_astra`, `completion_final_astra`). Local rules never
 authorize an edit on their own, and Fable and Astra still review any resulting
 comments.
 
@@ -477,7 +527,9 @@ lane, the final walk-through scope, the post-Fable and post-Astra propagation
 passes and the casing sweep belong to version 3; the stage-specific contracts,
 shared window context, focused-site and metadata diet, screening caps and the
 removal of the comma-boundary generator belong to version 4; silent
-normalization at intake and per-request site labels belong to version 5. A
+normalization at intake and per-request site labels belong to version 5;
+verse mechanics belong to version 6; the second Astra reading, its counted
+verdict rule and the archive/hand-off split belong to version 7. A
 workspace
 created by an earlier fixed version cannot resume under the new recipe: start a
 fresh workspace so the added checks cover the original manuscript and become

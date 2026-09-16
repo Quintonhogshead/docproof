@@ -52,6 +52,8 @@ class Readers:
             if result is not None:
                 if "reviewed_check_ids" in kwargs["schema"]["properties"]:
                     result.setdefault("reviewed_check_ids", [s["id"] for s in payload["focused_sites"]])
+                if "publication_blockers" in kwargs["schema"]["properties"]:
+                    result.setdefault("publication_blockers", [])
                 return result
         if stage == "poetry":
             return {"classification": "poetry" if self.poetry else "prose", "reason": "Fixed samples."}
@@ -66,6 +68,7 @@ class Readers:
                     "comment_decisions": [comment_decision(q) for q in payload.get("comments", [])],
                     **({"reviewed_check_ids": [s["id"] for s in payload["focused_sites"]]}
                        if "reviewed_check_ids" in properties else {}),
+                    **({"publication_blockers": []} if "publication_blockers" in properties else {}),
                     "editorial_verdict": "ready"}
         if "changes" in payload:
             return {"decisions": [{"id": x["id"], "verdict": "approve", "reason": "Correct."}
@@ -186,9 +189,10 @@ def test_real_docx_full_fixed_sequence_and_successive_corrected_versions(make_bo
         "We saw the twenty birds beside an apple. They were bright. It is warm. He walks home."]
     assert result["questions"] == []
     assert [row["stage"] for row in result["stages"]] == [
-        "poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks", "ensemble_sweep", "continuity", "fable", "astra"]
+        "poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks", "ensemble_sweep", "continuity", "fable", "astra", "final_astra"]
     assert [data["phase"] for event, data in progress if event == "phase_start"] == [
-        "poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks", "ensemble_sweep", "continuity", "fable", "astra"]
+        "poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks", "ensemble_sweep", "continuity", "fable", "astra", "final_astra"]
+    assert result["editorial_verdict"] == "ready" and result["final_review"]["core_mechanical_errors"] == 0
     assert all(data["ok"] for event, data in progress if event == "phase_end")
     events = readers.events
     assert len([x for x in events if x["stage"] == "typed"]) == 18
@@ -646,8 +650,13 @@ def test_new_astra_question_gets_explicit_final_astra_comment_review(make_book, 
     readers = Readers(handler=handler)
     result = FixedWorkflow(make_book("He waited for someone."), tmp_path / "run", calls=readers).run()
     assert len(result["questions"]) == 1
-    assert readers.events[-1]["stage"] == "astra_comment_review"
-    assert readers.events[-1]["model"] == ASTRA
+    stages = [r["stage"] for r in readers.events]
+    review = stages.index("astra_comment_review")
+    assert stages.index("astra") < review < stages.index("final_astra")
+    assert readers.events[review]["model"] == ASTRA
+    # The surviving question is then judged again by the second Astra reading.
+    final = readers.events[stages.index("final_astra")]
+    assert [c["id"] for c in final["payload"]["comments"]] == [result["questions"][0]["id"]]
 
 
 def test_stale_source_fails_before_any_model_call(make_book, tmp_path):
@@ -776,7 +785,7 @@ def test_local_completion_runs_after_ensemble_fable_and_astra(make_book, tmp_pat
     result = FixedWorkflow(make_book("She found teh letter."), tmp_path / "completion", calls=readers).run()
 
     assert list(result["accepted"].values()) == ["She found the letter."]
-    assert [stage for stage, _ in completion_calls] == ["completion", "completion_fable", "completion_astra"]
+    assert [stage for stage, _ in completion_calls] == ["completion", "completion_fable", "completion_astra", "completion_final_astra"]
     assert all(texts == result["accepted"] for stage, texts in completion_calls[1:])
     events = readers.events
     stages = [row["stage"] for row in events]
@@ -785,7 +794,7 @@ def test_local_completion_runs_after_ensemble_fable_and_astra(make_book, tmp_pat
     assert stages.index("local_completion_checks_meaning") < stages.index("local_completion_checks_correction") < stages.index("fable")
     assert [row for row in events if row["stage"] == "fable"][0]["payload"]["paragraphs"][0]["text"] == "She found the letter."
     assert result["questions"] == []
-    for stage in ("fable", "astra"):
+    for stage in ("fable", "astra", "final_astra"):
         saved = json.loads((tmp_path / f"completion/stages/{stage}.json").read_text())
         assert saved["evidence"]["local"] == {"recurrence_candidates": 0}
 
@@ -1131,8 +1140,11 @@ def test_walkthrough_prompts_reach_only_the_final_readers_and_their_checks(make_
     systems = {}
     for row in readers.events:
         systems.setdefault(row["stage"], row["system"])
-    assert all(FINAL_WALKTHROUGH in systems[stage] for stage in ("fable", "astra"))
-    assert all(FINAL_WALKTHROUGH not in systems[stage] for stage in systems if stage not in {"fable", "astra"})
+    assert all(FINAL_WALKTHROUGH in systems[stage] for stage in ("fable", "astra", "final_astra"))
+    assert all(FINAL_WALKTHROUGH not in systems[stage] for stage in systems if stage not in {"fable", "astra", "final_astra"})
+    from galley.press_prompt import FINAL_GATE_TASK
+    assert FINAL_GATE_TASK in systems["final_astra"]
+    assert all(FINAL_GATE_TASK not in systems[stage] for stage in systems if stage != "final_astra")
     assert CONTINUITY_TASK in systems["continuity"]
     assert all(CONTINUITY_TASK not in systems[stage] for stage in systems if stage != "continuity")
     assert FINAL_WALKTHROUGH_CHECK in systems["fable_checks_meaning"]
@@ -1440,7 +1452,7 @@ def test_number_policy_travels_only_with_number_work(make_book, tmp_path):
     assert flow._policy_for("continuity", "{}") == flow.base_policy
     assert flow.identity["policy_sha256"] == flow.identity["policy_sha256"]
     # The identity covers every contract, so a change to any of them starts a fresh workspace.
-    assert flow.identity["version"] == "fixed-proofreading-v6"
+    assert flow.identity["version"] == "fixed-proofreading-v7"
 
 
 def test_checks_carry_the_categories_of_accepted_corrections(make_book, tmp_path):
@@ -1572,7 +1584,9 @@ def test_completed_run_can_reinstate_dropped_walkthrough_questions(make_book, tm
         return handler(stage, model, payload, kwargs)
     readers = Readers(handler=dropping)
     result = FixedWorkflow(book, workspace / "runs" / "fixed", calls=readers).run()
-    assert result["questions"] == [] and result["editorial_verdict"] == "needs_human"
+    # A reader's own window verdict no longer decides: only the second Astra
+    # reading's counted rule can send a book to a person.
+    assert result["questions"] == [] and result["editorial_verdict"] == "ready"
     # Simulate a run made before the frontier-question route existed: the
     # screen's drop rows are what reinstatement reads.
     path = workspace / "runs/fixed/result.json"
@@ -1600,9 +1614,10 @@ def test_completed_run_can_reinstate_dropped_walkthrough_questions(make_book, tm
     assert [q["missing_knowledge"] for q in out["reinstated"]] == ["The intended coast"]
     stages = {r["stage"] for r in again.events}
     assert STAGE + "_screen" not in stages and STAGE + "_comment_review" in stages
-    assert not any(r["stage"] in {"typed", "astra", "fable", "numbers"} for r in again.events), "nothing is re-read"
+    assert not any(r["stage"] in {"typed", "astra", "final_astra", "fable", "numbers"} for r in again.events), "nothing is re-read"
     saved = json.loads((workspace / "runs/fixed/result.json").read_text())
-    assert [s["stage"] for s in saved["stages"]][-2:] == ["astra", STAGE]
+    assert [s["stage"] for s in saved["stages"]][-2:] == ["final_astra", STAGE]
+    assert saved["final_review"] == result["final_review"] and saved["editorial_verdict"] == "ready"
     assert saved["accepted"] == result["accepted"] and len(saved["questions"]) == 1
     manifest = json.loads((workspace / "runs/fixed/workflow.json").read_text())
     assert manifest["result_sha256"] == saved["result_sha256"] and manifest["status"] == "completed"
@@ -1615,4 +1630,4 @@ def test_completed_run_can_reinstate_dropped_walkthrough_questions(make_book, tm
     second = reinstate_walkthrough_questions(book, workspace, calls=Readers(handler=reinstating))
     assert second["stage"] == STAGE + "_2" and second["reinstated"] == []
     final = json.loads(path.read_text())
-    assert [s["stage"] for s in final["stages"]][-3:] == ["astra", STAGE, STAGE + "_2"] and len(final["questions"]) == 1
+    assert [s["stage"] for s in final["stages"]][-3:] == ["final_astra", STAGE, STAGE + "_2"] and len(final["questions"]) == 1

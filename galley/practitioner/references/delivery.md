@@ -1,5 +1,13 @@
 # Certification and delivery
 
+Fixed-lane runs (`--execution-mode fixed`, every production book) hand back the
+redline alone — `<surname> - Book Two - Pre-Proofread.docx` — to the author
+folder; the report, review evidence, certificate, `outcome.json` and clean copy
+are filed in DocWatch's Drive archive only. The second Astra reading is the one
+needs_human gate: more than 25 core mechanical corrections still found, or a
+verified publication blocker (see docs/fixed-galley.md). The rest of this page
+describes the legacy session lanes.
+
 Enrolled workspaces (`astra-review-required.json`) use the driver's final Astra
 high review/adjudication. Certification, authorized repair execution, packaging,
 and upload afterward are deterministic. Do not launch another Claude editorial

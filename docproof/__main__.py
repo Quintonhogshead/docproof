@@ -1631,6 +1631,7 @@ def _galley_agent(args) -> int:
     agent = ga.Agent(env=env, workspace_root=root,
                      budget_usd=args.budget,
                      drive_folder_override=args.drive_folder_id,
+                     drive_archive_override=args.archive_folder_id,
                      poll_interval_s=args.poll_interval
                      or ga.DEFAULT_POLL_INTERVAL_S,
                      preflight=ga.check_credentials)
@@ -1787,6 +1788,7 @@ def _galley_drive(args) -> int:
         approve=args.approve, mechanical_only=mechanical_only,
         start_phase=args.from_phase, only_phases=args.phases,
         drive_folder_id=args.drive_folder_id,
+        drive_archive_folder_id=getattr(args, "archive_folder_id", ""),
         state_gate=not args.no_state_gate,
         question_gate=not args.no_question_gate,
         astra_review=not args.no_astra_review,

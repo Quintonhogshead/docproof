@@ -258,6 +258,9 @@ class AwaitingBook:
     folder_id: str = ""
     author_last: str = ""
     request_id: str = ""
+    # DocWatch's Drive archive root, when it has one: where the proofread's
+    # record (everything but the redline) is filed.
+    archive_folder_id: str = ""
 
     @classmethod
     def from_json(cls, raw: dict) -> "AwaitingBook":
@@ -266,7 +269,8 @@ class AwaitingBook:
                    folder_id=str(raw.get("folder_id")
                                  or raw.get("subfolder_id") or ""),
                    author_last=str(raw.get("author_last", "")),
-                   request_id=str(raw.get("request_id", "")))
+                   request_id=str(raw.get("request_id", "")),
+                   archive_folder_id=str(raw.get("archive_folder_id") or ""))
 
 
 def _open_url(request: urllib.request.Request, timeout: int = 30):
@@ -503,6 +507,9 @@ class Agent:
     budget_usd: float | None = None
     poll_interval_s: float = DEFAULT_POLL_INTERVAL_S
     drive_folder_override: str = ""
+    # File every record HERE instead of the archive DocWatch names — for a
+    # rehearsal, like drive_folder_override.
+    drive_archive_override: str = ""
     #: Injected seams: the app, Drive, the driver, and the clock.
     opener: Callable = _open_url
     download: Callable[[AwaitingBook, Path], Path] | None = None
@@ -675,6 +682,17 @@ class Agent:
                 ledger.books[book.file_id] = {"request_id": book.request_id,
                                               "previous_runs": history}
                 ledger.save()
+
+        # DocWatch may name (or change) its archive folder after a book was
+        # claimed. A delivery still pending for want of an archive picks the
+        # current one up from the awaiting list rather than waiting forever
+        # on the value it was claimed with.
+        for book in books:
+            entry = ledger.claimed(book.file_id)
+            if (entry and book.archive_folder_id and not self.drive_archive_override
+                    and entry.get("archive_folder_id") != book.archive_folder_id):
+                ledger.record(book.file_id, entry["state"],
+                              archive_folder_id=book.archive_folder_id)
 
         # Older releases permanently abandoned a finished package after six
         # upload failures. Recover only the same still-requested, validated
@@ -938,8 +956,10 @@ class Agent:
             slug += "-r" + hashlib.sha256(book.request_id.encode()).hexdigest()[:12]
         report.claimed = book.name
         folder = self.drive_folder_override or book.folder_id
+        archive_folder = self.drive_archive_override or book.archive_folder_id
         ledger.record(book.file_id, CLAIMED, name=book.name, slug=slug,
-                      folder_id=folder, request_id=book.request_id,
+                      folder_id=folder, archive_folder_id=archive_folder,
+                      request_id=book.request_id,
                       operational_status="", reason="")
         self.log(f"{'Resuming' if resume else 'Claiming'} {book.name} "
                  f"(workspace {slug}).")
@@ -961,7 +981,8 @@ class Agent:
 
         self._file_id = book.file_id
         try:
-            result = self.drive_book(local, slug, folder, resume=resume)
+            result = self.drive_book(local, slug, folder, resume=resume,
+                                     archive_folder_id=archive_folder)
         except UsageLimitError as e:
             report.outcome, report.reason = "held", str(e)
             ledger.record(book.file_id, CLAIMED, name=book.name, slug=slug,
@@ -1146,9 +1167,11 @@ class Agent:
         return fetch(token, drive_handle(token, book), dest)
 
     def drive_book(self, local: Path, slug: str, folder_id: str, *,
-                   resume: bool) -> Any:
+                   resume: bool, archive_folder_id: str = "") -> Any:
         """Run the practitioner loop over one manuscript, in this process."""
         kwargs: dict[str, Any] = {}
+        if archive_folder_id:
+            kwargs["drive_archive_folder_id"] = archive_folder_id
         if self.budget_usd is not None:
             kwargs["budget_usd"] = self.budget_usd
         if self.verify_upload is not None:
@@ -1456,8 +1479,10 @@ class Agent:
                 raise AgentError("The pending package no longer matches its reviewed build.")
             publish_verified_handoff(
                 package, folder, driver_dir / "delivery.json",
-                source_id=package["source_id"], upload=self.upload,
-                verify=self.verify_upload)
+                source_id=package["source_id"],
+                archive_folder_id=(self.drive_archive_override
+                                   or str(entry.get("archive_folder_id") or "")),
+                upload=self.upload, verify=self.verify_upload)
             machine = RunStateMachine.load(ws / "state.json")
             if not machine.reached("delivered"):
                 previous = machine.history[-1]

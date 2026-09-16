@@ -1355,6 +1355,10 @@ class Driver:
     only_phases: Sequence[str] | None = None
     handoff_dir: Path | None = None
     drive_folder_id: str = ""
+    # DocWatch's Drive archive root. The fixed lane files everything but the
+    # redline there (`Proofing/<month>/<book>`); empty means the record cannot
+    # be filed and delivery stays pending until it can.
+    drive_archive_folder_id: str = ""
     # None = the per-phase table (PHASE_MODEL / PHASE_EFFORT); a value here
     # overrides it for every phase; the by-phase maps win over both.
     model: str | None = None
@@ -3234,15 +3238,41 @@ def drive_token(*, get_key=None) -> str:
     return drive.refresh_access_token(ws.client_id, ws.client_secret, refresh)
 
 
+def _archive_run_folder(token: str, archive_folder_id: str, *, ledger: dict,
+                        source_id: str, name: str) -> str:
+    """The archive folder this package's record is filed in, resolved once and
+    remembered in the delivery ledger so a retry that crosses a month boundary
+    or follows a rename still lands in the same place."""
+    from app.watch import archive
+    saved = ledger.get("archive") or {}
+    if saved.get("folder_id") and saved.get("root") == archive_folder_id:
+        return str(saved["folder_id"])
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    folder = archive.external_run_folder(token, archive_folder_id, kind="galley",
+                                         name=name, source_id=source_id, month=month)
+    ledger["archive"] = {"root": archive_folder_id, "folder_id": folder,
+                         "path": f"{archive.KIND_FOLDER['galley']}/{month}/{name}"}
+    return folder
+
+
 def publish_verified_handoff(package: dict[str, Any], folder_id: str,
                              ledger_path: Path, *, source_id: str,
+                             archive_folder_id: str = "",
                              upload: Callable | None = None,
                              verify: Callable | None = None) -> list[str]:
     """Publish a frozen package once, checkpointing each verified remote file.
 
-    The outcome is the watcher's commit marker and is uploaded last. A retry
-    adopts matching remote files after an ambiguous response, then verifies
-    bytes before acknowledging delivery. Tests inject both upload and verify.
+    Artifacts marked `destination: archive` go to DocWatch's Drive archive
+    (`Proofing/<month>/<book>` under `archive_folder_id`), everything else to
+    `folder_id`, the author folder. The hand-off files go first, so the person
+    waiting on the redline has it even if the record cannot yet be filed; the
+    outcome is the watcher's commit marker and is uploaded last. A package
+    with archive-bound files and no archive folder stops after the hand-off
+    files with the ledger still pending — the run is not lost, the delivery is
+    retried once DocWatch names an archive. A retry adopts matching remote
+    files after an ambiguous response, then verifies bytes before
+    acknowledging delivery. Tests inject both upload and verify; an injected
+    uploader receives the archive root itself rather than a run subfolder.
     """
     import hashlib
     from app.watch import drive
@@ -3252,7 +3282,10 @@ def publish_verified_handoff(package: dict[str, Any], folder_id: str,
     records = list(package.get("artifacts") or [])
     if not records:
         raise DriverError("No package artifacts were recorded.")
-    records.sort(key=lambda row: row["name"].endswith(" - outcome.json"))
+    def destination(row: dict[str, Any]) -> str:
+        return str(row.get("destination") or "handoff")
+    records.sort(key=lambda row: (destination(row) == "archive",
+                                  row["name"].endswith(" - outcome.json")))
     for row in records:
         path = Path(row["path"])
         if not path.is_file() or sha256_file(path) != row["sha256"]:
@@ -3276,11 +3309,35 @@ def publish_verified_handoff(package: dict[str, Any], folder_id: str,
     token = drive_token() if upload is None else None
     if upload is None and not token:
         raise DriverError("Google Drive sign-in is unavailable for delivery.")
-    listing = drive.list_folder(token, folder_id) if token else []
-    by_id = {item.id: item for item in listing}
+    listings: dict[str, list] = {}
+
+    def listing_of(target: str) -> list:
+        if target not in listings:
+            listings[target] = drive.list_folder(token, target) if token else []
+        return listings[target]
+
+    archive_target = ""
+    run_name = str(package.get("archive_name") or "").strip() or Path(records[0]["name"]).stem
     ids = []
     for row in records:
         path = Path(row["path"])
+        if destination(row) == "archive":
+            if not archive_folder_id:
+                ledger["archive_error"] = "DocWatch names no archive folder; the record is not filed."
+                save()
+                raise DriverError("The redline is delivered, but DocWatch names no Drive archive "
+                                  "folder to file the proofread's record in; delivery stays pending.")
+            if not archive_target:
+                archive_target = (_archive_run_folder(token, archive_folder_id, ledger=ledger,
+                                                      source_id=source_id, name=run_name)
+                                  if token else archive_folder_id)
+                ledger.pop("archive_error", None)
+                save()
+            target = archive_target
+        else:
+            target = folder_id
+        listing = listing_of(target)
+        by_id = {item.id: item for item in listing}
         old = ledger["artifacts"].get(row["name"], {})
         equivalent_ids = []
         preverified = False
@@ -3312,24 +3369,26 @@ def publish_verified_handoff(package: dict[str, Any], folder_id: str,
         if not file_id:
             if token:
                 file_id = drive.upload(
-                    token, folder_id, path, name=row["name"],
+                    token, target, path, name=row["name"],
                     mime_type=_MIME.get(path.suffix.lower(), "application/octet-stream"),
                     app_properties={"galley_packet": packet,
                                     "galley_sha256": row["sha256"],
-                                    "galley_source": source_id})
+                                    "galley_source": source_id,
+                                    "galley_destination": destination(row)})
             else:
-                uploaded = upload([path], folder_id)
+                uploaded = upload([path], target)
                 if not uploaded or len(uploaded) != 1 or not str(uploaded[0]).strip():
                     raise DriverError(f"No upload id returned for {row['name']}")
                 file_id = str(uploaded[0])
         ledger["artifacts"][row["name"]] = {
-            "sha256": row["sha256"], "file_id": file_id, "verified": False}
+            "sha256": row["sha256"], "file_id": file_id, "verified": False,
+            "destination": destination(row), "folder_id": target}
         if equivalent_ids:
             ledger["artifacts"][row["name"]]["equivalent_file_ids"] = equivalent_ids
         save()  # Retain the id even if the subsequent read-back fails.
         confirmed = preverified or (hashlib.sha256(drive.download_bytes(
             token, file_id, what="verify a handoff artifact")).hexdigest() == row["sha256"]
-                     if token else bool(verify(path, file_id, folder_id)))
+                     if token else bool(verify(path, file_id, target)))
         if not confirmed:
             raise DriverError(f"Remote content verification failed for {row['name']}")
         ledger["artifacts"][row["name"]]["verified"] = True

@@ -17,7 +17,7 @@ from functools import partial
 
 from docproof.utils.files import write_atomic
 
-VERSION = "fixed-proofreading-v6"
+VERSION = "fixed-proofreading-v7"
 SONNET = "claude-sonnet-5"
 LUNA = "gpt-5.6-luna"
 OPUS = "claude-opus-5"
@@ -27,7 +27,21 @@ ASTRA = "gpt-6-astra"
 # Readers of whole windows of the book may raise number errors themselves, so
 # they keep the complete number policy; screening, checks and comment reviews
 # see it only when a number proposal is actually in front of them.
-WHOLE_BOOK_STAGES = frozenset({"ensemble_sweep_opus", "ensemble_sweep_sol", "fable", "astra"})
+# The second Astra reading is the last stage and the only one that can send a
+# book to a human proofreader; its verdict is code's (see final_review_verdict).
+FINAL_REVIEW_STAGE = "final_astra"
+# The three final readers share the walk-through scope, the frontier schema,
+# the query rider and the fact/continuity/structure demotion of dropped edits.
+FRONTIER_STAGES = frozenset({"fable", "astra", FINAL_REVIEW_STAGE})
+WHOLE_BOOK_STAGES = frozenset({"ensemble_sweep_opus", "ensemble_sweep_sol"}) | FRONTIER_STAGES
+# What the last gate counts as an error still standing after the whole recipe:
+# the mechanical categories, not the walk-through's typesetting, continuity,
+# fact, structure or usage findings, and never a question or a title italic.
+CORE_MECHANICAL_CATEGORIES = frozenset({"spelling", "grammar", "punctuation", "number_style",
+                                        "currency_style", "broken_sentence"})
+# More core mechanical corrections than this from the second Astra reading, or
+# any verified publication blocker, is needs_human (Quinton, 2026-09-16).
+FINAL_REVIEW_ERROR_CEILING = 25
 # Below this many classified narration paragraphs a tense baseline is noise, and
 # every narrative-tense site is sent rather than only the deviating ones.
 TENSE_BASELINE_FLOOR = 20
@@ -66,6 +80,7 @@ def workflow_plan():
         {"stage": "continuity", "model": f"{FABLE}; edits: {OPUS}", "description": "Whole-book continuity read with cited evidence; Opus rules on evidenced edits, unresolved contradictions become author questions"},
         {"stage": "fable", "model": FABLE, "description": "Read the corrected book and decide every proposed Galley comment, then propagate its accepted corrections and casing decisions book-wide"},
         {"stage": "astra", "model": ASTRA, "description": "Read the Fable-corrected book and review every surviving comment, then run the final propagation and consistency sweep"},
+        {"stage": FINAL_REVIEW_STAGE, "model": ASTRA, "description": "Second Astra reading of the finished book: correct what remains, list publication blockers, and decide needs_human by the fixed rule"},
     ]
 
 
@@ -120,6 +135,10 @@ FRONTIER_FINDING = _object(**{**FINDING["properties"], "category": _enum(*FRONTI
                            evidence=_array(EVIDENCE))
 FRONTIER_SCHEMA = _object(**{**READ_SCHEMA["properties"], "findings": _array(FRONTIER_FINDING)},
                           reviewed_check_ids=_array(S))
+# A problem that should stop publication and that a proofread cannot repair,
+# anchored to an exact current paragraph; code discards one it cannot anchor.
+BLOCKER = _object(para_id=S, quote=S, problem=S, reason=S)
+FINAL_REVIEW_SCHEMA = _object(**FRONTIER_SCHEMA["properties"], publication_blockers=_array(BLOCKER))
 CONTINUITY_FINDING = _object(para_id=S, quote=S, occurrence=I, replacement=S,
                              action=_enum("edit", "query"), category=_enum("continuity"),
                              reason=S, question=S, missing_knowledge=S, evidence=_array(EVIDENCE))
@@ -350,6 +369,43 @@ def _groups(candidates):
     return groups
 
 
+def final_review_verdict(accepted, coverage, *, ceiling=FINAL_REVIEW_ERROR_CEILING):
+    """The fixed rule the second Astra reading is judged by, owned by code.
+
+    `accepted` is that reading's adjudicated proposals; `coverage` its window
+    rows, each carrying the blockers code could anchor (`publication_blockers`)
+    and those it could not (`unverified_blockers`). More than `ceiling` core
+    mechanical corrections still found, or any verified blocker, is
+    needs_human; otherwise the proofread is complete. A skipped window or a
+    reader's own window verdict is reported, never turned into the verdict: an
+    operational failure is not an editorial judgment."""
+    core = [row for row in accepted if row.get("action") == "edit" and not row.get("format")
+            and row.get("category") in CORE_MECHANICAL_CATEGORIES]
+    blockers = [b for window in coverage for b in window.get("publication_blockers", [])]
+    unverified = [b for window in coverage for b in window.get("unverified_blockers", [])]
+    skipped = sum(1 for window in coverage if window.get("status") == "skipped")
+    window_verdicts = {}
+    for window in coverage:
+        verdict = window.get("verdict", "ready")
+        window_verdicts[verdict] = window_verdicts.get(verdict, 0) + 1
+    needs_human = len(core) > ceiling or bool(blockers)
+    if needs_human:
+        reason = (f"The second Astra reading still found {len(core)} core mechanical errors "
+                  f"(ceiling {ceiling}) and named {len(blockers)} publication blocker(s); "
+                  "the book goes to a human proofreader.")
+    else:
+        reason = (f"The second Astra reading found {len(core)} core mechanical errors "
+                  f"(ceiling {ceiling}) and no publication blocker; proofread complete.")
+    if skipped:
+        reason += f" {skipped} reading window(s) were unavailable and are recorded as skipped."
+    return {"stage": FINAL_REVIEW_STAGE, "verdict": "needs_human" if needs_human else "ready",
+            "reason": reason, "core_mechanical_errors": len(core), "ceiling": ceiling,
+            "core_mechanical_edits": [{k: row.get(k) for k in ("id", "para_id", "category", "before", "replacement")}
+                                      for row in core],
+            "publication_blockers": blockers, "unverified_blockers": unverified,
+            "skipped_windows": skipped, "window_verdicts": window_verdicts}
+
+
 class FixedWorkflow:
     def __init__(self, source, directory, *, calls=None, progress=None, max_api_usd=10):
         from galley.fixed_policy import configuration, NUMBER_POLICY, PROOFREADING_POLICY
@@ -411,6 +467,8 @@ class FixedWorkflow:
         self.stages = []
         self.context = ""
         self.needs_human = False
+        # The second Astra reading's counted evidence and code-owned verdict.
+        self.final_review = None
         self.local_seen = set()
         self.prose_prepared = None
         self.source_marks = {}
@@ -714,7 +772,7 @@ class FixedWorkflow:
     def _query_rider(stage):
         """The final walk-through's questions are screened in its own scope."""
         from galley.press_prompt import WALKTHROUGH_QUERY_RIDER
-        return WALKTHROUGH_QUERY_RIDER if stage in {"fable", "astra", "walkthrough_questions"} else ""
+        return WALKTHROUGH_QUERY_RIDER if stage in FRONTIER_STAGES or stage == "walkthrough_questions" else ""
 
     def _screen_candidates(self, stage, sites, rider=""):
         from galley.fixed_screening import PAIR, aliases, decision_key, packet, windows
@@ -780,7 +838,7 @@ class FixedWorkflow:
         drops it, is not discarded: it becomes the author question Astra's
         comment review judges in the reader's own scope, as the readers'
         questions already are. Returns (question, missing_knowledge, quote) or None."""
-        if not (stage in {"fable", "astra"} or stage.startswith("walkthrough_questions")):
+        if not (stage in FRONTIER_STAGES or stage.startswith("walkthrough_questions")):
             return None
         rows = [p for p in site["proposals"]
                 if p.get("action") == "edit" and p.get("category") in FRONTIER_QUESTION_CATEGORIES]
@@ -790,7 +848,7 @@ class FixedWorkflow:
 
     def _adjudicate(self, stage, candidates, expected_models=(), *, force=False):
         accepted, disputed = [], []
-        if stage in {"fable", "astra"} or stage.startswith("walkthrough_questions"):
+        if stage in FRONTIER_STAGES or stage.startswith("walkthrough_questions"):
             kept = []
             for row in candidates:
                 if row["action"] == "query" and row["category"] in FRONTIER_QUESTION_CATEGORIES:
@@ -1119,8 +1177,9 @@ class FixedWorkflow:
         snapshot = dict(self.current if texts is None else texts)
         keys = list(snapshot) if ids is None else list(ids)
         proposals, decisions, coverage = [], [], []
-        structure = self._structure_context(snapshot)[0] if stage in {"fable", "astra"} else None
-        frontier = stage in {"fable", "astra"}
+        structure = self._structure_context(snapshot)[0] if stage in FRONTIER_STAGES else None
+        frontier = stage in FRONTIER_STAGES
+        final_gate = stage == FINAL_REVIEW_STAGE
         focused, citations, formatting, parts = None, None, {}, {}
         book = None
         if frontier:
@@ -1177,6 +1236,9 @@ class FixedWorkflow:
             assigned, omitted = [], 0
             if frontier:
                 scope += FRONTIER_TASK + FINAL_WALKTHROUGH
+                if final_gate:
+                    from galley.press_prompt import FINAL_GATE_TASK
+                    scope += FINAL_GATE_TASK
                 for s in focused["sites"]:
                     if s["para_id"] not in owned:
                         continue
@@ -1208,7 +1270,8 @@ class FixedWorkflow:
             jobs.append((model, partial(self._ask, stage, model,
                 scope + "Context paragraphs are read-only. Verse paragraphs (poetry_ids) take house mechanics only, never a change to their structure (VERSE). Return reviewed_ids for all owned paragraphs. For EVERY assigned comment explicitly drop, retain, or replace it: answer from the book where possible, remove false/stale/duplicate/style concerns, and retain only specific questions requiring author knowledge. Retained comments must use an exact contextual quote that occurs only once in its paragraph. To resolve with an edit return the edit plus a drop decision. Do not invent or omit comment IDs. New questions require missing_knowledge. needs_human means substantive unresolved damage/meaning beyond a proofread, never an operational failure. Findings must quote their exact current paragraph. Never retype clean paragraphs." + shared_text,
                 payload,
-                FRONTIER_SCHEMA if frontier else READ_SCHEMA, effort="high", max_tokens=16000)))
+                FINAL_REVIEW_SCHEMA if final_gate else FRONTIER_SCHEMA if frontier else READ_SCHEMA,
+                effort="high", max_tokens=16000)))
         for (owned, questions, assigned, omitted), result in zip(windows, self.scheduler.map(jobs)):
             if result is None:
                 decisions.extend(self._drop_unreviewed(questions))
@@ -1244,6 +1307,20 @@ class FixedWorkflow:
                 coverage[-1]["focused_counts"] = {key: sum(s["check"] == key for s in assigned)
                                                   for key in focused["counts"]}
                 coverage[-1]["tense_sites_omitted"] = omitted
+            if final_gate:
+                # A blocker is evidence only when it anchors to the exact current
+                # text of an owned paragraph; anything else is kept as a diagnostic.
+                verified, unverified = [], []
+                for blocker in result.get("publication_blockers", []):
+                    text = owned.get(blocker.get("para_id"))
+                    quote = blocker.get("quote", "")
+                    if text is not None and quote and quote in text and blocker.get("problem", "").strip():
+                        verified.append({**blocker, "model": model})
+                    else:
+                        unverified.append({**blocker, "model": model,
+                                           "rejected": "Blocker does not anchor to an owned current paragraph"})
+                coverage[-1]["publication_blockers"] = verified
+                coverage[-1]["unverified_blockers"] = unverified
         return proposals, decisions, coverage
 
     def _comments(self, decisions, stage, *, before=None, model=None):
@@ -1270,7 +1347,7 @@ class FixedWorkflow:
                                for pid in self.current if pid in changed_ids | rejected]
             windows = list(_windows(refresh, 16000))
             comment_rider = ""
-            if stage in {"fable", "astra"} or stage.startswith("walkthrough_questions"):
+            if stage in FRONTIER_STAGES or stage.startswith("walkthrough_questions"):
                 from galley.press_prompt import WALKTHROUGH_COMMENT_RIDER
                 comment_rider = WALKTHROUGH_COMMENT_RIDER
             jobs = [(model, partial(self._ask,stage + "_comment_review", model,
@@ -1568,7 +1645,7 @@ class FixedWorkflow:
             self._stage("continuity")
             self._continuity()
             from galley.press_prompt import FINAL_WALKTHROUGH_CHECK
-            for stage, model in (("fable", FABLE), ("astra", ASTRA)):
+            for stage, model in (("fable", FABLE), ("astra", ASTRA), (FINAL_REVIEW_STAGE, ASTRA)):
                 self._stage(stage)
                 snapshot = dict(self.current)
                 rows, comments, read_coverage = self._read(stage, model, comments=True)
@@ -1582,14 +1659,18 @@ class FixedWorkflow:
                 completion = self._local_completion(prose_prepared, stage="completion_" + stage,
                                                     label="local_completion_" + stage)
                 self._comments(comments, stage, before=snapshot, model=model)
-                if stage == "astra":
-                    self.needs_human = any(x["verdict"] == "needs_human" for x in read_coverage)
+                if stage == FINAL_REVIEW_STAGE:
+                    # The only needs_human gate. A reader's window verdict is
+                    # recorded evidence; the verdict itself is the fixed rule.
+                    self.final_review = final_review_verdict(accepted, read_coverage)
+                    self.needs_human = self.final_review["verdict"] == "needs_human"
                     from galley.press_checks import final_audit
                     from galley.fixed_local import _paragraphs
                     audit = final_audit(prose_prepared,
                         _paragraphs(prose_prepared, self.current, self.poetry_ids), self.cfg)
                     audit["accepted_sha256"] = _hash(self.current)
-                    self._record(stage, coverage=read_coverage, press_audit=audit, local=completion)
+                    self._record(stage, coverage=read_coverage, press_audit=audit, local=completion,
+                                 final_review=self.final_review)
                 else:
                     self._record(stage, coverage=read_coverage, local=completion)
         return self._write_result(all_poetry)
@@ -1606,6 +1687,7 @@ class FixedWorkflow:
                   "formats": self.formats,
                   "stages": self.stages, "poetry_only": all_poetry,
                   "editorial_verdict": "needs_human" if self.needs_human else "ready",
+                  "final_review": self.final_review,
                   "usage": self.calls.usage_summary()}
         skipped = sorted((h["skipped_read"] for h in self.history if h.get("skipped_read")), key=_json)
         if skipped:
@@ -1666,6 +1748,7 @@ def run_fixed_driver(driver):
                 if driver.drive_folder_id:
                     result.uploaded = publish_verified_handoff(package, driver.drive_folder_id,
                         driver.workspace / "runs/driver/delivery.json", source_id=driver.source_id or driver.slug,
+                        archive_folder_id=driver.drive_archive_folder_id,
                         upload=driver.upload, verify=driver.verify_upload)
                 result.outcome, result.reason = package["outcome"], package["reason"]
                 if not state.reached("delivered"):

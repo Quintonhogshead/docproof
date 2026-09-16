@@ -444,6 +444,42 @@ def _resolve_job_folder(token: str, ws: WatchSettings, store, job, *,
     return folder_id
 
 
+# The tag an external run (the Fly Galley agent) puts on the archive folder it
+# files a book's record under, so a retry finds the same folder by the source
+# file's Drive id and never by its human-typed name.
+SOURCE_PROP = "galley_source"
+
+
+def external_run_folder(token: str, archive_folder_id: str, *, kind: str,
+                        name: str, source_id: str, month: str,
+                        opener=None) -> str:
+    """Find or make `<kind folder>/<month>/<name>` under the archive root for a
+    run DocWatch did not perform itself, and return its id.
+
+    The Galley agent's fixed lane files a proofread's record here (report,
+    review evidence, certificate, verdict, clean copy) while the redline alone
+    goes to the author folder. The folder is found by the `galley_source` tag
+    it carries — the Book 1's Drive id — so a delivery retry lands in the same
+    folder even if a person renamed it. Raises `drive.DriveError` like every
+    other Drive call here; the caller decides whether that blocks delivery."""
+    opener = opener or drive._open_url
+    kind_name = KIND_FOLDER.get(kind, "Other")
+    cache: dict = {}
+    kind_id = _child_folder(token, archive_folder_id, kind_name, cache=cache,
+                            opener=opener)
+    month_id = _child_folder(token, kind_id, month, cache=cache, opener=opener)
+    found = drive.find_children(token, month_id,
+                                app_property=(SOURCE_PROP, source_id),
+                                folders_only=True, opener=opener)
+    if found:
+        return found[0].id
+    return drive.create_folder(
+        token, month_id, name,
+        app_properties={ARCHIVE_PROP: "1", SOURCE_PROP: source_id,
+                        KIND_PROP: kind, JOBSTATE_PROP: "external"},
+        opener=opener)
+
+
 def _child_folder(token: str, parent_id: str, name: str, *, cache: dict,
                   opener) -> str:
     """The id of a named subfolder of `parent_id`, found or made once and reused
