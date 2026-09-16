@@ -131,6 +131,12 @@ def test_midbook_quota_survives_restart_and_resumes_both_books_at_reset(env, tmp
     assert calls[0]["slug"] == calls[1]["slug"]
     assert not agent._usage_pause()
     assert agent.ledger().claimed("drive-1")["reason"] == "no open items"
+    # The second book waits for the spacing window after the first claim,
+    # which the pause did not extend; then it runs.
+    if clock["now"] < NOW + ga.DEFAULT_BOOK_SPACING_S:
+        assert agent.poll_once().outcome != "done"
+        assert agent.ledger().state("drive-2") == ""
+        clock["now"] = NOW + ga.DEFAULT_BOOK_SPACING_S + 1
     assert agent.poll_once().outcome == "done"
     assert agent.ledger().state("drive-2") == ga.FINISHED
 
