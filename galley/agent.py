@@ -689,7 +689,13 @@ class Agent:
         # on the value it was claimed with.
         for book in books:
             entry = ledger.claimed(book.file_id)
-            if (entry and book.archive_folder_id and not self.drive_archive_override
+            # A book re-requested under a new request id (a proof-flag reset
+            # in DocWatch) has just had its entry replaced by one with no
+            # state yet; it is claimed afresh below and takes the archive
+            # folder then. Reading entry["state"] here crashed every poll
+            # on 2026-09-16 after the first such reset.
+            if (entry and entry.get("state") and book.archive_folder_id
+                    and not self.drive_archive_override
                     and entry.get("archive_folder_id") != book.archive_folder_id):
                 ledger.record(book.file_id, entry["state"],
                               archive_folder_id=book.archive_folder_id)
