@@ -356,9 +356,17 @@ def awaiting(home: str | Path) -> list[dict]:
     listed: the book is finished, whatever the folder still holds. Reads
     `state.json` only — no Drive call, so a poll every five minutes costs
     the server nothing."""
+    from . import archive
+
     root = Path(home)
     ws = WatchSettings.load(root)
     state = WatchState.load(root / STATE_FILE)
+    # Where the proofread's record goes: DocWatch's Drive archive, when it has
+    # one. The redline alone goes to the author folder; the report, evidence,
+    # certificate, verdict and clean copy are filed under
+    # `Proofing/<month>/<book>` here, and the ticker reads the verdict back
+    # from there (see `proof.outcome_in_archive`).
+    archive_folder = ws.archive_folder_id if archive.is_enabled(ws) else ""
     out = []
     for rec in sorted(state.files.values(), key=lambda r: r.updated_at):
         if rec.proof_marked != AWAITING:
@@ -370,6 +378,7 @@ def awaiting(home: str | Path) -> list[dict]:
             # to their own folder; a flat install has one folder for everyone.
             "folder_id": rec.subfolder_id or ws.folder_id,
             "subfolder_id": rec.subfolder_id,
+            "archive_folder_id": archive_folder,
             "author_last": rec.author_last,
             "modified_time": rec.modified_time,
             "request_id": rec.flag_resets.get("proof", ""),

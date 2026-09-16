@@ -106,6 +106,12 @@ CLEAN_SUFFIX = " - clean"
 # `stages.OUTPUT_STEM_SUFFIXES` already recognises the suffix, so the file is
 # never mistaken for a manuscript to work on.
 PRE_PROOFREAD_SUFFIX = " - Pre-Proofread"
+# The stage token the fixed lane WRITES on that redline. Unlike the legacy
+# `Book 2` series it does not mirror the source's spelling: the press asked
+# (2026-09-16) for every pre-proofread to be "<surname> - Book Two -
+# Pre-Proofread.docx", digits or not on the way in. Recognition is unchanged —
+# `is_output_name` and `is_proof_outcome_name` still accept both spellings.
+PRE_PROOFREAD_STAGE = "Book Two"
 
 # The dashes a " - " separator turns up as in the wild: a plain hyphen-minus,
 # the hyphen and non-breaking hyphen, the figure/en/em dashes, the horizontal
@@ -260,6 +266,21 @@ def proof_base(stem: str) -> str:
     `galley/driver.py` builds the practitioner side of the hand-off from this
     same function."""
     return stage_base(stem, PROOF_STAGE)
+
+
+def pre_proofread_base(stem: str) -> str:
+    """The fixed lane's hand-off base — "Smith - Book Two", whatever stage
+    token and spelling the source carried ("Smith - Book 1", "Smith - Book
+    One", a bare "Smith - Book Original"). Idempotent, like every `*_base`."""
+    author, _index = _split_stage(stem)
+    return f"{author} - {PRE_PROOFREAD_STAGE}"
+
+
+def pre_proofread_name(stem: str) -> str:
+    """What the fixed lane calls its redline — "Smith - Book 1.docx" ->
+    "Smith - Book Two - Pre-Proofread.docx". The companions filed in the
+    archive share the same base (see `galley/fixed_documents.py`)."""
+    return f"{pre_proofread_base(Path(stem).stem)}{PRE_PROOFREAD_SUFFIX}.docx"
 
 
 def proof_outcome_name(stem: str) -> str:
@@ -505,6 +526,8 @@ __all__ = ["CHECKS_SUFFIX", "CLEAN_SUFFIX", "CORRECTIONS_SHEET_SUFFIX",
            "DECISION_LOG_SUFFIX", "INDESIGN_SUFFIX",
            "LETTER_SUFFIX",
            "NOTES_SUFFIX", "OUTCOME_SUFFIX", "OUTPUT_STAGE", "OUTPUT_STAGES",
+           "PRE_PROOFREAD_STAGE", "PRE_PROOFREAD_SUFFIX",
+           "pre_proofread_base", "pre_proofread_name",
            "PROOF_SOURCE_STAGE", "PROOF_STAGE", "SOURCE_STAGE", "SPELLINGS",
            "STAGE_TOKENS", "STYLE_SHEET_SUFFIX", "TRACKED_SUFFIX",
            "VERIFICATION_SUFFIX",

@@ -858,6 +858,11 @@ def _one_proof(token: str, home: Path, ws: WatchSettings, file: DriveFile,
                     else drive.list_folder(token, dest_folder_id, opener=opener))
     folder_files = flags.current_outputs(folder_files, rec, "proof", file)
     landed = proof.outcome_in_folder(folder_files, file.name)
+    if landed is None and rec.proof_marked not in PROOF_TERMINAL:
+        # The fixed lane leaves the author folder holding the redline alone and
+        # files its verdict in DocWatch's Drive archive, tagged with this
+        # book's id. Same commit marker, different shelf.
+        landed = proof.outcome_in_archive(token, ws, file, rec, opener=opener)
     if landed is not None and rec.proof_marked not in PROOF_TERMINAL:
         verdict = proof.read_outcome(token, landed, opener=opener)
         if verdict is not None:
@@ -951,8 +956,9 @@ def _await_external_proof(token: str, ws: WatchSettings, file: DriveFile, rec,
                    if dest_folder_id else "the watched folder")
     reason = (f"is flagged '{ws.hubspot_proof_ready_value}' and is waiting for "
               f"the proofreading practitioner. The book is in {folder_link}; "
-              f"the run delivers '{proof.hand_off_names(file.name)['outcome']}' "
-              f"beside it, and the next pass picks it up.")
+              f"the run delivers the redline there and files "
+              f"'{proof.hand_off_names(file.name)['outcome']}' in the Drive "
+              f"archive (or beside the book), and the next pass picks it up.")
     if rec.proof_marked != PROOF_AWAITING:
         proof.mark_source(token, file, rec, state, status=PROOF_AWAITING,
                           opener=opener)

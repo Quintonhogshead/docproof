@@ -252,6 +252,35 @@ stylistic rewriting. evidence on a change lists verified passages elsewhere in t
 book; reconciling a name, place or fact to that evidenced established form
 preserves the book's facts. """
 
+# The second Astra reading: the only stage that can send a book to a human
+# proofreader. Code applies the rule (galley/fixed_workflow.py,
+# FINAL_REVIEW_ERROR_CEILING): more than the ceiling of core mechanical
+# corrections still found, or any verified publication blocker, is needs_human;
+# otherwise the proofread is complete. The reader supplies the evidence, never
+# the verdict.
+FINAL_GATE_TASK = """SECOND ASTRA READING — THE LAST GATE
+Every earlier stage, including a first Astra reading, has already corrected
+this book; you hold the finished text. Read it again as the last proofreader
+before it goes to a person: correct every clear mechanical error that remains
+(spelling, grammar, punctuation, number and currency style, broken sentences)
+with the same minimal edits and the same protections as before, and review
+every surviving comment. Do not rediscover corrections already made; the text
+you are given is current.
+Separately, list publication_blockers: problems that should stop this book from
+being published as it stands and that a proofread cannot repair — a missing,
+duplicated, truncated or garbled passage; unreadable or untranslated text;
+placeholder text (TK, TBD, lorem ipsum, XXX); a chapter or section out of
+order or a heading with no body; damage an earlier correction did to meaning;
+a passage that cannot be read as the author's finished prose. Each blocker
+names its paragraph id, a verbatim quote from that paragraph and the problem;
+code verifies the quote and discards a blocker it cannot anchor. An ordinary
+correction, a style preference, a question for the author, an unusual voice
+or an unresolved editorial disagreement is never a blocker. Galley counts the
+core mechanical corrections you still propose; a count over its ceiling or any
+verified blocker sends the book to a human proofreader, and otherwise the
+proofread is complete. Report what you find; the verdict is Galley's.
+"""
+
 # The screen that rules on a final reader's QUESTIONS must judge them in the
 # reader's own scope. Without this, Wilder's screen dropped seven of eight
 # fact, logic and continuity questions as "outside proofreading scope".
@@ -350,5 +379,5 @@ def policy_identity():
     implementations = "".join((ROOT / name).read_text() for name in (
         "galley/press_checks.py", "docproof/tensecheck.py", "docproof/sweeps.py"))
     return hashlib.sha256((editorial_policy() + FRONTIER_TASK + FINAL_WALKTHROUGH + FINAL_WALKTHROUGH_CHECK
-                           + CONTINUITY_TASK + STORY_TASK + implementations +
+                           + FINAL_GATE_TASK + CONTINUITY_TASK + STORY_TASK + implementations +
                            SOURCE.read_text() + COVERAGE.read_text()).encode()).hexdigest()
