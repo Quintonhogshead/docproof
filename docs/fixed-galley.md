@@ -116,9 +116,12 @@ human proofreader, and the rule is code's, not the reader's
 - any verified publication blocker
 
 is `needs_human`; otherwise the proofread is complete (`done`). A reader's own
-window verdict, an earlier stage's verdict, and a skipped (unavailable) window
-are recorded as evidence and never decide: an operational failure is not an
-editorial judgment. The counts, the blockers, the ceiling and the reason are
+window verdict, an earlier stage's verdict, a skipped (unavailable) window and
+a skipped model review in any earlier stage are recorded as evidence and never
+decide: an operational failure is not an editorial judgment. The outcome file's
+reason carries the reading's own sentence and, when reads were skipped, their
+count; the report and the review evidence list them. (A subscription limit
+never produces skips: the lane pauses and resumes.) The counts, the blockers, the ceiling and the reason are
 recorded in `final_astra.json`, in `result.json` (`final_review`), in the
 outcome file and in the report; certification refuses a result whose verdict
 does not follow from that recorded evidence.
@@ -228,8 +231,9 @@ label still fails coverage. Screening windows hold at most 25 sites, and
 screening requests may answer with up to 16,000 output tokens and are asked
 for one-sentence reasons: at
 43-50 sites per window Sonnet's answers ran to about 11,000 tokens against a
-12,000 ceiling and Luna dropped IDs from its coverage, and the resulting
-skipped reviews were the only reason that book finished `needs_human`.
+12,000 ceiling and Luna dropped IDs from its coverage; the resulting skipped
+reviews are recorded in the reason and the evidence but, since v0.217.1, do
+not by themselves make a book `needs_human`.
 
 The exhaustive `comma_boundary` generator, which the base recipe also leaves
 opted out, is not part of the fixed local checks: on the first production book

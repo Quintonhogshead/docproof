@@ -252,16 +252,22 @@ def _audit_stage(version):
 def package_outcome(result) -> tuple[str, str]:
     """The delivery outcome and its reason for a completed fixed result.
 
-    A run whose model reviews were skipped is not a finished proofread,
-    whatever the editorial verdict says: the skipped stages made no edits
-    and nobody read those paragraphs. It goes to a person. On 2026-09-16 a
-    quota outage skipped every review of Kyler 2 - Book 1 and the untouched
-    manuscript was delivered as "done"."""
+    The outcome is the editorial verdict alone: under the final gate that is
+    the second Astra reading's fixed rule, and nothing else sends a book to a
+    person (Quinton, 2026-09-16: "the only thing that should skip a book is
+    the Astra review"). Skipped model reviews are an operational fact: they
+    are counted in the reason and in the report, never turned into a verdict.
+    A subscription limit no longer produces skips at all; the lane pauses."""
     skipped = len(result.get("skipped_reads") or [])
-    outcome = "needs_human" if result["editorial_verdict"] == "needs_human" or skipped else "done"
-    reason = (f"Fixed proofreading finished with {skipped} skipped model review(s); the redline is incomplete "
-              "and needs a person. Unverified suggestions were discarded and output checks passed."
-              if skipped else "Fixed proofreading complete; every required reading and output check passed.")
+    outcome = "needs_human" if result["editorial_verdict"] == "needs_human" else "done"
+    review = result.get("final_review")
+    if isinstance(review, dict):
+        reason = review["reason"]
+    else:
+        reason = "Fixed proofreading complete; every required reading and output check passed."
+    if skipped:
+        reason += (f" {skipped} model review(s) were unavailable and skipped; their unverified suggestions "
+                   "were discarded and the skipped reads are recorded in the review evidence.")
     return outcome, reason
 
 
@@ -548,8 +554,6 @@ def package_result(driver, result):
     outcome = run / f"{source.stem} - outcome.json"
     outcome_value, reason = package_outcome(result)
     review = result.get("final_review") if isinstance(result.get("final_review"), dict) else None
-    if review and not result.get("skipped_reads"):
-        reason = review["reason"]
     from galley.outcome import hubspot_fields
     record = {"schema_version": 1, "outcome": outcome_value, "reason": reason,
               "set_by": "Galley fixed proofreading", "execution_mode": "fixed",
