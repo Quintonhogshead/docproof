@@ -1243,20 +1243,6 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
     contents = drive.list_folder(token, subfolder_id, opener=opener)
     manuscripts = [f for f in contents if stage.candidate(f)]
 
-    # A multi-book author keeps each book in its own folder one level down —
-    # author folder -> book folder -> book original — so an author's several
-    # books do not pile into one folder and get read as "which of these is the
-    # one?". Only when the author folder holds no manuscript of its own does the
-    # pass descend: a single-book author's folder is read exactly as before, and
-    # the extra Drive listing is paid only for authors who actually nest.
-    if not manuscripts:
-        book_folders = [f for f in contents if f.is_folder]
-        if book_folders:
-            _discover_nested(token, ws, record, first, last, author,
-                             book_folders, state, listing, routes, stage=stage,
-                             opener=opener, report=report, dry_run=dry_run)
-            return
-
     # Is the file this stage reads in the folder at all — a fresh one to work
     # on, or one already finished with (marked done, so out of `manuscripts`)?
     # It is asked by NAME, not by marker: an output a human placed and named is
@@ -1272,6 +1258,28 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
                            subfolder_id=subfolder_id, subfolder_name=author)
     intake_done = any(stage.already_done(f) for f in intake_files)
     intake_failed = [f for f in intake_files if stage.already_failed(f)]
+
+    # A multi-book author keeps each book in its own folder one level down —
+    # author folder -> book folder -> book original — so an author's several
+    # books do not pile into one folder and get read as "which of these is the
+    # one?". Only when the author folder holds no manuscript of its own does the
+    # pass descend: a single-book author's folder is read exactly as before, and
+    # the extra Drive listing is paid only for authors who actually nest.
+    #
+    # And only when it holds no *finished* one either. A folder whose own
+    # intake this stage has already finished with (or failed on) is a record
+    # stuck at ready, reported below; the subfolders beside it are the
+    # author's history, not more books to do. On 2026-09-16 Bill Gunn's
+    # finished "Book 1" sent the pass into "Walls Came Tumbling Down", his
+    # published previous book, whose 2025 "Gunn - Book 1.docx" was then
+    # proofread at a novel's price.
+    if not manuscripts and not intake_done and not intake_failed:
+        book_folders = [f for f in contents if f.is_folder]
+        if book_folders:
+            _discover_nested(token, ws, record, first, last, author,
+                             book_folders, state, listing, routes, stage=stage,
+                             opener=opener, report=report, dry_run=dry_run)
+            return
 
     def _unprepared(missing_detail: str) -> None:
         """Account for a ready author with no book to prepare — none dropped
@@ -1392,6 +1400,16 @@ def _discover_nested(token: str, ws: WatchSettings, record, first: str,
             failed_intakes += [f for f in contents
                                if stage.source_name(f.name, last)
                                and stage.already_failed(f)]
+            continue
+        later = _folder_past_stage(contents, stage)
+        if later:
+            # A published book's folder keeps its whole series — the "Book 2"
+            # redline, the finals — beside the "Book 1" nobody ever marked.
+            # That is a book long past this stage, not one to do again.
+            log.info("%s / %s: '%s' is already beside %s, so that book is "
+                     "past %s; left alone.", author, folder.name, later,
+                     manuscripts[0].name, stage.name)
+            report.already_formatted += [(f.name, later) for f in manuscripts]
             continue
         if len(manuscripts) > 1:
             reason = (f"{len(manuscripts)} new manuscripts are in {author}'s "
@@ -1522,6 +1540,22 @@ def _match_ready_record(ws: WatchSettings, rec, name: str, surname: str,
     elif len(matches) > 1:
         log.info("%s: %d records are '%s' for %s; none will be moved on.",
                  name, len(matches), ws.hubspot_format_ready_value, surname)
+
+
+def _folder_past_stage(contents: list[DriveFile], stage: "DiscoveryStage") -> str:
+    """The name of a file proving this folder is already past `stage`, or "".
+
+    Formatting's tell is `_folder_past_formatting`'s. Proofing's is a file of
+    the stage it writes — a "<surname> - Book 2" or any companion of one —
+    or its own intake carrying a terminal proofing marker."""
+    if stage.name != "proofing":
+        return _folder_past_formatting(contents)
+    for f in contents:
+        if naming.is_output_name(f.name):
+            return f.name
+        if stage.already_done(f) or stage.already_failed(f):
+            return f.name
+    return ""
 
 
 def _folder_past_formatting(contents: list[DriveFile]) -> str:
