@@ -9,4 +9,7 @@ Nothing is imported here on purpose: setuptools reads `__version__` out of this
 file before the dependencies exist.
 """
 
-__version__ = "0.215.1"
+<<<<<<< HEAD
+=======
+__version__ = "0.215.2"
+>>>>>>> f1c5008 (Never descend into an author's old-book folders past a finished Book 1 (v0.215.2))
