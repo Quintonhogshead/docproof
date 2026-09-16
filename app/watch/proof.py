@@ -233,7 +233,7 @@ def outcome_in_archive(token: str, ws: WatchSettings, file: DriveFile, rec,
     """The fixed lane's verdict, read back from DocWatch's own Drive archive.
 
     The Galley agent hands the author folder the redline alone and files the
-    record — including "<surname> - Book Two - outcome.json" — under
+    record — including "<surname> - Book One - outcome.json" — under
     `Proofing/<month>/<book>` in the archive, tagging every file with the
     source Book 1's Drive id (`galley_source`). That tag, not a folder, is how
     the verdict is found: one Drive query for outcome files carrying this

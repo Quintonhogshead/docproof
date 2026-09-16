@@ -1,7 +1,7 @@
 # Certification and delivery
 
 Fixed-lane runs (`--execution-mode fixed`, every production book) hand back the
-redline alone — `<surname> - Book Two - Pre-Proofread.docx` — to the author
+redline alone — `<surname> - Book One - Pre-Proofread.docx` — to the author
 folder; the report, review evidence, certificate, `outcome.json` and clean copy
 are filed in DocWatch's Drive archive only. The second Astra reading is the one
 needs_human gate: more than 25 core mechanical corrections still found, or a

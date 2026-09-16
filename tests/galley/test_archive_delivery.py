@@ -15,14 +15,14 @@ from galley import driver as gd
 
 def _package(tmp_path):
     files = []
-    for name, destination in (("Writer - Book Two - Pre-Proofread.docx", "handoff"),
-                              ("Writer - Book Two - outcome.json", "archive"),
-                              ("Writer - Book Two - proofreading report.md", "archive")):
+    for name, destination in (("Writer - Book One - Pre-Proofread.docx", "handoff"),
+                              ("Writer - Book One - outcome.json", "archive"),
+                              ("Writer - Book One - proofreading report.md", "archive")):
         path = tmp_path / name
         path.write_bytes(name.encode())
         files.append({"path": str(path), "name": name, "destination": destination,
                       "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
-    return {"packet_sha256": "packet", "archive_name": "Writer - Book Two", "artifacts": files}
+    return {"packet_sha256": "packet", "archive_name": "Writer - Book One", "artifacts": files}
 
 
 def test_redline_goes_to_the_author_folder_and_the_record_to_the_archive(tmp_path):
@@ -37,13 +37,13 @@ def test_redline_goes_to_the_author_folder_and_the_record_to_the_archive(tmp_pat
     ids = gd.publish_verified_handoff(package, "author-folder", ledger, source_id="book-1",
                                       archive_folder_id="archive-root", upload=upload, verify=lambda *a: True)
     assert len(ids) == 3
-    assert calls == [("Writer - Book Two - Pre-Proofread.docx", "author-folder"),
-                     ("Writer - Book Two - proofreading report.md", "archive-root"),
-                     ("Writer - Book Two - outcome.json", "archive-root")]
+    assert calls == [("Writer - Book One - Pre-Proofread.docx", "author-folder"),
+                     ("Writer - Book One - proofreading report.md", "archive-root"),
+                     ("Writer - Book One - outcome.json", "archive-root")]
     saved = json.loads(ledger.read_text())
     assert saved["status"] == "delivered"
-    assert saved["artifacts"]["Writer - Book Two - Pre-Proofread.docx"]["destination"] == "handoff"
-    assert saved["artifacts"]["Writer - Book Two - outcome.json"]["folder_id"] == "archive-root"
+    assert saved["artifacts"]["Writer - Book One - Pre-Proofread.docx"]["destination"] == "handoff"
+    assert saved["artifacts"]["Writer - Book One - outcome.json"]["folder_id"] == "archive-root"
 
 
 def test_without_an_archive_the_redline_is_delivered_and_the_record_waits(tmp_path):
@@ -58,16 +58,16 @@ def test_without_an_archive_the_redline_is_delivered_and_the_record_waits(tmp_pa
     with pytest.raises(gd.DriverError, match="no Drive archive folder"):
         gd.publish_verified_handoff(package, "author-folder", ledger, source_id="book-1",
                                     upload=upload, verify=lambda *a: True)
-    assert calls == [("Writer - Book Two - Pre-Proofread.docx", "author-folder")]
+    assert calls == [("Writer - Book One - Pre-Proofread.docx", "author-folder")]
     saved = json.loads(ledger.read_text())
     assert saved["status"] == "pending" and "archive" in saved["archive_error"]
-    assert saved["artifacts"]["Writer - Book Two - Pre-Proofread.docx"]["verified"] is True
+    assert saved["artifacts"]["Writer - Book One - Pre-Proofread.docx"]["verified"] is True
     # Once DocWatch names an archive, the retry files the record and finishes
     # without uploading the redline again.
     gd.publish_verified_handoff(package, "author-folder", ledger, source_id="book-1",
                                 archive_folder_id="archive-root", upload=upload, verify=lambda *a: True)
-    assert [name for name, _ in calls].count("Writer - Book Two - Pre-Proofread.docx") == 1
-    assert calls[-1] == ("Writer - Book Two - outcome.json", "archive-root")
+    assert [name for name, _ in calls].count("Writer - Book One - Pre-Proofread.docx") == 1
+    assert calls[-1] == ("Writer - Book One - outcome.json", "archive-root")
     saved = json.loads(ledger.read_text())
     assert saved["status"] == "delivered" and "archive_error" not in saved
 
@@ -112,17 +112,17 @@ def test_with_drive_credentials_the_record_is_filed_in_a_run_folder_under_the_ar
     ledger = tmp_path / "delivery.json"
     gd.publish_verified_handoff(package, "author-folder", ledger, source_id="book-1",
                                 archive_folder_id="archive-root")
-    assert made == [("archive-root", "galley", "Writer - Book Two", "book-1")]
+    assert made == [("archive-root", "galley", "Writer - Book One", "book-1")]
     assert [(name, folder) for name, folder, _ in uploads] == [
-        ("Writer - Book Two - Pre-Proofread.docx", "author-folder"),
-        ("Writer - Book Two - proofreading report.md", "run-folder"),
-        ("Writer - Book Two - outcome.json", "run-folder")]
+        ("Writer - Book One - Pre-Proofread.docx", "author-folder"),
+        ("Writer - Book One - proofreading report.md", "run-folder"),
+        ("Writer - Book One - outcome.json", "run-folder")]
     props = uploads[-1][2]
     assert props["galley_source"] == "book-1" and props["galley_destination"] == "archive"
     saved = json.loads(ledger.read_text())
     assert saved["archive"] == {"root": "archive-root", "folder_id": "run-folder",
                                 "path": saved["archive"]["path"]}
-    assert saved["archive"]["path"].startswith("Proofing/") and saved["archive"]["path"].endswith("/Writer - Book Two")
+    assert saved["archive"]["path"].startswith("Proofing/") and saved["archive"]["path"].endswith("/Writer - Book One")
     # A retry reuses the remembered run folder rather than resolving it again.
     made.clear()
     gd.publish_verified_handoff(package, "author-folder", ledger, source_id="book-1",
@@ -150,11 +150,11 @@ def test_external_run_folder_is_found_by_the_source_tag_or_made(monkeypatch):
         return "new-run"
     monkeypatch.setattr(drive, "find_children", find_children)
     monkeypatch.setattr(drive, "create_folder", create_folder)
-    assert archive.external_run_folder("t", "root", kind="galley", name="Writer - Book Two",
+    assert archive.external_run_folder("t", "root", kind="galley", name="Writer - Book One",
                                        source_id="known", month="2026-09", opener=object()) == "existing-run"
     assert created == []
-    assert archive.external_run_folder("t", "root", kind="galley", name="Writer - Book Two",
+    assert archive.external_run_folder("t", "root", kind="galley", name="Writer - Book One",
                                        source_id="fresh", month="2026-09", opener=object()) == "new-run"
-    assert created == [("month", "Writer - Book Two",
+    assert created == [("month", "Writer - Book One",
                         {archive.ARCHIVE_PROP: "1", archive.SOURCE_PROP: "fresh",
                          archive.KIND_PROP: "galley", archive.JOBSTATE_PROP: "external"})]

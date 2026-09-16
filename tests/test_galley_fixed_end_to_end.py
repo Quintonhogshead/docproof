@@ -117,7 +117,7 @@ def test_real_fixed_driver_delivers_and_resumes_without_new_generations(tmp_path
     # The author folder gets the pre-proofread redline alone, spelled "Book
     # Two"; the clean reading copy and the record go to the archive.
     documents = [p for p in result.handoff if p.suffix == ".docx"]
-    assert [p.name for p in documents] == ["Writer - Book Two - Pre-Proofread.docx", "Writer - Book Two - clean.docx"]
+    assert [p.name for p in documents] == ["Writer - Book One - Pre-Proofread.docx", "Writer - Book One - clean.docx"]
     corrected, archived_clean = documents
     assert corrected.parent == worker.workspace / "handoff"
     assert archived_clean.parent == worker.workspace / "handoff" / "archive"

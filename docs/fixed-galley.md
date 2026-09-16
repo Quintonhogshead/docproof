@@ -129,18 +129,24 @@ does not follow from that recorded evidence.
 ## What is handed back, and where
 
 The author folder receives the redline alone, always named
-`<surname> - Book Two - Pre-Proofread.docx` (spelled out whatever the source
+`<surname> - Book One - Pre-Proofread.docx` (spelled out whatever the source
 carried; `app.watch.naming.pre_proofread_name`). Everything else is the press's
 record and is filed in DocWatch's Drive **archive** only, under
-`Proofing/<YYYY-MM>/<surname> - Book Two/` (tagged with the Book 1's Drive id):
+`Proofing/<YYYY-MM>/<surname> - Book One/` (tagged with the Book 1's Drive id):
 
 ```
-<surname> - Book Two - proofreading report.md
-<surname> - Book Two - review evidence.json
-<surname> - Book Two - fixed certificate.json
-<surname> - Book Two - outcome.json        the verdict DocWatch reads
-<surname> - Book Two - clean.docx          every change accepted, comments removed
+<surname> - Book One - proofreading report.md
+<surname> - Book One - review evidence.json
+<surname> - Book One - fixed certificate.json
+<surname> - Book One - outcome.json        the verdict DocWatch reads
+<surname> - Book One - clean.docx          every change accepted, comments removed
 ```
+
+The base carries proofing's own input token, so the stage token can no longer
+say that these are DocProof's output. Their tails do — see
+`app.watch.naming.PRE_PROOFREAD_TAILS`, which `is_output_name` reads, and
+`is_proof_outcome_name`, which accepts the `Book One` verdict alongside the
+legacy `Book 2`/`Book Two` spellings.
 
 Locally the same split is `handoff/` and `handoff/archive/`. The redline is
 uploaded first; if DocWatch names no archive folder the run is kept and

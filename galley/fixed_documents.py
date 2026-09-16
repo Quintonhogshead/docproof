@@ -590,7 +590,7 @@ def package_result(driver, result):
     base = pre_proofread_base(source.stem)
     # The fixed lane hands back a pre-proofread, not a finished stage: a person
     # reads the redline before the author does. The author folder therefore
-    # receives the redline ALONE — "<surname> - Book Two - Pre-Proofread.docx".
+    # receives the redline ALONE — "<surname> - Book One - Pre-Proofread.docx".
     # The report, the review evidence, the certificate, the verdict DocWatch
     # reads to move the HubSpot property, and the clean reading copy are the
     # press's record: they are filed in the Drive archive only (`handoff/
