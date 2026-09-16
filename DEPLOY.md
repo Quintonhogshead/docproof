@@ -369,6 +369,12 @@ One-time setup:
 4. **Turn proofing on** under Admin → Automations → Proofread, runner
    `external`. Until then the agent polls and finds nothing.
 
+   The agent claims **one book every five hours** — a whole-book proofread
+   spends most of a Max session window, and a second claim inside the same
+   window only runs into the limit and waits. `GALLEY_BOOK_SPACING_HOURS`
+   (in the agent's env file or a `fly secrets set` value) changes the gap;
+   `0` switches spacing off. Resumes are never held.
+
    Optionally `GALLEY_ALERT_EMAIL=<you>` too (a plain `fly secrets set`
    value): the agent emails that address when it starts, when its polling
    breaks and again when it recovers, and when a hand-off delivery is given

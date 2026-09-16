@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+import math
 import os
 import plistlib
 import re
@@ -45,6 +46,12 @@ LABEL = "com.atmosphere.galley-agent"
 DOWNLOAD_DIR = ".agent-downloads"
 
 DEFAULT_POLL_INTERVAL_S = 300.0
+#: One book per Max subscription window. A whole-book proofread spends most
+#: of a five-hour session window, so a second claim inside it only runs into
+#: the limit and waits; claims are spaced instead. Hours, in the agent's env
+#: file or the process environment; 0 switches spacing off.
+BOOK_SPACING_KEY = "GALLEY_BOOK_SPACING_HOURS"
+DEFAULT_BOOK_SPACING_S = 5 * 3600.0
 #: What the server calls the read-only route this poller lives on.
 AWAITING_PATH = "/api/watch/awaiting"
 #: Where the agent reports what it is doing, so the Proofread drawer can show
@@ -506,6 +513,9 @@ class Agent:
     workspace_root: Path = Path("~/galley-workspaces")
     budget_usd: float | None = None
     poll_interval_s: float = DEFAULT_POLL_INTERVAL_S
+    #: Seconds between one claim and the next (resumes are never held).
+    #: BOOK_SPACING_KEY in the env overrides it.
+    book_spacing_s: float = DEFAULT_BOOK_SPACING_S
     drive_folder_override: str = ""
     # File every record HERE instead of the archive DocWatch names — for a
     # rehearsal, like drive_folder_override.
@@ -736,6 +746,22 @@ class Agent:
                 report.skipped.append(f"{book.name} (held for new code)")
                 continue
             resume = state == CLAIMED
+            if not resume:
+                wait = self._spacing_wait(ledger)
+                if wait > 0:
+                    # One book per subscription window (Quinton, 2026-09-16).
+                    at = datetime.fromtimestamp(self.wall_clock() + wait, timezone.utc)
+                    when = at.strftime("%H:%M UTC")
+                    report.skipped.append(f"{book.name} (next claim at {when})")
+                    self.log(f"{len(books)} book(s) awaiting; one book every "
+                             f"{self._spacing_s() / 3600:g} h, so the next claim "
+                             f"is at {when}.")
+                    self._rest_beat(state="idle", awaiting=len(books),
+                                    handled_here=len(report.skipped),
+                                    handled_why=list(report.skipped)[:6],
+                                    next_claim_at=at.isoformat(),
+                                    pending_deliveries=len(ledger.pending_deliveries()))
+                    return report
             self.run_book(book, ledger, report, resume=resume)
             return report                     # one book at a time, on purpose
         if books:
@@ -823,6 +849,45 @@ class Agent:
         self._usage_beat(pause)
         self.log(f"Claude usage limit: queue paused until "
                  f"{self._status['usage_resets_at']}; checkpoints preserved.")
+
+    def _spacing_s(self) -> float:
+        """Seconds between claims: the env's hours when set, else the field."""
+        raw = (self.env.values.get(BOOK_SPACING_KEY) or
+               os.environ.get(BOOK_SPACING_KEY) or "").strip()
+        if raw:
+            try:
+                hours = float(raw)
+                if math.isfinite(hours) and hours >= 0:
+                    return hours * 3600.0
+            except ValueError:
+                pass
+            self.log(f"{BOOK_SPACING_KEY}={raw!r} is not a number of hours; "
+                     f"using {self.book_spacing_s / 3600:g}.")
+        return max(0.0, float(self.book_spacing_s))
+
+    def _spacing_wait(self, ledger: "Ledger") -> float:
+        """Seconds until a new book may be claimed, from the newest claim in
+        the ledger. Every claim counts, a cancelled one included: the window
+        it spent is spent."""
+        spacing = self._spacing_s()
+        if spacing <= 0:
+            return 0.0
+        newest = 0.0
+        for entry in ledger.books.values():
+            clock = entry.get("claimed_clock")
+            if isinstance(clock, (int, float)) and math.isfinite(clock):
+                newest = max(newest, float(clock))
+                continue
+            stamp = entry.get("claimed_at")       # ledgers written before spacing
+            if not stamp:
+                continue
+            try:
+                newest = max(newest, datetime.fromisoformat(str(stamp)).timestamp())
+            except ValueError:
+                continue
+        if not newest:
+            return 0.0
+        return max(0.0, newest + spacing - self.wall_clock())
 
     def _usage_waiting(self) -> bool:
         pause = self._usage_pause()
@@ -966,7 +1031,10 @@ class Agent:
         ledger.record(book.file_id, CLAIMED, name=book.name, slug=slug,
                       folder_id=folder, archive_folder_id=archive_folder,
                       request_id=book.request_id,
-                      operational_status="", reason="")
+                      operational_status="", reason="",
+                      # The claim's moment on the agent's own clock, for the
+                      # spacing between books; a resume keeps the original.
+                      **({} if resume else {"claimed_clock": self.wall_clock()}))
         self.log(f"{'Resuming' if resume else 'Claiming'} {book.name} "
                  f"(workspace {slug}).")
         self._status = {k: v for k, v in self._status.items()

@@ -268,8 +268,9 @@ def test_discovery_claim_run_handoff_and_ledger(env, tmp_path):
 
 def test_one_book_at_a_time(env, tmp_path):
     ran = []
+    # Spacing off: this test is about one claim per poll, not the gap between them.
     agent = _agent(env, tmp_path, opener=FakeApp([BOOK, BOOK_2]),
-                   download=_downloader(tmp_path),
+                   download=_downloader(tmp_path), book_spacing_s=0,
                    run_driver=lambda **kw: ran.append(kw) or FakeResult())
     report = agent.poll_once()
     assert len(ran) == 1
@@ -1183,3 +1184,63 @@ def test_a_poll_that_works_retires_the_last_polls_complaint(env, tmp_path):
     agent.poll_once()
     assert obs.beats[-1]["last_error"] == "", \
         "one crashed poll must not leave a red line up for the life of the process"
+
+
+def test_one_book_is_claimed_per_spacing_window(env, tmp_path):
+    """Quinton, 2026-09-16: one book every five hours. A second awaiting book
+    waits for the window after the last claim, however quickly the first
+    finished; the clock, not the queue, decides."""
+    ran = []
+    clock = {"now": 1_000_000_000.0}
+    agent = _agent(env, tmp_path, opener=FakeApp([BOOK, BOOK_2]), download=_downloader(tmp_path),
+                   run_driver=lambda **kw: ran.append(kw) or FakeResult(),
+                   wall_clock=lambda: clock["now"])
+    agent.poll_once()
+    assert [r["slug"] for r in ran] == ["test-drive-1"]
+    report = agent.poll_once()
+    assert len(ran) == 1
+    assert any("next claim at" in item for item in report.skipped)
+    assert agent._status.get("next_claim_at")
+    clock["now"] += 5 * 3600 - 60
+    agent.poll_once()
+    assert len(ran) == 1
+    clock["now"] += 120
+    agent.poll_once()
+    assert [r["slug"] for r in ran] == ["test-drive-1", "other-drive-2"]
+
+
+def test_spacing_counts_a_cancelled_claim_and_never_holds_a_resume(env, tmp_path):
+    ran = []
+    clock = {"now": 1_000_000_000.0}
+    agent = _agent(env, tmp_path, opener=FakeApp([BOOK, BOOK_2]), download=_downloader(tmp_path),
+                   run_driver=lambda **kw: ran.append(kw) or FakeResult(),
+                   wall_clock=lambda: clock["now"])
+    ledger = agent.ledger()
+    ledger.record("drive-1", ga.CLAIMED, name=BOOK["name"], slug="test-drive-1", folder_id="folder-A",
+                  claimed_clock=clock["now"])
+    ledger.save()
+    agent.poll_once()                       # a claimed book resumes at once
+    assert len(ran) == 1 and ran[0]["slug"] == "test-drive-1"
+    ledger = agent.ledger()
+    ledger.record("drive-1", ga.FAILED, outcome="cancelled")
+    ledger.save()
+    agent.poll_once()                       # the cancelled claim still spent its window
+    assert len(ran) == 1
+    clock["now"] += 5 * 3600 + 1
+    agent.poll_once()
+    assert len(ran) == 2 and ran[1]["slug"] == "other-drive-2"
+
+
+def test_spacing_is_configurable_and_zero_switches_it_off(env, tmp_path):
+    ran = []
+    env.values[ga.BOOK_SPACING_KEY] = "0"
+    agent = _agent(env, tmp_path, opener=FakeApp([BOOK, BOOK_2]), download=_downloader(tmp_path),
+                   run_driver=lambda **kw: ran.append(kw) or FakeResult(),
+                   wall_clock=lambda: 1_000_000_000.0)
+    agent.poll_once()
+    agent.poll_once()
+    assert len(ran) == 2
+    env.values[ga.BOOK_SPACING_KEY] = "2"
+    assert agent._spacing_s() == 7200.0
+    env.values[ga.BOOK_SPACING_KEY] = "soon"
+    assert agent._spacing_s() == ga.DEFAULT_BOOK_SPACING_S
