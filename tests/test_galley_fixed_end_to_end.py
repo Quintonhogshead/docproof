@@ -92,8 +92,11 @@ class ScriptedReaders:
 
     def subscription(self, prompt, schema, directory, **options):
         assert options["no_tools"] is True
-        assert options["model"] in {SOL, ASTRA}
-        return self.answer(options["model"], prompt.rsplit("\n\n", 1)[-1], schema)
+        assert options["model"] in {LUNA, SOL, ASTRA}
+        # The runner receives system + "\n\n" + user. Paragraph reads are
+        # matched by regex over the whole prompt; JSON payloads are the tail.
+        user = prompt if "reviewed_paragraph_ids" in schema["properties"] else prompt.rsplit("\n\n", 1)[-1]
+        return self.answer(options["model"], user, schema)
 
 
 @pytest.mark.parametrize("poetry", [False, True])
@@ -649,7 +652,10 @@ def test_unattended_default_finishes_and_resumes_after_exhausted_reads(tmp_path,
     monkeypatch.setattr(codex_runner, "run_structured", readers.subscription)
     worker = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode="fixed")
     result = worker.run()
-    assert result.outcome == "done", result.reason
+    # Delivered, but never as a finished proofread: a skipped review means
+    # paragraphs nobody read, so the redline goes to a person.
+    assert result.outcome == "needs_human", result.reason
+    assert "skipped model review" in result.reason and "needs a person" in result.reason
     packet = json.loads((worker.workspace / "runs/fixed/result.json").read_text())
     assert packet["review_complete"] is False and packet["skipped_reads"]
     assert packet["questions"] == [] and source.read_bytes() == original
@@ -667,7 +673,7 @@ def test_unattended_default_finishes_and_resumes_after_exhausted_reads(tmp_path,
     assert "All required paragraph reads completed" not in report
     assert "incomplete" in report
     count = len(readers.requests)
-    assert worker.run().outcome == "done"
+    assert worker.run().outcome == "needs_human"
     assert len(readers.requests) == count
 
 

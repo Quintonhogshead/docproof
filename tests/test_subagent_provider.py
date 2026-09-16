@@ -410,3 +410,80 @@ def test_review_budget_blocks_settle_after_independent_reader_invocations(monkey
     assert len(seen) == 2  # the rejected settlement never starts the SDK
     group = summarize(ledger)["groups"]["review"]
     assert group["calls"] == 2 and group["charged_output_tokens"] == 40
+
+
+def test_a_subscription_limit_is_raised_after_the_stream_ends_not_inside_it(monkeypatch, tmp_path):
+    """Raising from inside `async for` abandons the SDK's nested generators;
+    asyncio.run() then closes them during shutdown while the SDK's own
+    cleanup is closing the same ones, and the resulting RuntimeError
+    ("aclose(): asynchronous generator is already running") replaced the
+    quota error on 2026-09-16. The turn drains the stream and closes it in
+    order, THEN raises."""
+    import pytest
+    from docproof.subscription_limits import UsageLimitError
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    result = _Result("You've hit your session limit · resets 12pm (UTC)")
+    result.is_error, result.subtype = True, "error_during_execution"
+    sdk = _fake_sdk([], [])
+    lifecycle = []
+
+    async def query(*, prompt, options):
+        async for _ in prompt:
+            pass
+        try:
+            yield result
+            lifecycle.append("resumed after result")
+            yield _Assistant("trailing")
+            lifecycle.append("exhausted")
+        finally:
+            lifecycle.append("closed")
+    sdk.query = query
+    provider = subagent.SubagentProvider(sdk=sdk, cwd=tmp_path)
+    with pytest.raises(UsageLimitError, match="resets 12pm"):
+        provider.complete_structured(model="opus", system="s", user="u",
+                                     schema={}, schema_name="x", max_tokens=1)
+    assert lifecycle == ["resumed after result", "exhausted", "closed"]
+
+
+def test_a_control_error_masked_by_event_loop_shutdown_is_restored(monkeypatch, tmp_path):
+    import pytest
+    from docproof.subscription_limits import UsageLimitError
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    sdk = _fake_sdk([_Result('{"ok": true}')], [])
+
+    def shutdown_noise(coro):
+        coro.close()
+        error = RuntimeError("aclose(): asynchronous generator is already running")
+        error.__context__ = UsageLimitError("You've hit your session limit · resets 12pm (UTC)")
+        raise error
+    monkeypatch.setattr(subagent.asyncio, "run", shutdown_noise)
+    provider = subagent.SubagentProvider(sdk=sdk, cwd=tmp_path)
+    with pytest.raises(UsageLimitError, match="session limit") as caught:
+        provider.complete_structured(model="opus", system="s", user="u",
+                                     schema={}, schema_name="x", max_tokens=1)
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+    def plain_failure(coro):
+        coro.close()
+        raise RuntimeError("something else entirely")
+    monkeypatch.setattr(subagent.asyncio, "run", plain_failure)
+    with pytest.raises(RuntimeError, match="something else"):
+        provider.complete_structured(model="opus", system="s", user="u",
+                                     schema={}, schema_name="x", max_tokens=1)
+
+
+def test_control_error_finds_the_limit_anywhere_in_the_chain():
+    from docproof.agent_lane import AgentLaneUnavailable
+    from docproof.subscription_limits import UsageLimitError
+    limit = UsageLimitError("weekly limit reached")
+    assert subagent.control_error(limit) is limit
+    wrapped = RuntimeError("noise")
+    wrapped.__context__ = limit
+    assert subagent.control_error(wrapped) is limit
+    lane = AgentLaneUnavailable("not logged in")
+    outer = ValueError("x")
+    outer.__cause__ = lane
+    assert subagent.control_error(outer) is lane
+    textual = subagent.control_error(RuntimeError("CLI said: session limit reached"))
+    assert isinstance(textual, UsageLimitError)
+    assert subagent.control_error(RuntimeError("ordinary")) is None

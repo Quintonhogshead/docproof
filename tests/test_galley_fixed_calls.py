@@ -45,9 +45,14 @@ def calls(tmp_path, provider=None, **kwargs):
 
 
 def ask(caller, **kwargs):
-    return caller.ask("test-read", **{ "model": "gpt-5.6-luna", "system": "Only proofread the supplied evidence.",
-        "user": "The manuscript excerpt.", "schema": SCHEMA, "schema_name": "test", "max_tokens": 100,
-        **kwargs})
+    request = {"model": "gpt-5.6-luna", "system": "Only proofread the supplied evidence.",
+               "user": "The manuscript excerpt.", "schema": SCHEMA, "schema_name": "test", "max_tokens": 100,
+               **kwargs}
+    # Luna reads through the ChatGPT subscription by default; these receipt
+    # and budget tests exercise the API provider path by asking for it.
+    if request["model"] == "gpt-5.6-luna":
+        request.setdefault("transport", "openai")
+    return caller.ask("test-read", **request)
 
 
 def test_completed_request_is_reused_across_restart_and_not_double_billed(tmp_path):
@@ -281,7 +286,9 @@ def test_known_api_usage_releases_the_unused_reservation(tmp_path):
     assert summary["charged_api_usd"] == summary["known_api_usd"] > 0
 
 
-def test_routes_luna_api_claude_subscription_sol_and_astra_codex(tmp_path):
+def test_routes_claude_to_its_subscription_and_every_openai_model_to_codex(tmp_path):
+    """Luna joined Sol and Astra on the ChatGPT subscription on 2026-09-16;
+    the OpenAI API is used only when a caller asks for it by name."""
     provider = FakeProvider()
     subscription = []
 
@@ -290,19 +297,21 @@ def test_routes_luna_api_claude_subscription_sol_and_astra_codex(tmp_path):
         return {"ready": True}
 
     caller = calls(tmp_path, provider, codex_runner=codex)
-    ask(caller)
+    ask(caller, transport=None)                       # Luna, no request: subscription
+    ask(caller, user="Explicit API read.")            # the helper asks for the API
     ask(caller, model="claude-opus-5")
     ask(caller, model="gpt-5.6-sol", effort="high")
     ask(caller, model="gpt-6-astra", effort="high")
     assert [m for _, m in provider.configs] == ["gpt-5.6-luna", "claude-opus-5"]
-    assert [item[3]["model"] for item in subscription] == ["gpt-5.6-sol", "gpt-6-astra"]
+    assert [item[3]["model"] for item in subscription] == ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra"]
+    assert all(item[3]["reasoning_effort"] == effort for item, effort in zip(subscription, ("low", "high", "high")))
     assert all(item[3]["no_tools"] is True for item in subscription)
     assert all(cfg.api.claude_lane == "subagent" and cfg.api.max_retries == 0 for cfg, _ in provider.configs)
     assert all(cfg.api.effort == "low" for cfg, _ in provider.configs)
 
 
 @pytest.mark.parametrize("model,transport", [("gpt-5.6-sol", "api"), ("gpt-6-astra", "api"),
-    ("claude-opus-5", "api"), ("gpt-5.6-luna", "codex"), ("unknown", None)])
+    ("claude-opus-5", "api"), ("gpt-5.6-luna", "subagent"), ("unknown", None), ("unknown", "api")])
 def test_forbidden_transport_never_falls_back(tmp_path, model, transport):
     provider = FakeProvider()
     with pytest.raises(fc.FixedCallError, match="no fallback"):
@@ -326,7 +335,7 @@ def test_provider_adapter_counts_only_new_usage(tmp_path):
     provider = FakeProvider()
     caller = calls(tmp_path, provider)
     adapter = caller.provider("detector", Config())
-    request = dict(model="gpt-5.6-luna", system="Proofread.", user="Text.",
+    request = dict(model="claude-opus-5", system="Proofread.", user="Text.",
                    schema=SCHEMA, schema_name="typed", max_tokens=100)
     first, cached = adapter.complete_structured(**request), adapter.complete_structured(**request)
     assert first.usage.output_tokens == 10
@@ -592,7 +601,7 @@ def test_each_inventory_contract_retries_missing_required_items(tmp_path, field,
     provider = FakeProvider([replace(GOOD, parsed={field: rows[:1]}), replace(GOOD, parsed={field: rows})])
     caller = calls(tmp_path, provider)
     result = caller.ask("review", model="gpt-5.6-luna", system="Check every assigned item.", user="Book context.",
-        schema=schema, schema_name="review", max_tokens=100,
+        schema=schema, schema_name="review", max_tokens=100, transport="openai",
         coverage={field: {"ids": ["p1", "p2"], "id_key": key, "context_ids": []}})
     assert result == {field: rows} and len(provider.requests) == 2
     caller.assert_complete()
@@ -854,3 +863,48 @@ def test_claude_subscription_read_has_a_bounded_timeout(monkeypatch):
     provider = fc._default_provider(Config(), model="claude-sonnet-5")
     with pytest.raises(TimeoutError):
         asyncio.run(provider._turn(evidence={}))
+
+
+@pytest.mark.parametrize("wrapped", ["context", "cause", "text"])
+def test_a_masked_subscription_limit_pauses_the_queue_instead_of_skipping(tmp_path, wrapped):
+    """2026-09-16: the SDK turn raised UsageLimitError, asyncio.run() replaced
+    it with "aclose(): asynchronous generator is already running", and the
+    unattended lane read the wrapper as a plain failure — skipping every
+    remaining review and certifying an untouched manuscript. The pause must
+    be recognised wherever the limit is in the chain."""
+    from docproof.subscription_limits import UsageLimitError
+    limit = UsageLimitError("You've hit your session limit · resets 12pm (UTC)")
+    error = RuntimeError("aclose(): asynchronous generator is already running")
+    if wrapped == "context":
+        error.__context__ = limit
+    elif wrapped == "cause":
+        error.__cause__ = limit
+    else:
+        error = RuntimeError("turn failed: You've hit your session limit · resets 12pm (UTC)")
+    provider = FakeProvider([error])
+    caller = calls(tmp_path, provider, continue_on_model_failure=True)
+    with pytest.raises(UsageLimitError, match="session limit"):
+        ask(caller)
+    folder = next((caller.directory / "calls").iterdir())
+    assert not (folder / "skipped.json").exists()
+    receipt = json.loads((folder / "receipt.json").read_text())
+    assert receipt["status"] == "failed" and receipt["retryable"] is True
+    assert receipt["failure_category"] == "subscription_limit"
+    assert len(provider.requests) == 1
+
+
+def test_queue_pause_reads_the_whole_cause_chain():
+    from docproof.subscription_limits import UsageLimitError
+    from galley.driver import CredentialsError
+    limit = UsageLimitError("weekly limit reached")
+    outer = RuntimeError("shutdown noise")
+    outer.__context__ = limit
+    assert fc._queue_pause(outer) is limit
+    token = CredentialsError("401 token revoked")
+    wrapped = RuntimeError("shutdown noise")
+    wrapped.__cause__ = token
+    assert fc._queue_pause(wrapped) is token
+    assert fc._queue_pause(RuntimeError("an ordinary failure")) is None
+    loop = RuntimeError("cyclic")
+    loop.__context__ = loop
+    assert fc._queue_pause(loop) is None

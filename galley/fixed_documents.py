@@ -249,6 +249,22 @@ def _audit_stage(version):
     return "final_astra" if version in _FINAL_GATE_VERSIONS else "astra"
 
 
+def package_outcome(result) -> tuple[str, str]:
+    """The delivery outcome and its reason for a completed fixed result.
+
+    A run whose model reviews were skipped is not a finished proofread,
+    whatever the editorial verdict says: the skipped stages made no edits
+    and nobody read those paragraphs. It goes to a person. On 2026-09-16 a
+    quota outage skipped every review of Kyler 2 - Book 1 and the untouched
+    manuscript was delivered as "done"."""
+    skipped = len(result.get("skipped_reads") or [])
+    outcome = "needs_human" if result["editorial_verdict"] == "needs_human" or skipped else "done"
+    reason = (f"Fixed proofreading finished with {skipped} skipped model review(s); the redline is incomplete "
+              "and needs a person. Unverified suggestions were discarded and output checks passed."
+              if skipped else "Fixed proofreading complete; every required reading and output check passed.")
+    return outcome, reason
+
+
 def _verify_result(result, directory):
     if result.get("execution_mode") != "fixed" or result.get("status") != "completed":
         raise FixedDocumentError("The fixed workflow has not completed")
@@ -530,14 +546,10 @@ def package_result(driver, result):
     evidence = run / f"{source.stem} - Review evidence.json"
     _save(evidence, result)
     outcome = run / f"{source.stem} - outcome.json"
-    outcome_value = "needs_human" if result["editorial_verdict"] == "needs_human" else "done"
+    outcome_value, reason = package_outcome(result)
     review = result.get("final_review") if isinstance(result.get("final_review"), dict) else None
-    if review:
+    if review and not result.get("skipped_reads"):
         reason = review["reason"]
-    elif result.get("skipped_reads"):
-        reason = "Fixed proofreading finished with skipped model reviews; unverified suggestions were discarded and output checks passed."
-    else:
-        reason = "Fixed proofreading complete; every required reading and output check passed."
     from galley.outcome import hubspot_fields
     record = {"schema_version": 1, "outcome": outcome_value, "reason": reason,
               "set_by": "Galley fixed proofreading", "execution_mode": "fixed",
@@ -636,7 +648,7 @@ def validate_delivery_package(package):
     if (certificate.get("delivery_ready") is not True or package["packet_sha256"] != result["result_sha256"]
             or certificate["packet_sha256"] != result["result_sha256"]):
         raise FixedDocumentError("Fixed package belongs to another reviewed manuscript")
-    expected_outcome = "needs_human" if result["editorial_verdict"] == "needs_human" else "done"
+    expected_outcome, _ = package_outcome(result)
     if (package.get("source_id") != certificate.get("source_id")
             or certificate.get("review", {}).get("editorial_verdict") != result["editorial_verdict"]
             or package.get("outcome") != expected_outcome

@@ -31,7 +31,12 @@ PROTOCOL_VERSION = 1
 _LOCKS: dict[str, threading.RLock] = {}
 _LOCKS_GUARD = threading.Lock()
 _MAX_FILE_BYTES = 32 * 1024 * 1024
-_SUBSCRIPTION_MODELS = {"gpt-5.6-sol", "gpt-6-astra"}
+# Every OpenAI model the fixed lane reads with goes through the worker's
+# ChatGPT subscription login (the Codex transport), Luna included since
+# 2026-09-16. The API is not a default for any model; a caller may still
+# request it explicitly for Luna (tests and diagnostics), never as a fallback.
+_SUBSCRIPTION_MODELS = {"gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra"}
+_API_ON_REQUEST = {"gpt-5.6-luna"}
 
 
 class FixedCallError(RuntimeError):
@@ -319,11 +324,12 @@ def _check_schema_definition(schema):
 
 def _transport(model: str, requested: str | None) -> str:
     expected = ("codex_subscription" if model in _SUBSCRIPTION_MODELS else
-                "claude_subscription" if model.startswith("claude-") else
-                "api" if model == "gpt-5.6-luna" else None)
+                "claude_subscription" if model.startswith("claude-") else None)
     aliases = {"codex": "codex_subscription", "subscription": expected,
                "subagent": "claude_subscription", "openai": "api"}
     requested = aliases.get(requested, requested)
+    if requested == "api" and model in _API_ON_REQUEST:
+        return "api"
     if expected is None or requested is not None and requested != expected:
         raise FixedCallError(f"Unsupported fixed-call transport for {model}; no fallback was submitted.")
     return expected
@@ -377,16 +383,31 @@ def _default_provider(cfg: Config, *, model: str, stage: str | None = None):
 
 
 def _queue_pause(exc, category=None):
-    """Preserve the worker queue's quota/authentication control exceptions."""
+    """Preserve the worker queue's quota/authentication control exceptions.
+
+    The whole cause chain is read, not just the outermost exception: a quota
+    error raised inside an SDK turn can reach here wrapped in asyncio's own
+    shutdown error ("aclose(): asynchronous generator is already running"),
+    and on 2026-09-16 that wrapper read as a generic failure, so the fixed
+    lane skipped every remaining model review and delivered an untouched
+    manuscript as done instead of pausing until the limit reset."""
     from docproof.agent_lane import AgentLaneUnavailable, CredentialsError as LaneCredentialsError
-    from docproof.subscription_limits import UsageLimitError
+    from docproof.subscription_limits import UsageLimitError, is_usage_limited
     from galley.driver import CredentialsError, detect_credential_failure
-    if isinstance(exc, (UsageLimitError, CredentialsError)):
-        return exc
     if category == "subscription_limit":
         return UsageLimitError(str(exc))
-    if (category == "authentication" or isinstance(exc, LaneCredentialsError) or
-            isinstance(exc, (AgentLaneUnavailable, ProviderError)) and detect_credential_failure(str(exc))):
+    seen, cause = set(), exc
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        if isinstance(cause, (UsageLimitError, CredentialsError)):
+            return cause
+        if is_usage_limited(str(cause)):
+            return UsageLimitError(str(cause))
+        if (isinstance(cause, LaneCredentialsError) or
+                isinstance(cause, (AgentLaneUnavailable, ProviderError)) and detect_credential_failure(str(cause))):
+            return CredentialsError(str(cause))
+        cause = cause.__cause__ or cause.__context__
+    if category == "authentication":
         return CredentialsError(str(exc))
     return None
 
@@ -644,9 +665,16 @@ class FixedCalls:
         try:
             return self._request_result(request, coverage)
         except Exception as exc:
+            # A quota or token pause is never a skippable model failure: the
+            # queue checkpoints and resumes this same read once the limit
+            # resets or the token is replaced. Freezing it as a skip (as the
+            # unattended lane did until 2026-09-16) discards the review and
+            # delivers a manuscript nobody read.
+            pause = _queue_pause(exc)
+            if pause is not None:
+                raise pause if pause is exc else pause from exc
             if (not self.continue_on_model_failure or
-                    not (isinstance(exc, (FixedReadUnavailable, FixedCallBudgetExceeded, FixedCallInterrupted))
-                         or _queue_pause(exc) is not None)):
+                    not isinstance(exc, (FixedReadUnavailable, FixedCallBudgetExceeded, FixedCallInterrupted))):
                 raise
             from galley.fixed_skips import freeze_skip, skipped_result
             freeze_skip(self, request, str(exc))

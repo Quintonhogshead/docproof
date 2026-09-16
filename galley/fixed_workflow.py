@@ -71,11 +71,11 @@ def workflow_plan():
     return [
         {"stage": "intake", "model": "code", "description": "Freeze the original manuscript and paragraph identities"},
         {"stage": "poetry", "model": SONNET, "description": "Classify fixed samples; verse receives house mechanics, never a change to its structure"},
-        {"stage": "story_sheet", "model": LUNA, "description": "Read the manuscript for the Story Sheet through the API"},
+        {"stage": "story_sheet", "model": LUNA, "description": "Read the manuscript for the Story Sheet through the ChatGPT subscription"},
         {"stage": "typed", "model": f"{SONNET} + {LUNA}; disputes: {OPUS}", "description": "Local proofreading checks, including LanguageTool, plus the typed ensemble; number and currency review remains separate"},
         {"stage": "numbers", "model": f"{SONNET} + {LUNA}; disputes: {OPUS}", "description": "Review every extracted number in context against the existing house policy"},
         {"stage": "broken_repair", "model": OPUS, "description": "Repair triggered broken sentences with clear intended meaning"},
-        {"stage": "checks", "model": LUNA, "description": "Meaning preservation and correction checks through the API"},
+        {"stage": "checks", "model": LUNA, "description": "Meaning preservation and correction checks through the ChatGPT subscription"},
         {"stage": "ensemble_sweep", "model": f"{OPUS} + {SOL}; disputes: {OPUS}", "description": "Independent complete reads, followed by deterministic recurrence, casing and residual checks"},
         {"stage": "continuity", "model": f"{FABLE}; edits: {OPUS}", "description": "Whole-book continuity read with cited evidence; Opus rules on evidenced edits, unresolved contradictions become author questions"},
         {"stage": "fable", "model": FABLE, "description": "Read the corrected book and decide every proposed Galley comment, then propagate its accepted corrections and casing decisions book-wide"},

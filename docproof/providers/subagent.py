@@ -213,6 +213,39 @@ def _usage_of(msg: Any) -> NormalizedUsage:
         billed=False)
 
 
+def control_error(exc: BaseException) -> BaseException | None:
+    """The queue-control error (quota exhausted, lane unavailable) that `exc`
+    is or hides.
+
+    asyncio.run() can replace the error a turn raised with one from its own
+    shutdown ("aclose(): asynchronous generator is already running"); the
+    original survives only as `__context__`. Walk the chain so callers see
+    the error that decides whether to pause, halt or fail."""
+    seen: set[int] = set()
+    cause: BaseException | None = exc
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        if isinstance(cause, (UsageLimitError, agent_lane.AgentLaneUnavailable)):
+            return cause
+        if is_usage_limited(str(cause)):
+            return UsageLimitError(str(cause))
+        cause = cause.__cause__ or cause.__context__
+    return None
+
+
+async def _close_stream(stream: Any) -> None:
+    """Close the SDK's message stream in order, before asyncio.run() shuts
+    down whatever generators are left. A failure here is logged, never
+    raised: it must not replace the turn's own error."""
+    aclose = getattr(stream, "aclose", None)
+    if aclose is None:
+        return
+    try:
+        await aclose()
+    except Exception as e:                                  # noqa: BLE001
+        log.debug("subagent stream close raised %s: %s", type(e).__name__, e)
+
+
 class SubagentProvider:
     """One fenced Claude Code turn per structured request, on the subscription.
 
@@ -261,16 +294,29 @@ class SubagentProvider:
             sdk = self._sdk or agent_lane.sdk(_INSTALL_HINT)
             agent_lane.require_login(_LOGIN_HINT)
             def run():
-                return asyncio.run(self._turn(sdk, target, system, prompt,
-                                             max_tokens=max_tokens, evidence=evidence))
+                try:
+                    return asyncio.run(self._turn(sdk, target, system, prompt,
+                                                 max_tokens=max_tokens, evidence=evidence))
+                except Exception as exc:
+                    masked = control_error(exc)
+                    if masked is not None and masked is not exc:
+                        raise masked from exc
+                    raise
             try:
                 asyncio.get_running_loop()
             except RuntimeError:
-                result = run()
+                nested = False
             else:
+                nested = True
+            # run() is called outside that except block so a failure it
+            # raises keeps its own cause chain (which is what control_error
+            # reads) instead of being chained onto "no running event loop".
+            if nested:
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
                     result = ex.submit(run).result()
+            else:
+                result = run()
             evidence["stop_reason"] = result.stop_reason
             return result
         except BaseException as exc:
@@ -355,8 +401,20 @@ class SubagentProvider:
         reply = ""
         last_text = ""
         usage = NormalizedUsage(billed=False)
+        # A control error (quota, not logged in) is raised AFTER the stream
+        # has ended, never from inside the loop. Raising mid-stream abandons
+        # the SDK's nested generators at their yields; asyncio.run() then
+        # closes them all at once during shutdown_asyncgens() while the SDK's
+        # own cleanup is closing the same ones, and that race surfaces as
+        # "RuntimeError: aclose(): asynchronous generator is already running"
+        # in place of the real error. On 2026-09-16 that masked "You've hit
+        # your session limit" from the fixed lane, which read it as a
+        # generic failure and skipped every remaining review instead of
+        # pausing the queue (Kyler, Cooper).
+        pending: BaseException | None = None
+        stream = sdk.query(prompt=prompt(), options=options)
         try:
-            async for msg in sdk.query(prompt=prompt(), options=options):
+            async for msg in stream:
                 if isinstance(msg, sdk.AssistantMessage):
                     if getattr(msg, "parent_tool_use_id", None):
                         continue
@@ -381,17 +439,19 @@ class SubagentProvider:
                                     getattr(msg, "is_error", None),
                                     getattr(msg, "num_turns", None))
                         if is_usage_limited(reply) or is_usage_limited(last_text):
-                            raise UsageLimitError(reply if is_usage_limited(reply) else last_text)
-                        if _not_logged_in(reply):
+                            pending = UsageLimitError(reply if is_usage_limited(reply) else last_text)
+                        elif _not_logged_in(reply):
                             # The CLI's own "Not logged in · Please run
                             # /login": /login is a slash command nobody
                             # headless can type. Say the command that works.
-                            raise agent_lane.AgentLaneUnavailable(
+                            pending = agent_lane.AgentLaneUnavailable(
                                 f"{_SUBJECT} started a Claude session but the "
                                 f"CLI is not logged in ({reply[:80]!r}). Sign "
                                 f"this machine in with `claude setup-token` "
                                 f"and set CLAUDE_CODE_OAUTH_TOKEN (or run "
                                 f"`claude auth login`), then {_REMEDY}.")
+            if pending is not None:
+                raise pending
         except (agent_lane.AgentLaneUnavailable, UsageLimitError):
             raise
         except sdk.CLINotFoundError as e:
@@ -422,6 +482,8 @@ class SubagentProvider:
             return ProviderResult(parsed=None, usage=usage,
                                   stop_reason="error",
                                   error=f"{type(e).__name__}: {e}")
+        finally:
+            await _close_stream(stream)
         self.calls += 1
         parsed = extract_json(reply) or extract_json(last_text)
         if parsed is None:
@@ -437,6 +499,6 @@ class SubagentProvider:
         return ProviderResult(parsed=parsed, usage=usage, stop_reason="ok")
 
 
-__all__ = ["DEFAULT_MODEL", "MODEL_ENV", "SubagentProvider",
+__all__ = ["DEFAULT_MODEL", "MODEL_ENV", "SubagentProvider", "control_error",
            "SubagentUnavailable", "availability", "available", "extract_json",
            "is_subagent_model", "resolve_model"]

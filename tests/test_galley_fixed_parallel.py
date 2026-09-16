@@ -17,7 +17,11 @@ def test_provider_pools_overlap_preserve_order_and_carry_context():
     cfg.api.subagent_concurrency = 2
     cfg.api.concurrency_by_provider["openai"] = 3
     scheduler = ReadScheduler(cfg)
-    barrier = threading.Barrier(5)
+    # Luna reads on the ChatGPT subscription (2026-09-16), so it shares the
+    # Codex pool with Sol and Astra rather than the OpenAI API pool.
+    assert scheduler.lane(LUNA) == scheduler.lane(SOL) == "codex"
+    assert scheduler.lane(SONNET) == "claude"
+    barrier = threading.Barrier(4)
     marker = ContextVar("test_resource_context", default=None)
     marker.set("book-123")
     def read(i):
@@ -25,8 +29,8 @@ def test_provider_pools_overlap_preserve_order_and_carry_context():
         barrier.wait(timeout=3)
         return i
     # A single FIFO pool would be starved by the queued Claude work.
-    jobs = [(SONNET, partial(read, i)) for i in range(2)] + [(LUNA, partial(read, i)) for i in range(2, 5)]
-    assert scheduler.map(jobs) == list(range(5))
+    jobs = [(SONNET, partial(read, i)) for i in range(2)] + [(LUNA, partial(read, i)) for i in range(2, 4)]
+    assert scheduler.map(jobs) == list(range(4))
 
 
 def test_nested_batches_share_limits_without_deadlock_or_oversubscription():
