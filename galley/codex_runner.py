@@ -143,6 +143,51 @@ def _binary(explicit: str | None) -> str:
     return located
 
 
+def normalize_schema(schema: dict) -> dict:
+    """The same schema in the runner's small vocabulary, or the input unchanged.
+
+    A schema generated from a pydantic model (`strict_json_schema`) writes
+    nested models as `$defs` with `$ref` pointers and a fixed literal as
+    `const`; the hand-written fixed-lane schemas never do. Both mean exactly
+    what an inlined definition and a one-value `enum` mean, so they are
+    rewritten to that rather than refused. On 2026-09-16, the first day Luna
+    read through this transport, every typed-detector and Story Sheet read
+    (694 of Kyler 2's 2,198) was refused for these keys and skipped, while
+    every hand-written schema went through. Anything else unsupported still
+    fails `_check_schema`."""
+    if not isinstance(schema, dict):
+        return schema
+    definitions = schema.get("$defs")
+    if not isinstance(definitions, dict):
+        definitions = {}
+
+    def rewrite(node, depth=0):
+        if depth > 32:
+            raise AstraReviewError("Codex review output schema nests too deeply.")
+        if isinstance(node, list):
+            return [rewrite(item, depth + 1) for item in node]
+        if not isinstance(node, dict):
+            return node
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            target = definitions.get(ref[len("#/$defs/"):])
+            if not isinstance(target, dict):
+                raise AstraReviewError("Codex review output schema references an unknown definition.")
+            merged = {**target, **{k: v for k, v in node.items() if k != "$ref"}}
+            return rewrite(merged, depth + 1)
+        out = {}
+        for key, value in node.items():
+            if key == "$defs":
+                continue
+            if key == "const":
+                out["enum"] = [value]
+                continue
+            out[key] = rewrite(value, depth + 1)
+        return out
+
+    return rewrite(schema)
+
+
 def _check_schema(schema: dict) -> None:
     """The same strict, deliberately small schema vocabulary as Astra review."""
     if not isinstance(schema, dict) or schema.get("type") not in {
@@ -517,6 +562,7 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
                'gpt-5.6-sol': {'low', 'medium', 'high', 'xhigh', 'max'}}
     if model not in allowed or reasoning_effort not in allowed[model]:
         raise AstraReviewError("Unsupported subscription model or reasoning effort.")
+    schema = normalize_schema(schema)
     _check_schema(schema)
     if schema["type"] != "object":
         raise AstraReviewError("The Codex review output must be a structured object.")
