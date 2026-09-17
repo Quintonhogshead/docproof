@@ -54,6 +54,7 @@ BOOK_SPACING_KEY = "GALLEY_BOOK_SPACING_HOURS"
 DEFAULT_BOOK_SPACING_S = 5 * 3600.0
 #: What the server calls the read-only route this poller lives on.
 AWAITING_PATH = "/api/watch/awaiting"
+KEYS_PATH = "/api/watch/agent-keys"
 #: Where the agent reports what it is doing, so the Proofread drawer can show
 #: it — the second and last route a machine may touch, write-only.
 STATUS_PATH = "/api/watch/agent"
@@ -158,6 +159,10 @@ class AgentEnv:
     @property
     def status_url(self) -> str:
         return self.app_url.rstrip("/") + STATUS_PATH
+
+    @property
+    def keys_url(self) -> str:
+        return self.app_url.rstrip("/") + KEYS_PATH
 
     @property
     def alert_email(self) -> str:
@@ -325,6 +330,53 @@ def poll_awaiting(env: AgentEnv, *, opener=_open_url
     books = [AwaitingBook.from_json(row)
              for row in (payload.get("books") or []) if isinstance(row, dict)]
     return [b for b in books if b.file_id and b.name], ""
+
+
+def fetch_portal_keys(env: AgentEnv, *, opener=_open_url) -> dict[str, str]:
+    """Lane keys an administrator set in the portal, as environment values.
+
+    The keys for the optional lanes live on the web machine's volume, which
+    this machine cannot read, so they arrive over the same bearer-gated hop
+    the awaiting list uses. Everything here is best effort by design: an older
+    server has no such route, a desktop build has no keystore, and neither is
+    a reason to refuse to proofread a book. A failure logs one line and the
+    run goes on with whatever secrets this machine already holds — which, for
+    every lane that uses one, means the lane records a skip and the recipe
+    continues.
+
+    Values are never logged, and a name whose value is empty is dropped rather
+    than exported as an empty string, which would read as "set" to a lane that
+    only checks for presence.
+    """
+    request = urllib.request.Request(
+        env.keys_url,
+        headers={"Authorization": f"Bearer {env.token}",
+                 "Accept": "application/json"})
+    try:
+        with opener(request) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            log.info("This server has no portal key route; using this "
+                     "machine's own secrets.")
+        else:
+            log.warning("The app refused the portal keys (HTTP %s); using "
+                        "this machine's own secrets.", e.code)
+        return {}
+    except Exception as e:                                  # noqa: BLE001
+        log.warning("Could not read %s (%s); using this machine's own "
+                    "secrets.", env.keys_url, e)
+        return {}
+    raw = payload.get("keys") if isinstance(payload, dict) else None
+    if not isinstance(raw, dict):
+        log.warning("The app answered something that is not a key set.")
+        return {}
+    keys = {str(name): str(value) for name, value in raw.items()
+            if isinstance(name, str) and str(value or "").strip()}
+    if keys:
+        log.info("Using %d key(s) set in the portal: %s",
+                 len(keys), ", ".join(sorted(keys)))
+    return keys
 
 
 def post_status(env: AgentEnv, payload: dict[str, Any], *,
@@ -1323,6 +1375,12 @@ class Agent:
         env = dict(os.environ)
         env.setdefault("PATH", PATH)
         env.update(self.env.values)
+        # Last, so a key an administrator set in the portal wins over a stale
+        # one in this machine's secrets or credential file — the same
+        # precedence the web build gives the same store. Read once per driver
+        # launch, so turning a lane on takes effect on the next book without a
+        # release.
+        env.update(fetch_portal_keys(self.env, opener=self.opener))
         return env
 
     def give_up(self, book: AwaitingBook, ledger: Ledger, report: RunReport,

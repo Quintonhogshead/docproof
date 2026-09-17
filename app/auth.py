@@ -44,8 +44,13 @@ LOCAL_OWNER = "local"
 # app/routes/watch.py::agent_gate) and is refused outright when no agent token
 # is configured. `/api/watch/agent` is that same machine's heartbeat — the one
 # thing it may write, and only ever one bounded JSON file in the watch home,
-# behind the same gate. Nothing else writable belongs in this set.
+# behind the same gate. `/api/watch/agent-keys` is how that machine — which has
+# its own volume and cannot read the portal's keystore — is given the optional
+# lane keys an administrator set here; read-only, behind the same gate, and
+# limited to an explicit allow-list of key names. Nothing else writable belongs
+# in this set.
 _OPEN_PATHS = {"/api/login", "/api/watch/awaiting", "/api/watch/agent",
+               "/api/watch/agent-keys",
                # Exact path only, with the existing agent bearer gate before
                # body parsing. Author content and settings remain session-gated.
                "/api/teasers/worker"}

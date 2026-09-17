@@ -33,8 +33,9 @@ KEYCHAIN_SERVICE = "docproof"
 # The AI providers, plus the odds and ends that are not providers at all: a
 # read-only GitHub token, so a build somebody was sent can ask whether a newer
 # one has been released, the watcher's Google refresh token, the watcher's
-# HubSpot private-app token, and Sapling's grammar-API key (serving both the
-# test panel and the opt-in Sapling pass a review can run). They live here
+# HubSpot private-app token, Sapling's grammar-API key (serving both the test
+# panel and the opt-in Sapling pass a review can run), and TypeSafe's key for
+# the fixed Galley recipe's Jev lanes. They live here
 # because they are secrets and this is where secrets go — the Keychain, never a
 # file, never returned to the browser. `PROVIDERS` stays the list of vendors
 # that review documents, so nothing offers to review one with a Drive, HubSpot
@@ -43,7 +44,7 @@ ENV_VARS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
             "gemini": "GEMINI_API_KEY", "deepinfra": "DEEPINFRA_API_KEY",
             "github": "GITHUB_TOKEN",
             "google": "GOOGLE_REFRESH_TOKEN", "hubspot": "HUBSPOT_TOKEN",
-            "sapling": "SAPLING_API_KEY"}
+            "sapling": "SAPLING_API_KEY", "typesafe": "TYPESAFE_API_KEY"}
 # DeepInfra is the hosted-open-weights vendor: the same models a local machine
 # would run, billed per token, no watermark, no retention — but the text does
 # leave the building for the call, which the model blurbs say plainly.
@@ -54,9 +55,18 @@ PROVIDERS = ("anthropic", "openai", "gemini", "deepinfra")
 # Sapling pass a review runs when `sapling.enabled` is on. It is set and stored
 # exactly like a provider's key. `KEY_PROVIDERS` is the set the portal's key
 # screen manages and the server loads from the keystore at boot: the review
-# providers, plus Sapling.
+# providers, plus Sapling and TypeSafe.
 SAPLING = "sapling"
-KEY_PROVIDERS = PROVIDERS + (SAPLING,)
+
+# TypeSafe's System One model (Jev) is the fixed Galley recipe's judgment lane:
+# it screens rule candidates and proposes comma and confusion sites upstream of
+# the paid screen, and decides no edit by itself. Like Sapling it is not a
+# review provider — no review runs on its key — but it is set and stored in the
+# portal the same way, so an administrator can turn the lane on without a
+# deploy. The Galley agent runs on its own machine with its own volume, so it
+# does not see this store: it asks for the key over `/api/watch/agent-keys`.
+TYPESAFE = "typesafe"
+KEY_PROVIDERS = PROVIDERS + (SAPLING, TYPESAFE)
 
 # Reasoning depth the model runs at, ordered cheapest → deepest. Mirrors the
 # Literal in docproof.config.APIConfig.effort. The app never offers "null"
