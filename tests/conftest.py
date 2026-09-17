@@ -65,6 +65,18 @@ def no_developer_galley_credentials(monkeypatch, tmp_path_factory):
                        str(tmp_path_factory.mktemp("no-galley") / "absent.env"))
 
 
+@pytest.fixture(autouse=True)
+def no_developer_jev_key(monkeypatch):
+    """The fixed recipe's Jev lane must stay off unless a test asks for it.
+
+    galley.jev.enabled() reads TYPESAFE_API_KEY from the environment, which on
+    a developer machine is exported for the private evaluation harness. Left
+    alone, every workflow test would start brute-forcing its fixture book's
+    comma sites against the real judgment service. A test about the lane sets
+    GALLEY_JEV and injects its own client."""
+    monkeypatch.setenv("GALLEY_JEV", "off")
+
+
 @pytest.fixture(autouse=True, scope="session")
 def no_internet():
     """Nothing in this suite may leave the machine.

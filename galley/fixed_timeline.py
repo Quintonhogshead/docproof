@@ -81,6 +81,30 @@ def attempts(directory) -> list[dict]:
     return rows
 
 
+def jev_usage(directory) -> dict:
+    """What the Jev judgment lane cost, summed from its own receipts.
+
+    Jev requests are receipted under `<run>/jev/<stage>/`, not through the call
+    ledger, so the timeline reads them directly. No receipts, no row."""
+    root = fixed_directory(directory) / "jev"
+    if not root.is_dir():
+        return {}
+    from galley.jev import usage_from_receipts
+    usage = usage_from_receipts(root)
+    return usage if usage["total"]["calls"] else {}
+
+
+def _jev_row(usage: dict) -> dict:
+    total = usage["total"]
+    tokens = {k: 0 for k in TOKEN_FIELDS}
+    tokens["input_tokens"] = total["input_tokens"]
+    tokens["output_tokens"] = total["output_tokens"]
+    return {"stage": "jev", "model": "jev", "effort": "-", "attempts": total["calls"],
+            "failed_attempts": 0, "in_flight": 0, "first_started": None, "last_finished": None,
+            "span_seconds": total["seconds"], "median_seconds": None, "max_seconds": None,
+            "api_usd": round(total["usd"], 6), "tokens": tokens}
+
+
 def summarize(directory) -> dict:
     """Stage rows in order of first start, plus run totals."""
     rows = attempts(directory)
@@ -114,10 +138,14 @@ def summarize(directory) -> dict:
             "max_seconds": seconds[-1] if seconds else None,
             "api_usd": round(stage["api_usd"], 4)})
         ordered.append(stage)
+    jev = jev_usage(directory)
+    if jev:
+        ordered.append(_jev_row(jev))
     starts = [_when(r["started"]) for r in rows if _when(r["started"])]
     ends = [_when(r["finished"]) for r in rows if _when(r["finished"])]
     totals = {k: sum(s["tokens"][k] for s in ordered) for k in TOKEN_FIELDS}
     return {"directory": str(fixed_directory(directory)),
+            **({"jev": jev} if jev else {}),
             "run": {"attempts": len(rows),
                     "failed_attempts": sum(s["failed_attempts"] for s in ordered),
                     "in_flight": sum(s["in_flight"] for s in ordered),
@@ -162,4 +190,4 @@ def write_timeline(directory) -> Path:
     return target
 
 
-__all__ = ["attempts", "fixed_directory", "render", "summarize", "write_timeline"]
+__all__ = ["attempts", "fixed_directory", "jev_usage", "render", "summarize", "write_timeline"]
