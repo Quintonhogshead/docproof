@@ -281,3 +281,18 @@ def test_a_question_about_a_running_head_is_carried_by_the_first_body_paragraph(
               "stages": [], "history": []}
     report = fd._report(result, details)
     assert "because Word keeps comments in the body" in report
+
+
+def test_intake_normalization_reaches_the_findings_envelope_with_its_ellipses():
+    from galley.fixed_documents import intake_normalization
+    receipt = {"normalization": {"policy": "silent-quotes-spaces-house-ellipsis-v1", "variant": "us",
+                                 "ellipsis_style": "nbsp", "quotes": 0, "spaces": 2, "ellipses": 48,
+                                 "paragraphs": 50}}
+    envelope = intake_normalization(receipt)
+    assert envelope["ran"] is True and envelope["ellipses"] == 48 and envelope["paragraphs"] == 50
+    assert intake_normalization(None) == {"ran": False}
+    assert intake_normalization({"normalization": {"quotes": 0, "spaces": 0, "ellipses": 0}})["ran"] is False
+    from galley.letter import _section_preparation
+    from types import SimpleNamespace
+    lines = _section_preparation(SimpleNamespace(envelope={"normalization": envelope}))
+    assert any("48 ellipsis/ellipses to the house form" in line for line in lines)

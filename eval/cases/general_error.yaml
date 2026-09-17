@@ -19,6 +19,13 @@ cases:
   - id: ge-005
     text: "She poured the coffee into the mug and drank the newspaper instead."
     expect: { span: "drank the newspaper", confidence: high }
+  # --- Wilder (2026-09-17): two misses no narrow rule owns ---
+  - id: ge-w01
+    text: "A bitter ache spreads across my body as countless needles."
+    expect: { span: "as countless needles", correction: "like countless needles", confidence: medium }
+  - id: ge-w02
+    text: "I'm down for dinner or something (I'll pay:). It sounds like you've gone through a lot."
+    expect: { span: "(I'll pay:).", correction: "(I'll pay:)).", confidence: medium }
   # --- traps: general_error must stay silent ---
   - id: ge-101
     text: "The lighthouse threw its beam across the water every twelve seconds."

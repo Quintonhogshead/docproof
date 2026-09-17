@@ -60,7 +60,8 @@ authorities: Galley's existing number/currency policy controls, including
 clock times as digits with minutes and a lowercase meridiem — 8:30 a.m. / 3:00 p.m.
 (periods, colon) for US/Canada, 8.30 am / 3:00 pm (no periods; the author's
 separator kept consistent) for UK/Australia — and no invented meridiem or
-automatic .00. Do not fabricate a dictionary lookup or style-guide citation.
+automatic :00: a bare hour with neither is spelled out like any other number
+(around four; At three?). Do not fabricate a dictionary lookup or style-guide citation.
 For quotation nesting, logical punctuation, date order, percent/per cent and
 that/which, these established-variant rules take precedence over generic US
 examples elsewhere in the prompt; Galley's clock and number rules still win.
@@ -228,7 +229,11 @@ mark, still with minimal edits and never a rewrite.
    running head CHAPTER ONE beside body headings CHAPTER 2 to 18; a TOP TEN
    heading over nine items; ACKNOWLEDGEMENTS in a US book; copyright, colophon
    and contents lines. Header and footer paragraphs are owned, editable
-   paragraphs like any other. category=structure.
+   paragraphs like any other. A chapter or part label whose number or style
+   breaks the book's sequence (that running head CHAPTER ONE beside CHAPTER 2
+   to 18) is corrected to the dominant style — CHAPTER 1 — never queried:
+   labels are mechanics. Whether an unlabeled scene needs a heading of its
+   own is a question. category=structure.
 5. Copyedit-grade grammar and usage: brand new -> brand-new before a noun; the
    nonrestrictive appositive (my twin brother, Kai); faulty parallelism;
    different than -> different from in narration; a dangling modifier with one
@@ -289,7 +294,8 @@ stage about a fact or logic a general reader would notice, a continuity
 contradiction, or a heading or running-head inconsistency is in scope: keep it
 as a query when the reader names what only the author can supply and the text
 does not settle it. Drop it only when the book itself answers it or the concern
-is stylistic. """
+is stylistic. A chapter or part label's number or style is never a question:
+it is corrected to the book's dominant style. """
 
 # Astra's comment review of the final readers' own questions.
 WALKTHROUGH_COMMENT_RIDER = """A question a final reader raised about a fact or
@@ -297,7 +303,8 @@ logic a general reader would notice, a continuity contradiction, or a heading or
 running-head inconsistency, with the missing fact named, is a specific question
 requiring author knowledge: retain it unless the book itself answers it or the
 concern is stylistic. That the passage is grammatically correct is not a reason
-to drop it. """
+to drop it. A question that only asks how a chapter or part label should be
+numbered or styled is dropped: labels are mechanics the house corrects. """
 
 CONTINUITY_TASK = """WHOLE-BOOK CONTINUITY READ
 You hold the complete current manuscript in reading order (id, text, location).

@@ -1631,3 +1631,87 @@ def test_completed_run_can_reinstate_dropped_walkthrough_questions(make_book, tm
     assert second["stage"] == STAGE + "_2" and second["reinstated"] == []
     final = json.loads(path.read_text())
     assert [s["stage"] for s in final["stages"]][-3:] == ["final_astra", STAGE, STAGE + "_2"] and len(final["questions"]) == 1
+
+
+# --- Wilder proofreader follow-ups (2026-09-17) -------------------------------
+
+@pytest.mark.parametrize("before, after", [("at around five.", "at around 5:00."),
+                                           ("by 10—11 at the latest.", "by 10:00–11:00 AM at the latest.")])
+def test_number_reader_cannot_invent_a_clock_reading(make_book, tmp_path, before, after):
+    flow = FixedWorkflow(make_book("We surfed " + before), tmp_path / "run", calls=Readers())
+    texts = {"p1": "We surfed " + before}
+    row = finding("p1", texts["p1"], "We surfed " + after, "number_style")
+    assert flow._reader_candidate("numbers", row, texts, SONNET) is None
+    [rejected] = [h["rejected_proposal"] for h in flow.history]
+    assert "clock reading" in rejected["reason"] or "digits" in rejected["reason"]
+    spelled = finding("p1", "“At 3?”", "“At three?”", "number_style")
+    assert flow._reader_candidate("numbers", spelled, {"p1": "“At 3?”"}, SONNET)["replacement"] == "three"
+
+
+def test_consistency_sites_move_together_once_one_swap_is_accepted():
+    from galley.fixed_workflow import _harmonize_consistency, _word_swap
+    assert _word_swap("My parents are OK with it.", "My parents are okay with it.") == ("OK", "okay")
+    assert _word_swap("on this green Earth blessed", "on this green earth blessed") == ("Earth", "earth")
+    assert _word_swap("She waited.", "She waited and left.") is None
+    site = lambda sid, before, category="term_consistency": {
+        "id": sid, "para_id": sid, "before": before, "proposals": [{"category": category, "replacement": before}]}
+    sites = [site("a", "My parents are OK with it, of course."),
+             site("b", "“Is everything OK?”"),
+             site("c", "The OKLAHOMA sign was fine."),
+             site("d", "He said it was fine.", "grammar")]
+    agreed = {"a": {"id": "a", "action": "apply", "replacement": "My parents are okay with it, of course.", "reason": "x"},
+              "b": {"id": "b", "action": "drop", "replacement": "", "reason": "Correct in dialogue."},
+              "c": {"id": "c", "action": "drop", "replacement": "", "reason": "Not the term."},
+              "d": {"id": "d", "action": "drop", "replacement": "", "reason": "Fine."}}
+    updated, log = _harmonize_consistency(sites, agreed)
+    assert updated["b"]["action"] == "apply" and updated["b"]["replacement"] == "“Is everything okay?”"
+    assert updated["c"] == agreed["c"] and updated["d"] == agreed["d"]
+    assert log == [{"site": "b", "swap": ["OK", "okay"], "origin": "a", "dropped_reason": "Correct in dialogue."}]
+    # A query stands, and nothing moves when no site was accepted.
+    agreed["b"]["action"] = "query"
+    assert _harmonize_consistency(sites, agreed)[0]["b"]["action"] == "query"
+    agreed["a"]["action"] = "drop"
+    assert _harmonize_consistency(sites, agreed) == (agreed, [])
+
+
+def test_screened_consistency_drop_is_harmonized_with_the_accepted_swap(make_book, tmp_path):
+    def answer(stage, model, payload, kwargs):
+        assert stage == "typed_screen"
+        # The screen sees the minimal span ("OK") at the first site and the
+        # scan's sentence window at the second; it accepts one, drops the other.
+        return {"decisions": [ruling(s, "apply" if s["para_id"] == "a" else "drop",
+                                     s["proposals"][0]["replacement"] if s["para_id"] == "a" else "")
+                              for s in payload["sites"]]}
+    flow = _flow(make_book, tmp_path, Readers(handler=answer))
+    flow.original = {"a": "My parents are OK with it.", "b": "“Is everything OK?”"}
+    flow.current = dict(flow.original)
+    pids = list(flow.current)
+    rows = [_candidate({**finding(pids[0], "My parents are OK with it.", "My parents are okay with it.",
+                                  "term_consistency")}, flow.current, "local:consistency"),
+            _candidate({**finding(pids[1], "“Is everything OK?”", "“Is everything OK?”",
+                                  "term_consistency", action="query")}, flow.current, "local:consistency")]
+    flow._apply("typed", flow._adjudicate("typed", rows))
+    assert flow.current[pids[0]] == "My parents are okay with it."
+    assert flow.current[pids[1]] == "“Is everything okay?”"
+    assert [h["swap"] for h in flow.history if h["stage"] == "typed_harmonized"] == [["OK", "okay"]]
+
+
+def test_a_screen_query_on_a_chapter_label_is_overruled_into_the_fix(make_book, tmp_path):
+    def answer(stage, model, payload, kwargs):
+        assert stage == "typed_screen"
+        return {"decisions": [{**ruling(s, "query", ""), "question": "Should this be Chapter 1?",
+                               "missing_knowledge": "The intended label."} for s in payload["sites"]]}
+    flow = _flow(make_book, tmp_path, Readers(handler=answer), text="CHAPTER ONE")
+    pid = "p"
+    rows = [_candidate({**finding(pid, "CHAPTER ONE", "CHAPTER 1", "chapter_label")}, flow.current, "local:chapter_labels")]
+    flow._apply("typed", flow._adjudicate("typed", rows))
+    assert flow.current[pid] == "CHAPTER 1" and flow.questions == []
+    [overruled] = [h for h in flow.history if h["stage"] == "typed_label_query_overruled"]
+    assert overruled["question"] == "Should this be Chapter 1?"
+
+
+def test_a_final_reader_never_demotes_a_label_edit_into_a_question():
+    proposal = {"action": "edit", "category": "structure", "before": "CHAPTER ONE", "replacement": "CHAPTER 1",
+                "reason": "Label out of style.", "para_id": "h1", "start": 0, "end": 11, "evidence": []}
+    assert FixedWorkflow._frontier_demotion("fable", {"proposals": [proposal]}, "CHAPTER ONE") is None
+    assert FixedWorkflow._frontier_demotion("fable", {"proposals": [proposal]}, "The sun set in the east.") is not None

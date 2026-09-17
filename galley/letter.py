@@ -878,10 +878,13 @@ def _section_preparation(src: JournalSources) -> list[str]:
     if not norm or not norm.get("ran"):
         return []
     out = ["## Preparation disclosure", ""]
+    ellipses = norm.get("ellipses") or 0
     out.append(f"Before any tracked edit, the engine normalized "
                f"{_n(norm.get('spaces') or 0)} space run(s) and curled "
-               f"{_n(norm.get('quotes') or 0)} quotation mark(s) across "
-               f"{_n(norm.get('paragraphs') or 0)} paragraph(s). Those "
+               f"{_n(norm.get('quotes') or 0)} quotation mark(s)"
+               + (f" and set {_n(ellipses)} ellipsis/ellipses to the house form "
+                  "(… with a non-breaking space before it)" if ellipses else "")
+               + f" across {_n(norm.get('paragraphs') or 0)} paragraph(s). Those "
                "preparation changes are not tracked: rejecting every revision "
                "returns that normalized text, not every original spacing "
                "character. The supplied original is unchanged and remains "
@@ -984,8 +987,9 @@ HOUSE_CONVENTIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("Dashes and ellipses", "Unspaced em dashes; the house nonbreaking-space "
                             "ellipsis. Compound hyphens are never turned into "
                             "dashes.", ("sweep_dash", "sweep_ellipsis")),
-    ("Clock times", "`h:mm AM` / `h:mm PM` — the stated time is never "
-                    "changed.", ("sweep_time_of_day",)),
+    ("Clock times", "`h:mm a.m.` / `h:mm p.m.` (U.K.: `am`/`pm`); a bare hour "
+                    "with neither minutes nor a meridiem is spelled out; the "
+                    "stated time is never changed.", ("sweep_time_of_day",)),
     ("Numbers", "Whole numbers spelled out through one hundred; numerals "
                 "above; percentages as `40 percent`. A number that "
                 "contradicts another is a question, never an edit.",
@@ -1295,8 +1299,9 @@ def render_verification_report(evidence: JournalSources, out_dir: str | Path,
     if norm.get("ran"):
         lines.append("## Untracked preparation")
         lines.append("")
-        lines.append(f"{_n(norm.get('spaces') or 0)} space normalization(s) and "
-                     f"{_n(norm.get('quotes') or 0)} quote curl(s) across "
+        lines.append(f"{_n(norm.get('spaces') or 0)} space normalization(s), "
+                     f"{_n(norm.get('quotes') or 0)} quote curl(s) and "
+                     f"{_n(norm.get('ellipses') or 0)} house-form ellipsis/ellipses across "
                      f"{_n(norm.get('paragraphs') or 0)} paragraph(s) were "
                      "applied before tracking began. Rejecting every revision "
                      "restores that normalized text, not every original "

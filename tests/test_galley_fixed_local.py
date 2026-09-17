@@ -452,3 +452,76 @@ def test_verse_packet_runs_the_glyph_sweeps_over_poetry_only(tmp_path, monkeypat
     assert all(f["para_id"] == "verse" and f["source"] == "local:verse" for f in findings)
     assert {f["category"] for f in findings} == {"sweep_dash", "sweep_elision_apostrophe", "sweep_quote_pair"}
     assert local.validate_local_evidence(evidence, tmp_path / "local", IDENTITY)["request"]["verse_ids"] == ["verse"]
+
+
+# --- chapter and part labels are mechanics (Wilder running head, 2026-09-17) --
+
+def _label_rows(*paragraphs):
+    return local._chapter_label_rows(list(paragraphs), configuration())
+
+
+def _header(pid, text):
+    return ParagraphRef(pid, "word/header5.xml", "header", text, "Header")
+
+
+def _chapters(*labels):
+    """Heading lines with a body paragraph under each, as a real book has."""
+    out = []
+    for i, label in enumerate(labels):
+        out += [para(f"h{i}", label, style="Heading1"), para(f"b{i}", f"Body of chapter {i}.")]
+    return out
+
+
+def test_running_head_label_is_restyled_to_the_body_sequence_and_keeps_its_case():
+    body = _chapters(*(f"CHAPTER {n}" for n in range(2, 6)))
+    rows = _label_rows(_header("rh", "CHAPTER ONE"), *body)
+    [row] = rows
+    assert row["para_id"] == "rh" and row["category"] == "chapter_label" and row["action"] == "edit"
+    assert row["replacement"] == "CHAPTER 1" and row["source"] == "local:chapter_labels"
+    assert "mechanics" in row["reason"]
+    # Title case in the head is the typesetter's; only the number form moves.
+    [row] = _label_rows(_header("rh", "Chapter One"), *body)
+    assert row["replacement"] == "Chapter 1"
+
+
+def test_running_head_that_matches_the_body_form_proposes_nothing():
+    body = _chapters(*(f"CHAPTER {n}" for n in range(2, 6)))
+    assert _label_rows(_header("rh", "CHAPTER 1"), *body) == []
+    assert _label_rows(_header("rh", "12 | ANA AND ATLAS"), *body) == []
+
+
+def test_body_sequence_is_renumbered_in_its_dominant_style():
+    body = _chapters("Chapter Fifteen", "Chapter Seventeen", "Chapter Eighteen", "Chapter Nineteen",
+                     "Chapter Twenty-One", "Chapter Twenty-Thirty")
+    rows = _label_rows(*body)
+    assert [(r["para_id"], r["replacement"]) for r in rows] == [
+        ("h1", "Chapter Sixteen"), ("h2", "Chapter Seventeen"), ("h3", "Chapter Eighteen"),
+        ("h4", "Chapter Nineteen"), ("h5", "Chapter Twenty")]
+    assert all(r["category"] == "chapter_label" for r in rows)
+
+
+def test_a_contents_list_and_a_lone_label_never_drive_renumbering():
+    toc = [para(f"t{n}", f"CHAPTER {n}", style="Heading1") for n in (1, 2, 3)]
+    body = _chapters("CHAPTER 1", "CHAPTER 2", "CHAPTER 3")
+    assert _label_rows(*toc, *body) == []
+    # With the list in place, a running head still follows the real headings.
+    [row] = _label_rows(_header("rh", "CHAPTER ONE"), *toc, *body)
+    assert row["para_id"] == "rh" and row["replacement"] == "CHAPTER 1"
+    assert _label_rows(para("h1", "Chapter Two", style="Heading1"), para("b1", "Only one label.")) == []
+    # A prose line that happens to open with a label word is not a label.
+    assert _label_rows(para("p1", "Chapter three of the report says the bridge failed in the storm of that year."),
+                       *_chapters("CHAPTER 2", "CHAPTER 3")) == []
+
+
+def test_initial_and_completion_scans_carry_the_chapter_label_check(tmp_path):
+    body = _chapters(*(f"CHAPTER {n}" for n in range(2, 5)))
+    source = prepared(_header("rh", "CHAPTER ONE"), *body, para("p1", "She waited."))
+    rows, evidence = collect(tmp_path, source)
+    saved = packet(evidence)
+    assert {c["check"] for c in saved["checks"]} >= {"chapter_labels", "normalization_and_speakers"}
+    assert [r["replacement"] for r in rows if r["category"] == "chapter_label"] == ["CHAPTER 1"]
+    texts = {p.para_id: p.text for p in source.doc.paragraphs}
+    rows, evidence = local.collect_completion_candidates(source, texts, dict(texts), tmp_path / "local",
+                                                          identity=IDENTITY, stage="completion")
+    assert [r["replacement"] for r in rows if r["category"] == "chapter_label"] == ["CHAPTER 1"]
+    assert "chapter_labels" in {c["check"] for c in packet(evidence)["checks"]}

@@ -49,7 +49,10 @@ COMMON_RULES: tuple[str, ...] = (
     "U.K. (Oxford): without periods, “8:30 am”, “3:00 pm” (an author's "
     "point separator, “8.30 am”, is kept if used consistently). Never "
     "“3:00 PM”, “3 PM”, or “3PM”, and never a meridiem invented for a bare "
-    "hour. A range takes an unspaced en dash (“9:00–5:00 p.m.”).",
+    "hour. A bare hour with neither minutes nor a meridiem is spelled out "
+    "like any other number under 101 (“around four”, “at three”), never "
+    "given “:00”; a spelled-out hour never becomes digits. A range takes an "
+    "unspaced en dash (“9:00–5:00 p.m.”).",
     "A formal date never takes an ordinal (“24 July”, not “24th July”). "
     "U.S.: month day, year, with a comma after the day and after the year "
     "when the sentence continues (“July 14, 1989, was rainy.”). U.K.: day "
