@@ -496,6 +496,8 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
     cert.checks.append(_certify_plan_ledger(run))
     # 14. Every surviving margin comment still describes the delivered text.
     cert.checks.append(_certify_comment_premises(run, envelope))
+    # 15. One source term, one delivered form (Cooper, 2026-09-17).
+    cert.checks.append(_certify_swap_consistency(run))
     return cert
 
 
@@ -527,6 +529,85 @@ def _certify_plan_ledger(run: Path) -> Check:
                            load_ledger(ledger_path),
                            ledger_exists=ledger_path.is_file(), workspace=ws)
     return Check("plan ledger", status, detail)
+
+
+# A swap surface: letters joined by apostrophes or hyphens, so “band-aid” and
+# “grown up” each read as one term rather than a sweep of “band”.
+_SWAP_WORD = re.compile(r"[^\W\d_]+(?:['’\-‐‑][^\W\d_]+)*", re.UNICODE)
+_SWAP_TRIM = " \t“”\"‘’'(),.;:!?—–-"
+
+
+def _word_swap(before: str, after: str) -> tuple[str, str] | None:
+    """The one contiguous word-level difference between two quotations.
+
+    At most two words on either side: this looks for a term swap, not a
+    rewrite, and anything longer is not a question about what a thing is
+    called.
+    """
+    old_words, new_words = before.split(), after.split()
+    lo = 0
+    while (lo < len(old_words) and lo < len(new_words)
+           and old_words[lo] == new_words[lo]):
+        lo += 1
+    hi = 0
+    while (hi < len(old_words) - lo and hi < len(new_words) - lo
+           and old_words[-1 - hi] == new_words[-1 - hi]):
+        hi += 1
+    old = [w.strip(_SWAP_TRIM) for w in old_words[lo:len(old_words) - hi]]
+    new = [w.strip(_SWAP_TRIM) for w in new_words[lo:len(new_words) - hi]]
+    if not (1 <= len(old) <= 2 and 1 <= len(new) <= 2) or not all(old + new):
+        return None
+    if not all(_SWAP_WORD.fullmatch(word) for word in old + new):
+        return None
+    return " ".join(old), " ".join(new)
+
+
+def _swap_surfaces(row: dict[str, Any]) -> tuple[str, str] | None:
+    """The term swap an applied finding made, from its anchor or its quotations."""
+    anchor = row.get("anchor") or {}
+    if (isinstance(anchor, dict) and isinstance(anchor.get("delete_text"), str)
+            and isinstance(anchor.get("insert_text"), str)):
+        return _word_swap(anchor["delete_text"], anchor["insert_text"])
+    return _word_swap(str(row.get("original_text") or ""),
+                      str(row.get("corrected_text") or ""))
+
+
+def _certify_swap_consistency(run: Path) -> Check:
+    """Fail when one source term was delivered under two different forms.
+
+    Cooper, 2026-09-17: the same word left the run as “muttonchops” in one
+    paragraph and “lamb chops” in two others. Either answer may be right; both
+    together are a book that cannot be read. Folding spaces, hyphens and case
+    means “lambchops” and “lamb chops” count as the one term they are. Grammar
+    words and homophones are exempt — two fixes for “their” are two readings of
+    two sentences, not one unsettled term.
+    """
+    from galley.fixed_local import _CONTEXTUAL_SWAPS, _swap_key
+    data = _load_json(run / "findings.json")
+    if data is None:
+        return Check("swap consistency", "skip", "no findings.json to scan")
+    rows = data.get("findings", data) if isinstance(data, dict) else data
+    forms: dict[str, dict[str, list[str]]] = {}
+    for row in rows or []:
+        if not isinstance(row, dict) or not _row_applied(row):
+            continue
+        pair = _swap_surfaces(row)
+        if pair is None:
+            continue
+        key = _swap_key(pair[0])
+        # Short keys are function words whatever the taxonomy says.
+        if len(key) < 4 or key in _CONTEXTUAL_SWAPS:
+            continue
+        forms.setdefault(key, {}).setdefault(_swap_key(pair[1]), []).append(
+            f"“{pair[1]}” at {row.get('para_id', '?')}")
+    bad = [f"{key}: " + "; ".join(", ".join(sites) for sites in by_form.values())
+           for key, by_form in sorted(forms.items()) if len(by_form) > 1]
+    if bad:
+        return Check("swap consistency", "fail",
+                     "one source term delivered under two forms — "
+                     + " | ".join(bad[:6]))
+    return Check("swap consistency", "pass",
+                 f"{len(forms)} corrected term(s), each delivered in one form")
 
 
 def _certify_comment_premises(run: Path, envelope: dict[str, Any] | None

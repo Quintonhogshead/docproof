@@ -444,6 +444,41 @@ preference. ALLCAPS forms, capitalized name phrases (Atlas the Elephant, Easy
 Speed counted only as the phrase) and determiner-led kinship nouns (my mom
 against Mom) are excluded; a casing the run has already decided by an edit
 outranks the counts. Residual house-rule errors are rechecked in the same pass.
+
+Version 0.218.0 (after the Cooper QA of 2026-09-17) widened the same pass with
+whole-book scans a paragraph read structurally cannot make, each screened like
+any other row: a named vessel the book pronouns as *she* proposes *her* at the
+*its* strays in sentences that name her; a dialect speaker's marker families
+(`dinnae`/`dinna`, `ye`/`yeh`, elided `no'`) take the speaker's own majority
+spelling at 3:1 and are asked about below it; an open/closed pair the shipped
+Merriam-Webster table decides (`sat phone`/`satphone`) is closed regardless of
+which form leads; a figure with a unit that recurs in one form and once in a
+near form (`282.6°` ×9 against `282.8°`) is a question, never an edit; a
+remembered or re-quoted sentence that nearly matches an earlier one inside a
+memory frame ("the words kept burning", "read it again") is corrected to the
+earlier text, a frameless near-match or a verbatim repeat in the same chapter
+is a question; and a casing split whose capitalized form carries a proper noun
+(`Atacama plateau`) needs only three uses to be judged. Two deterministic
+sweeps joined the house floor: prefixed compounds close where Merriam-Webster
+closes them (`non-reflective`, `re-evaluating`, `pre-launch`; U.S. books only,
+meaning-changing pairs such as `re-sign` held back) and Chicago's lowercase
+`solar system`/`the universe`.
+
+The same release put a last gate in front of every text change, whatever stage
+proposed it (`galley/proposal_guards.py`, applied in `_apply`): a time already
+written in 24-hour form (`17:03`, `00:05 UTC`, `0830`, "thirteen hundred")
+stays 24-hour and is never given a meridiem; a pronoun that changes number
+(`they` to `he`) is refused when the paragraph's only antecedent in view is
+plural; a comma is never inserted beside an ellipsis; and a comma-closed line
+tagged `said mildly`/`flatly`/`dryly`, or a verbatim echo of the previous
+speaker, keeps its comma rather than becoming a question. A refused row is a
+dropped row with a receipt in the history, not a run failure. The propagation
+sweep also folds accepted swaps by case, space and hyphen: when one folded
+surface was replaced two different ways (`lambchops` closed to `lamb chops` in
+one place and `lamb chops` to `muttonchops` in another) none of its sites
+propagate and every site is put to the screen as a question naming both
+replacements, and certification fails a run whose applied edits still carry
+two replacements for one folded surface.
 Every candidate receives Sonnet and Luna screening, Opus on disagreement, and
 the usual correction checks; each pass has its own local receipt
 (`completion`, `completion_fable`, `completion_astra`, `completion_final_astra`). Local rules never

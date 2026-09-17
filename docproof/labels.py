@@ -53,6 +53,10 @@ FREE_FORM: frozenset[str] = frozenset({
     "term_consistency",   # consistency.py CONSISTENCY_KEY
     "name_consistency",   # consistency.py NAME_KEY
     "case_split",         # consistency.py CASE_SPLIT_KEY — casing splits, fixed Galley only
+    "vessel_pronoun",     # consistency.py VESSEL_KEY — a ship called she, then it
+    "dialect_spelling",   # consistency.py DIALECT_KEY — dinnae against dinna
+    "compound_style",     # consistency.py COMPOUND_KEY — sat phone -> satphone
+    "callback_drift",     # callbacks.py CALLBACK_KEY — a misquoted callback
     "near_duplicate_name",# pipeline.py — protected-name pairs too close to call
     "unclosed_quote",     # sweeps.py — unbalanced-quotation queries
     "speaker_split",      # speakersplit.py — the split's declarative comment

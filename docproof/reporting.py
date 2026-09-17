@@ -133,7 +133,27 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                          "times": ({"with_minutes": consistency.times.with_minutes,
                                     "example": consistency.times.example,
                                     "outliers": len(consistency.times.outliers)}
-                                   if consistency.times else None)}
+                                   if consistency.times else None),
+                         # The whole-book scans added after the Cooper QA
+                         # (2026-09-17): counts only, one row per group.
+                         "vessels": [{"vessel": v.vessel, "feminine": v.feminine,
+                                      "neuter": v.neuter, "outliers": len(v.outliers)}
+                                     for v in consistency.vessels],
+                         "dialect": [{"key": d.key, "dominant": d.dominant,
+                                      "forms": dict(d.counts), "enforced": d.enforce,
+                                      "outliers": len(d.outliers)}
+                                     for d in consistency.dialect],
+                         "compounds": [{"key": c.key, "preferred": c.preferred,
+                                        "forms": dict(c.counts), "note": c.note,
+                                        "outliers": len(c.outliers)}
+                                       for c in consistency.compounds],
+                         "figures": [{"key": f.key, "majority": f.majority,
+                                      "forms": dict(f.counts), "outliers": len(f.outliers)}
+                                     for f in consistency.figures],
+                         "callbacks": [{"kind": c.kind, "para_id": c.para_id,
+                                        "earlier_para_id": c.earlier_para_id,
+                                        "ratio": round(c.ratio, 3)}
+                                       for c in consistency.callbacks]}
                         if consistency is not None else None),
         "spell_scan": ({"available": spell.available, "tokens": spell.tokens,
                         "unique": spell.unique, "unknown": spell.unknown,

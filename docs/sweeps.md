@@ -40,6 +40,8 @@ sweeps:
 | `sweep_century` | `20th century` → `twentieth century` |
 | `sweep_compound_number` | a spelled-out compound number `twenty four` → `twenty-four` (twenty-one to ninety-nine); left alone before a hyphen (`twenty four-year-olds`) |
 | `sweep_dialogue_tag` | the brief's dialogue-tag table, every cell |
+| `sweep_prefix_compound` | a prefixed compound Merriam-Webster closes: `non-reflective` → `nonreflective`, `re-evaluating` → `reevaluating`, `post-apocalyptic` → `postapocalyptic`. **U.S. runs only** — the authority is M-W, so an Oxford or Canadian Oxford manuscript keeps its hyphens |
+| `sweep_chicago_terms` | Chicago 8.140–8.141's lowercase astronomy: `the Solar System` → `the solar system`, `the Universe` → `the universe`, `our Galaxy` → `our galaxy`. `the Milky Way`, `Earth`, `Sun` and `Moon` are left alone |
 
 Sweeps reach more paragraphs than the model does. Beyond the body prose the
 model reviews, they also run on heading-styled paragraphs (`skip.sweep_only`,
@@ -70,6 +72,37 @@ cannot decide:
   never lowercases `I`, and never touches a named subject — lowercasing a
   character's name would be far worse than missing a comma. Named subjects are
   the `dialogue_tag` error type's judgment call instead.
+- `sweep_prefix_compound` asks a dictionary before it closes anything. The
+  authority is Merriam-Webster and no press can ship M-W as a file, so the
+  offline stand-in is the en_US Hunspell word list `spellscan` already uses. If
+  that list carries the closed form, the compound closes (inflections included:
+  `reevaluating` is in the list, so `re-evaluating` needs no stemming). If it
+  does not, the sweep closes the compound only when the prefix is one M-W
+  closes as a matter of course (`non-`, `pre-`, `post-`, `over-`, `under-`,
+  `re-`) *and* the stem is a word in its own right — which is why `pre-launch`
+  and `non-reflective` are corrected but `multi-week` is not: `multi-`, `anti-`,
+  `co-`, `sub-`, `semi-`, `mid-` and `un-` are the prefixes whose practice
+  varies (`co-op`, `co-opt`, `un-ionized`, `anti-inflammatory`), so for those
+  the word list must carry the closed form itself. A capitalized second element
+  keeps its hyphen (`anti-American`, `pre-Columbian`, `mid-June`), as do digits
+  (`mid-1990s`), longer chains (`non-self-reflective`), and a short stop list of
+  pairs whose closed form is a *different word*: `re-cover`/`recover`,
+  `re-sign`/`resign`, `re-creation`/`recreation`, `re-form`, `re-sort`,
+  `re-count`, `re-press`, `re-collect`, `re-lease`, `re-serve`, `re-strain`,
+  `re-treat`, `re-mark`, `re-place`, `re-solve`, `re-store`, `re-search`,
+  `re-tire`, `re-fuse`, `re-cite`, `re-move`, `re-pair`, `re-bound`,
+  `re-present`, `re-view`, `re-ally`, `re-verse`, `co-op`, `co-opt`,
+  `un-ionized`, `pre-date`. With no dictionary loadable the sweep reports
+  nothing — there is no authority to ask, so there is no edit to make.
+- `sweep_chicago_terms` lowercases only where the capital cannot be anything
+  else. It skips heading and display lines (a capital there is styling), a term
+  embedded in a name phrase (`the Solar System Dynamics Laboratory`, `the
+  Universe Next Door`), and `Universe`/`Galaxy` without a determiner in front of
+  them — bare `Universe` may be a title, a ship or a personification, and
+  `Milky Way Galaxy` is a proper name. A sentence-initial `Solar System` keeps
+  the sentence's own capital (`Solar system`). `Earth`, `Sun` and `Moon` are
+  never touched: whether they take a capital depends on whether the sentence is
+  using them astronomically, which is a judgment and not a pattern.
 
 Because both the sweep and the error type can see a pronoun-subject dialogue
 tag, the model sometimes reports one the sweep already fixed. The validator

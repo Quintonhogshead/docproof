@@ -31,6 +31,32 @@ for the exact bar), the strays are corrected as tracked changes, because the
 author's accept/reject review is itself the human judgment the query channel
 exists to request — a lopsided count answers the question before it is asked.
 Anything short of that bar falls back to a question, same as the terms.
+
+THE INVENTORY. Every scan here reads the whole book, runs offline, is
+deterministic, and is silent on a book without its pattern. What each one finds,
+and which channel it uses:
+
+  ``find_inconsistencies``       one term written two ways         asks
+  ``find_name_drift``            Rian / Rian with an accent        both
+  ``find_spelling_variants``     grey / gray, via VarCon           asks
+  ``find_variant_policy``        theatre throughout, on a US run   asks
+  ``find_abbreviation_variants`` U.S. / US                         asks
+  ``find_acronym_case``          NASA / Nasa                       asks
+  ``find_accent_loanwords``      Si / Si with an accent            asks
+  ``find_deity_pronouns``        he / He in a reverent book        asks
+  ``find_time_style``            "at 8" in an "11:00 a.m." book    asks
+  ``find_case_splits``           earth / Earth mid-sentence        corrects
+  ``find_vessel_pronouns``       a ship called *she* and once *it* corrects
+  ``find_dialect_variants``      dinnae / dinna inside dialect     both
+  closed compounds               sat phone / satphone              corrects
+  ``find_figure_drift``          282.6 deg x9 against 282.8 deg x1 asks
+  ``callbacks.find_callbacks``   a remembered line, misquoted      both
+
+The five at the bottom came out of the Cooper QA, where each was a miss no
+per-paragraph review could structurally have caught. The ones that correct are
+read by a caller that screens every proposal in context (Galley's fixed
+workflow); the figure scan corrects nothing at all, because house policy is that
+a numeric value is never changed to repair a contradiction.
 """
 from __future__ import annotations
 
@@ -205,6 +231,86 @@ class DeityPronounDrift:
     outliers: tuple[Occurrence, ...]      # lowercase strays, deity in sentence
 
 
+# The key a vessel-pronoun correction carries. Like the other consistency keys
+# it lives outside config/error_types — nothing about it needs a prompt.
+VESSEL_KEY = "vessel_pronoun"
+
+# The key a dialect-spelling correction carries (dinnae against dinna).
+DIALECT_KEY = "dialect_spelling"
+
+# The key a dictionary-decided compound correction carries (sat phone ->
+# satphone). Separate from CONSISTENCY_KEY because the channel differs: the
+# term scan asks, and this one corrects on the dictionary's authority.
+COMPOUND_KEY = "compound_style"
+
+
+@dataclass(frozen=True)
+class VesselPronounDrift:
+    """A named vessel the book pronouns as *she*, and the *it/its* strays in
+    sentences that name her. The deity scan's shape with the polarity flipped:
+    there the book's convention is a capital, here it is a gender, and in both
+    cases the evidence is the book's own counts.
+
+    `vessel` is the name as the book writes it; `feminine` and `neuter` are the
+    pronoun counts in sentences naming her — the numbers the explanation
+    cites."""
+    vessel: str
+    feminine: int
+    neuter: int
+    outliers: tuple[Occurrence, ...]
+
+
+@dataclass(frozen=True)
+class DialectVariants:
+    """One dialect marker spelled more than one way inside dialect speech —
+    *dinnae* ×20 against *dinna* ×6, *cannae* ×10 against *canna* ×1. Counted
+    only over paragraphs that are plainly in dialect (see
+    ``find_dialect_variants``), because every one of these spellings is a
+    misspelling in ordinary prose and none of them is this scan's business
+    there.
+
+    `enforce` is the dominance test: a majority leading `min_dominance`:1 is the
+    book answering the question itself, and the strays are corrected. A closer
+    split is one query, at the first minority site."""
+    key: str                              # the family: "dinnae", "ye", "no’"
+    counts: Counter                       # spelling -> times seen in dialect
+    dominant: str
+    enforce: bool
+    outliers: tuple[Occurrence, ...]
+    kind: str = "dialect"
+
+
+@dataclass(frozen=True)
+class CompoundPreference:
+    """A compound the dictionary closes (*satphone*, *website*) that this book
+    also writes open or hyphenated. The one place the term scan's "ask, never
+    correct" rule gives way: it asks because a key-folding scan cannot tell an
+    inconsistency from a distinction, and here the dictionary has already told
+    it. Dominance is not consulted — *sat phone* ×4 against *satphone* ×3 never
+    reaches the term scan's bar, and the table settles it anyway."""
+    key: str                              # folded key: "satphone"
+    counts: Counter                       # representative form -> times seen
+    preferred: str                        # the closed form the dictionary sets
+    note: str                             # the dictionary phrasing to cite
+    outliers: tuple[Occurrence, ...]      # every occurrence not already closed
+
+
+@dataclass(frozen=True)
+class FigureDrift:
+    """One recurring figure written two ways — a bearing printed "282.6°" nine
+    times and "282.8°" once, with "A perfect match." on the line after.
+
+    Queries only, and not because the evidence is thin: house policy is that a
+    numeric value is never changed to repair a contradiction. Which of two
+    figures is the right one is not something a count can know, and quietly
+    rewriting the rare one would destroy the only evidence the author has that
+    the two disagree."""
+    key: str                              # unit + integer part: "282°"
+    counts: Counter                       # figure as written -> times seen
+    majority: str
+    outliers: tuple[Occurrence, ...]
+
+
 @dataclass(frozen=True)
 class ConsistencyReport:
     ran: bool = False
@@ -218,6 +324,11 @@ class ConsistencyReport:
     deity: DeityPronounDrift | None = None         # he->He in a reverent book
     times: TimeStyleDrift | None = None            # "at 8" in an "11:00" book
     case_splits: tuple[CaseSplit, ...] = ()        # earth/Earth outside sentence starts
+    vessels: tuple[VesselPronounDrift, ...] = ()   # "Its wings" on a ship called she
+    dialect: tuple[DialectVariants, ...] = ()      # dinnae/dinna, ye/yeh
+    compounds: tuple[CompoundPreference, ...] = ()  # sat phone -> satphone
+    figures: tuple[FigureDrift, ...] = ()          # 282.6° ×9 against 282.8° ×1
+    callbacks: tuple = ()                          # callbacks.Callback rows
 
     @property
     def _mechanical(self) -> tuple[VariantGroup, ...]:
@@ -225,20 +336,27 @@ class ConsistencyReport:
 
     @property
     def flagged(self) -> int:
-        # Terms, non-enforced names, deity strays and time strays are
-        # per-occurrence; the mechanical and policy scans are one query per
-        # group.
+        # Terms, non-enforced names, deity strays, time strays and figure
+        # strays are per-occurrence; the mechanical, policy and dialect scans
+        # are one query per group.
         return (sum(len(t.outliers) for t in self.terms)
                 + sum(len(n.outliers) for n in self.names if not n.enforce)
                 + len(self._mechanical) + len(self.policy)
                 + (len(self.deity.outliers) if self.deity else 0)
                 + (len(self.times.outliers) if self.times else 0)
-                + sum(len(c.outliers) for c in self.case_splits if not c.clear))
+                + sum(len(c.outliers) for c in self.case_splits if not c.clear)
+                + sum(1 for d in self.dialect if not d.enforce)
+                + sum(len(f.outliers) for f in self.figures)
+                + sum(1 for c in self.callbacks if c.kind != "misquote"))
 
     @property
     def corrected(self) -> int:
         return (sum(len(n.outliers) for n in self.names if n.enforce)
-                + sum(len(c.outliers) for c in self.case_splits if c.clear))
+                + sum(len(c.outliers) for c in self.case_splits if c.clear)
+                + sum(len(v.outliers) for v in self.vessels)
+                + sum(len(d.outliers) for d in self.dialect if d.enforce)
+                + sum(len(c.outliers) for c in self.compounds)
+                + sum(1 for c in self.callbacks if c.kind == "misquote"))
 
 
 def _key(form: str) -> str:
@@ -300,6 +418,39 @@ def _fold_accents(s: str) -> str:
 # and trimming it here both merges their counts and keeps a correction from
 # touching the clitic.
 _POSSESSIVE = re.compile(r"(?:[’']s|[’'])$")
+
+# The sentence boundary ``sweeps.sentence_window`` quotes by, repeated here so a
+# span these scans measure and the window a finding quotes cannot disagree about
+# where a sentence ends. (Kept as a copy rather than an import of a private
+# name; the one-line pattern is the contract.)
+_SENTENCE_END = re.compile(r"[.!?…][\"”’')\]]*\s+")
+
+
+def _sentence_spans(text: str) -> list[tuple[int, int]]:
+    """Every sentence in `text` as a (start, end) pair, trailing whitespace
+    excluded, split exactly where ``sentence_window`` splits. A scan that needs
+    to count what shares a sentence — pronouns against a vessel's name, a
+    remembered line against the line it remembers — needs the sentences
+    themselves, not one window at a time."""
+    bounds = [0] + [m.end() for m in _SENTENCE_END.finditer(text)] + [len(text)]
+    spans: list[tuple[int, int]] = []
+    for lo, hi in zip(bounds, bounds[1:]):
+        end = lo + len(text[lo:hi].rstrip())
+        if end > lo:
+            spans.append((lo, end))
+    return spans
+
+
+def _match_case(target: str, source: str) -> str:
+    """`target` set the way `source` was, so a correction at a sentence start
+    keeps its capital and a shouted one keeps its shout."""
+    if not source:
+        return target
+    if source.isupper() and len(source) > 1:
+        return target.upper()
+    if source[:1].isupper():
+        return target[:1].upper() + target[1:]
+    return target
 
 
 @dataclass
@@ -439,6 +590,53 @@ def _load_chicago() -> tuple[dict, dict]:
         return {}, {}
     data = data or {}
     return (data.get("classes") or {}), (data.get("forms") or {})
+
+
+@lru_cache(maxsize=1)
+def _load_closed_compounds() -> dict[str, tuple[str, str]]:
+    """The compounds the dictionary closes, keyed the way ``_key`` keys a term:
+    folded key -> (closed spelling, the note a correction cites).
+
+    Two tables feed it. ``closed_compounds.yaml``, whose whole subject this is,
+    and — narrowly — a single-word entry in ``chicago.yaml``'s `forms` map whose
+    note actually says the word is set closed, so a preference already recorded
+    there needs no second home. The narrowness matters: most of that map is
+    British-against-American letter variants (gray, toward), which are the query
+    channel's business and not a spacing question at all. A missing or malformed
+    file leaves the map empty and the scan silent."""
+    out: dict[str, tuple[str, str]] = {}
+    for form, note in (_load_chicago()[1] or {}).items():
+        form, note = str(form), str(note)
+        if (form and not re.search(r"[-\s]", form)
+                and re.search(r"\b(closed|one word|solid)\b", note, re.I)):
+            out.setdefault(_key(form), (form.lower(), note))
+    try:
+        import yaml
+        data = yaml.safe_load(
+            (_CONSISTENCY_DIR / "closed_compounds.yaml").read_text(
+                encoding="utf-8")) or {}
+    except Exception:                             # missing or malformed: not fatal
+        data = {}
+    for form, note in (data.get("forms") or {}).items():
+        form = str(form)
+        if form and not re.search(r"[-\s]", form):
+            out[_key(form)] = (form.lower(), str(note))
+    return out
+
+
+def _closed_compound(key: str, structures: Sequence[str]) -> tuple[str, str] | None:
+    """The closed spelling the dictionary sets for this group, or None.
+
+    The group has to be a spacing/hyphenation contest and nothing else: every
+    structure must reduce to `key` by deleting spaces and hyphens alone. An
+    apostrophe in the mix (*farmer's market*) is a different question and is left
+    to the query channel, where the term scan already asks it."""
+    known = _load_closed_compounds().get(key)
+    if known is None:
+        return None
+    if any(re.sub(r"[-\s]", "", s) != key for s in structures):
+        return None
+    return known
 
 
 def _variant_class(american: str, british: str) -> str:
@@ -693,6 +891,139 @@ def find_deity_pronouns(paragraphs: Sequence[ParagraphRef], *,
 
 
 
+# The same shape as the deity scan, one convention over: a ship the book calls
+# *she* and once or twice calls *it*.
+_FEMININE_PRONOUNS = frozenset({"she", "her", "hers", "herself"})
+_NEUTER_PRONOUNS = frozenset({"it", "its", "itself"})
+# What each stray becomes. "it" is the only one that depends on its position:
+# subject "it" is *she*, an object or a preposition's complement is *her*.
+_NEUTER_FIX = {"its": "her", "itself": "herself"}
+# What a subject pronoun can follow — nothing (a sentence start), a coordinator,
+# or a subordinator. Anything else (a preposition, a verb) makes the pronoun an
+# object, where the feminine form is "her" rather than "she".
+_SUBJECT_LEADERS = frozenset("""
+and but or so yet then that which who because if when while whilst though
+although since until unless before after as where whether nor
+""".split())
+# What a person does and a ship does not. A candidate the book ever puts in front
+# of one of these is somebody, and somebody is never an "it" — which makes this
+# the cheapest guard available against correcting the pronouns of "the Captain".
+_PERSON_VERBS = frozenset("""
+said says asked asks replied replies answered answers shouted whispered muttered
+murmured laughed smiled nodded shrugged sighed grinned frowned agreed admitted
+wondered thought knew believed remembered decided explained added continued
+told asked demanded insisted repeated promised swore
+""".split())
+
+
+def find_vessel_pronouns(paragraphs: Sequence[ParagraphRef], *,
+                         min_feminine: int = 5,
+                         min_mentions: int = 8,
+                         max_queries: int = 25) -> tuple[VesselPronounDrift, ...]:
+    """A named vessel the book pronouns as *she*, and the *it/its* strays.
+
+    The Cooper QA: a ship called the Dutchwoman carries "Her vast sails" and
+    "She hung in the center of the lens" for four hundred pages, and then "Its
+    wings curved forward" and "Its systems couldn't reconcile" — invisible to a
+    per-paragraph read, which sees a perfectly ordinary neuter pronoun beside a
+    perfectly ordinary noun.
+
+    Self-gating in three steps, because the whole risk here is a pronoun that
+    refers to something else in the same sentence. A candidate is a capitalized
+    word the book introduces with "the" at least `min_mentions` times away from
+    a sentence start — the shape of a named vessel (*the Dutchwoman*), not of a
+    person. A candidate is feminine only when the sentences that name it carry
+    at least `min_feminine` she/her/hers/herself AND outnumber their it/its by
+    three to one; anything closer is a book that pronouns the thing both ways
+    on purpose, or a candidate that is not a vessel at all. Then every
+    it/its/itself in a sentence naming her is a stray.
+
+    Corrections, like the case-split scan's: the counts answer the question a
+    query would ask, and the caller that reads this (Galley's fixed workflow)
+    screens every proposal in context before any of it reaches the document —
+    which is also the screen for the one thing this scan cannot see, an "it"
+    that means the console rather than the ship."""
+    usable = [(p.para_id, p.text, _sentence_spans(p.text))
+              for p in paragraphs if not _skip_caps_context(p)]
+    mentions: Counter = Counter()
+    people: set[str] = set()
+    for _pid, text, _spans in usable:
+        for m in _WORD.finditer(text):
+            form, start, end = _trim_quote(m.group(0), m.start(), m.end())
+            form = _POSSESSIVE.sub("", form)
+            end = start + len(form)
+            if (len(form) < 4 or _case_shape(form) != "title"
+                    or _sentence_initial(text, start)):
+                continue
+            if _word_before(text, start) != "the":
+                continue
+            mentions[form] += 1
+            # "the Captain said", "the Commodore nodded" — a candidate that acts
+            # like a person is a person, and no person is ever an "it".
+            after = _WORD.search(text[end:end + 24] or "")
+            if after and after.group(0).lower() in _PERSON_VERBS:
+                people.add(form)
+    candidates = [f for f, n in mentions.items()
+                  if n >= min_mentions and f not in people]
+    if not candidates:
+        return ()
+
+    drifts: list[VesselPronounDrift] = []
+    budget = max_queries
+    for vessel in sorted(candidates):
+        named = re.compile(r"\b" + re.escape(vessel) + r"(?:[’']s)?\b")
+        feminine = neuter = 0
+        strays: list[Occurrence] = []
+        for para_id, text, spans in usable:
+            for lo, hi in spans:
+                sentence = text[lo:hi]
+                if not named.search(sentence):
+                    continue
+                for m in _WORD.finditer(sentence):
+                    w = m.group(0).lower()
+                    if w in _FEMININE_PRONOUNS:
+                        feminine += 1
+                    elif w in _NEUTER_PRONOUNS:
+                        neuter += 1
+                        strays.append(Occurrence(
+                            para_id, lo + m.start(),
+                            lo + m.end(), m.group(0)))
+        if feminine < min_feminine or feminine < neuter * 3 or not strays:
+            continue
+        if budget <= 0:
+            log.info("Vessel-pronoun corrections capped at %d.", max_queries)
+            break
+        strays = strays[:budget]
+        budget -= len(strays)
+        drifts.append(VesselPronounDrift(vessel, feminine, neuter,
+                                         tuple(strays)))
+    # One stray belongs to one vessel: when two candidates share a sentence the
+    # first by name wins, so the same span is never corrected twice.
+    seen: set[tuple[str, int]] = set()
+    kept: list[VesselPronounDrift] = []
+    for d in drifts:
+        strays = tuple(o for o in d.outliers
+                       if (o.para_id, o.start) not in seen)
+        seen.update((o.para_id, o.start) for o in strays)
+        if strays:
+            kept.append(VesselPronounDrift(d.vessel, d.feminine, d.neuter,
+                                           strays))
+    return tuple(kept)
+
+
+def vessel_fix(text: str, o: Occurrence) -> str:
+    """The feminine form a stray becomes: *its*->her, *itself*->herself, and
+    *it*->she when it is a subject, *her* when it is not. Case is carried over,
+    so a sentence-initial "It" becomes "She"."""
+    lower = o.form.lower()
+    if lower in _NEUTER_FIX:
+        return _match_case(_NEUTER_FIX[lower], o.form)
+    subject = (_sentence_initial(text, o.start)
+               or _word_before(text, o.start) in _SUBJECT_LEADERS)
+    return _match_case("she" if subject else "her", o.form)
+
+
+
 # An H:MM time anywhere in the book: the style evidence.
 _TIME_WITH_MINUTES = re.compile(r"\b\d{1,2}:[0-5]\d\b")
 # A bare hour with a meridiem attached ("11 a.m.", "2 PM") — the digits must
@@ -755,6 +1086,99 @@ def find_time_style(paragraphs: Sequence[ParagraphRef], *,
                  max_queries, len(candidates))
         candidates = candidates[:max_queries]
     return TimeStyleDrift(with_minutes, example, tuple(candidates))
+
+
+
+# A figure with a unit attached, or a currency amount. The unit alternation is
+# longest-first so "km/h" and "kHz" are not read as "km" and "k". Case matters:
+# "N" is newtons and "m" is metres, while "degrees" and "seconds" are words.
+_FIGURE_UNITS = (
+    "°", "degrees", "%", "km/h", "kHz", "MHz", "Hz", "km", "kg", "mph",
+    "μrad", "µrad", "urad", "µN", "uN", "AU", "ly", "seconds", "secs", "sec",
+    "N", "m", "g", "s",
+)
+_FIGURE = re.compile(
+    r"(?<![\w.,])(?P<currency>[$€£])?(?P<sign>[-−])?"
+    r"(?P<number>\d{1,4}(?:,\d{3})*(?:\.\d+)?)"
+    r"(?:[    ]?(?P<unit>" + "|".join(_FIGURE_UNITS) + r"))?"
+    r"(?!\w)")
+# One spelling per unit, so "degrees" and "°" — or "sec" and "s" — are one
+# recurring figure rather than two.
+_UNIT_CANON = {"degrees": "°", "seconds": "s", "secs": "s", "sec": "s",
+               "urad": "μrad", "µrad": "μrad", "uN": "µN"}
+
+
+def find_figure_drift(paragraphs: Sequence[ParagraphRef], *,
+                      min_majority: int = 3,
+                      max_queries: int = 25) -> tuple[FigureDrift, ...]:
+    """A recurring figure whose decimal wanders once.
+
+    The Cooper QA: a bearing printed "282.6°" and "77.4°" nine times, and once
+    "282.8°" and "77.2°" — followed, two words later, by "A perfect match." Two
+    numbers that disagree are the single hardest thing for a per-paragraph read
+    to see, because each of them is a perfectly well-formed number.
+
+    Queries, always. House policy is that a numeric value is never changed to
+    repair a contradiction: a count cannot know which of two figures is the
+    right one, and silently rewriting the rare one would delete the only
+    evidence the author has that they disagree. Self-gating on repetition — the
+    majority figure must appear at least `min_majority` times and the stray
+    fewer than a third as often, which is the shape of a slip rather than of two
+    real measurements."""
+    groups: dict[str, dict] = {}
+    for para in paragraphs:
+        if _skip_caps_context(para):
+            continue
+        for m in _FIGURE.finditer(para.text):
+            unit, currency = m.group("unit"), m.group("currency")
+            if not unit and not currency:
+                continue
+            number = m.group("number")
+            if unit == "s" and re.fullmatch(r"[12]\d{3}", number):
+                continue                      # "the 1980s" is not a duration
+            unit = _UNIT_CANON.get(unit or "", unit or "")
+            integer, _, decimal = number.replace(",", "").partition(".")
+            sign = m.group("sign") or ""
+            key = f"{currency or ''}{sign}{integer}{unit}"
+            written = para.text[m.start():m.end()]
+            g = groups.setdefault(key, {"counts": Counter(), "sites": [],
+                                        "decimals": {}})
+            g["counts"][written] += 1
+            g["decimals"][written] = decimal
+            g["sites"].append(Occurrence(
+                para.para_id, m.start(), m.end(), written))
+
+    out: list[FigureDrift] = []
+    budget = max_queries
+    for key in sorted(groups):
+        g = groups[key]
+        counts: Counter = g["counts"]
+        if len(counts) < 2:
+            continue
+        majority = _pick_dominant(counts)
+        maj_n = counts[majority]
+        if maj_n < min_majority:
+            continue
+        # A stray is a figure whose DECIMAL differs and which is rare beside the
+        # majority. A form that differs only in its thousands separator is a
+        # number-style question, not a contradiction, and is left alone.
+        # Both figures must carry a decimal. "6 m" beside "6.5 m" is two
+        # measurements a reader cannot confuse; "282.6°" beside "282.8°" is one
+        # measurement that moved, and that is the only shape worth a question.
+        strays = {f for f, n in counts.items()
+                  if f != majority and n * 3 < maj_n
+                  and g["decimals"][f] and g["decimals"][majority]
+                  and g["decimals"][f] != g["decimals"][majority]}
+        if not strays:
+            continue
+        outliers = tuple(o for o in g["sites"] if o.form in strays)
+        if budget <= 0:
+            log.info("Figure-drift queries capped at %d.", max_queries)
+            break
+        outliers = outliers[:budget]
+        budget -= len(outliers)
+        out.append(FigureDrift(key, Counter(counts), majority, outliers))
+    return tuple(out)
 
 
 
@@ -822,6 +1246,132 @@ def find_accent_loanwords(paragraphs: Sequence[ParagraphRef], *,
             "accent", key, Counter(counts), key,
             True, g["sites"][0], counts[bare]))
     return tuple(_cap(out, "accent-loanword", max_queries))
+
+
+
+# Dialect. Every spelling below is a misspelling in ordinary prose, which is
+# exactly why the scan first has to prove it is looking at dialect: two distinct
+# markers in the paragraph, and only then does it count anything. Outside that
+# gate an "o’" is a possessive artifact and a "ye" is Ye Olde signage.
+_DIALECT_MARKER_WORDS = """
+dinnae dinna dinny cannae canna tae ye yer aye wee ken isnae isna wasnae wasna
+didnae didna wouldnae wouldna couldnae couldna havenae havena ain bairn yersel
+yerself
+""".split()
+# Markers written with an elision mark: no’ (not), o’ (of), wi’ (with), an’ (and).
+_DIALECT_MARKER_ELIDED = ("no", "o", "wi", "an")
+_DIALECT_MARKER = re.compile(
+    r"\b(?:" + "|".join(sorted(_DIALECT_MARKER_WORDS, key=len, reverse=True))
+    + r")\b|\b(?:" + "|".join(_DIALECT_MARKER_ELIDED) + r")[’'](?![A-Za-z])",
+    re.IGNORECASE)
+
+# Variant spellings of ONE marker. Deliberately conservative: "canny" is a real
+# English word and is not in the cannae family, and a family is only listed when
+# both spellings are unambiguously the same dialect word.
+_DIALECT_FAMILIES: dict[str, tuple[str, ...]] = {
+    "dinnae": ("dinnae", "dinna", "dinny"),
+    "cannae": ("cannae", "canna"),
+    "havenae": ("havenae", "havena"),
+    "isnae": ("isnae", "isna"),
+    "wasnae": ("wasnae", "wasna"),
+    "didnae": ("didnae", "didna"),
+    "wouldnae": ("wouldnae", "wouldna"),
+    "couldnae": ("couldnae", "couldna"),
+    "ye": ("ye", "yeh"),
+    "yersel": ("yersel", "yerself"),
+}
+# The elided-not family, whose two spellings are not two spellings of a word but
+# a mark that is there or missing: "It’s no’ bad" against "It’s no bad".
+_NO_FAMILY = "no’"
+_NO_ELIDED = re.compile(r"\bno[’'](?![A-Za-z])")
+# A bare "no" standing where the elided "not" would: after a copula, before a
+# modifier. The word after is what tells a dialect "no" from an ordinary one.
+_NO_BARE = re.compile(
+    r"(?:\b(?:is|was|were|are|am)|[’'](?:s|re|m))\s+(no)\b\s+([A-Za-z’']+)",
+    re.IGNORECASE)
+# After "was no ___", these make the "no" ordinary English rather than an elided
+# "not": a quantifier, a determiner, a pronoun, or one of the fixed phrases.
+_NO_IS_ORDINARY = frozenset("""
+one longer more matter doubt need use idea sign room question point harm trouble
+sense man woman place name reason choice chance hope escape mistake friend help
+business word words sound sign sight thing things body kind sort time times way
+ways good telling knowing mistaking a an the my your his her its our their this
+that these those them it him you me us stranger fool
+""".split())
+
+
+@lru_cache(maxsize=None)
+def _dialect_family_re(family: str) -> re.Pattern:
+    forms = sorted(_DIALECT_FAMILIES[family], key=len, reverse=True)
+    return re.compile(r"\b(?:" + "|".join(forms) + r")\b", re.IGNORECASE)
+
+
+def _dialect_markers(text: str) -> set[str]:
+    return {m.group(0).lower().replace("’", "'")
+            for m in _DIALECT_MARKER.finditer(text)}
+
+
+def find_dialect_variants(paragraphs: Sequence[ParagraphRef], *,
+                          min_dominance: int = 3,
+                          max_queries: int = 40) -> tuple[DialectVariants, ...]:
+    """One dialect marker spelled more than one way inside dialect speech.
+
+    The Cooper QA, all of it in Scots dialogue: *dinnae* ×20 against *dinna* ×6,
+    *cannae* ×10 against *canna* ×1, *ye* everywhere against one *yeh*,
+    *havenae* against *havena*. No per-paragraph read can see it — each spelling
+    is fine on its own page — and no spell scan can either, because all of them
+    are outside the dictionary.
+
+    The scan counts nothing until a paragraph proves it is in dialect: at least
+    two distinct markers from ``_DIALECT_MARKER``. Inside that gate, a family
+    whose majority leads `min_dominance`:1 has answered the question itself and
+    its strays become tracked edits (the fixed workflow screens every one); a
+    closer split is a single query at the first minority site, because which
+    spelling a dialect uses is the author's ear, not a scan's."""
+    counts: dict[str, Counter] = defaultdict(Counter)
+    sites: dict[str, list[tuple[str, Occurrence]]] = defaultdict(list)
+
+    def record(family: str, para_id: str, start: int, end: int, raw: str,
+               form: str) -> None:
+        counts[family][form] += 1
+        sites[family].append((form, Occurrence(para_id, start, end, raw)))
+
+    for para in paragraphs:
+        text = para.text
+        if _skip_caps_context(para) or len(_dialect_markers(text)) < 2:
+            continue
+        for family in _DIALECT_FAMILIES:
+            for m in _dialect_family_re(family).finditer(text):
+                raw = m.group(0)
+                record(family, para.para_id, m.start(), m.end(), raw,
+                       raw.lower())
+        for m in _NO_ELIDED.finditer(text):
+            record(_NO_FAMILY, para.para_id, m.start(), m.end(), m.group(0),
+                   "no’")
+        for m in _NO_BARE.finditer(text):
+            if m.group(2).lower().strip("’'") in _NO_IS_ORDINARY:
+                continue
+            record(_NO_FAMILY, para.para_id, m.start(1), m.end(1),
+                   m.group(1), "no")
+
+    out: list[DialectVariants] = []
+    for family in sorted(counts):
+        c = counts[family]
+        if len(c) < 2:
+            continue                          # one spelling: nothing to settle
+        dominant = _pick_dominant(c, prefer=family)
+        minority = {f for f in c if f != dominant}
+        enforce = _has_majority(c, dominant, min_dominance)
+        outliers = tuple(o for form, o in sites[family] if form in minority)
+        if not outliers:
+            continue
+        out.append(DialectVariants(family, Counter(c), dominant, enforce,
+                                   outliers))
+    if max_queries and len(out) > max_queries:
+        log.info("Dialect-variant findings capped at %d (%d found).",
+                 max_queries, len(out))
+        out = out[:max_queries]
+    return tuple(out)
 
 
 # A run of letter-then-dot (U.S., a.m., Ph.D.) with no spaces between the units,
@@ -1073,6 +1623,7 @@ def _in_name_phrase(tokens, i, text) -> bool:
 
 def find_case_splits(paragraphs: Sequence[ParagraphRef], *,
                      dominance: int = 3, min_total: int = 5,
+                     proper_min_total: int = 3,
                      min_length: int = 3, max_ngram: int = 2,
                      sentence_initial_excluded: bool = True,
                      determiner_guard: float = 0.8,
@@ -1099,10 +1650,40 @@ def find_case_splits(paragraphs: Sequence[ParagraphRef], *,
 
     `dominance` and `min_total` decide `clear`: a clear split proposes the
     majority form as a correction; a closer split is reported with its counts
-    for a reader to judge."""
+    for a reader to judge.
+
+    `proper_min_total` is a lower bar for a term hung off a PROPER NOUN — a word
+    the book capitalizes everywhere away from a sentence start and never
+    lowercases at all. "Atacama plateau" once against "Atacama Plateau" three
+    times is four uses in total, well under `min_total`, and it is still a split
+    a reader wants: the proper noun rules out the ordinary reason a word appears
+    both ways (a common noun that is also somebody's name). Such a bigram is
+    counted even when its two words disagree in case, which is the only way the
+    lowercase half of "Atacama plateau" is visible at all."""
     protected_l = {str(p).lower() for p in protected} | {str(e).lower() for e in exclude}
     from .function_words import FUNCTION_WORDS
     groups: dict[str, dict] = {}
+
+    # Pass one, over the whole book: which words are proper nouns. A word seen
+    # lowercased anywhere is not one, and a word only ever seen at a sentence
+    # start says nothing — English capitalizes those regardless.
+    lowered: set[str] = set()
+    titled: set[str] = set()
+    for para in paragraphs:
+        if _skip_caps_context(para):
+            continue
+        for m in _WORD.finditer(para.text):
+            form, start, _end = _trim_quote(m.group(0), m.start(), m.end())
+            form = _POSSESSIVE.sub("", form)
+            if not form:
+                continue
+            shape = _case_shape(form)
+            if shape == "lower":
+                lowered.add(form.lower())
+            elif shape == "title" and not (sentence_initial_excluded
+                                           and _sentence_initial(para.text, start)):
+                titled.add(form.lower())
+    proper = titled - lowered
 
     def bucket(key):
         return groups.setdefault(key, {"lower": [], "title": [], "det_lower": 0,
@@ -1132,12 +1713,24 @@ def find_case_splits(paragraphs: Sequence[ParagraphRef], *,
             if shape is None:
                 continue
             determined = _word_before(text, start) in _CASE_DETERMINERS
-            # A bigram of two same-shaped words joined by one space.
-            if max_ngram >= 2 and i + 1 < len(tokens):
+            # A bigram joined by one space. Two same-shaped words are one term
+            # capitalized one way ("solar system" / "Solar System"). A
+            # Capitalized PROPER noun followed by a word of either shape is one
+            # too — "Atacama plateau" against "Atacama Plateau" — and there the
+            # shape that matters is the SECOND word's, since the first is
+            # capitalized either way.
+            if max_ngram >= 2 and i + 1 < len(tokens) and not initial:
                 nform, nstart, nend, nshape, _ = tokens[i + 1]
-                if nshape == shape and text[end:nstart] == " " and not initial:
+                joined = text[end:nstart] == " " and nshape is not None
+                bigram_shape = None
+                if joined and nshape == shape:
+                    bigram_shape = shape
+                elif joined and shape == "title" and form.lower() in proper:
+                    bigram_shape = nshape
+                if bigram_shape is not None:
                     add(form.lower() + " " + nform.lower(),
-                        Occurrence(para.para_id, start, nend, text[start:nend]), shape, determined)
+                        Occurrence(para.para_id, start, nend, text[start:nend]),
+                        bigram_shape, determined)
             if initial:
                 continue
             if shape == "title" and _in_name_phrase(tokens, i, text):
@@ -1152,7 +1745,10 @@ def find_case_splits(paragraphs: Sequence[ParagraphRef], *,
                 or not g["lower"] or not g["title"]):
             continue
         total = len(g["lower"]) + len(g["title"])
-        if total < min_total:
+        # A term hung off a proper noun clears a lower bar — see the docstring.
+        floor = (min(min_total, proper_min_total)
+                 if any(w in proper for w in key.split(" ")) else min_total)
+        if total < floor:
             continue
         lo = g["det_lower"] / len(g["lower"])
         ti = g["det_title"] / len(g["title"])
@@ -1194,7 +1790,18 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
                          case_splits: bool = False,
                          case_split_dominance: int = 3,
                          case_split_min_total: int = 5,
-                         case_split_exclude: Sequence[str] = ()) -> ConsistencyReport:
+                         case_split_proper_min_total: int = 3,
+                         case_split_exclude: Sequence[str] = (),
+                         vessel_pronouns: bool = False,
+                         vessel_min_feminine: int = 5,
+                         dialect_variants: bool = False,
+                         dialect_dominance: int = 3,
+                         closed_compounds: bool = False,
+                         figure_drift: bool = True,
+                         figure_min_majority: int = 3,
+                         callbacks: bool = False,
+                         callback_min_tokens: int = 8,
+                         callback_near: float = 0.80) -> ConsistencyReport:
     """Terms this manuscript writes more than one way.
 
     `min_length` keeps short words out — the shorter the key, the more likely
@@ -1218,6 +1825,23 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
     that screens every proposal (Galley's fixed workflow); the legacy pipeline
     has no such screen and does not ask for it. `case_split_exclude` lists
     keys the run has already decided by an accepted edit.
+
+    The five whole-book scans the Cooper QA added, each silent on a book without
+    the pattern: `vessel_pronouns` (a ship called *she* and once *it*),
+    `dialect_variants` (dinnae against dinna inside dialect speech),
+    `closed_compounds` (sat phone against satphone, where the dictionary
+    decides), `figure_drift` (282.6° nine times and 282.8° once) and `callbacks`
+    (a remembered line that misquotes the line it remembers; see
+    ``docproof/callbacks.py``).
+
+    Four of those five can propose a tracked edit, and they are off here for the
+    same reason `case_splits` is: the caller that asks for them is the one that
+    screens every proposal in context. The shipped config turns them on, so
+    Galley's fixed workflow — which reads this signature and passes the config
+    through by name — gets all of them; the legacy pipeline, which enumerates
+    what it wants and has no screen, keeps the behaviour it had. `figure_drift`
+    is on by default because it corrects nothing at all: a numeric value is never
+    changed to repair a contradiction, so its worst case is a question.
     """
     if not enabled:
         return ConsistencyReport(ran=False)
@@ -1225,6 +1849,7 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
     # Paragraph text by id, for the compound part-of-speech gate below (it reads
     # the word before each occurrence to tell a phrasal verb from its noun twin).
     _text_by_id = {p.para_id: p.text for p in paragraphs}
+    closed_keys = _load_closed_compounds() if closed_compounds else {}
     groups: dict[str, _Group] = defaultdict(_Group)
     for para in paragraphs:
         # Trim closing-quote artifacts up front, so both the single-token form
@@ -1244,13 +1869,20 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
                     forms.append((para.text[wstart:nend], wstart, nend))
             for form, start, end in forms:
                 key = _key(form)
-                if len(key) < min_length or key in _LEGITIMATE:
+                # `min_length` is a guard against accidental key collisions
+                # between unrelated short words. A key the closed-compound table
+                # names is not an accident — the dictionary put it there — so
+                # "email" and "online" are counted despite being short.
+                if key in _LEGITIMATE:
+                    continue
+                if len(key) < min_length and key not in closed_keys:
                     continue
                 g = groups[key]
                 g.counts[form] += 1
                 g.where.append(Occurrence(para.para_id, start, end, form))
 
     terms: list[Inconsistency] = []
+    compounds: list[CompoundPreference] = []
     for key, g in sorted(groups.items()):
         # Collapse the surface forms into their structures before deciding
         # anything. Two spellings that differ only in letter case (or in the
@@ -1269,6 +1901,20 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
         # spelling never carries an incidental sentence-initial capital.
         reps = {s: min(c, key=lambda f, c=c: (-c[f], f != f.lower(), f))
                 for s, c in buckets.items()}
+        # The dictionary decides before dominance gets a vote. "sat phone" ×4
+        # against "satphone" ×3 never reaches the bar below and never will; the
+        # table already knows which of the two is the word.
+        closed = (_closed_compound(key, tuple(buckets))
+                  if closed_compounds else None)
+        if closed is not None:
+            preferred, note = closed
+            strays = tuple(o for o in g.where
+                           if _structure(o.form) != preferred)
+            if strays:
+                counts = Counter({reps[s]: totals[s] for s in totals})
+                compounds.append(CompoundPreference(key, counts, preferred,
+                                                    note, strays))
+            continue
         dom_struct = max(totals, key=lambda s: (totals[s], s))
         dom_total = totals[dom_struct]
         minority_structs = {s for s, t in totals.items()
@@ -1318,20 +1964,42 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
         max_queries=max_queries_per_kind) if accent_loanwords else ())
     splits = (find_case_splits(
         paragraphs, dominance=case_split_dominance, min_total=case_split_min_total,
+        proper_min_total=case_split_proper_min_total,
         protected=protected, exclude=case_split_exclude,
         max_groups=max_queries_per_kind) if case_splits else ())
+    vessels = (find_vessel_pronouns(
+        paragraphs, min_feminine=vessel_min_feminine,
+        max_queries=max_queries_per_kind) if vessel_pronouns else ())
+    dialect = (find_dialect_variants(
+        paragraphs, min_dominance=dialect_dominance,
+        max_queries=max_queries_per_kind) if dialect_variants else ())
+    figures = (find_figure_drift(
+        paragraphs, min_majority=figure_min_majority,
+        max_queries=max_queries_per_kind) if figure_drift else ())
+    echoes: tuple = ()
+    if callbacks:
+        from .callbacks import find_callbacks
+        echoes = find_callbacks(paragraphs, min_tokens=callback_min_tokens,
+                                near=(callback_near, 0.999),
+                                max_queries=max_queries_per_kind)
     report = ConsistencyReport(ran=True, terms=tuple(terms), names=drift,
                                variants=variants, abbreviations=abbrevs,
                                casings=cases, accents=accents, policy=policy,
-                               deity=deity, times=times, case_splits=splits)
+                               deity=deity, times=times, case_splits=splits,
+                               vessels=vessels, dialect=dialect,
+                               compounds=tuple(compounds), figures=figures,
+                               callbacks=echoes)
     log.info("Consistency scan: %d term(s), %d spelling-variant(s), "
              "%d abbreviation(s), %d acronym-case(s), %d accent(s), "
              "%d policy form(s), %d deity-pronoun stray(s), %d bare-hour "
-             "time(s), and %d name(s) with diacritic drift — %d occurrence(s) "
-             "to correct, %d to ask about",
+             "time(s), %d name(s) with diacritic drift, %d vessel(s) pronouned "
+             "both ways, %d dialect spelling(s), %d dictionary-decided "
+             "compound(s), %d drifting figure(s), and %d verbatim callback(s) "
+             "— %d occurrence(s) to correct, %d to ask about",
              len(terms), len(variants), len(abbrevs), len(cases), len(accents),
              len(policy), len(deity.outliers) if deity else 0,
-             len(times.outliers) if times else 0, len(drift),
+             len(times.outliers) if times else 0, len(drift), len(vessels),
+             len(dialect), len(compounds), len(figures), len(echoes),
              report.corrected, report.flagged)
     return report
 
@@ -1581,8 +2249,8 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
     k = 1
     for split in report.case_splits:
         forms = " vs ".join(f"“{f}” ×{c}" for f, c in split.counts.most_common())
-        dom_n = sum(c for f, c in split.counts.items() if _case_shape(f) == _case_shape(split.dominant))
-        min_n = sum(split.counts.values()) - dom_n
+        min_n = len(split.outliers)
+        dom_n = sum(split.counts.values()) - min_n
         for o in split.outliers:
             para = by_id.get(o.para_id)
             if para is None:
@@ -1611,5 +2279,141 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
                 confidence="high" if split.clear else "medium",
             ))
             k += 1
+
+    # Vessel pronouns: one correction per stray, carrying the counts that make
+    # the book's own convention the evidence.
+    v = 1
+    for vessel in report.vessels:
+        for o in vessel.outliers:
+            para = by_id.get(o.para_id)
+            if para is None:
+                continue
+            window, lo, occurrence = sentence_window(para.text, o.start, o.end)
+            fix = vessel_fix(para.text, o)
+            findings.append(Finding(
+                finding_id=f"v-{v:04d}",
+                chunk_id="consistency",
+                para_id=o.para_id,
+                error_type=VESSEL_KEY,
+                original_text=window,
+                occurrence=occurrence,
+                corrected_text=window[:o.start - lo] + fix + window[o.end - lo:],
+                explanation=(
+                    f"This book pronouns the {vessel.vessel} as “she” — "
+                    f"{vessel.feminine} feminine pronoun(s) in sentences naming "
+                    f"her against {vessel.neuter} neuter — so this “{o.form}” "
+                    f"is changed to “{fix}”. Drop it if the pronoun refers to "
+                    f"something else in the sentence."),
+                confidence="medium",
+            ))
+            v += 1
+
+    # Dialect: corrections when the majority spelling is decisive, otherwise one
+    # query at the first minority site. A spelling that recurs on every page of
+    # dialogue cannot have a margin note per occurrence.
+    d = 1
+    for group in report.dialect:
+        forms = ", ".join(f"“{f}” ({c})" for f, c in group.counts.most_common())
+        sites = [o for o in group.outliers if by_id.get(o.para_id)]
+        if not sites:
+            continue
+        if not group.enforce:
+            first = sites[0]
+            para = by_id[first.para_id]
+            window, _, occurrence = sentence_window(
+                para.text, first.start, first.end)
+            findings.append(Finding(
+                finding_id=f"c-{n:04d}",
+                chunk_id="consistency",
+                para_id=first.para_id,
+                error_type=CONSISTENCY_KEY,
+                original_text=window,
+                occurrence=occurrence,
+                corrected_text=window,
+                explanation=(
+                    f"This dialect word is spelled more than one way in "
+                    f"dialogue: {forms}. No spelling clearly dominates, so "
+                    f"which one to settle on is your ear — “{group.dominant}” "
+                    f"is the one used more."),
+                confidence="medium",
+            ))
+            n += 1
+            continue
+        for o in sites:
+            para = by_id[o.para_id]
+            window, lo, occurrence = sentence_window(para.text, o.start, o.end)
+            fix = _match_case(group.dominant, o.form)
+            findings.append(Finding(
+                finding_id=f"d-{d:04d}",
+                chunk_id="consistency",
+                para_id=o.para_id,
+                error_type=DIALECT_KEY,
+                original_text=window,
+                occurrence=occurrence,
+                corrected_text=window[:o.start - lo] + fix + window[o.end - lo:],
+                explanation=(
+                    f"This dialogue spells one dialect word more than one way: "
+                    f"{forms}. Changed to the spelling the book uses; reject if "
+                    f"this speaker's spelling is deliberately different."),
+                confidence="high",
+            ))
+            d += 1
+
+    # Dictionary-decided compounds: corrections, because the table already
+    # answered the question the term scan would have asked.
+    m = 1
+    for pref in report.compounds:
+        forms = ", ".join(f"“{f}” ({c})" for f, c in pref.counts.most_common())
+        for o in pref.outliers:
+            para = by_id.get(o.para_id)
+            if para is None:
+                continue
+            window, lo, occurrence = sentence_window(para.text, o.start, o.end)
+            fix = _match_case(pref.preferred, o.form)
+            findings.append(Finding(
+                finding_id=f"m-{m:04d}",
+                chunk_id="consistency",
+                para_id=o.para_id,
+                error_type=COMPOUND_KEY,
+                original_text=window,
+                occurrence=occurrence,
+                corrected_text=window[:o.start - lo] + fix + window[o.end - lo:],
+                explanation=(
+                    f"{pref.note} This manuscript writes it {forms}, so this "
+                    f"one is closed up to match the dictionary rather than the "
+                    f"count. Reject if the open spelling is deliberate."),
+                confidence="high",
+            ))
+            m += 1
+
+    # Figures: one query per stray, and never an edit — a numeric value is not
+    # changed to repair a contradiction.
+    for figure in report.figures:
+        maj_n = figure.counts[figure.majority]
+        for o in figure.outliers:
+            para = by_id.get(o.para_id)
+            if para is None:
+                continue
+            window, _, occurrence = sentence_window(para.text, o.start, o.end)
+            findings.append(Finding(
+                finding_id=f"c-{n:04d}",
+                chunk_id="consistency",
+                para_id=o.para_id,
+                error_type=CONSISTENCY_KEY,
+                original_text=window,
+                occurrence=occurrence,
+                corrected_text=window,
+                explanation=(
+                    f"This figure is “{figure.majority}” at {maj_n} other "
+                    f"place(s) and “{o.form}” here. Is the difference "
+                    f"deliberate? Nothing has been changed either way — which "
+                    f"figure is the right one is yours to say."),
+                confidence="high",
+            ))
+            n += 1
+
+    if report.callbacks:
+        from .callbacks import callback_findings
+        findings.extend(callback_findings(report.callbacks, paragraphs))
 
     return findings

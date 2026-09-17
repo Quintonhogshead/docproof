@@ -38,6 +38,8 @@ sweeps:
   - sweep_initialism
   - sweep_decade_apostrophe
   - sweep_trailing_space
+  - sweep_prefix_compound
+  - sweep_chicago_terms
 ```
 
 To ADD a per-category repeat read or a bespoke sweep, paste the block above and

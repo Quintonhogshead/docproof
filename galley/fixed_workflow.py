@@ -1187,6 +1187,7 @@ class FixedWorkflow:
                 raise FixedWorkflowError("Unsettled overlapping corrections cannot be applied")
             unique.append(group[0])
         from galley.fixed_policy import verse_safe
+        from galley.proposal_guards import proposal_problem
         for row in sorted(unique, key=lambda x: (x["para_id"], x["start"], x["end"]), reverse=True):
             pid, lo, hi = row["para_id"], row["start"], row["end"]
             if pid in self.poetry_ids and pid in self.current:
@@ -1198,6 +1199,14 @@ class FixedWorkflow:
                 raise FixedWorkflowError("Correction has invalid source coordinates")
             if before[pid][lo:hi] != row["before"]:
                 raise FixedWorkflowError("Correction belongs to a different manuscript version")
+            # The last gate before the text changes: a proposal every stage
+            # agreed on can still be the wrong edit (Cooper, 2026-09-17). A
+            # refusal is a dropped row with a receipt, never a run failure.
+            if not row.get("format"):
+                problem = proposal_problem(row["before"], row["replacement"], before[pid], lo, hi)
+                if problem:
+                    self.history.append({"stage": stage, "dropped": row, "reason": "guard: " + problem})
+                    continue
             if row.get("format"):
                 self.formats.append({**row, "snapshot": before[pid], "stage": stage})
             else:

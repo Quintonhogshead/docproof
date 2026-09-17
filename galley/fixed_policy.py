@@ -73,7 +73,9 @@ def _number_policy() -> str:
         "for a U.K.-oriented one — when the text establishes a clock time WITH minutes or a meridiem. "
         "A bare hour with neither (“around 4”, “At 3?”) is a number like any other: spelled out "
         "(“around four”, “At three?”), never given “:00” or a meridiem. A spelled-out hour "
-        "(“at around five”) never becomes digits. Never infer a missing meridiem "
+        "(“at around five”) never becomes digits. A time already written in 24-hour form (“17:03”, "
+        "“00:05 UTC”, “0830”, “thirteen hundred”) stays 24-hour: never convert it to a.m./p.m. or "
+        "invent a meridiem for it. Never infer a missing meridiem "
         "or time value. Preserve legitimate dates, years, identifiers, measurements, "
         "labels, idioms and deliberate spoken numbers. Return only clear errors. "
         "Currency-specific rules take precedence over the general prohibition "
@@ -178,6 +180,7 @@ VERSE_CATEGORIES = frozenset({
     "missing_word", "ly_adverb_hyphen",
     "sweep_ellipsis", "sweep_dash", "sweep_elision_apostrophe", "sweep_quote_pair",
     "sweep_trailing_space", "sweep_time_of_day", "sweep_compound_number",
+    "sweep_prefix_compound",  # chicago_terms stays out: a poet’s capitals are the poet’s
     "sweep_century", "sweep_decade_apostrophe", "sweep_initialism",
 })
 
