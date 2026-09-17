@@ -52,6 +52,30 @@ LOCAL_CANDIDATE_TYPES = tuple(
     key for key in INITIAL_CANDIDATE_TYPES if key not in EXCLUDED_LOCAL_TYPES)
 DIAGNOSTIC_ONLY_TYPES = frozenset({"word_echo", "reading_level"})
 
+# The Jev pre-screen over those local rule candidates (galley.fixed_prescreen).
+# Measured 2026-09-17 on 553 rule candidates over the Redding miss paragraphs:
+# at P >= 0.30 Jev kept 232 of them and preserved 56 of the 81 located misses,
+# where the lane's own paid Luna-low judge preserved 30 to 35. A lower bar buys
+# little; a higher one starts discarding real errors. Jev judges only whether
+# the rule fired on a real error — the paid screen still decides every site.
+JEV_PRESCREEN_THRESHOLD = 0.30
+JEV_PRESCREEN_RULE = (
+    "Chicago Manual of Style comma rules for fiction: a comma before a coordinating "
+    "conjunction (and, but, or, so, yet, for, nor) that joins two independent clauses; "
+    "after an introductory dependent clause or a long introductory phrase; the serial "
+    "(Oxford) comma before the last item of a list of three or more; around a "
+    "nonrestrictive clause or appositive; before and after a name in direct address; "
+    "between a dialogue tag and the quotation; after an interjection or 'yes'/'no'. "
+    "No comma between a subject and its verb, before a restrictive clause, or between "
+    "two verbs sharing one subject. A fiction author's deliberate polysyndeton "
+    "('and ... and ... and') and short punchy fragments are left alone. "
+    "Numbers: spell out whole numbers one through one hundred in narrative; numerals "
+    "for ages in some houses, so a number-style flag is only an error when the "
+    "manuscript is inconsistent with itself. Dialogue: a comma, not a period, "
+    "separates a quotation from its tag ('...,' she said); every opening quotation mark "
+    "has a closing one. A word repeated back to back (the the) is an error unless "
+    "deliberate emphasis.")
+
 
 def _number_policy() -> str:
     sections = [PROOFREADING_POLICY, house_rules_block("number proofreader")]
@@ -440,5 +464,6 @@ def poetry_samples(paragraphs: Mapping[str, str], count: int = 6,
 
 
 __all__ = ["configuration", "EXCLUDED_LOCAL_TYPES", "LOCAL_CANDIDATE_TYPES",
+           "DIAGNOSTIC_ONLY_TYPES", "JEV_PRESCREEN_RULE", "JEV_PRESCREEN_THRESHOLD",
            "NUMBER_POLICY", "PROOFREADING_POLICY", "VERSE_CATEGORIES",
            "extract_numbers", "number_proposal_problem", "poetry_samples", "verse_safe"]
