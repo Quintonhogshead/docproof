@@ -103,6 +103,31 @@ def register(app: FastAPI) -> None:
             except SaplingError as e:
                 return {"ok": False, "message": str(e)}
             return {"ok": True, "message": "Key works."}
+        if provider == settingslib.TYPESAFE:
+            # Jev answers typed questions, not prose, so its "does the key
+            # work?" is one tiny judgment in a throwaway receipt directory —
+            # the same shape the fixed recipe asks a few thousand times.
+            key = settingslib.get_api_key(settingslib.TYPESAFE)
+            if not key:
+                return {"ok": False, "message": "No key saved yet."}
+            import tempfile
+            from pathlib import Path
+            from galley.jev import JevLedger, JevUnavailable
+            try:
+                with tempfile.TemporaryDirectory() as tmp:
+                    JevLedger(Path(tmp)).ask(
+                        "key_test", {"sentence": "The key works."},
+                        {"ok": {"type": "noul",
+                                "instructions": "Is this sentence in English?"}})
+            except JevUnavailable as e:
+                return {"ok": False, "message": str(e)}
+            except ImportError:
+                return {"ok": False,
+                        "message": "The typesafe-sdk package is not installed "
+                                   "on this server."}
+            except Exception as e:            # noqa: BLE001 - surface verbatim
+                return {"ok": False, "message": str(e)}
+            return {"ok": True, "message": "Key works."}
         if provider not in settingslib.PROVIDERS:
             raise HTTPException(404, "Unknown provider")
         key = settingslib.get_api_key(provider)

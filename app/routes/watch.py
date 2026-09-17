@@ -158,6 +158,14 @@ class WatchSchedule(BaseModel):
 # Absent means the read-only agent route is OFF — a server nobody configured
 # for an agent does not answer one.
 AGENT_TOKEN_ENV = "DOCPROOF_AGENT_TOKEN"
+
+#: The portal keys `/api/watch/agent-keys` will hand the Galley agent, by
+#: provider name. An allow-list, not the whole keystore: the agent needs the
+#: keys its own lanes call with, and nothing else on that machine should be
+#: reachable with the agent token. TypeSafe is here because the fixed recipe's
+#: Jev lanes read TYPESAFE_API_KEY from the run environment, and the agent has
+#: no other way to be given one without a deploy.
+AGENT_KEY_PROVIDERS = ("typesafe",)
 #: Short secrets are guessable, and a secret set to "test" would be worse than
 #: none because it reads as configured. Refused with the fix named.
 MIN_AGENT_TOKEN = 24
@@ -709,6 +717,41 @@ def register(app: FastAPI) -> None:
         agent_gate(request)
         watch: WatchRunner = app.state.watch
         return {"books": watchlib.awaiting(watch.home)}
+
+    @app.get("/api/watch/agent-keys")
+    def agent_keys(request: Request) -> dict:
+        """The lane keys an administrator set in the portal, for the agent.
+
+        The Galley agent runs on its own machine with its own volume, so the
+        portal's keystore — which lives on the web machine's volume — is
+        invisible to it. Without this it would take a `fly secrets set` and a
+        release to turn a lane on, which is exactly the deploy the key screen
+        exists to avoid. So the third and last route a machine may touch,
+        behind the same bearer gate as the awaiting list, hands it back the
+        values for an explicit allow-list of names and nothing else: a token
+        that can claim a book and read a manuscript is not thereby allowed to
+        read the Google refresh token or the CRM's.
+
+        Only what an administrator typed in the portal is served. A key the
+        agent already holds as its own environment secret is not here and does
+        not need to be — the agent prefers this one when it is set and keeps
+        its own otherwise, which mirrors what the web build does with the same
+        store. Nothing is logged: the names go to the log, never the values."""
+        agent_gate(request)
+        keystore = getattr(app.state, "keystore", None)
+        if keystore is None:
+            # The desktop build has no portal and no keystore. An agent asking
+            # gets an empty set, not a 500, and goes on with its own secrets.
+            return {"keys": {}}
+        keys = {}
+        for provider in AGENT_KEY_PROVIDERS:
+            value = keystore.get(provider)
+            if value:
+                keys[ENV_VARS[provider]] = value
+        if keys:
+            log.info("The agent read %d portal key(s): %s",
+                     len(keys), ", ".join(sorted(keys)))
+        return {"keys": keys}
 
     @app.post("/api/watch/agent")
     async def agent_heartbeat(request: Request) -> dict:

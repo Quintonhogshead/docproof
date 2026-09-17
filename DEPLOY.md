@@ -380,6 +380,15 @@ One-time setup:
    breaks and again when it recovers, and when a hand-off delivery is given
    up on. Without it the agent uses the watcher's notify address.
 
+   **The optional lane keys are set in the portal, not here.** The agent has
+   its own volume and cannot read the web machine's keystore, so it asks the
+   app for them over `/api/watch/agent-keys` — behind the same bearer token it
+   polls with, limited to an allow-list of key names. Put TypeSafe's key in
+   **Admin → Provider API keys → TypeSafe (Jev)** to turn Galley's judgment
+   lanes on; the agent picks it up on its next book, with no release. A
+   `fly secrets set TYPESAFE_API_KEY=…` on the agent still works and is used
+   when the portal has none — the portal wins while it has one.
+
 **When the token dies.** A `claude setup-token` token expires or is revoked
 eventually, and Claude Code then prints `Failed to authenticate. API Error: 401
 OAuth access token is invalid` and exits on turn one. Since v0.193.12 the

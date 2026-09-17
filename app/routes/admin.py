@@ -49,7 +49,8 @@ class KeyUpdate(BaseModel):
 # is the odd one out — a standalone grammar-check test surface, not a reviewer —
 # but its key is managed here alongside the review providers.
 KEY_DISPLAY = {"anthropic": "Claude", "openai": "ChatGPT", "gemini": "Gemini",
-               "deepinfra": "DeepInfra", "sapling": "Sapling"}
+               "deepinfra": "DeepInfra", "sapling": "Sapling",
+               "typesafe": "TypeSafe (Jev)"}
 
 
 def register(app: FastAPI) -> None:
