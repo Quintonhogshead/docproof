@@ -346,6 +346,55 @@ class ConsistencyConfig(BaseModel):
     case_splits: bool = True
     case_split_dominance: int = Field(default=3, ge=2)
     case_split_min_total: int = Field(default=5, ge=2)
+    # A lower bar for a term hung off a proper noun — a word the book never
+    # lowercases anywhere ("Atacama plateau" ×1 against "Atacama Plateau" ×3 is
+    # four uses in all, and still a split worth proposing, because the proper
+    # noun rules out the ordinary reason a word appears both ways).
+    case_split_proper_min_total: int = Field(default=3, ge=2)
+    # A named vessel the book pronouns as "she" throughout and as "it" once or
+    # twice ("Her vast sails" … "Its wings curved forward"). Read by the same
+    # caller as case_splits and for the same reason: the counts answer the
+    # question a query would ask, and every proposal is screened in context
+    # before it reaches the document — which is also the screen for the one
+    # thing the scan cannot see, an "it" that means the console, not the ship.
+    # Self-gating: the vessel must be introduced with "the" at least eight times
+    # and carry vessel_min_feminine feminine pronouns at 3:1 over the neuter
+    # ones. See docproof/consistency.py:find_vessel_pronouns.
+    vessel_pronouns: bool = True
+    vessel_min_feminine: int = Field(default=5, ge=2)
+    # One dialect marker spelled more than one way inside dialect speech
+    # (dinnae ×20 / dinna ×6, cannae ×10 / canna ×1, ye / yeh). Counted only
+    # over paragraphs carrying two distinct dialect markers, because every one
+    # of these spellings is a misspelling in ordinary prose. A majority leading
+    # dialect_dominance:1 corrects its strays (screened, as above); a closer
+    # split is one query at the first minority site.
+    dialect_variants: bool = True
+    dialect_dominance: int = Field(default=3, ge=2)
+    # Compounds Merriam-Webster/Chicago set CLOSED (satphone, website, predawn),
+    # from config/consistency/closed_compounds.yaml. The one place the term
+    # scan's "ask, never correct" rule gives way: it asks because a key-folding
+    # scan cannot tell an inconsistency from a distinction, and for these the
+    # dictionary already has. Dominance is not consulted — "sat phone" ×4
+    # against "satphone" ×3 never reaches the term scan's bar, and the table
+    # settles it anyway. A book that writes one form throughout is left alone.
+    closed_compounds: bool = True
+    # A recurring figure whose decimal wanders once: a bearing printed "282.6°"
+    # nine times and "282.8°" once, followed by "A perfect match." QUERIES ONLY,
+    # and not for want of evidence — house policy is that a numeric value is
+    # never changed to repair a contradiction, since a count cannot know which
+    # of two figures is the right one.
+    figure_drift: bool = True
+    figure_min_majority: int = Field(default=3, ge=2)
+    # A line the book quotes back to itself and gets wrong: a remembered line
+    # that drops the speaker's contraction, a re-quoted email with a changed
+    # salutation, one sentence repeated verbatim inside a single scene. A near
+    # match inside a memory frame ("replayed", "the words", "still hear") is
+    # corrected to the words as first given; anything else is a question.
+    # Refrains — a sentence the book uses three times or more — are excluded
+    # before anything is measured. See docproof/callbacks.py.
+    callbacks: bool = True
+    callback_min_tokens: int = Field(default=8, ge=4)
+    callback_near: float = Field(default=0.80, ge=0.5, le=0.99)
     # The three mechanical scans a compound-word key scan structurally cannot do,
     # each a whole-document query pass that changes nothing:
     #   spelling_variants — different-letter spellings of one word via the VarCon

@@ -326,6 +326,47 @@ def test_certify_text_hygiene_without_source_still_fails_a_preexisting_fault(
     assert check.status == "fail"
 
 
+# --- one source term, one delivered form -------------------------------------
+
+def _swap_finding(fid, pid, delete_text, insert_text):
+    return {"finding_id": fid, "para_id": pid, "error_type": "spelling",
+            "applied": True, "original_text": f"He ordered {delete_text} again.",
+            "corrected_text": f"He ordered {insert_text} again.",
+            "anchor": {"start": 11, "end": 11 + len(delete_text),
+                       "delete_text": delete_text, "insert_text": insert_text}}
+
+
+def test_certify_fails_a_term_delivered_under_two_forms(tmp_path):
+    """Cooper, 2026-09-17: one source word left the run as “muttonchops” in one
+    paragraph and “lamb chops” in two others."""
+    run = _run_dir(tmp_path, {"cost": {"total_usd": 4.2}, "checkpoint": {"x": 1},
+        "findings": [_swap_finding("f-0001", "p12", "lamb chops", "muttonchops"),
+                     _swap_finding("f-0002", "p88", "lambchops", "lamb chops"),
+                     _swap_finding("f-0003", "p91", "lambchops", "lamb chops")]})
+    check = next(c for c in certify_run(run).checks if c.name == "swap consistency")
+    assert check.status == "fail"
+    assert "lambchops" in check.detail and "muttonchops" in check.detail
+
+
+def test_certify_passes_one_form_and_ignores_dropped_and_contextual_swaps(tmp_path):
+    run = _run_dir(tmp_path, {"cost": {"total_usd": 4.2}, "checkpoint": {"x": 1},
+        "findings": [_swap_finding("f-0001", "p12", "lambchops", "lamb chops"),
+                     _swap_finding("f-0002", "p88", "lambchops", "lamb chops"),
+                     # A rejected conflicting edit was never delivered.
+                     {**_swap_finding("f-0003", "p90", "lamb chops", "muttonchops"),
+                      "applied": False, "status": "rejected_invalid_proposal"},
+                     # Two readings of two sentences, not one unsettled term.
+                     _swap_finding("f-0004", "p20", "their", "there"),
+                     _swap_finding("f-0005", "p21", "their", "they’re")]})
+    check = next(c for c in certify_run(run).checks if c.name == "swap consistency")
+    assert check.status == "pass"
+
+
+def test_certify_swap_consistency_skips_without_findings(tmp_path):
+    from galley.manifest import _certify_swap_consistency
+    assert _certify_swap_consistency(tmp_path).status == "skip"
+
+
 # --- the `ran` flag from `galley verify` -------------------------------------
 
 def test_certify_change_verify_honors_ran_false(tmp_path):

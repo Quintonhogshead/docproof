@@ -139,6 +139,20 @@ consistency:
   case_splits: true
   case_split_dominance: 3
   case_split_min_total: 5
+  case_split_proper_min_total: 3   # "Atacama plateau" / "Atacama Plateau"
+  # The five whole-book scans the Cooper QA added, each silent on a book without
+  # the pattern. The first three correct as well as ask, so like case_splits
+  # they are meant for a caller that screens every proposal in context.
+  vessel_pronouns: true     # a ship called "she" and once "it" ("Its wings")
+  vessel_min_feminine: 5
+  dialect_variants: true    # dinnae/dinna, cannae/canna, ye/yeh in dialect
+  dialect_dominance: 3
+  closed_compounds: true    # sat phone -> satphone, the dictionary's call
+  figure_drift: true        # 282.6° ×9 against 282.8° ×1 — QUERIES ONLY
+  figure_min_majority: 3
+  callbacks: true           # a remembered line that misquotes what was said
+  callback_min_tokens: 8
+  callback_near: 0.80
   # "us" also queries words the book spells the British way THROUGHOUT
   # (theatre, colour), one query per word proposing the American form —
   # regular British/American families only, so towards/grey never flag.
@@ -778,6 +792,8 @@ sweeps:
   - sweep_initialism          # whitelisted initialisms capitalized (tv -> TV)
   - sweep_decade_apostrophe   # the 80s -> the ’80s; U.K.: the ’80s -> the 80s (the/early/late/mid leads only)
   - sweep_trailing_space      # paragraph-trailing spaces deleted (tracked)
+  - sweep_prefix_compound     # non-reflective -> nonreflective (M-W closes it; U.S. runs only)
+  - sweep_chicago_terms       # the Solar System -> the solar system; the Universe -> the universe
 
 # After every gate has settled which edits stand, re-scan the reviewed text
 # for number-rule trigger sites no edit touched — bare numerals to one

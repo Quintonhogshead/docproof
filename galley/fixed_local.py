@@ -619,6 +619,68 @@ def _recurrence_seeds(original, current, excluded):
     return seeds
 
 
+# Words whose right correction is a reading of ONE sentence rather than a term
+# the book settles on: two different fixes for “their” or “its” are homophone
+# judgments, not a conflict about what the thing is called.
+_CONTEXTUAL_SWAPS = frozenset({
+    "a", "an", "the", "of", "off", "is", "was", "were", "are", "hour", "our",
+    "to", "too", "two", "then", "than", "that", "which", "who", "whom",
+    "their", "there", "they're", "theyre", "its", "it's", "your", "you're",
+    "youre", "whose", "who's", "whos", "he", "she", "they", "him", "her",
+    "them", "his", "hers", "where", "wear", "affect", "effect", "lead", "led",
+    "lie", "lay", "loose", "lose", "past", "passed", "principal", "principle",
+    "complement", "compliment", "discreet", "discrete", "peace", "piece",
+    "sight", "site", "cite", "accept", "except", "advice", "advise",
+})
+
+
+def _swap_key(surface):
+    """One term, however a paragraph spaced or hyphenated it. “lamb chops”,
+    “lambchops” and “Lamb-Chops” are the same choice about the same thing."""
+    return re.sub(r"[\s\-‐‑–—]+", "", surface.casefold())
+
+
+def _swap_conflict_reason(conflict):
+    """The question a conflicted term puts to the readers, sites and all."""
+    surfaces = sorted({site["before"] for site in conflict["sites"]})
+    by_replacement = {}
+    for site in conflict["sites"]:
+        by_replacement.setdefault(site["replacement"], []).append(site["para_id"])
+    changed = " and ".join(f"to “{new}” at " + ", ".join(pids)
+                           for new, pids in by_replacement.items())
+    return ("“" + "”/“".join(surfaces) + "” was changed " + changed +
+            "; one term must take one form in this book. Settle which form is "
+            "right here, or leave every site as the author wrote it.")
+
+
+def _swap_conflicts(seeds):
+    """Split recurrence seeds into the ones that may sweep the book and the
+    terms this run has already changed two different ways.
+
+    Cooper, 2026-09-17: one paragraph's “lamb chops” became “muttonchops” while
+    two others had “lambchops” closed up to “lamb chops”. Both are propagation
+    seeds for the same term and neither is evidence for the other, so the term
+    is put to the readers as sites instead of sweeping the book twice.
+    """
+    grouped = {}
+    for seed in seeds:
+        key = _swap_key(seed.anchor.delete_text)
+        if key and key not in _CONTEXTUAL_SWAPS:
+            grouped.setdefault(key, []).append(seed)
+    conflicted = {key: group for key, group in grouped.items()
+                  if len({_swap_key(s.anchor.insert_text) for s in group}) > 1}
+    kept = [s for s in seeds if _swap_key(s.anchor.delete_text) not in conflicted]
+    conflicts = []
+    for key in sorted(conflicted):
+        conflict = {"key": key, "sites": [
+            {"para_id": s.para_id, "before": s.anchor.delete_text,
+             "replacement": s.anchor.insert_text,
+             "start": s.anchor.start, "end": s.anchor.end}
+            for s in conflicted[key]]}
+        conflicts.append({**conflict, "reason": _swap_conflict_reason(conflict)})
+    return kept, conflicts
+
+
 def collect_verse_candidates(prepared, texts, directory, *, identity, verse_ids, cfg=None):
     """The deterministic house sweeps over the poetry paragraphs only.
 
@@ -664,6 +726,9 @@ def collect_completion_candidates(prepared, original, current, directory, *, ide
         ceiling = max(1, sum(len(p.text) for p in paragraphs))
         language = _dictionary(prepared, cfg)
         seeds = _recurrence_seeds(original, current, set(poetry_ids))
+        # A term this run has already changed two ways sweeps nowhere; its
+        # sites go to the readers below instead.
+        seeds, conflicts = _swap_conflicts(seeds)
         # A casing the run has already decided by an accepted edit outranks
         # the count-based split scan for that term.
         casing_keys = sorted({s.anchor.delete_text.lower() for s in seeds
@@ -683,11 +748,19 @@ def collect_completion_candidates(prepared, original, current, directory, *, ide
             proposed = [_finding(f, by_id, "local:completion:" + name) for f in found]
             rows.extend(proposed)
             checks.append(_check(name, paragraphs, len(proposed)))
+        # Every site of a conflicted term, as a query the pair screen anchors
+        # and the Opus dispute path can settle. No replacement is proposed:
+        # neither of the run's own two answers is known to be the right one.
+        rows.extend(_span(by_id[site["para_id"]], site["start"], site["end"], None,
+                          "spelling", conflict["reason"], "local:completion:swap_conflicts")
+                    for conflict in conflicts for site in conflict["sites"]
+                    if site["para_id"] in by_id)
         structure = _normalize_and_structure(paragraphs, prepared)
         rows.extend(structure)
         checks.append(_check("normalization_and_speakers", paragraphs, len(structure)))
         return _deduplicate(rows), checks, [], {"sweep_reports": reports,
             "recurrence_seed_count": len(seeds), "casing_seed_keys": casing_keys,
+            "swap_conflicts": conflicts,
             "uncapped_site_ceiling": ceiling,
             "recurrence_guard": "Context-dependent common-word floods retain the existing exclusion guard; no propagation is applied directly."}
 

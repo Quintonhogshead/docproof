@@ -897,3 +897,165 @@ def test_quote_pair_closes_a_single_opener_single(before, after):
 ])
 def test_quote_pair_leaves_balanced_marks_alone(text):
     assert unchanged("sweep_quote_pair", text)
+
+
+# --- prefixed compounds closed per Merriam-Webster ---------------------------
+#
+# The Cooper QA (2026-09-17) is the case: the readers closed "nonstandard",
+# "nontechnical", "predawn", "rebalance" and "reread", and left "non-optional",
+# "pre-launch", "over-interpreting" and "post-apocalyptic" hyphenated in the
+# same manuscript. The sweep is here to make that even — and, far more
+# important, to stay off every hyphen Merriam-Webster keeps.
+
+@pytest.mark.parametrize("before,after", [
+    ("a non-reflective surface", "a nonreflective surface"),
+    ("re-evaluating the plan", "reevaluating the plan"),
+    ("the pre-launch checklist", "the prelaunch checklist"),
+    ("a post-apocalyptic wasteland", "a postapocalyptic wasteland"),
+    ("over-interpreting the data", "overinterpreting the data"),
+    # The rest of the QA's list, and the inflections around it.
+    ("a non-optional step", "a nonoptional step"),
+    ("non-gravitational drift", "nongravitational drift"),
+    ("she re-read it twice", "she reread it twice"),
+    # Capitalization comes from the text, so a sentence-initial compound keeps
+    # its capital.
+    ("Non-reflective panels lined the hull.",
+     "Nonreflective panels lined the hull."),
+])
+def test_prefix_compound_closes_what_merriam_webster_closes(before, after):
+    assert swept("sweep_prefix_compound", before) == after
+
+
+@pytest.mark.parametrize("text", [
+    # Not in the word list, and "multi-" is not one of the prefixes the sweep
+    # will close on the stem alone: no authority, no edit.
+    "a multi-week delay",
+    # The stop list: closing these makes a different word.
+    "they re-sign the contract tomorrow",
+    "they re-signed the contract",          # the stop list reaches inflections
+    "she re-covered the sofa",
+    "the re-creation of the scene",
+    "un-ionized water",
+    "the co-op board met",
+    "he tried to co-opt the idea",
+    "papers that pre-date the fire",
+    # A proper noun after the hyphen keeps it (Chicago 7.89).
+    "an anti-American slur",
+    "a pre-Columbian bowl",
+    "un-American activities",
+    "non-Euclidean geometry",               # known only capitalized: M-W's no
+    # Digits and months fall out the same way.
+    "mid-1990s cars",
+    "in mid-June",
+    # A longer hyphenated chain is not this sweep's business.
+    "a non-self-reflective mood",
+    # Already closed: idempotent.
+    "a nonreflective surface, reevaluating nothing",
+])
+def test_prefix_compound_leaves_these_hyphens_alone(text):
+    assert unchanged("sweep_prefix_compound", text)
+
+
+def test_prefix_compound_is_a_us_rule_only():
+    """Merriam-Webster is the authority for this rule, so a manuscript proofed
+    to Oxford or to the Canadian Oxford keeps its hyphens — the sweep finds
+    nothing at all rather than imposing an American dictionary."""
+    from docproof.variants import load_variant
+    text = "a non-reflective surface, re-evaluating the pre-launch checklist"
+    for key in ("uk", "au", "ca"):
+        assert not SWEEPS_BY_KEY["sweep_prefix_compound"].scan(
+            text, load_variant(key))
+    assert SWEEPS_BY_KEY["sweep_prefix_compound"].scan(
+        text, load_variant("us"))
+
+
+def test_prefix_compound_is_idempotent():
+    text = ("The non-reflective hull went past on re-evaluating the "
+            "pre-launch plan, over-interpreting a post-apocalyptic sky.")
+    scan = SWEEPS_BY_KEY["sweep_prefix_compound"].scan
+    hits = scan(text)
+    assert len(hits) == 5
+    assert not scan(apply_hits(text, hits))
+
+
+# --- Chicago's lowercase astronomy -------------------------------------------
+#
+# Chicago 8.140–8.141: the solar system, the universe and a galaxy are
+# descriptions and take lowercase; the proper name inside one ("the Milky Way")
+# keeps its capitals. Cooper had "Solar System" three times against nine
+# lowercase and "the Universe" once against fifty.
+
+@pytest.mark.parametrize("before,after", [
+    ("They strip-mine the Solar System like a junkyard.",
+     "They strip-mine the solar system like a junkyard."),
+    ("The Universe is trying to tell me something, she thought.",
+     "The universe is trying to tell me something, she thought."),
+    ("the whole Universe, she said, was listening for once",
+     "the whole universe, she said, was listening for once"),
+    ("He said our Galaxy was a rumour, and he meant it kindly.",
+     "He said our galaxy was a rumour, and he meant it kindly."),
+    # Sentence-initial: the term is lowercased, the sentence keeps its capital.
+    ("Solar System bodies move, and he knew it well enough.",
+     "Solar system bodies move, and he knew it well enough."),
+])
+def test_chicago_terms_lowercased(before, after):
+    assert swept("sweep_chicago_terms", before) == after
+
+
+@pytest.mark.parametrize("text", [
+    # A proper name the term is embedded in: a run of capitalized words.
+    "He worked at the Solar System Dynamics Laboratory in town.",
+    "the Universe Next Door was a book he had read twice",
+    # A proper name in its own right, and a capitalized word before "Galaxy".
+    "They mapped the Milky Way Galaxy that winter, star by star.",
+    # No determiner: bare "Universe" may be a title, a ship, a personification.
+    "Universe, she thought, was too big a word for it.",
+    "a Galaxy far away was still a Galaxy, she supposed",
+    # Display lines: capitals in a heading are styling, not a house violation.
+    "THE UNIVERSE AND THE SOLAR SYSTEM",
+    "The Universe",
+    "Solar System Dynamics",
+    # Earth, Sun and Moon are a judgment, not this sweep's job.
+    "The Sun rose over the Earth and the Moon hung there, unbothered.",
+    # Already lowercase: idempotent.
+    "Our galaxy and the solar system are quiet tonight, thankfully.",
+])
+def test_chicago_terms_leaves_these_capitals_alone(text):
+    assert unchanged("sweep_chicago_terms", text)
+
+
+def test_chicago_terms_is_idempotent():
+    text = ("The Solar System was quiet, and the Universe with it, though the "
+            "Solar System had never once asked her opinion.")
+    scan = SWEEPS_BY_KEY["sweep_chicago_terms"].scan
+    hits = scan(text)
+    assert len(hits) == 3
+    assert not scan(apply_hits(text, hits))
+
+
+def test_the_new_house_sweeps_ride_the_validator():
+    """Both sweeps have to reach the document through the ordinary path: the
+    validator narrows each to the characters that actually change (a hyphen
+    deleted, a capital recased), which is what the author sees marked."""
+    doc, paras = _doc(
+        "She kept re-evaluating the pre-launch checklist, non-reflective and "
+        "unhappy, while the Solar System went on without her and the Universe "
+        "said nothing at all.")
+    findings, reports = run_sweeps(paras, ALL)
+    counts = {r.key: (r.flagged, r.remaining) for r in reports}
+    assert counts["sweep_prefix_compound"] == (3, 0)
+    assert counts["sweep_chicago_terms"] == (2, 0)
+    validated = validate_findings(findings, doc, "medium")
+    assert validated and all(f.status == "validated" for f in validated)
+    text = paras[0].text
+    out, last = [], 0
+    for a in sorted((f.anchor for f in validated), key=lambda a: a.start):
+        assert text[a.start:a.end] == a.delete_text
+        out.append(text[last:a.start])
+        out.append(a.insert_text)
+        last = a.end
+    out.append(text[last:])
+    assert "".join(out) == (
+        "She kept reevaluating the prelaunch checklist, nonreflective and "
+        "unhappy, while the solar system went on without her and the universe "
+        "said nothing at all.")

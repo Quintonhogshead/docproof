@@ -749,7 +749,10 @@
 # user flips it.
 #
 # WHAT CHANGED IN THIS REVISION, for that diff: two passages gained one comma
-# each (rhy-02, int-09) and nothing else inside any `text:` was touched; three
+# each (rhy-02, int-09); doc-09's "non-negotiable" closed to "nonnegotiable"
+# (Merriam-Webster; the new sweep_prefix_compound would otherwise fire on it
+# every run, the same FIX branch as lyr-06's dashes); nothing else inside any
+# `text:` was touched; three
 # passages gained a `mechanical_overlap` key (arch-09, lyr-02, frag-04); the
 # schema went to 5 for the new `reconciliation.runner` field; and the header's
 # tag table, FIX-vs-TAG rule and DETECTOR RECONCILIATION section were rewritten
@@ -2068,7 +2071,7 @@ traps:
       The recipe card in the tin said BEANS, and underneath, in the same hand
       but with a different pen, ALL DAY. Nothing else. No quantities, no
       temperature, no mention of the ham hock that everybody in that family
-      considered non-negotiable. Sasha made them four times before she
+      considered nonnegotiable. Sasha made them four times before she
       understood that the card had never been instructions at all, and that it
       had been written by somebody who already knew, for a morning when she
       might not.

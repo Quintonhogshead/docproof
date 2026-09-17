@@ -1,0 +1,37 @@
+# Compounds Merriam-Webster sets CLOSED, where the dictionary decides and the
+# consistency engine may correct rather than ask.
+#
+# This is the one table in this directory the engine ENFORCES, and the bar for
+# adding a line is correspondingly high. The term scan asks about "sat phone"
+# against "satphone" because a key-folding scan cannot tell an inconsistency
+# from a distinction — and it cannot, in general. It can here: for the words
+# below the dictionary has already settled which spelling is the word, so the
+# open and hyphenated spellings are misspellings and dominance is beside the
+# point (Cooper wrote "sat phone" four times and "satphone" three, which no
+# dominance test will ever call).
+#
+# A pair where BOTH spellings are current — "health care" the noun beside
+# "healthcare" the modifier, "cell phone" (M-W gives this one OPEN, so it is
+# deliberately absent), "every day" against "everyday" — does not belong here.
+# It belongs in the query channel, where the term scan already puts it.
+#
+# `forms` maps the closed spelling to the note a correction cites.
+
+forms:
+  satphone: "Merriam-Webster sets this closed: “satphone”."
+  smartphone: "Merriam-Webster sets this closed: “smartphone”."
+  database: "Merriam-Webster sets this closed: “database”."
+  website: "Merriam-Webster and Chicago set this closed and lowercase: “website”."
+  email: "Merriam-Webster sets this closed and unhyphenated: “email”."
+  online: "Merriam-Webster sets this closed: “online”."
+  offline: "Merriam-Webster sets this closed: “offline”."
+  healthcare: "Merriam-Webster gives the closed “healthcare” for the industry sense."
+  wildlife: "Merriam-Webster sets this closed: “wildlife”."
+  firsthand: "Merriam-Webster sets this closed: “firsthand”."
+  secondhand: "Merriam-Webster sets this closed: “secondhand”."
+  nonstandard: "Chicago closes the “non-” prefix before a common noun: “nonstandard”."
+  nontechnical: "Chicago closes the “non-” prefix before a common noun: “nontechnical”."
+  prelaunch: "Chicago closes the “pre-” prefix before a common noun: “prelaunch”."
+  predawn: "Chicago closes the “pre-” prefix before a common noun: “predawn”."
+  reread: "Chicago closes the “re-” prefix before a common verb: “reread”."
+  rebalance: "Chicago closes the “re-” prefix before a common verb: “rebalance”."
