@@ -186,9 +186,9 @@ def _validate_packet(saved, request):
     if len(paragraphs) != len(request["paragraphs"]):
         raise FixedLocalError("Local-check paragraph inventory is duplicated")
     expected = ({"verse_sweeps"} if request.get("verse_ids") else
-                {"house_sweeps", "consistency", "residuals", "recurrences", "calendar", "normalization_and_speakers"}
+                {"house_sweeps", "consistency", "residuals", "recurrences", "calendar", "normalization_and_speakers", "chapter_labels"}
                 if request.get("completion") else
-                {"sweeps", "consistency", "genre", "calendar", "dictionary", "candidate_generators", "normalization_and_speakers", "languagetool"}) if paragraphs else set()
+                {"sweeps", "consistency", "genre", "calendar", "dictionary", "candidate_generators", "normalization_and_speakers", "chapter_labels", "languagetool"}) if paragraphs else set()
     checks = saved.get("checks", [])
     if len(checks) != len(expected) or {c.get("check") for c in checks} != expected:
         raise FixedLocalError("Local-check evidence is missing a required check")
@@ -456,6 +456,80 @@ def _normalize_and_structure(paragraphs, prepared):
     return rows
 
 
+def _chapter_label_rows(paragraphs, cfg):
+    """Chapter and part labels as deterministic candidates (category
+    chapter_label): the body sequence renumbered and restyled in its dominant
+    style, and a running head whose number form differs from that style
+    restyled to it — CHAPTER ONE in a header beside body headings CHAPTER 2
+    to 18 becomes CHAPTER 1. Labels are mechanics, never author questions
+    (Quinton, 2026-09-04; the Wilder run of 2026-09-14 queried that head).
+
+    Guards: only heading-shaped body lines count (a contents list is a run
+    of label lines with no body text between them, and is skipped); a kind
+    needs two readable labels before anything is proposed; an unreadable
+    number (Twenty-Thirty) joins the sequence only once three readable
+    labels establish it; a running head keeps its own case."""
+    from docproof.chapter_labels import dominant_style, label_map, render, renumber_rows
+    from docproof.continuity import looks_like_chapter_heading
+    from docproof.headings import is_structural_heading
+    is_heading_style = cfg.skip.is_sweep_only
+    by_id = {p.para_id: p for p in paragraphs}
+    candidates, previous_was_label = [], {}
+    for p in paragraphs:
+        if p.location != "body" or not p.text.strip():
+            continue
+        found = label_map([p]) if (is_structural_heading(p, is_heading_style)
+                                   or looks_like_chapter_heading(p)) else []
+        if not found:
+            previous_was_label = {}
+            continue
+        lb = found[0]
+        if previous_was_label.get(lb.kind):
+            # Two labels of one kind with no body text between them: a
+            # contents list. The earlier one is withdrawn too.
+            candidates = [c for c in candidates if c.para_id != previous_was_label[lb.kind]]
+            previous_was_label[lb.kind] = "toc"
+            continue
+        if previous_was_label.get(lb.kind) == "toc":
+            continue
+        previous_was_label = {lb.kind: lb.para_id}
+        candidates.append(lb)
+    by_kind = {}
+    for lb in candidates:
+        by_kind.setdefault(lb.kind, []).append(lb)
+    sequence = []
+    for kind, seq in by_kind.items():
+        readable = [lb for lb in seq if lb.number is not None]
+        if len(readable) < 2:
+            by_kind[kind] = []
+            continue
+        by_kind[kind] = seq if len(readable) >= 3 else readable
+        sequence.extend(by_kind[kind])
+    rows = []
+    def span(para, label_text, wanted, why):
+        start = para.text.find(label_text)
+        if start < 0 or wanted == label_text:
+            return
+        rows.append(_span(para, start, start + len(label_text), wanted, "chapter_label", why,
+                          "local:chapter_labels", metadata={"producer": "chapter_label"}))
+    for r in renumber_rows(sequence):
+        span(by_id[r["para_id"]], r["original_text"], r["corrected_text"], r["explanation"])
+    for p in paragraphs:
+        if p.location not in {"header", "footer"} or not p.text.strip():
+            continue
+        for lb in label_map([p]):
+            seq = by_kind.get(lb.kind)
+            if not seq or lb.number is None:
+                continue
+            form, _ = dominant_style(seq)
+            if lb.form == form:
+                continue
+            span(p, lb.label_text, render(lb.kind_word, lb.number, form, lb.case),
+                 f"Running head {lb.kind} label styled {lb.form} where the book's {lb.kind} headings are "
+                 f"{form} — labels are mechanics: restyled to match (noted once in the letter).")
+    return rows
+
+
 def _house_findings(paragraphs, prepared, cfg):
     from docproof.sweeps import run_sweeps, unclosed_quote_findings, heading_case_findings, heading_vocab_findings
     found, reports = run_sweeps(paragraphs, cfg.sweeps, prepared.variant, ellipsis_style=cfg.style.ellipsis)
@@ -557,6 +631,9 @@ def collect_local_candidates(prepared, texts, directory, *, identity, poetry_ids
         structure = _normalize_and_structure(paragraphs, prepared)
         rows.extend(structure)
         checks.append(_check("normalization_and_speakers", paragraphs, len(structure)))
+        labels = _chapter_label_rows(paragraphs, cfg)
+        rows.extend(labels)
+        checks.append(_check("chapter_labels", paragraphs, len(labels)))
         lt_rows, lt_evidence = _language_tool(paragraphs, prepared, cfg, lt_factory, progress)
         rows.extend(lt_rows)
         checks.append(_check("languagetool", paragraphs, len(lt_rows), **lt_evidence))
@@ -686,6 +763,9 @@ def collect_completion_candidates(prepared, original, current, directory, *, ide
         structure = _normalize_and_structure(paragraphs, prepared)
         rows.extend(structure)
         checks.append(_check("normalization_and_speakers", paragraphs, len(structure)))
+        labels = _chapter_label_rows(paragraphs, cfg)
+        rows.extend(labels)
+        checks.append(_check("chapter_labels", paragraphs, len(labels)))
         return _deduplicate(rows), checks, [], {"sweep_reports": reports,
             "recurrence_seed_count": len(seeds), "casing_seed_keys": casing_keys,
             "uncapped_site_ceiling": ceiling,

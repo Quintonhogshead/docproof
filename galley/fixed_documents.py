@@ -518,6 +518,18 @@ def artifact_destination(row):
     return row.get("destination", HANDOFF)
 
 
+def intake_normalization(receipt):
+    """The findings-envelope form of the intake receipt's silent normalization:
+    what the Author Letter's preparation disclosure reads."""
+    normalization = (receipt or {}).get("normalization") if isinstance(receipt, dict) else None
+    if not isinstance(normalization, dict):
+        return {"ran": False}
+    counts = {k: int(normalization.get(k) or 0) for k in ("quotes", "spaces", "ellipses", "paragraphs")}
+    return {"ran": any(counts[k] for k in ("quotes", "spaces", "ellipses")), **counts,
+            "ellipsis_style": normalization.get("ellipsis_style", "nbsp"),
+            "policy": normalization.get("policy", "")}
+
+
 def package_result(driver, result):
     """Build once, freeze artifact hashes, and preserve exact package on resume."""
     from galley.state_machine import RunStateMachine
@@ -542,12 +554,17 @@ def package_result(driver, result):
     call_evidence = validate_fixed_call_evidence(directory / "calls", identity=result["identity"])
     run = driver.workspace / "runs/final"
     tracked, clean, details = write_manuscripts(source, run, result["accepted"], result["questions"], result["formats"])
-    findings = {"source": str(source), "source_sha256": result["identity"]["source_sha256"],
-                "execution_mode": "fixed", "findings": details}
-    _save(run / "findings.json", findings)
-    report = run / f"{source.stem} - Proofreading report.md"
     from galley.fixed_calls import _load
     receipt = (_load(directory / "intake/receipt.json") if "intake" in result["identity"] else None)
+    findings = {"source": str(source), "source_sha256": result["identity"]["source_sha256"],
+                "execution_mode": "fixed", "findings": details,
+                # The silent intake normalization (quotes, spaces, ellipses) is
+                # invisible in the redline; the Author Letter and decision log
+                # read it from here so the count is stated somewhere a reviewer
+                # looks (Wilder, 2026-09-17: 48 ellipses with no trace).
+                "normalization": intake_normalization(receipt)}
+    _save(run / "findings.json", findings)
+    report = run / f"{source.stem} - Proofreading report.md"
     write_atomic(report, _report(result, details, receipt))
     evidence = run / f"{source.stem} - Review evidence.json"
     _save(evidence, result)

@@ -240,3 +240,29 @@ def test_verse_safe_refuses_formatting():
     from galley.fixed_policy import verse_safe
     row = {"start": 0, "end": 3, "before": "The", "replacement": "The", "category": "spelling", "format": "italic"}
     assert verse_safe(row, "The Moon") == "Verse takes no formatting changes"
+
+
+# --- bare hours (Wilder, 2026-09-17) -----------------------------------------
+
+@pytest.mark.parametrize("before, replacement, problem", [
+    ("at around five.", "at around 5:00.", "spelled-out number is never set in digits"),
+    ("by 10—11 at", "by 10:00–11:00 AM at", "clock reading"),
+    ("“At 3?”", "“At 3:00?”", "clock reading"),
+    ("“At 3?”", "“At 3 p.m.?”", "clock reading"),
+    ("“At 3?”", "“At three?”", None),
+    ("around 4 p.m. when", "around 4:00 p.m. when", None),
+    ("waited 20 minutes", "waited twenty minutes", None),
+    ("stage four liver", "stage IV liver", None),
+    ("in her mid-40s,", "in her mid-forties,", None),
+])
+def test_number_proposals_never_invent_a_clock_reading_or_digits(before, replacement, problem):
+    from galley.fixed_policy import number_proposal_problem
+    found = number_proposal_problem(before, replacement)
+    assert (found is None) if problem is None else (problem in found)
+    assert number_proposal_problem(before, replacement, "currency_style") is None
+
+
+def test_number_policy_spells_out_bare_hours_and_never_adds_minutes():
+    assert "bare hour" in NUMBER_POLICY.lower()
+    assert "At three?" in NUMBER_POLICY
+    assert "never given “:00”" in NUMBER_POLICY or "never given \":00\"" in NUMBER_POLICY

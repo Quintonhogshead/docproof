@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import difflib
 import hashlib
 import itertools
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from pathlib import Path
@@ -50,6 +52,16 @@ TENSE_BASELINE_FLOOR = 20
 # screen dropped every one as "not a mechanical error". Such a question goes
 # straight to Astra's comment review, which judges it in the reader's scope.
 FRONTIER_QUESTION_CATEGORIES = frozenset({"fact_logic", "continuity", "structure"})
+# Book-wide consistency proposals (a term the book spells two ways, a word it
+# capitalizes two ways) are decided as a set: once the screen accepts the
+# swap at one site, every other site of the same swap in the same
+# adjudication moves with it. The Wilder run (2026-09-14) applied OK -> okay
+# at one of the book's two "OK"s and left "Is everything OK?" standing.
+CONSISTENCY_CATEGORIES = frozenset({"term_consistency", "case_split"})
+# A chapter or part label's number or style is mechanics the house corrects,
+# never an author question (Quinton, 2026-09-04): the code-generated
+# chapter_label rows are applied, and a screen's "query" on one is overruled.
+LABEL_CATEGORY = "chapter_label"
 # Introduces the JSON block of context shared by every window of one read,
 # appended to that read's system prompt.
 SHARED_CONTEXT_MARKER = "\n\nSHARED CONTEXT, identical for every window of this read (JSON): "
@@ -369,6 +381,71 @@ def _groups(candidates):
     return groups
 
 
+_SWAP_TOKEN = re.compile(r"\w+(?:['’\-‐‑]\w+)*|\W+", re.UNICODE)
+_SWAP_WORD = re.compile(r"[^\W\d_]+(?:['’\-‐‑][^\W\d_]+)*\Z", re.UNICODE)
+
+
+def _word_swap(before, after):
+    """The one- or two-word replacement that turns `before` into `after`, as
+    (old, new), or None when the change is anything else."""
+    a = [m.group() for m in _SWAP_TOKEN.finditer(before)]
+    b = [m.group() for m in _SWAP_TOKEN.finditer(after)]
+    changes = [op for op in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes()
+               if op[0] != "equal"]
+    if len(changes) != 1 or changes[0][0] != "replace":
+        return None
+    _, i, j, k, l = changes[0]
+    old, new = "".join(a[i:j]), "".join(b[k:l])
+    if (old == new or not 1 <= len(old.split()) <= 2 or not 1 <= len(new.split()) <= 2
+            or not all(_SWAP_WORD.match(w) for w in old.split() + new.split())):
+        return None
+    return old, new
+
+
+def _consistency_site(site):
+    return bool(site["proposals"]) and all(p["category"] in CONSISTENCY_CATEGORIES for p in site["proposals"])
+
+
+def _label_site(site):
+    return len(site["proposals"]) == 1 and site["proposals"][0]["category"] == LABEL_CATEGORY
+
+
+def _harmonize_consistency(sites, agreed):
+    """Decide consistency sites as a set. Every swap the screen applied at a
+    consistency site (old -> new, whole words) is carried to each other
+    consistency site of the same screen whose text still holds `old` and
+    whose decision was drop. Returns the updated decisions and the log rows.
+    A query stands: the author was asked something specific."""
+    swaps = {}
+    for site in sites:
+        decision = agreed.get(site["id"])
+        if not _consistency_site(site) or not decision or decision.get("action") != "apply":
+            continue
+        swap = _word_swap(site["before"], decision.get("replacement", ""))
+        if swap and swap[0] not in swaps:
+            swaps[swap[0]] = (swap[1], site["id"])
+    if not swaps:
+        return agreed, []
+    updated, log = dict(agreed), []
+    for site in sites:
+        decision = agreed.get(site["id"])
+        if not _consistency_site(site) or not decision or decision.get("action") != "drop":
+            continue
+        for old, (new, origin) in swaps.items():
+            pattern = re.compile(r"(?<![\w'’])" + re.escape(old) + r"(?![\w'’])")
+            if not pattern.search(site["before"]):
+                continue
+            replacement = pattern.sub(new, site["before"])
+            updated[site["id"]] = {**decision, "action": "apply", "replacement": replacement,
+                "reason": (f"Book-wide consistency: “{old}” → “{new}” was accepted at another site of this "
+                           f"screen; the book's sites of one term move together or not at all."),
+                "question": "", "missing_knowledge": ""}
+            log.append({"site": site["id"], "swap": [old, new], "origin": origin,
+                        "dropped_reason": decision.get("reason", "")})
+            break
+    return updated, log
+
+
 def final_review_verdict(accepted, coverage, *, ceiling=FINAL_REVIEW_ERROR_CEILING):
     """The fixed rule the second Astra reading is judged by, owned by code.
 
@@ -668,6 +745,16 @@ class FixedWorkflow:
         except RejectedModelProposal as exc:
             self._reject_proposal(stage, row, texts, model, str(exc), exc.status)
             return None
+        if candidate and candidate["action"] == "edit" and candidate["category"] == "number_style":
+            from galley.fixed_policy import number_proposal_problem
+            text, lo, hi = texts[candidate["para_id"]], candidate["start"], candidate["end"]
+            # Judged with a few characters of context on each side, so ":00"
+            # added to a bare "3" reads as the clock mark it is.
+            problem = number_proposal_problem(text[max(0, lo - 6):hi + 6],
+                text[max(0, lo - 6):lo] + candidate["replacement"] + text[hi:hi + 6])
+            if problem:
+                self._reject_proposal(stage, row, texts, model, problem)
+                return None
         if candidate and candidate.get("format") and formatting is not None:
             lo, hi, pid = candidate["start"], candidate["end"], candidate["para_id"]
             roman = [r for r in formatting[pid] if r["start"] < hi and r["end"] > lo]
@@ -787,6 +874,8 @@ class FixedWorkflow:
             "For a sole formatting proposal, apply retains that proposed formatting and must leave before unchanged. "
             "Query only a real proofreading problem requiring specific missing author knowledge. "
             "Judge the text independently; another reader or a local flag is not proof of an error. "
+            "A chapter_label site is a chapter or part label's number or style, mechanics the house corrects: "
+            "apply it unless the span is not such a label, and never query it. "
             "reason is one short sentence of at most 25 words; leave replacement, question and missing_knowledge empty unless the action needs them. "
             "Sites are named s01, s02, ... within this request; return each decision under exactly that name. "
             "action is apply, drop or query only: a proposal you accept is apply (never edit). Return every field of the decision "
@@ -840,6 +929,9 @@ class FixedWorkflow:
         questions already are. Returns (question, missing_knowledge, quote) or None."""
         if not (stage in FRONTIER_STAGES or stage.startswith("walkthrough_questions")):
             return None
+        from docproof.chapter_labels import is_chapter_label
+        if text is not None and is_chapter_label(text):
+            return None            # a label's number or style is mechanics, never a question
         rows = [p for p in site["proposals"]
                 if p.get("action") == "edit" and p.get("category") in FRONTIER_QUESTION_CATEGORIES]
         if not rows:
@@ -894,10 +986,19 @@ class FixedWorkflow:
             _exact_ids([x["id"] for x in result], [x["id"] for x in window], "Opus adjudication")
             agreed.update({x["id"]: x for x in result})
         disputed_ids = {s["id"] for s in disputed}
+        agreed, harmonized = _harmonize_consistency(sites, agreed)
+        for entry in harmonized:
+            self.history.append({"stage": stage + "_harmonized", **entry})
         for site in sites:
             decision = agreed[site["id"]]
             models = [OPUS] if site["id"] in disputed_ids else [SONNET, LUNA]
             self.history.append({"stage": stage + ("_disputes" if site["id"] in disputed_ids else "_screened"), "site": site, "decision": decision})
+            if decision["action"] == "query" and _label_site(site):
+                self.history.append({"stage": stage + "_label_query_overruled", "site": site["id"],
+                                     "question": decision.get("question", ""),
+                                     "reason": "A chapter or part label's number or style is mechanics, never an author question"})
+                decision = {**decision, "action": "apply", "replacement": site["proposals"][0]["replacement"],
+                            "question": "", "missing_knowledge": ""}
             if decision["action"] == "drop":
                 demoted = self._frontier_demotion(stage, site, self.current[site["para_id"]])
                 if demoted is not None:

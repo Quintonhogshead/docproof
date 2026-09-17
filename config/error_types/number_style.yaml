@@ -41,16 +41,22 @@ detection_prompt: |
   - Simple fractions as digits in prose: "2/3 of the class".
   - A four-digit-or-larger quantity missing its thousands comma: "1000 people",
     "12500 miles". (Years are exempt — see below.)
+  - A BARE clock hour — digits with no minutes and no meridiem — in prose or
+    dialogue: "around 4" -> "around four", "at 8" -> "at eight", "At 3?" ->
+    "At three?", "by 10 or 11" -> "by ten or eleven". Chicago spells out an
+    even hour that carries neither minutes nor a.m./p.m. Never repair a bare
+    hour by adding ":00" or a meridiem instead: that invents a clock reading
+    the author did not write.
 
   Do NOT flag — these are legitimate numeral contexts and the house guide
   leaves them alone:
   - Dates and years: "July 14, 1989", "in 1997", "the 1990s".
-  - Times, including a BARE clock hour: "8:30 a.m.", "at 5:00", "around 4",
-    "the meeting starts at 8". The house time form is digits with minutes and
-    a lowercase meridiem ("3:00 p.m." U.S.; "3:00 pm" U.K.) — a deterministic
-    sweep normalizes the meridiem and the whole-book consistency scan owns
-    bare hours, so never spell a clock time out and never restyle one
-    yourself.
+  - Clock times that carry minutes or a meridiem: "8:30 a.m.", "at 5:00",
+    "3 p.m.". The house time form is digits with minutes and a lowercase
+    meridiem ("3:00 p.m." U.S.; "3:00 pm" U.K.); a deterministic sweep
+    normalizes that form, so never spell such a time out and never restyle
+    one yourself. (A BARE hour with neither is an ordinary number and IS
+    flagged — see above.)
   - Money, which the currency_style type owns entirely.
   - Percentages: "40 percent".
   - Addresses, house and room numbers: "12 Oak Street", "room 4".
@@ -152,4 +158,16 @@ examples:
   - text: "She manages her type 2 diabetes with diet alone."
     finding: null
   - text: "We will start getting ready around 4."
+    finding:
+      original_text: "We will start getting ready around 4."
+      corrected_text: "We will start getting ready around four."
+      explanation: "A bare hour with no minutes and no meridiem is spelled out like any other number; it is never given a clock reading."
+      confidence: high
+  - text: "Kai looks at his watch. \"At 3?\""
+    finding:
+      original_text: "Kai looks at his watch. \"At 3?\""
+      corrected_text: "Kai looks at his watch. \"At three?\""
+      explanation: "A bare hour in dialogue is spelled out; adding \":00\" would invent a clock reading."
+      confidence: high
+  - text: "We'd surf until they got back from work at around five."
     finding: null

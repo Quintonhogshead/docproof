@@ -23,6 +23,21 @@ cases:
     text: "The lamp had burned out yet she read on by the last of the fire."
     expect: { span: "out yet", correction: "out, yet", confidence: high }
 
+  # Wilder (2026-09-17, head proofreader's pass): the join Galley added a
+  # comma to and the one it missed in the same book -----------------------
+  - id: csc-w01
+    text: "The back of my board rises higher and higher in the air behind me and I cling tighter to avoid sliding off the front."
+    expect: { span: "behind me and I", correction: "behind me, and I", confidence: high }
+  - id: csc-w02
+    text: "An array of sliced meats and cheeses graces the table and I grin; they know me so well."
+    expect: { span: "table and I", correction: "table, and I", confidence: high }
+  - id: csc-w03
+    text: "A clownfish floats past and my breath catches in my throat, my mind racing back to my dream."
+    expect: { span: "past and my", correction: "past, and my", confidence: high }
+  - id: csc-w04
+    text: "The questions come one after another and I hardly have time to gather myself."
+    expect: { span: "another and I", correction: "another, and I", confidence: high }
+
   # Traps — compound predicate (one subject, two verbs): NO comma ------------
   - id: csc-101
     text: "She rose and crossed to the hearth without a sound."
@@ -36,6 +51,12 @@ cases:
   - id: csc-104
     text: "The old dog stretched and yawned and settled back down."
     expect: clean
+  - id: csc-w11
+    text: "I smile to myself and suddenly realize that it feels good."
+    expect: clean          # Wilder: one subject, two verbs
+  - id: csc-w12
+    text: "There's always been something about wide-open water that opens the heart and leads to a heightened sense of connection."
+    expect: clean          # Wilder: relative clause with two verbs
 
   # Traps — conjunction joins words/phrases, not clauses --------------------
   - id: csc-105
