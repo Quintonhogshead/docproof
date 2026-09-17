@@ -12,6 +12,7 @@ import hashlib
 import itertools
 import json
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from pathlib import Path
@@ -26,6 +27,9 @@ OPUS = "claude-opus-5"
 SOL = "gpt-5.6-sol"
 FABLE = "claude-fable-5-1"
 ASTRA = "gpt-6-astra"
+# TypeSafe's System One judgment model. It proposes sites for the typed stage's
+# screen and never decides anything; see galley/fixed_jev.py.
+JEV = "jev"
 # Readers of whole windows of the book may raise number errors themselves, so
 # they keep the complete number policy; screening, checks and comment reviews
 # see it only when a number proposal is actually in front of them.
@@ -84,7 +88,7 @@ def workflow_plan():
         {"stage": "intake", "model": "code", "description": "Freeze the original manuscript and paragraph identities"},
         {"stage": "poetry", "model": SONNET, "description": "Classify fixed samples; verse receives house mechanics, never a change to its structure"},
         {"stage": "story_sheet", "model": LUNA, "description": "Read the manuscript for the Story Sheet through the ChatGPT subscription"},
-        {"stage": "typed", "model": f"{SONNET} + {LUNA}; disputes: {OPUS}", "description": "Local proofreading checks, including LanguageTool, plus the typed ensemble; number and currency review remains separate"},
+        {"stage": "typed", "model": f"{SONNET} + {LUNA}; disputes: {OPUS}; sites: {JEV}", "description": "Local proofreading checks, including LanguageTool, plus the typed ensemble and Jev's judged comma and confusion sites; number and currency review remains separate"},
         {"stage": "numbers", "model": f"{SONNET} + {LUNA}; disputes: {OPUS}", "description": "Review every extracted number in context against the existing house policy"},
         {"stage": "broken_repair", "model": OPUS, "description": "Repair triggered broken sentences with clear intended meaning"},
         {"stage": "checks", "model": LUNA, "description": "Meaning preservation and correction checks through the ChatGPT subscription"},
@@ -547,6 +551,10 @@ class FixedWorkflow:
         # The second Astra reading's counted evidence and code-owned verdict.
         self.final_review = None
         self.local_seen = set()
+        # The Jev judgment ledger, built on first use from <run>/jev and
+        # shared by every lane that asks Jev anything during this run.
+        self.jev = None
+        self._jev_lock = threading.Lock()
         self.prose_prepared = None
         self.source_marks = {}
         # Categories of the corrections applied to each paragraph since its
@@ -560,8 +568,12 @@ class FixedWorkflow:
         # insertion orders. The same evidence must produce the same bytes.
         write_atomic(Path(path), json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2))
 
+    def _cancel_requested(self):
+        return any(p.exists() for p in (self.directory / "cancel-review.txt",
+                                        self.directory.parent.parent / "cancel-review.txt"))
+
     def _cancel(self):
-        if any(p.exists() for p in (self.directory / "cancel-review.txt", self.directory.parent.parent / "cancel-review.txt")):
+        if self._cancel_requested():
             raise FixedWorkflowError("The fixed proofread was cancelled")
 
     def _stage(self, stage):
@@ -837,6 +849,54 @@ class FixedWorkflow:
     def _local_progress(self, done, total):
         self._cancel()
         self.progress("local_progress", phase="typed", check="LanguageTool", completed=done, total=total)
+
+    def _jev_ledger(self):
+        """The run's one receipted Jev ledger; lanes run concurrently."""
+        from galley.jev import JevLedger
+        with self._jev_lock:
+            if self.jev is None:
+                self.jev = JevLedger(self.directory / "jev")
+            return self.jev
+
+    def _jev_progress(self, done, total):
+        self.progress("local_progress", phase="typed", check="Jev", completed=done, total=total)
+
+    def _jev_initial(self, prepared):
+        """Jev's exhaustive single-character sites as candidates for the screen.
+
+        The lane is optional in both directions: without a key it is skipped
+        with a history note, and a refusal mid-stage keeps whatever it had
+        already judged. Nothing here is applied; every row is screened."""
+        from galley import jev as jev_lane
+        self._cancel()
+        if not jev_lane.enabled():
+            skipped = "Jev is unavailable: no TYPESAFE_API_KEY, GALLEY_JEV=off, or the SDK is absent"
+            self.history.append({"stage": "typed_jev", "skipped": skipped})
+            return [], {"skipped": skipped}
+        from galley.fixed_jev import collect_jev_candidates
+        try:
+            rows, evidence = collect_jev_candidates(
+                prepared, self.original, self.directory / "jev", identity=self.identity,
+                poetry_ids=self.poetry_ids, ledger=self._jev_ledger(),
+                should_cancel=self._cancel_requested, progress=self._jev_progress)
+        except jev_lane.JevUnavailable as exc:
+            self.history.append({"stage": "typed_jev", "skipped": str(exc)})
+            return [], {"skipped": str(exc)}
+        if evidence.get("unavailable"):
+            self.history.append({"stage": "typed_jev", "skipped": evidence["unavailable"]})
+        self._cancel()
+        candidates = []
+        for row in rows:
+            try:
+                candidate = _candidate(row, self.original, JEV, query_types=prepared.query_types,
+                                       format_types=prepared.format_types)
+            except RejectedModelProposal as exc:
+                self._reject_proposal("typed_jev", row, self.original, JEV, str(exc), exc.status)
+                continue
+            if candidate is not None:
+                candidate["jev"] = row["jev"]
+                candidates.append(candidate)
+        return candidates, evidence
 
     def _local_completion(self, prepared, *, stage="completion", label="local_completion"):
         """The deterministic propagation and consistency sweep over the current
@@ -1683,19 +1743,23 @@ class FixedWorkflow:
                 self._story()
             prepared_modes = list(zip(modes, [future.result() for future in preparations]))
         self._stage("typed")
-        candidates, coverage, local_evidence, verse_evidence = [], [], None, None
+        candidates, coverage, local_evidence, verse_evidence, jev_evidence = [], [], None, None, None
         prose_prepared = next((prepared for poetry, prepared in prepared_modes if not poetry), None)
         verse_prepared = next((prepared for poetry, prepared in prepared_modes if poetry), None)
         self.prose_prepared = prose_prepared
         # Poetry/prose detectors and the independent local scans share no edits.
         # Their findings are committed below in the original deterministic order.
-        with ThreadPoolExecutor(max_workers=len(modes) + 2) as pool:
+        with ThreadPoolExecutor(max_workers=len(modes) + 3) as pool:
             local_future = _submit(pool, self._local_initial, prose_prepared) if prose_prepared else None
+            jev_future = _submit(pool, self._jev_initial, prose_prepared) if prose_prepared else None
             verse_future = _submit(pool, self._local_verse, verse_prepared) if verse_prepared else None
             readings = [_submit(pool, self._typed, prepared, poetry=poetry) for poetry, prepared in prepared_modes]
             if local_future is not None:
                 local, local_evidence = local_future.result()
                 candidates.extend(local)
+            if jev_future is not None:
+                jev_rows, jev_evidence = jev_future.result()
+                candidates.extend(jev_rows)
             if verse_future is not None:
                 verse_rows, verse_evidence = verse_future.result()
                 candidates.extend(verse_rows)
@@ -1707,6 +1771,7 @@ class FixedWorkflow:
         accepted = self._adjudicate("typed", candidates, (SONNET, LUNA))
         self._apply("typed", accepted)
         self._record("typed", coverage=coverage, candidates=candidates, local=local_evidence,
+                     **({"jev": jev_evidence} if jev_evidence is not None else {}),
                      **({"verse_local": verse_evidence} if verse_evidence is not None else {}))
         if all_poetry:
             # Verse takes house mechanics: the typed passes and sweeps above,

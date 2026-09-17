@@ -52,6 +52,39 @@ LOCAL_CANDIDATE_TYPES = tuple(
     key for key in INITIAL_CANDIDATE_TYPES if key not in EXCLUDED_LOCAL_TYPES)
 DIAGNOSTIC_ONLY_TYPES = frozenset({"word_echo", "reading_level"})
 
+# Jev (TypeSafe System One) reads the same brute-force sites the comma sweep
+# above was too expensive to screen, but ranks them itself for about a cent a
+# thousand sites, so only the survivors reach the paid Sonnet/Luna screen.
+# Measured 2026-09-17 on the Redding proofread pair: at these thresholds comma
+# insertion recall rose from 68% to 85% and deletion recall from 64% to 84%,
+# and 9 of the 10 human confusion-set swaps scored above 0.90.
+JEV_COMMA_RULE = (
+    "Chicago Manual of Style comma rules for fiction: a comma before a coordinating "
+    "conjunction (and, but, or, so, yet, for, nor) that joins two independent clauses; "
+    "after an introductory dependent clause or a long introductory phrase; the serial "
+    "(Oxford) comma before the last item of a list of three or more; around a "
+    "nonrestrictive clause or appositive; before and after a name in direct address; "
+    "between a dialogue tag and the quotation; after an interjection or 'yes'/'no'. "
+    "No comma between a subject and its verb, before a restrictive clause, or between "
+    "two verbs sharing one subject. A fiction author's deliberate polysyndeton "
+    "('and ... and ... and') and short punchy fragments are left alone."
+)
+JEV_SPELLING_RULE = (
+    "Standard American English word choice: pick the word the writer intended in "
+    "this sentence. Common confusions: were/where, then/than, their/there/they're, "
+    "its/it's, your/you're, to/too, affect/effect, lose/loose, passed/past, "
+    "her/hers, accept/except, breath/breathe, lead/led, whose/who's."
+)
+JEV_HOUSE_RULES = {"comma_insert": JEV_COMMA_RULE, "comma_delete": JEV_COMMA_RULE,
+                   "spelling": JEV_SPELLING_RULE}
+# The probability, in Jev's answer, at or above which a site becomes a proposal
+# for the screen. Nothing here decides: every survivor is screened as usual.
+JEV_THRESHOLDS = {"comma_insert": 0.30, "comma_delete": 0.50, "spelling": 0.90}
+# One request carries up to this many variants of a single paragraph; a
+# paragraph longer than the window is quoted one sentence at a time.
+JEV_VARIANTS_PER_REQUEST = 30
+JEV_SENTENCE_LIMIT = 700
+
 
 def _number_policy() -> str:
     sections = [PROOFREADING_POLICY, house_rules_block("number proofreader")]
