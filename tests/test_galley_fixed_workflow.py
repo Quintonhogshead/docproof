@@ -1098,6 +1098,21 @@ def test_invalid_check_adjudication_restores_text_and_removes_disputed_format(ma
     assert len([h for h in flow.history if h.get("rejected_proposal")]) == 1
 
 
+def test_a_guarded_proposal_is_dropped_at_application_with_a_receipt(make_book, tmp_path):
+    """A proposal every stage agreed on can still be the wrong edit: the
+    application guard drops it into history instead of rewriting the text."""
+    text = "The log said the drone lifted at 18:03 UTC, nine minutes late."
+    flow = _flow(make_book, tmp_path, text=text)
+    row = _candidate(finding("p", "18:03", "6:03 p.m.", "number_style"), flow.current, LUNA)
+    before = flow._apply("numbers", [row])
+    assert flow.current["p"] == before["p"] == text
+    assert flow.history[-1]["dropped"] == row
+    assert flow.history[-1]["reason"].startswith("guard: ") and "24-hour" in flow.history[-1]["reason"]
+    # The same stage still applies a correction the guards have no view on.
+    flow._apply("numbers", [_candidate(finding("p", "nine", "9", "number_style"), flow.current, LUNA)])
+    assert flow.current["p"].endswith("9 minutes late.")
+
+
 def test_number_scope_noise_does_not_prevent_valid_number_correction(make_book, tmp_path):
     def handler(stage, model, payload, kwargs):
         if stage == "numbers":

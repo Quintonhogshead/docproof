@@ -1294,6 +1294,221 @@ def _sweep_decade_apostrophe(text: str, variant=None) -> list[Hit]:
 
 
 
+# "non-reflective", "re-evaluating", "pre-launch", "post-apocalyptic": a prefix
+# hyphenated onto an ordinary word. Merriam-Webster closes these, and Chicago
+# (7.89) sends the question to the dictionary rather than answering it itself.
+# The Cooper QA (2026-09-17) is the case for scripting it: the readers closed
+# "nonstandard", "nontechnical", "predawn", "rebalance" and "reread" and in the
+# next chapter left "non-optional", "pre-launch", "over-interpreting" and
+# "post-apocalyptic" hyphenated. Unevenness inside one book is exactly what a
+# reader cannot promise and a sweep can.
+#
+# Capitalized second elements never match: "anti-American", "pre-Columbian" and
+# "un-American" keep the hyphen because the word after it is a proper noun, and
+# "mid-1990s" / "mid-June" fall out the same way (digits, capital).
+_PREFIX_COMPOUND = re.compile(
+    r"(?<![A-Za-z0-9'’\-])"
+    r"(?P<prefix>[Uu]nder|[Mm]ulti|[Ss]emi|[Oo]ver|[Pp]ost|[Aa]nti|[Nn]on"
+    r"|[Pp]re|[Ss]ub|[Mm]id|[Cc]o|[Rr]e|[Uu]n)"
+    r"-(?P<stem>[a-z]{2,})(?![\w\-])")
+
+# Prefixes Merriam-Webster closes as a matter of course, so a closed form the
+# word list happens not to carry ("prelaunch", "nonreflective") can still be
+# proposed on the strength of the stem alone. The rest — multi-, anti-, co-,
+# sub-, semi-, mid-, un- — are the ones whose practice varies (co-op, co-opt,
+# un-ionized, anti-inflammatory), so for those the dictionary must carry the
+# closed form itself or the sweep stays quiet.
+_PREFIX_CLOSES = frozenset({"non", "pre", "post", "over", "under", "re"})
+
+# Pairs the dictionary would happily close into a DIFFERENT word. Every one of
+# these closed forms is real English, so the dictionary test cannot catch them;
+# only a list can. "re-cover" a sofa is not "recover" from flu, "re-sign" a
+# contract is not "resign" from the job, "re-creation" is not "recreation",
+# and "un-ionized" is the opposite of "unionized". Matched against the stem's
+# uninflected bases, so "re-signed" and "re-covering" are held back too.
+_PREFIX_STOP = {
+    "re": frozenset("""
+        cover creation form sort count press collect lease serve strain treat
+        sign mark lay place solve store search tire fuse cite move pair bound
+        present view ally verse side fine tail dress sent
+    """.split()),
+    "co": frozenset({"op", "opt"}),
+    "un": frozenset({"ionized", "ionised"}),
+    "pre": frozenset({"date", "dates"}),
+}
+
+
+@lru_cache(maxsize=1)
+def _us_wordlist():
+    """The en_US Hunspell set, or None when none can be loaded.
+
+    Merriam-Webster is not a file a press can ship, so the offline word list
+    stands in for it — the same authority `docproof.spellscan` asks before
+    calling a closed compound a spelling fix. With no dictionary there is no
+    authority to ask, and the sweep reports nothing rather than guessing."""
+    from .spellscan import _dictionary
+    return _dictionary("en_US")
+
+
+@lru_cache(maxsize=8192)
+def _wordlist_has(word: str) -> bool:
+    """Whether the word list carries `word` exactly as spelled (lowercase).
+
+    Deliberately not the tolerant, capitalize-too lookup `dictionary_knows`
+    does: a stem the list knows only capitalized is a proper adjective
+    ("non-Euclidean"), and closing that one is the dictionary's own no."""
+    dic = _us_wordlist()
+    if dic is None:
+        return False
+    try:
+        return bool(dic.lookup(word))
+    except Exception:                       # a broken .dic row is not a verdict
+        return False
+
+
+def _inflection_bases(stem: str) -> set[str]:
+    """`stem` and the uninflected forms it could be an inflection of, so the
+    stop list can be written once ("sign") and still hold back "re-signed",
+    "re-signing" and "re-signs"."""
+    out = {stem}
+    for suffix in ("s", "es", "ed", "ing", "d"):
+        if stem.endswith(suffix) and len(stem) - len(suffix) >= 2:
+            root = stem[:-len(suffix)]
+            out.add(root)
+            out.add(root + "e")             # leasing -> lease, moving -> move
+            if len(root) > 2 and root[-1] == root[-2]:
+                out.add(root[:-1])          # stopping -> stop
+    return out
+
+
+def _sweep_prefix_compound(text: str, variant=None) -> list[Hit]:
+    """Close a prefixed compound Merriam-Webster closes: "non-reflective" ->
+    "nonreflective", "re-evaluating" -> "reevaluating", "post-apocalyptic" ->
+    "postapocalyptic".
+
+    U.S. runs only. The authority for this rule is Merriam-Webster, so a
+    manuscript proofed to Oxford (U.K., Australian) or to the Canadian Oxford
+    keeps its hyphens and the sweep returns nothing at all.
+
+    Two gates, in order. If the word list carries the closed form it is closed,
+    inflections included ("reevaluating" is in the list, so "re-evaluating" is
+    answered without any stemming). Otherwise the prefix must be one M-W closes
+    by default AND the stem must be a word in its own right AND the seam must
+    not double a vowel — "multi-week" is left alone because "multi-" is not on
+    that list, and "co-op" because the stop list says so. A hyphen the sweep
+    cannot settle stays a hyphen: a reader can still close it, and closing one
+    the dictionary does not is an edit nobody asked for."""
+    if getattr(variant, "dictionary", "en_US") != "en_US":
+        return []
+    if _us_wordlist() is None:
+        return []
+    hits: list[Hit] = []
+    for m in _PREFIX_COMPOUND.finditer(text):
+        prefix, stem = m.group("prefix"), m.group("stem")
+        key = prefix.lower()
+        stop = _PREFIX_STOP.get(key, frozenset())
+        if stop and (_inflection_bases(stem) & stop):
+            continue
+        closed = key + stem
+        if not _wordlist_has(closed):
+            if key not in _PREFIX_CLOSES:
+                continue
+            if len(stem) < 4 or not _wordlist_has(stem):
+                continue
+            if key[-1] in "aeiou" and stem[0] == key[-1]:
+                continue                    # pre-empt, re-enter: the doubled
+                                            # vowel is the dictionary's call
+        replacement = closed if prefix[0].islower() else closed.capitalize()
+        hits.append(Hit(m.start(), m.end(), replacement,
+                        f"Merriam-Webster closes this compound: "
+                        f"{replacement}."))
+    return hits
+
+
+
+# Chicago 8.140–8.141: the solar system, the universe and a galaxy are
+# descriptions, not names, and take lowercase; only the proper name inside one
+# keeps its capitals ("the Milky Way"). The Cooper QA found "Solar System"
+# capitalized three times against nine lowercase and "the Universe" once
+# against fifty — a consistency failure a reader is very likely to glide over
+# and a sweep cannot.
+#
+# "Earth", "Sun" and "Moon" are deliberately not here: whether they take a
+# capital depends on whether the sentence is using them astronomically, which
+# is a judgment, not a pattern.
+_SOLAR_SYSTEM = re.compile(r"\bSolar(?P<gap>[  ]+)System\b")
+
+# "Universe" and "Galaxy" are only safe to lowercase where a determiner marks
+# them as the common noun they are. Bare "Universe" may be a title, a band, a
+# ship or a personification, so it is left to a reader.
+_COSMOS_DET = re.compile(
+    r"\b(?:[Tt]he|[Tt]his|[Oo]ur|[Ww]hole|[Ee]ntire|[Kk]nown|[Oo]bservable)"
+    r"[  ]+(?P<word>Universe|Galaxy)\b")
+
+_CAP_AFTER = re.compile(r"[  ]+[A-Z][a-z’']")
+_WORD_BEFORE_GAP = re.compile(r"([A-Za-z][\w’']*)[  ]+$")
+
+_CHICAGO_SOLAR_WHY = ("Chicago sets “solar system” lowercase (8.140): it "
+                      "describes the system, it does not name it.")
+_CHICAGO_COSMOS_WHY = ("Chicago sets “universe” and “galaxy” lowercase "
+                       "(8.140–8.141); only a proper name — the Milky Way — "
+                       "keeps its capitals.")
+
+
+def _is_display_line(text: str) -> bool:
+    """Whether the paragraph is a heading, title or other display line rather
+    than prose. Capitals there are a styling choice, not a house violation, so
+    the astronomy sweep leaves the whole paragraph alone — the same instinct
+    `_sweep_terminal_period` follows when it declines to end a title."""
+    s = text.strip()
+    if not s:
+        return True
+    if s.isupper():
+        return True
+    if _is_name_only_line(s):
+        return True
+    return "\n" not in s and len(s.split()) <= 8 and not _has_internal_punct(s)
+
+
+def _in_capitalized_run(text: str, start: int, end: int) -> bool:
+    """Whether the span sits inside a run of capitalized words — a name phrase
+    like "Solar System Dynamics Laboratory", where "Solar System" is part of
+    somebody's proper name and not the house's lowercase term. A capitalized
+    word that merely opens the sentence does not count; every sentence has
+    one."""
+    before = _WORD_BEFORE_GAP.search(text[:start])
+    if before is not None and before.group(1)[:1].isupper() \
+            and not _sentence_starts_at(text, before.start(1)):
+        return True
+    return _CAP_AFTER.match(text[end:]) is not None
+
+
+def _sweep_chicago_terms(text: str, variant=None) -> list[Hit]:
+    """Lowercase the Chicago astronomy terms: "the Solar System" -> "the solar
+    system", "the Universe" -> "the universe".
+
+    Every guard is about the capital that is NOT a house violation: a heading,
+    a proper name the term is embedded in, a sentence-initial position (where
+    "Solar system" keeps its opening capital), and a following capitalized word
+    ("the Universe Next Door" is a title, "Milky Way Galaxy" a proper name)."""
+    if _is_display_line(text):
+        return []
+    hits: list[Hit] = []
+    for m in _SOLAR_SYSTEM.finditer(text):
+        if _in_capitalized_run(text, m.start(), m.end()):
+            continue
+        lead = "Solar" if _sentence_starts_at(text, m.start()) else "solar"
+        hits.append(Hit(m.start(), m.end(), f"{lead}{m.group('gap')}system",
+                        _CHICAGO_SOLAR_WHY))
+    for m in _COSMOS_DET.finditer(text):
+        if _CAP_AFTER.match(text[m.end():]) is not None:
+            continue
+        hits.append(Hit(m.start("word"), m.end("word"),
+                        m.group("word").lower(), _CHICAGO_COSMOS_WHY))
+    return hits
+
+
+
 # A heading that reads as the near-homophone of the standard book-part label.
 # AFTERWARD for AFTERWORD is the classic; each is raised as a query because
 # "Afterward" is also a legitimate chapter title meaning "in the time after".
@@ -1378,6 +1593,12 @@ SWEEPS: tuple[Sweep, ...] = (
           _sweep_elision_apostrophe),
     Sweep("sweep_quote_pair", "A single-opened quotation closes single",
           _sweep_quote_pair),
+    Sweep("sweep_prefix_compound",
+          "Prefixed compounds closed per Merriam-Webster",
+          _sweep_prefix_compound),
+    Sweep("sweep_chicago_terms",
+          "Chicago lowercase terms (solar system, universe)",
+          _sweep_chicago_terms),
 )
 
 SWEEPS_BY_KEY = {s.key: s for s in SWEEPS}

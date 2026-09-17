@@ -1062,3 +1062,300 @@ def test_the_default_scan_leaves_casing_splits_to_the_fixed_workflow():
     cfg = load_config("config/default.yaml")
     assert cfg.consistency.case_splits and cfg.consistency.case_split_dominance == 3
     assert cfg.consistency.case_split_min_total == 5
+
+
+# --- the Cooper QA: five misses no per-paragraph review could see -------------
+#
+# Each of these was found by a human reading the whole Cooper manuscript, and
+# each is structurally invisible to a chunked read: every paragraph involved is
+# well-formed on its own, and the error is the difference between two of them.
+
+from docproof.consistency import (COMPOUND_KEY, DIALECT_KEY, VESSEL_KEY,
+                                  find_dialect_variants, find_figure_drift,
+                                  find_vessel_pronouns)
+
+
+def _cooper(paras, **kw):
+    """The four Cooper scans that can propose an edit, switched on the way the
+    shipped config switches them on. Off in the signature by design — see
+    ``find_inconsistencies``: the caller that asks for tracked edits is the
+    caller that screens them."""
+    return find_inconsistencies(
+        paras, vessel_pronouns=True, dialect_variants=True,
+        closed_compounds=True, callbacks=True, **kw)
+
+
+def _ship(strays=("Its wings curved forward where the Dutchwoman met the dark.",
+                  "The Dutchwoman shuddered, and its systems could not reconcile the readings."),
+          mentions=9, feminine=9):
+    texts = [f"They watched the Dutchwoman turn again, number {i}."
+             for i in range(mentions)]
+    texts += [f"Her vast sails caught the light as the Dutchwoman came about, number {i}."
+              for i in range(feminine)]
+    return _paras(*texts, *strays)
+
+
+def test_a_ship_the_book_calls_she_has_its_neuter_strays_corrected():
+    paras = _ship()
+    [drift] = find_vessel_pronouns(paras)
+    assert drift.vessel == "Dutchwoman"
+    assert (drift.feminine, drift.neuter) == (9, 2)
+    assert [o.form for o in drift.outliers] == ["Its", "its"]
+    findings = [f for f in to_findings(_cooper(paras), paras)
+                if f.error_type == VESSEL_KEY]
+    assert [f.finding_id for f in findings] == ["v-0001", "v-0002"]
+    # "Its wings" opens the sentence, so the possessive takes the capital back.
+    assert findings[0].corrected_text.startswith("Her wings curved forward")
+    assert "and her systems could not reconcile" in findings[1].corrected_text
+    assert "9 feminine pronoun(s)" in findings[0].explanation
+    assert "against 2 neuter" in findings[0].explanation
+
+
+def test_a_subject_it_becomes_she_and_an_object_it_becomes_her():
+    paras = _ship(strays=("It hung in the center of the lens, and the Dutchwoman held there.",
+                          "The Dutchwoman turned, and they steered around it carefully."))
+    findings = [f for f in to_findings(_cooper(paras), paras)
+                if f.error_type == VESSEL_KEY]
+    assert findings[0].corrected_text.startswith("She hung in the center")
+    assert "steered around her carefully" in findings[1].corrected_text
+
+
+def test_the_vessel_scan_is_silent_without_the_pattern():
+    # A ship the book pronouns as "it" throughout has no convention to keep.
+    neuter = _paras(*[f"They watched the Dutchwoman turn, number {i}."
+                      for i in range(9)],
+                    *[f"Its sails caught the light as the Dutchwoman came about, {i}."
+                      for i in range(9)])
+    assert find_vessel_pronouns(neuter) == ()
+    # A vessel named too rarely to be a convention at all (six "the
+    # Dutchwoman"s in the whole book, against the eight the scan asks for).
+    assert find_vessel_pronouns(_ship(mentions=1, feminine=5)) == ()
+    # Feminine pronouns below the floor.
+    assert find_vessel_pronouns(_ship(feminine=2)) == ()
+    # And a book with no vessel in it.
+    assert find_vessel_pronouns(_paras("The theater was dark and nobody spoke.")) == ()
+
+
+def _scots():
+    texts = [f"“I dinnae ken what ye mean, number {i}.”" for i in range(20)]
+    texts += [f"“I dinna ken why ye came, number {i}.”" for i in range(6)]
+    texts += [f"“Ye cannae tell the bairn that, number {i}.”" for i in range(10)]
+    texts += ["“Ye canna tell a wee bairn that at all.”",
+              "“Yeh dinnae ken the wee bairn, do ye.”"]
+    return _paras(*texts)
+
+
+def test_dialect_spellings_are_settled_on_the_books_own_majority():
+    paras = _scots()
+    groups = {g.key: g for g in find_dialect_variants(paras)}
+    assert dict(groups["dinnae"].counts) == {"dinnae": 21, "dinna": 6}
+    assert dict(groups["cannae"].counts) == {"cannae": 10, "canna": 1}
+    assert dict(groups["ye"].counts) == {"ye": 38, "yeh": 1}
+    assert all(g.enforce for g in groups.values())
+    findings = [f for f in to_findings(_cooper(paras), paras)
+                if f.error_type == DIALECT_KEY]
+    # One edit per stray: six dinna, one canna, one yeh.
+    assert len(findings) == 8
+    assert any("Ye cannae tell a wee bairn" in f.corrected_text for f in findings)
+    assert any(f.corrected_text.startswith("“Ye dinnae ken the wee bairn")
+               for f in findings)
+    assert any("“dinnae” (21), “dinna” (6)" in f.explanation for f in findings)
+
+
+def test_a_close_dialect_split_asks_once_instead_of_correcting():
+    paras = _paras(
+        "“It's no' bad, ye ken, no' bad at all,” he said to the bairn.",
+        "“Aye, it's no bad, ye ken,” she said, and the wee thing laughed.")
+    [group] = find_dialect_variants(paras)
+    assert group.key == "no’" and not group.enforce
+    assert dict(group.counts) == {"no’": 2, "no": 1}
+    queries = [f for f in to_findings(_cooper(paras), paras)
+               if "dialect word is spelled more than one way" in f.explanation]
+    assert len(queries) == 1                      # one query, not one per site
+    assert queries[0].corrected_text == queries[0].original_text
+
+
+def test_the_dialect_scan_never_speaks_outside_dialect():
+    # Ordinary prose: "was no good" is English, and none of it is dialect.
+    plain = _paras("There was no good reason to wait for the tide to turn.",
+                   "He was no stranger to the harbour and its moods, either.",
+                   "It was no' the answer she wanted.")
+    assert find_dialect_variants(plain) == ()
+    # "canny" is a real English word and is not a spelling of "cannae".
+    canny = _paras(*[f"“Ye cannae ken that, number {i}, wee bairn.”"
+                     for i in range(10)],
+                   "“That was a canny thing to do, ye ken, for a wee bairn.”")
+    assert find_dialect_variants(canny) == ()
+
+
+def _satphone(open_n=4, closed_n=3):
+    texts = [f"She raised the sat phone and waited for the tone, hour {i}."
+             for i in range(open_n)]
+    texts += [f"The satphone lay on the table, its battery gone, hour {i}."
+              for i in range(closed_n)]
+    return _paras(*texts)
+
+
+def test_the_dictionary_settles_a_compound_the_counts_never_will():
+    paras = _satphone()
+    report = _cooper(paras)
+    [pref] = report.compounds
+    assert pref.preferred == "satphone"
+    assert dict(pref.counts) == {"sat phone": 4, "satphone": 3}
+    assert len(pref.outliers) == 4                # dominance would have said the opposite
+    assert not [t for t in report.terms if t.key == "satphone"]
+    findings = [f for f in to_findings(report, paras) if f.error_type == COMPOUND_KEY]
+    assert len(findings) == 4
+    assert all("the satphone and waited" in f.corrected_text for f in findings)
+    assert "Merriam-Webster sets this closed" in findings[0].explanation
+    assert report.corrected == 4
+
+
+def test_a_compound_shorter_than_min_length_is_still_the_dictionarys_call():
+    paras = _paras("She sent the e-mail before dawn and waited by the window.",
+                   "The email came back an hour later with nothing attached.",
+                   "His email said only that the plates were gone.")
+    [pref] = _cooper(paras).compounds
+    assert pref.preferred == "email" and len(pref.outliers) == 1
+    assert pref.outliers[0].form == "e-mail"
+
+
+def test_compounds_the_table_does_not_know_keep_asking():
+    paras = _paras("He kept the archive in safe keeping for a year and a day.",
+                   "The safekeeping of the archive was her only duty.",
+                   "The safekeeping cost more than the archive was worth.")
+    report = _cooper(paras)
+    assert report.compounds == ()
+    assert _keys(report) == {"safekeeping": "safekeeping"}
+    # And a book that writes one form throughout has nothing to settle.
+    assert _cooper(_satphone(open_n=5, closed_n=0)).compounds == ()
+    assert find_inconsistencies(_satphone()).compounds == ()   # off unless asked
+
+
+def _bearings(strays=1):
+    texts = [f"The bearing held at 282.6° and the elevation at 77.4°, sweep {i}."
+             for i in range(9)]
+    texts += ["The bearing read 282.8° and the elevation 77.2°. A perfect match."
+              for _ in range(strays)]
+    return _paras(*texts)
+
+
+def test_a_figure_that_drifts_once_is_asked_about_and_never_changed():
+    paras = _bearings()
+    figures = {f.key: f for f in find_figure_drift(paras)}
+    assert set(figures) == {"282°", "77°"}
+    assert dict(figures["282°"].counts) == {"282.6°": 9, "282.8°": 1}
+    assert figures["282°"].majority == "282.6°"
+    findings = [f for f in to_findings(_cooper(paras), paras)
+                if "This figure is" in f.explanation]
+    assert len(findings) == 2
+    assert all(f.corrected_text == f.original_text for f in findings)
+    assert ("This figure is “282.6°” at 9 other place(s) and “282.8°” here"
+            in findings[0].explanation)
+
+
+def test_the_figure_scan_leaves_ordinary_measurements_alone():
+    # Two measurements a reader cannot confuse, not one that moved.
+    assert find_figure_drift(_paras(
+        *[f"The mast was 6 m tall, mast {i}." for i in range(9)],
+        "The rope was 6.5 m long and frayed at one end.")) == ()
+    # Too few repetitions to call anything a majority.
+    assert find_figure_drift(_paras(
+        "The bearing held at 282.6° through the night.",
+        "The bearing read 282.8° at dawn and nobody checked it.")) == ()
+    # A book with no repeated figures at all.
+    assert find_figure_drift(_paras("The theater was dark and nobody spoke.")) == ()
+
+
+def test_the_universe_and_the_solar_system_split_like_any_other_term():
+    paras = _paras(
+        *[f"They mapped the solar system from end to end, survey {i}."
+          for i in range(9)],
+        *[f"They mapped the Solar System from end to end, chart {i}."
+          for i in range(3)],
+        *[f"He wondered how the universe could be so quiet, night {i}."
+          for i in range(50)],
+        "He wondered how the Universe could be so quiet at all.")
+    splits = {s.key: s for s in find_case_splits(paras)}
+    assert set(splits) == {"solar system", "universe"}
+    solar = splits["solar system"]
+    assert dict(solar.counts) == {"solar system": 9, "Solar System": 3}
+    assert solar.dominant == "solar system" and solar.clear
+    assert len(solar.outliers) == 3
+    universe = splits["universe"]
+    assert dict(universe.counts) == {"universe": 50, "Universe": 1}
+    assert universe.dominant == "universe" and universe.clear
+
+
+def test_a_term_hung_off_a_proper_noun_clears_a_lower_bar():
+    paras = _paras(
+        *[f"They drove across the Atacama Plateau before dawn, day {i}."
+          for i in range(3)],
+        "They drove across the Atacama plateau again at noon.")
+    [split] = find_case_splits(paras)
+    assert split.key == "atacama plateau"
+    assert dict(split.counts) == {"Atacama Plateau": 3, "Atacama plateau": 1}
+    assert split.dominant == "Atacama Plateau" and split.clear
+    findings = [f for f in to_findings(
+        find_inconsistencies(paras, case_splits=True), paras)
+        if f.error_type == CASE_SPLIT_KEY]
+    assert len(findings) == 1
+    assert "the Atacama Plateau again at noon" in findings[0].corrected_text
+    # Four uses in all: it is only visible because "Atacama" is a proper noun.
+    assert find_case_splits(paras, proper_min_total=5) == ()
+
+
+def test_a_close_capitalized_split_is_reported_with_its_counts():
+    paras = _paras(*[f"The Armada came at dawn, fleet {i}." for i in range(9)],
+                   *[f"He counted the armada again, hour {i}." for i in range(4)])
+    [split] = find_case_splits(paras)
+    assert split.key == "armada"
+    assert dict(split.counts) == {"Armada": 9, "armada": 4}
+    assert split.dominant == "Armada" and not split.clear
+    f = [f for f in to_findings(find_inconsistencies(paras, case_splits=True), paras)
+         if f.error_type == CASE_SPLIT_KEY][0]
+    assert "“Armada” ×9 vs “armada” ×4" in f.explanation
+    assert "no form clearly dominates" in f.explanation
+    assert f.confidence == "medium"
+
+
+def test_the_new_scans_all_carry_a_shipped_default():
+    cfg = load_config("config/default.yaml").consistency
+    assert cfg.vessel_pronouns and cfg.vessel_min_feminine == 5
+    assert cfg.dialect_variants and cfg.dialect_dominance == 3
+    assert cfg.closed_compounds and cfg.figure_drift
+    assert cfg.figure_min_majority == 3
+    assert cfg.callbacks and cfg.callback_min_tokens == 8
+    assert cfg.callback_near == 0.80
+    assert cfg.case_split_proper_min_total == 3
+    # And the four that can propose an edit are off in the SIGNATURE, exactly
+    # as case_splits is: the shipped config turns them on for the caller that
+    # screens every proposal, and the legacy pipeline — which enumerates the
+    # options it wants — keeps the behaviour it had.
+    paras = _ship() + _scots() + _satphone()
+    plain = find_inconsistencies(paras)
+    assert (plain.vessels, plain.dialect, plain.compounds) == ((), (), ())
+    assert plain.callbacks == ()
+    rich = _cooper(paras)
+    assert rich.vessels and rich.dialect and rich.compounds
+    # Every switch is a find_inconsistencies keyword, which is how galley's
+    # fixed workflow picks a new scan up by signature alone.
+    import inspect
+    params = inspect.signature(find_inconsistencies).parameters
+    for name in ("vessel_pronouns", "vessel_min_feminine", "dialect_variants",
+                 "dialect_dominance", "closed_compounds", "figure_drift",
+                 "figure_min_majority", "callbacks", "callback_min_tokens",
+                 "callback_near", "case_split_proper_min_total"):
+        assert name in params, name
+
+
+def test_every_new_scan_is_silent_on_an_ordinary_book():
+    """The whole contract: a book without these patterns hears nothing."""
+    paras = _paras(
+        "The theater was dark, and the rain had not let up since noon.",
+        "She counted the chairs in the third row and found one missing.",
+        "Nobody had swept the aisle in a week, and it showed in the dust.")
+    report = _cooper(paras, case_splits=True)
+    assert (report.vessels, report.dialect, report.compounds,
+            report.figures, report.callbacks) == ((), (), (), (), ())
+    assert report.flagged == 0 and report.corrected == 0

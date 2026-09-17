@@ -431,6 +431,61 @@ def test_completion_seed_suppresses_the_case_split_scan_for_that_term(tmp_path):
     assert all("Easy Speed" in r["replacement"] for r in recurrence)
 
 
+def test_a_term_changed_two_ways_sweeps_nowhere_and_asks_instead(tmp_path):
+    """Cooper, 2026-09-17: “lamb chops” became “muttonchops” in one paragraph
+    while “lambchops” was closed up to “lamb chops” in others. Neither swap is
+    evidence for the other, so the term propagates nowhere and every site asks."""
+    source = prepared(para("p1", "He ordered lamb chops for dinner."),
+                      para("p2", "The lambchops were cold."),
+                      para("p3", "She never ordered lambchops."))
+    original = {p.para_id: p.text for p in source.doc.paragraphs}
+    current = {**original, "p1": "He ordered muttonchops for dinner.",
+               "p2": "The lamb chops were cold."}
+    seeds = local._recurrence_seeds(original, current, set())
+    kept, conflicts = local._swap_conflicts(seeds)
+    assert len(seeds) == 2 and kept == []
+    assert [c["key"] for c in conflicts] == ["lambchops"]
+    assert [s["para_id"] for s in conflicts[0]["sites"]] == ["p1", "p2"]
+    rows, evidence = local.collect_completion_candidates(source, original, current,
+        tmp_path / "local", identity=IDENTITY, stage="conflict")
+    # No propagation to the untouched third site, in either direction.
+    assert not [r for r in rows if r["source"] == "local:completion:recurrences"]
+    conflict_rows = [r for r in rows if r["source"] == "local:completion:swap_conflicts"]
+    assert {r["para_id"] for r in conflict_rows} == {"p1", "p2"}
+    assert all(r["action"] == "query" and r["category"] == "spelling" for r in conflict_rows)
+    assert all(r["replacement"] == r["quote"] for r in conflict_rows)
+    reason = conflict_rows[0]["reason"]
+    assert "“lamb chops”/“lambchops” was changed" in reason
+    assert "to “muttonchops” at p1" in reason and "to “lamb chops” at p2" in reason
+    assert "one term must take one form" in reason
+    assert packet(evidence)["swap_conflicts"][0]["key"] == "lambchops"
+
+
+def test_one_form_of_a_swap_still_propagates(tmp_path):
+    """Only a conflicted term stops sweeping; the ordinary case is unchanged."""
+    source = prepared(para("p1", "He ordered lambchops for dinner."),
+                      para("p2", "The lambchops were cold."))
+    original = {p.para_id: p.text for p in source.doc.paragraphs}
+    current = {**original, "p1": "He ordered lamb chops for dinner."}
+    kept, conflicts = local._swap_conflicts(local._recurrence_seeds(original, current, set()))
+    assert len(kept) == 1 and conflicts == []
+    rows, evidence = local.collect_completion_candidates(source, original, current,
+        tmp_path / "local", identity=IDENTITY, stage="single")
+    recurrence = [r for r in rows if r["source"] == "local:completion:recurrences"]
+    assert [r["para_id"] for r in recurrence] == ["p2"]
+    assert "lamb chops" in recurrence[0]["replacement"]
+    assert not [r for r in rows if r["source"] == "local:completion:swap_conflicts"]
+    assert packet(evidence)["swap_conflicts"] == []
+
+
+def test_two_homophone_fixes_of_one_grammar_word_are_not_a_conflict():
+    """“their” corrected two ways is two readings of two sentences."""
+    original = {"p1": "their goes the bell.", "p2": "their coming home."}
+    current = {"p1": "there goes the bell.", "p2": "they're coming home."}
+    kept, conflicts = local._swap_conflicts(local._recurrence_seeds(original, current, set()))
+    assert conflicts == [] and len(kept) == 2
+
+
 def test_verse_packet_runs_the_glyph_sweeps_over_poetry_only(tmp_path, monkeypatch):
     """The verse sweep touches only the classified poetry, runs no
     LanguageTool, dictionary or sentence-level check, and records its own
