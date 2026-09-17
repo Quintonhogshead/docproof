@@ -1051,8 +1051,9 @@ def _sweep_time_of_day(text: str, variant=None) -> list[Hit]:
     a U.K.-oriented one ("3:00 pm"; an author's point separator, "8.30 am",
     is kept). A bare hour with a meridiem gains its ":00" here ("2 PM" ->
     "2:00 p.m.") — the meridiem is what makes it unambiguously a time; a
-    meridiem-less "around 4" stays the whole-book consistency scan's
-    question. In the U.S. form the abbreviation's own period doubles as the
+    meridiem-less "around 4" is an ordinary number the number stage spells
+    out ("around four"), never a site for ":00". In the U.S. form the
+    abbreviation's own period doubles as the
     sentence's, so a dotted source form is never ambiguous. In the U.K. form
     a dotted source ("at 3 p.m. He left") whose final period is followed by
     a capitalized word is skipped, not guessed: that dot may close the

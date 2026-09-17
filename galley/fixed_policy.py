@@ -70,10 +70,13 @@ def _number_policy() -> str:
         "clock-time normalization too (the earlier references to another sweep "
         "describe legacy routing, not an exemption): use digits, minutes and a lowercase "
         "meridiem — “3:00 p.m.” with periods for a U.S.-oriented book, “3:00 pm” without "
-        "for a U.K.-oriented one — when the text establishes a clock time; never infer a missing meridiem "
-        "or time value. A time already written in 24-hour form (“17:03”, “00:05 UTC”, “0830”, "
-        "“thirteen hundred”) stays 24-hour: never convert it to a.m./p.m. or invent a meridiem for it. "
-        "Preserve legitimate dates, years, identifiers, measurements, "
+        "for a U.K.-oriented one — when the text establishes a clock time WITH minutes or a meridiem. "
+        "A bare hour with neither (“around 4”, “At 3?”) is a number like any other: spelled out "
+        "(“around four”, “At three?”), never given “:00” or a meridiem. A spelled-out hour "
+        "(“at around five”) never becomes digits. A time already written in 24-hour form (“17:03”, "
+        "“00:05 UTC”, “0830”, “thirteen hundred”) stays 24-hour: never convert it to a.m./p.m. or "
+        "invent a meridiem for it. Never infer a missing meridiem "
+        "or time value. Preserve legitimate dates, years, identifiers, measurements, "
         "labels, idioms and deliberate spoken numbers. Return only clear errors. "
         "Currency-specific rules take precedence over the general prohibition "
         "on converting spelled numbers. For money, the detailed fix guidance controls decimal precision: add a "
@@ -316,6 +319,29 @@ def _kind(text: str, prefix: bool) -> str:
     return "numeral" if re.search(r"\d", text) else "spelled"
 
 
+_CLOCK_MARK = re.compile(rf"\d\s*:\s*\d{{2}}|\d\s*{_MERIDIEM}", re.IGNORECASE)
+
+
+def number_proposal_problem(before: str, replacement: str, category: str = "number_style") -> str | None:
+    """Why a number-style proposal may not be applied, or None.
+
+    Two over-edits the Wilder run made (2026-09-14) that no reader may repeat:
+    a bare hour given a clock reading it never had ("by 10—11" -> "10:00–11:00
+    AM"), and a spelled-out number set in digits ("at around five" -> "5:00").
+    Chicago spells out an even hour that carries neither minutes nor a
+    meridiem, and the house guide never invents either. Currency keeps its
+    own rules, and a cancer stage is the one spelled -> numeral direction.
+    """
+    if category != "number_style" or before == replacement:
+        return None
+    if (not re.search(r"\d", before) and re.search(r"\d", replacement)
+            and not _ROMAN_STAGE.search(replacement)):
+        return "A spelled-out number is never set in digits"
+    if _CLOCK_MARK.search(replacement) and not _CLOCK_MARK.search(before):
+        return "A clock reading (minutes or a meridiem) may not be added to a number that had none"
+    return None
+
+
 def extract_numbers(paragraphs: Mapping[str, str]) -> list[dict]:
     """Extract complete surface forms with source offsets and local context.
 
@@ -418,4 +444,4 @@ def poetry_samples(paragraphs: Mapping[str, str], count: int = 6,
 
 __all__ = ["configuration", "EXCLUDED_LOCAL_TYPES", "LOCAL_CANDIDATE_TYPES",
            "NUMBER_POLICY", "PROOFREADING_POLICY", "VERSE_CATEGORIES",
-           "extract_numbers", "poetry_samples", "verse_safe"]
+           "extract_numbers", "number_proposal_problem", "poetry_samples", "verse_safe"]

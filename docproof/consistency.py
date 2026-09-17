@@ -2240,8 +2240,9 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
                     f"This book writes clock times with minutes — "
                     f"“{report.times.example}”, {report.times.with_minutes} "
                     f"time(s) — but {len(sites)} clock hour(s) stand bare, "
-                    f"starting here with “{first.form}”. Add “:00” to the bare "
-                    f"hours to match?{others}"),
+                    f"starting here with “{first.form}”. House style spells a "
+                    f"bare hour out (“around four”) rather than adding “:00”; "
+                    f"is any of these meant as a clock reading with minutes?{others}"),
                 confidence="medium",
             ))
             n += 1
