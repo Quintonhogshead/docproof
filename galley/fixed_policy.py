@@ -84,6 +84,21 @@ JEV_THRESHOLDS = {"comma_insert": 0.30, "comma_delete": 0.50, "spelling": 0.90}
 # paragraph longer than the window is quoted one sentence at a time.
 JEV_VARIANTS_PER_REQUEST = 30
 JEV_SENTENCE_LIMIT = 700
+# The Jev pre-screen over the local rule candidates (galley.fixed_prescreen).
+# Measured 2026-09-17 on 553 rule candidates over the Redding miss paragraphs:
+# at P >= 0.30 Jev kept 232 of them and preserved 56 of the 81 located misses,
+# where the lane's own paid Luna-low judge preserved 30 to 35. A lower bar buys
+# little; a higher one starts discarding real errors. Jev judges only whether
+# the rule fired on a real error; the paid screen still decides every site.
+JEV_PRESCREEN_THRESHOLD = 0.30
+JEV_PRESCREEN_RULE = (
+    JEV_COMMA_RULE + " "
+    "Numbers: spell out whole numbers one through one hundred in narrative; numerals "
+    "for ages in some houses, so a number-style flag is only an error when the "
+    "manuscript is inconsistent with itself. Dialogue: a comma, not a period, "
+    "separates a quotation from its tag ('...,' she said); every opening quotation mark "
+    "has a closing one. A word repeated back to back (the the) is an error unless "
+    "deliberate emphasis.")
 
 
 def _number_policy() -> str:
@@ -473,5 +488,6 @@ def poetry_samples(paragraphs: Mapping[str, str], count: int = 6,
 
 
 __all__ = ["configuration", "EXCLUDED_LOCAL_TYPES", "LOCAL_CANDIDATE_TYPES",
+           "DIAGNOSTIC_ONLY_TYPES", "JEV_PRESCREEN_RULE", "JEV_PRESCREEN_THRESHOLD",
            "NUMBER_POLICY", "PROOFREADING_POLICY", "VERSE_CATEGORIES",
            "extract_numbers", "number_proposal_problem", "poetry_samples", "verse_safe"]

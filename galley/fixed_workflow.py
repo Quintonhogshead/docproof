@@ -825,6 +825,44 @@ class FixedWorkflow:
             candidates.append(candidate)
         return candidates
 
+    def _jev_prescreen(self, rows):
+        """Jev's judgment on the local rule candidates, before the paid screen.
+
+        The deterministic generators and LanguageTool name places to examine;
+        the Sonnet + Luna screen buys a window for each one. Jev answers one
+        typed question per site for about a cent a book and drops the obvious
+        misfires (galley.fixed_prescreen). The lane is optional and advisory:
+        without a key the rows pass through, an outage mid-stage passes the
+        rows it did not answer through, and nothing it keeps is proof.
+        """
+        from galley import jev as jev_lane
+        if not rows:
+            return rows, None
+        if not jev_lane.enabled():
+            self.history.append({"stage": "typed_jev_prescreen",
+                                 "skipped": "Jev is not enabled; every local candidate goes to the screen"})
+            return rows, None
+        from galley.fixed_prescreen import prescreen_local_candidates
+        from galley.fixed_policy import JEV_PRESCREEN_RULE, JEV_PRESCREEN_THRESHOLD
+        ledger = self._jev_ledger()
+        try:
+            kept, dropped, evidence = prescreen_local_candidates(
+                rows, self.original, ledger=ledger, house_rule=JEV_PRESCREEN_RULE,
+                threshold=JEV_PRESCREEN_THRESHOLD,
+                should_cancel=self._cancel_requested,
+                progress=lambda done, total: self.progress(
+                    "local_progress", phase="typed", check="Jev prescreen", completed=done, total=total))
+        except Exception as exc:  # a proofread never fails for want of Jev
+            self.history.append({"stage": "typed_jev_prescreen",
+                                 "skipped": f"Jev did not answer ({type(exc).__name__}: {exc}); "
+                                            "every local candidate goes to the screen"})
+            return rows, None
+        self.history.append({"stage": "typed_jev_prescreen", "generated": len(rows), "kept": len(kept),
+                             "dropped": dropped, "evidence": evidence,
+                             "usage": jev_lane.usage_from_receipts(ledger.directory)["stages"]
+                                 .get("typed_prescreen", {"calls": 0})})
+        return kept, evidence
+
     def _local_initial(self, prepared):
         from galley.fixed_local import collect_local_candidates
         self._cancel()
@@ -832,6 +870,10 @@ class FixedWorkflow:
             prepared, self.original, self.directory / "local", identity=self.identity,
             poetry_ids=self.poetry_ids, cfg=self.cfg,
             progress=lambda done, total: self._local_progress(done, total))
+        self._cancel()
+        rows, prescreen = self._jev_prescreen(rows)
+        if prescreen is not None:
+            evidence = {**evidence, "jev_prescreen": prescreen}
         self._cancel()
         return self._local_candidates(rows, texts=self.original, prepared=prepared), evidence
 
