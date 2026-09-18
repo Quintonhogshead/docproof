@@ -908,3 +908,40 @@ def test_queue_pause_reads_the_whole_cause_chain():
     loop = RuntimeError("cyclic")
     loop.__context__ = loop
     assert fc._queue_pause(loop) is None
+
+
+def test_a_request_that_was_never_submitted_does_not_block_delivery(tmp_path):
+    """Gunn - Book 1, 2026-09-17: the run stopped between writing a request and
+    reserving it, leaving a directory holding that request and nothing else.
+    The budget is the call inventory and it has no line for it, so nothing was
+    asked, answered or spent — and the resumed run must still deliver."""
+    caller = calls(tmp_path)
+    ask(caller)
+    shell = caller.directory / "calls" / ("0" * 64)
+    shell.mkdir()
+    (shell / "request.json").write_text('{"stage": "never_sent"}', encoding="utf-8")
+    (shell / "request.lock").write_text("", encoding="utf-8")
+    caller.assert_complete()
+    # It is not evidence either: nothing in the certificate comes from it.
+    manifest = fc.validate_fixed_call_evidence(caller.directory, identity=caller.identity)
+    assert not any("0" * 64 in item["path"] for item in manifest)
+
+
+def test_a_reserved_request_with_no_answer_still_blocks_delivery(tmp_path):
+    """The shell is forgiven only when the budget never knew about it. A
+    reservation that exists and never reconciled is an unresolved submission,
+    which is exactly what must not be waved through."""
+    caller = calls(tmp_path)
+    ask(caller)
+    budget_path = caller.directory / "budget.json"
+    budget = json.loads(budget_path.read_text("utf-8"))
+    sha = "0" * 64
+    entry = dict(next(iter(budget["entries"].values())))
+    entry.update(request_sha256=sha, attempt=1, status="started", usage=None)
+    budget["entries"][f"{sha}:1"] = entry
+    budget_path.write_text(json.dumps(budget), encoding="utf-8")
+    shell = caller.directory / "calls" / sha
+    shell.mkdir()
+    (shell / "request.json").write_text('{"stage": "never_answered"}', encoding="utf-8")
+    with pytest.raises(fc.FixedCallInterrupted):
+        caller.assert_complete()
