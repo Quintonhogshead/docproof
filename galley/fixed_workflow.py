@@ -72,7 +72,20 @@ SHARED_CONTEXT_MARKER = "\n\nSHARED CONTEXT, identical for every window of this 
 
 
 class FixedWorkflowError(ValueError):
-    pass
+    """A defect or integrity failure in the fixed recipe.
+
+    `retryable` is False by default because the fixed lane replays from its
+    call cache: the same inputs produce the same failure at the same stage on
+    every resume, so a poll that tries again spends the whole run over and
+    never converges. Set it True only for a genuinely temporary condition,
+    such as another worker holding the workspace lock.
+    """
+    retryable = False
+
+
+class FixedWorkflowBusy(FixedWorkflowError):
+    """Another worker owns this workspace; the next poll may well get it."""
+    retryable = True
 
 
 class RejectedModelProposal(FixedWorkflowError):
@@ -239,6 +252,17 @@ def _windows(rows, limit=24000):
         size += n
     if batch:
         yield batch
+
+
+def _question_id(pid, quote, missing):
+    """An author question's identity IS its content, in one place.
+
+    Two stages that arrive at the same paragraph, the same quote and the same
+    missing knowledge have raised one question, not two. Anything that changes
+    those three changes the id with them — see `_comments`, which re-keys a
+    question whose wording a comment review replaced.
+    """
+    return "q-" + _hash([pid, quote, missing])[:20]
 
 
 def _exact_ids(actual, expected, label):
@@ -543,6 +567,10 @@ class FixedWorkflow:
         self.original = {}
         self.poetry_ids = set()
         self.questions = []
+        # Ids whose question a comment review replaced with better wording. The
+        # replacement carries a new id, so without this the later stage that
+        # regenerates the original wording would mint the retired id again.
+        self.retired_questions = set()
         self.history = []
         self.formats = []
         self.stages = []
@@ -1276,10 +1304,37 @@ class FixedWorkflow:
                "missing_knowledge": missing, "reason": reason}
         if not self._valid_question(stage, row, self.current, model):
             return
-        key = "q-" + _hash([pid, quote, missing])[:20]
-        if not any(q["id"] == key for q in self.questions):
-            self.questions.append({"id": key, "para_id": pid, "quote": quote, "question": question,
-                                   "missing_knowledge": missing, "reason": reason, "stage": stage})
+        self._add_questions([{"id": _question_id(pid, quote, missing), "para_id": pid,
+                              "quote": quote, "question": question,
+                              "missing_knowledge": missing, "reason": reason, "stage": stage}])
+
+    def _add_questions(self, rows):
+        """The one door a question enters by, so an id is never held twice.
+
+        A question's id is a hash of its content, so the same id is the same
+        question asked again — by another window's child workflow, or by a
+        later stage rejecting the same edit for the same reason. The first one
+        keeps the place, and a retired id is not asked afresh. Children start
+        with an empty list, so their own guard cannot see what this workflow
+        already holds; every merge back has to come through here.
+        """
+        held = {q["id"] for q in self.questions}
+        for row in rows:
+            if row["id"] in held or row["id"] in self.retired_questions:
+                continue
+            held.add(row["id"])
+            self.questions.append(row)
+
+    def _assert_unique_questions(self, where):
+        """State the invariant where the questions become a call's inventory.
+
+        A duplicate id reaches the transport as a coverage inventory the call
+        contract refuses ("Coverage inventory needs unique string IDs"), two
+        layers from whatever produced it. Name it here instead.
+        """
+        ids = [q["id"] for q in self.questions]
+        if len(ids) != len(set(ids)):
+            raise FixedWorkflowError(f"{where}: author questions carry duplicate ids")
 
     def _apply(self, stage, rows):
         before = dict(self.current)
@@ -1428,6 +1483,8 @@ class FixedWorkflow:
             if structure is not None:
                 shared["structure_context"] = structure
         shared_text = SHARED_CONTEXT_MARKER + _json(shared)
+        if comments:
+            self._assert_unique_questions(stage)
         jobs, windows = [], []
         order = list(snapshot)
         positions = {pid: i for i, pid in enumerate(order)}
@@ -1536,6 +1593,7 @@ class FixedWorkflow:
         return proposals, decisions, coverage
 
     def _comments(self, decisions, stage, *, before=None, model=None):
+        self._assert_unique_questions(stage + " comment review")
         by_id = {x["id"]: x for x in decisions}
         if len(by_id) != len(decisions) or set(by_id) - {q["id"] for q in self.questions}:
             raise FixedWorkflowError(stage + ": duplicate or unassigned comment decisions")
@@ -1582,13 +1640,27 @@ class FixedWorkflow:
             if d["action"] == "drop":
                 continue
             proposed = {**q, **{k: d[k] for k in ("quote", "question", "missing_knowledge", "reason")}}
+            # A replaced question is a different question, so it takes the id
+            # its new content hashes to and the old id is retired. Keeping the
+            # old id on new wording leaves an id that no longer describes its
+            # row, and a later stage that regenerates the original wording then
+            # mints that same id a second time — which is a duplicate the call
+            # contract refuses when the questions become a coverage inventory.
+            proposed["id"] = _question_id(proposed["para_id"], proposed["quote"],
+                                          proposed["missing_knowledge"])
+            if proposed["id"] != q["id"]:
+                self.retired_questions.add(q["id"])
+            # A review that puts back wording it once replaced reinstates that
+            # question; "retired" means superseded, not forbidden.
+            self.retired_questions.discard(proposed["id"])
             if self._valid_question(stage + "_comments", proposed, self.current, model):
                 remaining.append(proposed)
         # Only identical questions at the same place are merged.
         unique = {}
         for q in remaining:
             unique.setdefault((q["para_id"], q["quote"], q["question"]), q)
-        self.questions = list(unique.values())
+        self.questions = []
+        self._add_questions(list(unique.values()))
 
     @staticmethod
     def _drop_unreviewed(rows):
@@ -1639,7 +1711,11 @@ class FixedWorkflow:
         # Preserve the old canonical meaning-then-correction evidence order.
         for kind in ("meaning", "correction"):
             for child in reviewed:
-                self.questions.extend(child._check_questions[kind])
+                # Through the one door: a child's own guard saw only its empty
+                # list, so a question this workflow already holds — the same
+                # rejected edit, demoted again by a later stage — comes back
+                # here as a second row carrying an id that is already taken.
+                self._add_questions(child._check_questions[kind])
                 self.history.extend(h for h in child.history if h["stage"].startswith(stage + "_" + kind))
         self._checked_format_count = len(self.formats)
         return changed
@@ -1916,6 +1992,31 @@ class FixedWorkflow:
         return result
 
 
+def deterministic_failure(exc):
+    """Would this exact failure happen again on the next resume?
+
+    The fixed lane resumes by replaying its call cache, so a defect in the
+    recipe or a refused local contract costs the whole run again at every
+    poll and can never converge — the Gunn run of 2026-09-17 replayed two
+    hours to reach the same duplicate coverage inventory twice. Saying so
+    lets the agent hold the book for a new release instead of looping.
+
+    Only failures that are certainly deterministic are named here. Anything
+    else keeps the ordinary operational block and its retry; the agent's
+    repeated-block counter catches whatever this misses.
+    """
+    from galley.fixed_calls import FixedCallContractError
+    cause, visited = exc, set()
+    while cause is not None and id(cause) not in visited:
+        visited.add(id(cause))
+        if isinstance(cause, FixedCallContractError):
+            return True
+        if isinstance(cause, FixedWorkflowError) and not cause.retryable:
+            return True
+        cause = cause.__cause__ or cause.__context__
+    return False
+
+
 def run_fixed_driver(driver):
     """Production entry, including source-bound local and Drive handoff."""
     from galley.driver import DriveResult, PhaseResult, publish_verified_handoff, CredentialsError, detect_credential_failure
@@ -1933,7 +2034,7 @@ def run_fixed_driver(driver):
             try:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
-                raise FixedWorkflowError("Another worker owns this fixed proofread") from exc
+                raise FixedWorkflowBusy("Another worker owns this fixed proofread") from exc
             try:
                 saved_result = directory / "result.json"
                 if saved_result.is_file():
@@ -1982,6 +2083,12 @@ def run_fixed_driver(driver):
         # This is an operational block, never an invented editorial verdict.
         result.outcome, result.reason = "blocked", str(exc)
         result.stopped_at = "deliver" if result.handoff else "fixed"
+        # A failure that replays identically is not worth another two hours at
+        # every poll: hand it to the agent as exhausted so the book is held for
+        # new code, alarmed once, and its evidence kept for the resume. A run
+        # that already has its hand-off keeps the delivery retry instead — the
+        # manuscript is certified and only the upload is outstanding.
+        result.recovery_exhausted = not result.handoff and deterministic_failure(exc)
         driver._write_ledger(result)
         cause, visited = exc, set()
         while cause is not None and id(cause) not in visited:

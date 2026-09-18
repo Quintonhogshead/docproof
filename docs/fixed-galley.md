@@ -263,6 +263,40 @@ not see it). A fact/logic, continuity or structure EDIT the screen dropped is
 reinstated as the question it would now become during a run. The certificate
 accepts the extra trailing stage.
 
+## One question, one id
+
+An author question's id is a hash of its paragraph, its quote and the missing
+knowledge it asks for, so the same three are the same question however many
+stages arrive at it. `_add_questions` is the only way one joins the list, and
+it keeps the first: the child workflow each check window runs starts with an
+empty list and cannot see what the run already holds, so its questions are
+merged back through that door rather than appended.
+
+A comment review may replace a question's wording. The replacement takes the
+id its new content hashes to, and the id it left behind is retired — a later
+stage that regenerates the original wording finds it already asked. Keeping
+the old id on new wording is what broke the Gunn run of 2026-09-17: the
+`final_astra` comment review was handed 28 questions under 27 ids, and the
+call contract refused the inventory ("Coverage inventory needs unique string
+IDs") two layers from the merge that produced it. Where the questions become a
+call's inventory the run now names a duplicate id as a duplicate id.
+
+## A failure that replays identically
+
+A resume replays the call cache to reach the stage it stopped at, so a defect
+in the recipe or a refused local contract costs the whole run again at every
+poll and never converges. That Gunn run spent two hours twice to be refused
+the same inventory, and would have gone on every five minutes.
+
+So `deterministic_failure` names the failures that will certainly repeat — a
+refused call contract, and any `FixedWorkflowError` that is not explicitly
+retryable (`FixedWorkflowBusy`, another worker holding the workspace lock, is
+the one that is) — and the driver reports them to the agent as exhausted
+recovery. The agent holds the book for a new release, alarms once, and keeps
+every checkpoint for the resume. Independently of that classification, a book
+the agent blocks on the same reason twice is held too, unless the reason reads
+as temporary or the driver asked for a later retry.
+
 ## Explicit disagreement gate
 
 Every Opus adjudication request must contain actual, conflicting decisions from

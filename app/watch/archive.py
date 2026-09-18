@@ -31,7 +31,7 @@ from pathlib import Path
 from docproof import __version__
 
 from . import drive
-from .settings import GOOGLE_KEY, WatchSettings
+from .settings import GOOGLE_KEY, WatchSettings, google_client
 
 log = logging.getLogger("docproof.app.watch.archive")
 
@@ -605,7 +605,7 @@ def _token(ws: WatchSettings, get_key, opener) -> str | None:
     make one from. A missing sign-in is a quiet skip, not a failure: the jobs
     wait, unchanged, for the next pass once someone has signed in."""
     from app.settings import get_api_key
-    if not (ws.client_id and ws.client_secret):
+    if not all(google_client(ws)):
         log.info("Drive archive skipped: Google sign-in is not set up.")
         return None
     refresh = (get_key or get_api_key)(GOOGLE_KEY)
@@ -613,8 +613,8 @@ def _token(ws: WatchSettings, get_key, opener) -> str | None:
         log.info("Drive archive skipped: DocProof is not signed in to Google.")
         return None
     try:
-        return drive.refresh_access_token(ws.client_id, ws.client_secret,
-                                          refresh, opener=opener)
+        return drive.refresh_access_token(*google_client(ws), refresh,
+                                          opener=opener)
     except drive.DriveError as e:
         log.warning("Drive archive skipped: could not sign in to Google (%s).",
                     e)

@@ -135,6 +135,15 @@ fly secrets set \
   `fly secrets set` values — `fly secrets set HUBSPOT_TOKEN=…` — read
   environment-first, so setting them here is all the wiring there is. Neither is
   a review-provider key, so neither appears in the admin portal's key screen.
+- Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` **in the same breath as
+  `GOOGLE_REFRESH_TOKEN`, and from the same OAuth client**. A refresh token
+  belongs to one client, and a token presented with another is a flat
+  `Unauthorized` that reads exactly like a revoked sign-in. When the
+  environment supplies the token it supplies the client with it, so these
+  three together are the server's Google sign-in and the portal's saved one is
+  not consulted. Setting the token alone and leaving an older client in the
+  watcher's `watch.json` is what stopped every DocWatch tick in September 2026
+  — silently, because a tick stamps `last_tick` before its first network call.
 
 To confirm what's set (values are hidden):
 

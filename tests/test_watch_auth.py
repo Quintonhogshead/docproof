@@ -325,3 +325,47 @@ def test_no_sign_in_is_reported_as_no_sign_in(monkeypatch):
 
     assert auth.token_source(lambda name: None, has_client=False) == {
         "configured": False, "source": None, "client": False}
+
+
+# --- the client the token was issued to ---------------------------------------
+
+def _settings(client=("stored-id", "stored-secret")):
+    from app.watch.settings import WatchSettings
+    ws = WatchSettings()
+    ws.client_id, ws.client_secret = client
+    return ws
+
+
+def test_a_token_from_the_environment_brings_its_own_client(monkeypatch):
+    """A refresh token belongs to one OAuth client; presenting it with another
+    is a flat Unauthorized. From 2026-09-15 the hosted app's watch.json held
+    the previous client while the environment's token belonged to the new one,
+    and every DocWatch tick died at its token refresh saying only that Google
+    no longer accepted the sign-in."""
+    from app.watch.settings import (CLIENT_ID_ENV, CLIENT_SECRET_ENV,
+                                    REFRESH_TOKEN_ENV, google_client)
+    monkeypatch.setenv(REFRESH_TOKEN_ENV, "a-refresh-token")
+    monkeypatch.setenv(CLIENT_ID_ENV, "env-id")
+    monkeypatch.setenv(CLIENT_SECRET_ENV, "env-secret")
+    assert google_client(_settings()) == ("env-id", "env-secret")
+
+
+def test_a_stored_token_keeps_the_stored_client(monkeypatch):
+    """A desktop install signs in with `docproof-watch auth`: both halves are
+    its own and neither comes from the environment."""
+    from app.watch.settings import (CLIENT_ID_ENV, CLIENT_SECRET_ENV,
+                                    REFRESH_TOKEN_ENV, google_client)
+    monkeypatch.delenv(REFRESH_TOKEN_ENV, raising=False)
+    monkeypatch.setenv(CLIENT_ID_ENV, "env-id")
+    monkeypatch.setenv(CLIENT_SECRET_ENV, "env-secret")
+    assert google_client(_settings()) == ("stored-id", "stored-secret")
+
+
+def test_half_a_client_in_the_environment_is_not_a_client(monkeypatch):
+    from app.watch.settings import (CLIENT_ID_ENV, CLIENT_SECRET_ENV,
+                                    REFRESH_TOKEN_ENV, google_client)
+    monkeypatch.setenv(REFRESH_TOKEN_ENV, "a-refresh-token")
+    monkeypatch.setenv(CLIENT_ID_ENV, "env-id")
+    monkeypatch.delenv(CLIENT_SECRET_ENV, raising=False)
+    assert google_client(_settings()) == ("stored-id", "stored-secret")
+    assert google_client(_settings(("", ""))) == ("", "")

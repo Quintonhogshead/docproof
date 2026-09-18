@@ -53,7 +53,7 @@ from .drive import DriveFile
 from .hubspot import HubSpotAuthError, HubSpotError
 from .names import name_key
 from .prep import _already_there
-from .settings import WatchSettings
+from .settings import WatchSettings, google_client
 from .stages import (AT_PROP, CORRECTIONS_DONE, CORRECTIONS_FAILED,
                      CORRECTIONS_PROP, CORRECTIONS_TERMINAL, JOB_PROP,
                      OUTPUT_PROP, REASON_PROP, SOURCE_PROP)
@@ -1224,7 +1224,7 @@ def rehearse(home: Path, ws: WatchSettings, record_id: str, *,
         raise tick.NotConfigured(
             "No folder is being watched yet. Run `docproof-watch init` to "
             "say which one.")
-    if not ws.client_id or not ws.client_secret:
+    if not all(google_client(ws)):
         raise tick.NotConfigured(
             "There is no Google sign-in set up yet. Run `docproof-watch "
             "auth` — docs/watch.md walks through making the OAuth client it "
@@ -1241,8 +1241,8 @@ def rehearse(home: Path, ws: WatchSettings, record_id: str, *,
             "`docproof-watch hubspot-token` on the desktop, or set the "
             "HUBSPOT_TOKEN secret on the server.")
 
-    token = drive.refresh_access_token(ws.client_id, ws.client_secret,
-                                       refresh, opener=opener)
+    token = drive.refresh_access_token(*google_client(ws), refresh,
+                                       opener=opener)
     state = WatchState.load(home / STATE_FILE)
     paths = Paths(home).ensure()
     store = JobStore(paths)

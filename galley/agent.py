@@ -52,6 +52,17 @@ DEFAULT_POLL_INTERVAL_S = 300.0
 #: file or the process environment; 0 switches spacing off.
 BOOK_SPACING_KEY = "GALLEY_BOOK_SPACING_HOURS"
 DEFAULT_BOOK_SPACING_S = 5 * 3600.0
+#: How many times one book may block on the same reason before it is held for
+#: new code instead of polled again. A fixed run resumes by replaying its call
+#: cache, so the second identical block has already spent the whole run twice
+#: and the third would learn nothing new. The Gunn run of 2026-09-17 replayed
+#: two hours to reach the same refused coverage inventory, and would have gone
+#: on doing so every five minutes.
+REPEATED_BLOCK_LIMIT = 2
+#: Consecutive successful polls a claimed book must be missing from the
+#: awaiting list before the agent lets the claim go. One poll can miss it while
+#: DocWatch is rewriting its own state; two is DocWatch having moved on.
+RELEASED_BOOK_POLLS = 2
 #: What the server calls the read-only route this poller lives on.
 AWAITING_PATH = "/api/watch/awaiting"
 KEYS_PATH = "/api/watch/agent-keys"
@@ -762,6 +773,12 @@ class Agent:
                 ledger.record(book.file_id, entry["state"],
                               archive_folder_id=book.archive_folder_id)
 
+        # An empty list because the app could not be asked says nothing about
+        # what is still awaiting, so only a poll that actually answered may
+        # release a claim.
+        if not error:
+            self._release_abandoned_claims(books, ledger, report)
+
         # Older releases permanently abandoned a finished package after six
         # upload failures. Recover only the same still-requested, validated
         # package; a reset/cancellation or missing/changed artifact stays put.
@@ -1127,7 +1144,8 @@ class Agent:
             log.exception("The proofread of %s crashed", book.name)
             self._operational_block(book, ledger, report, slug, folder,
                                     f"The proofreading run over {book.name} "
-                                    f"crashed ({e}); recovery is pending.")
+                                    f"crashed ({e}); recovery is pending.",
+                                    count_repeats=True)
             return
 
         outcome = getattr(result, "outcome", "needs_human")
@@ -1155,7 +1173,11 @@ class Agent:
                            last_reason=reason[:600], last_book=book.name,
                            delivery="pending")
             else:
-                self._operational_block(book, ledger, report, slug, folder, reason)
+                self._operational_block(
+                    book, ledger, report, slug, folder, reason,
+                    # A driver that asked for a later retry gets one, however
+                    # many times it asks.
+                    count_repeats=not getattr(result, "retry_later", False))
             return
         uploaded = list(getattr(result, "uploaded", []) or [])
         handoff = [Path(p) for p in (getattr(result, "handoff", []) or [])]
@@ -1184,20 +1206,89 @@ class Agent:
         ledger.record(book.file_id, FINISHED if outcome == "done" else FAILED,
                       name=book.name, slug=slug, folder_id=folder,
                       outcome=outcome, reason=reason[:400],
-                      uploaded=uploaded)
+                      uploaded=uploaded,
+                      # The run got past whatever it blocked on before.
+                      block_signature="", block_repeats=0)
         self.log(f"{book.name}: {outcome} — {reason[:200]}")
         self._rest_beat(state="idle", last_outcome=outcome,
                    last_reason=reason[:600], last_book=book.name,
                    finished_at=_now(), delivery="uploaded" if uploaded
                    else "none")
 
+    def _release_abandoned_claims(self, books: list[AwaitingBook],
+                                  ledger: Ledger, report: RunReport) -> None:
+        """Let go of a book DocWatch has stopped listing as awaiting.
+
+        A claim is one half of an arrangement: DocWatch marks a book awaiting,
+        this machine works it and writes a verdict back. When the book leaves
+        the awaiting list without one — released from the queue by an
+        administrator, or its marker moved by hand — nothing tells the agent,
+        which holds the claim for good and never looks at the book again.
+        Gunn - Book 1 sat claimed and blocked from 2026-09-17 with nobody
+        waiting for it and nothing anywhere saying so.
+
+        Only a plain claim is let go. A pending delivery belongs to
+        `retry_deliveries`: there the verdict exists and the upload is the one
+        thing outstanding, so the awaiting list has nothing to say about it.
+        """
+        listed = {book.file_id for book in books}
+        for file_id in ledger.pending():
+            entry = ledger.claimed(file_id)
+            if file_id in listed:
+                if entry.get("unlisted_polls"):
+                    ledger.record(file_id, CLAIMED, unlisted_polls=0)
+                continue
+            misses = int(entry.get("unlisted_polls") or 0) + 1
+            if misses < RELEASED_BOOK_POLLS:
+                ledger.record(file_id, CLAIMED, unlisted_polls=misses)
+                continue
+            name = str(entry.get("name") or file_id)
+            ledger.record(file_id, FAILED, outcome="released",
+                          operational_status="", unlisted_polls=0,
+                          reason="DocWatch stopped listing this book as "
+                                 "awaiting before a verdict was written, so "
+                                 "the claim was released. Nothing was "
+                                 "delivered; the workspace is kept.")
+            report.skipped.append(f"{name} (released by DocWatch)")
+            self.log(f"{name}: released — no longer on the awaiting list.")
+            self._alarm(
+                f"{name}: released from Galley without a verdict",
+                f"DocWatch stopped listing {name} as awaiting while this "
+                f"machine still held the claim, so Galley has let it go. No "
+                f"verdict was written and nothing was delivered. The "
+                f"workspace and every checkpoint are kept; putting the book "
+                f"back at the ready value in HubSpot queues it again.")
+
     def _operational_block(self, book: AwaitingBook, ledger: Ledger,
                            report: RunReport, slug: str, folder: str,
-                           reason: str) -> None:
+                           reason: str, *, count_repeats: bool = False) -> None:
+        """`count_repeats` for a block that cost a whole run to reach.
+
+        A book whose download failed is free to try again next poll and often
+        should. A run that got underway and stopped is not: the fixed lane
+        replays its call cache to reach the same place, so an identical second
+        block is a standing failure, not bad luck.
+
+        A transport wobble is still allowed to repeat itself. Only a failure
+        that says nothing temporary about itself — and that the driver did not
+        ask to be retried — is counted towards the hold.
+        """
+        from galley.recovery import transient_failure
         report.outcome, report.reason = "blocked", reason
+        signature = reason[:400]
+        entry = ledger.claimed(book.file_id)
+        repeats = (int(entry.get("block_repeats") or 0) + 1
+                   if entry.get("block_signature") == signature else 1)
+        if count_repeats and not transient_failure(reason) and repeats >= REPEATED_BLOCK_LIMIT:
+            # The same book, the same failure, the same evidence. Whatever the
+            # driver made of it, this one is not clearing itself: hold it for a
+            # release that changes something rather than spend the run again.
+            self._hold_for_new_code(book, ledger, report, slug, folder, reason)
+            return
         ledger.record(book.file_id, CLAIMED, name=book.name, slug=slug,
                       folder_id=folder, operational_status="blocked",
-                      reason=reason[:400])
+                      reason=signature, block_signature=signature,
+                      block_repeats=repeats)
         self._rest_beat(state="idle", last_outcome="blocked",
                    last_reason=reason[:600], last_book=book.name,
                    delivery="pending")

@@ -641,12 +641,12 @@ def send_job_completion(watch_home, job, *, get_key=None,
     gmail.send scope — is a quiet skip, logged and never raised: a job that did
     its work must not fail over an email."""
     from app.settings import get_api_key
-    from .settings import GOOGLE_KEY, WatchSettings
+    from .settings import GOOGLE_KEY, WatchSettings, google_client
 
     ws = WatchSettings.load(watch_home)
     if not (ws.notify_on_complete and ws.notify_email):
         return False
-    if not (ws.client_id and ws.client_secret):
+    if not all(google_client(ws)):
         log.info("Completion email skipped for %s: Google sign-in is not set up.",
                  job.filename)
         return False
@@ -656,8 +656,8 @@ def send_job_completion(watch_home, job, *, get_key=None,
                  "Google.", job.filename)
         return False
     try:
-        token = drive.refresh_access_token(ws.client_id, ws.client_secret,
-                                           refresh, opener=opener)
+        token = drive.refresh_access_token(*google_client(ws), refresh,
+                                           opener=opener)
         subject, body, html = completion_for_job(job)
         send(token, ws.notify_email, subject, body, html=html, opener=opener)
         log.info("Emailed %s the completion log for %s.", ws.notify_email,
@@ -688,18 +688,18 @@ class GalleyEmailTransport:
     def send(self, kind: str, subject: str, body: str) -> None:
         from app.settings import get_api_key
 
-        from .settings import GOOGLE_KEY, WatchSettings
+        from .settings import GOOGLE_KEY, WatchSettings, google_client
         try:
             ws = WatchSettings.load(self.watch_home)
             if not (ws.notify_on_complete and ws.notify_email):
                 return
-            if not (ws.client_id and ws.client_secret):
+            if not all(google_client(ws)):
                 return
             refresh = (self._get_key or get_api_key)(GOOGLE_KEY)
             if not refresh:
                 return
             token = drive.refresh_access_token(
-                ws.client_id, ws.client_secret, refresh, opener=self._opener)
+                *google_client(ws), refresh, opener=self._opener)
             tagged = f"{ALERT_TAGS} {subject}" if kind == "alarm" else subject
             send(token, ws.notify_email, tagged, body, opener=self._opener)
         except DriveError as e:
@@ -723,19 +723,19 @@ def send_question(watch_home, subject: str, body: str, *, book: str = "",
     Galley waiting on a reply that can never come."""
     from app.settings import get_api_key
 
-    from .settings import GOOGLE_KEY, WatchSettings
+    from .settings import GOOGLE_KEY, WatchSettings, google_client
 
     ws = WatchSettings.load(watch_home)
     if not ws.notify_email:
         raise ValueError("No notify address is set. Add one with "
                          "`docproof-watch init --notify-email you@example.com`, "
                          "then try again.")
-    if not (ws.client_id and ws.client_secret):
+    if not all(google_client(ws)):
         raise ValueError("Google sign-in is not set up yet.")
     refresh = (get_key or get_api_key)(GOOGLE_KEY)
     if not refresh:
         raise ValueError("DocProof is not signed in to Google.")
-    token = drive.refresh_access_token(ws.client_id, ws.client_secret, refresh,
+    token = drive.refresh_access_token(*google_client(ws), refresh,
                                        opener=opener)
     tag = f"{QUESTION_TAGS} {book} — " if book else f"{QUESTION_TAGS} "
     full = (body.rstrip() +
@@ -758,19 +758,19 @@ def send_test(watch_home, *, get_key=None, opener=drive._open_url) -> str:
     alert would."""
     from app.settings import get_api_key
 
-    from .settings import GOOGLE_KEY, WatchSettings
+    from .settings import GOOGLE_KEY, WatchSettings, google_client
 
     ws = WatchSettings.load(watch_home)
     if not ws.notify_email:
         raise ValueError("No notify address is set. Add one with "
                          "`docproof-watch init --notify-email you@example.com`, "
                          "then try again.")
-    if not (ws.client_id and ws.client_secret):
+    if not all(google_client(ws)):
         raise ValueError("Google sign-in is not set up yet.")
     refresh = (get_key or get_api_key)(GOOGLE_KEY)
     if not refresh:
         raise ValueError("DocProof is not signed in to Google.")
-    token = drive.refresh_access_token(ws.client_id, ws.client_secret, refresh,
+    token = drive.refresh_access_token(*google_client(ws), refresh,
                                        opener=opener)
     subject = f"{ALERT_TAGS} Test — DocWatch notifications are working"
     body = ("This is a test from DocWatch, sent because someone asked for one.\n\n"

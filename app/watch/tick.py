@@ -36,7 +36,7 @@ from . import (corrections, drive, flags, folders, hubspot, naming, notify, plan
 from .drive import DriveError, DriveFile
 from .hubspot import HubSpotAuthError, HubSpotError
 from .keys import key_from_name
-from .settings import GOOGLE_KEY, HUBSPOT_KEY, WatchSettings
+from .settings import GOOGLE_KEY, HUBSPOT_KEY, WatchSettings, google_client
 from .stages import (AT_PROP, FORMATTED, JOB_PROP, OUTPUT_PROP, PLAN_DONE,
                      PLAN_FAILED, REASON_PROP,
                      PLAN_PENDING, PREVIEW_GATED, PREVIEW_PLAN, PREVIEW_PROMO,
@@ -1935,7 +1935,7 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     if not ws.folder_id:
         raise NotConfigured("No folder is being watched yet. Run "
                             "`docproof-watch init` to say which one.")
-    if not ws.client_id or not ws.client_secret:
+    if not all(google_client(ws)):
         raise NotConfigured("There is no Google sign-in set up yet. Run "
                             "`docproof-watch auth` — docs/watch.md walks "
                             "through making the OAuth client it asks for.")
@@ -2150,7 +2150,7 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
         # tick_every_minutes. A dry run stays read-only, stamp included.
         note_tick(root)
 
-    token = drive.refresh_access_token(ws.client_id, ws.client_secret, refresh,
+    token = drive.refresh_access_token(*google_client(ws), refresh,
                                        opener=opener)
 
     # The state file and the HubSpot token are read before the listing because
