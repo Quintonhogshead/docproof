@@ -9,7 +9,10 @@ the answer to `/api/watch/auth/callback`. What this file pins down:
 - the callback trades the code for a refresh token and keeps it the web way —
   in the volume's keystore and live in the environment, not the Mac Keychain;
 - a state that does not match is refused and stores nothing;
-- forgetting clears both places, and falls back to a boot env secret;
+- a token and the client that minted it are written to the environment as one
+  piece, so a panel sign-in is never left beside an older fly-secret client —
+  the pair Google reads as a revoked sign-in;
+- forgetting clears both places, and falls back to the boot env sign-in;
 - the whole panel is admin-only, and a token kept in the keystore is loaded
   back into the environment at boot.
 
@@ -18,6 +21,7 @@ Keychain, the same discipline test_admin_keys.py keeps.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -25,20 +29,49 @@ from fastapi.testclient import TestClient
 
 from app.accounts import Accounts
 from app.keystore import KeyStore
-from app.main import create_app
+from app.main import create_app, watch_home_for
 from app.settings import ENV_VARS, Paths
 from app.watch import auth as authlib
-from app.watch.settings import GOOGLE_KEY, WatchSettings
+from app.watch.settings import (CLIENT_ID_ENV, CLIENT_SECRET_ENV, GOOGLE_KEY,
+                                WatchSettings, google_client)
 
 SECRET = "test-session-secret"
 GOOGLE_ENV = ENV_VARS[GOOGLE_KEY]
 
 
+GOOGLE_VARS = (GOOGLE_ENV, CLIENT_ID_ENV, CLIENT_SECRET_ENV)
+
+
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    monkeypatch.delenv(GOOGLE_ENV, raising=False)
+    """Snapshot and put back, rather than `monkeypatch.delenv`.
+
+    The app writes these three directly — boot and the callback both go through
+    `set_google_environment` — and `delenv` on a name that was never set
+    records nothing to undo, so a variable the boot then set would leak into
+    every test file that ran after this one."""
+    import os
+    before = {name: os.environ.get(name) for name in GOOGLE_VARS}
+    for name in GOOGLE_VARS:
+        os.environ.pop(name, None)
     import keyring
     monkeypatch.setattr(keyring, "get_password", lambda *a, **k: None)
+    yield
+    for name, value in before.items():
+        os.environ.pop(name, None)
+        if value is not None:
+            os.environ[name] = value
+
+
+def fly_secrets(monkeypatch, client_id="fly-id", client_secret="fly-secret",
+                token="from-fly-secret"):
+    """The three Google secrets a deployment is given, set together.
+
+    Straight into the environment, because `clean_env` is what puts it back."""
+    import os
+    os.environ[CLIENT_ID_ENV] = client_id
+    os.environ[CLIENT_SECRET_ENV] = client_secret
+    os.environ[GOOGLE_ENV] = token
 
 
 def make_app(tmp_path):
@@ -161,7 +194,7 @@ def test_forgetting_clears_the_keystore_and_the_environment(tmp_path,
     boss = _as(app, "boss@press.com")
     app.state.keystore.set(GOOGLE_KEY, "stored-token")
     import os
-    monkeypatch.setitem(os.environ, GOOGLE_ENV, "stored-token")
+    os.environ[GOOGLE_ENV] = "stored-token"
 
     boss.delete("/api/watch/auth")
 
@@ -169,28 +202,90 @@ def test_forgetting_clears_the_keystore_and_the_environment(tmp_path,
     assert GOOGLE_ENV not in os.environ
 
 
-def test_forgetting_falls_back_to_a_boot_secret(tmp_path, monkeypatch):
-    monkeypatch.setenv(GOOGLE_ENV, "from-fly-secret")
-    app = make_app(tmp_path)                      # snapshots the boot env value
+def test_forgetting_puts_the_boot_sign_in_back_whole(tmp_path, monkeypatch):
+    """The triple, not the token alone: a boot token restored beside the
+    client the forgotten sign-in used is the mismatch this route cleans up."""
+    fly_secrets(monkeypatch)
+    app = make_app(tmp_path)                      # snapshots the boot env triple
     boss = _as(app, "boss@press.com")
     app.state.keystore.set(GOOGLE_KEY, "portal-token")
     import os
-    monkeypatch.setitem(os.environ, GOOGLE_ENV, "portal-token")
+    os.environ[CLIENT_ID_ENV] = "portal-id"
+    os.environ[CLIENT_SECRET_ENV] = "portal-secret"
+    os.environ[GOOGLE_ENV] = "portal-token"
 
     boss.delete("/api/watch/auth")
 
     assert os.environ[GOOGLE_ENV] == "from-fly-secret"
+    assert os.environ[CLIENT_ID_ENV] == "fly-id"
+    assert os.environ[CLIENT_SECRET_ENV] == "fly-secret"
 
 
 # --- boot and gating ----------------------------------------------------------
 
-def test_a_stored_token_is_loaded_into_the_environment_at_boot(tmp_path):
-    KeyStore(Paths(tmp_path).keys_db).set(GOOGLE_KEY, "survives-redeploy")
+def test_a_stored_token_is_loaded_into_the_environment_at_boot(tmp_path,
+                                                              monkeypatch):
+    """With the client it was minted with, over the fly secrets' own.
 
-    make_app(tmp_path)
+    This is the September 2026 failure in one test: the keystore's token and
+    `watch.json`'s client are one sign-in, and a redeploy that put the token
+    back beside `GOOGLE_CLIENT_ID` made every refresh an `invalid_grant`."""
+    fly_secrets(monkeypatch)
+    KeyStore(Paths(tmp_path).keys_db).set(GOOGLE_KEY, "survives-redeploy")
+    # The sign-in as the volume holds it after a redeploy: the token in the
+    # keystore, the client it was minted with in watch.json.
+    home = watch_home_for(Path(tmp_path))
+    ws = WatchSettings.load(home)
+    ws.client_id, ws.client_secret = "web-id", "web-secret"
+    ws.save(home)
+
+    app = make_app(tmp_path)
 
     import os
     assert os.environ[GOOGLE_ENV] == "survives-redeploy"
+    assert os.environ[CLIENT_ID_ENV] == "web-id"
+    assert os.environ[CLIENT_SECRET_ENV] == "web-secret"
+    assert google_client(WatchSettings.load(app.state.watch.home)) == (
+        "web-id", "web-secret")
+
+
+def test_a_stored_token_with_no_client_is_left_out_of_the_environment(tmp_path,
+                                                                     monkeypatch):
+    """Unpairable is worse than absent: beside a fly-secret client it would be
+    a sign-in that looks present and fails at Google every time."""
+    fly_secrets(monkeypatch)
+    KeyStore(Paths(tmp_path).keys_db).set(GOOGLE_KEY, "orphan-token")
+
+    make_app(tmp_path)                            # no client in watch.json
+
+    import os
+    assert os.environ[GOOGLE_ENV] == "from-fly-secret"
+    assert os.environ[CLIENT_ID_ENV] == "fly-id"
+
+
+def test_a_panel_sign_in_does_not_inherit_the_fly_secret_client(tmp_path,
+                                                                monkeypatch):
+    """Signing in through the panel with one client used to leave the token
+    beside another, which Google refuses exactly as it refuses a revoked
+    sign-in — so the panel asked for a sign-in that could not help, forever."""
+    fly_secrets(monkeypatch)
+    app = make_app(tmp_path)
+    boss = _as(app, "boss@press.com")
+    monkeypatch.setattr(authlib, "exchange_code", lambda *a, **k: "portal-token")
+
+    url = boss.post("/api/watch/auth",
+                    json={"client_id": "portal-id",
+                          "client_secret": "portal-secret"}).json()["consent_url"]
+    boss.get(f"/api/watch/auth/callback?state={state_in(url)}&code=one-time",
+             follow_redirects=False)
+
+    import os
+    assert os.environ[GOOGLE_ENV] == "portal-token"
+    assert os.environ[CLIENT_ID_ENV] == "portal-id"
+    assert os.environ[CLIENT_SECRET_ENV] == "portal-secret"
+    # And what every Drive call actually resolves: the pair, not one of each.
+    assert google_client(WatchSettings.load(app.state.watch.home)) == (
+        "portal-id", "portal-secret")
 
 
 def test_docwatch_is_admin_only_on_the_web(tmp_path):

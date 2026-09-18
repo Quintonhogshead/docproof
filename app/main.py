@@ -216,13 +216,35 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
         # The Drive watcher's refresh token is kept like a provider key but is
         # not one of the review PROVIDERS, so it is loaded on its own: whatever
         # a person signed in for through DocWatch lives in the keystore and must
-        # be back in the environment after a redeploy, and the boot env value is
-        # remembered so forgetting a keystore token falls back to a fly secret.
-        from .watch.settings import GOOGLE_KEY
-        app.state.google_env = os.environ.get(ENV_VARS[GOOGLE_KEY])
+        # be back in the environment after a redeploy, and the boot env triple is
+        # remembered so forgetting a keystore token falls back to the fly
+        # secrets.
+        #
+        # With its client, never alone. A refresh token belongs to one OAuth
+        # client, and the panel's sign-in saves that client to `watch.json`
+        # before Google is ever called, so `watch.json` holds the client this
+        # token was minted with. Loading the token by itself left it beside
+        # whatever client `GOOGLE_CLIENT_ID` still held — the September 2026
+        # failure written up in watch/settings.py, where every refresh answered
+        # `invalid_grant` and the panel asked for a sign-in that could not
+        # help. A stored token with no client to pair it with is left in the
+        # keystore and the environment's own triple stands, because a mismatched
+        # pair is worse than the secret it would displace.
+        from .watch.settings import (GOOGLE_KEY, WatchSettings,
+                                     google_environment,
+                                     set_google_environment)
+        app.state.google_env = google_environment()
         stored_google = keystore.get(GOOGLE_KEY)
         if stored_google:
-            os.environ[ENV_VARS[GOOGLE_KEY]] = stored_google
+            signed_in = WatchSettings.load(wh)
+            if signed_in.client_id and signed_in.client_secret:
+                set_google_environment(signed_in.client_id,
+                                       signed_in.client_secret, stored_google)
+            else:
+                log.warning(
+                    "A Google sign-in is stored but no OAuth client is saved "
+                    "beside it, so it cannot be paired and was left out of the "
+                    "environment. Sign in again on the DocWatch tab.")
         # God Mode: the admin-only routes for managing users, caps and keys.
         # Only the web build has users to manage, so only it registers these.
         routes.register_admin(app)

@@ -104,8 +104,17 @@ At [console.cloud.google.com](https://console.cloud.google.com):
 > uses*, click **Sign in to Google**, approve on Google's own page, and it
 > returns you to the tab signed in. The refresh token is kept in the server's
 > keystore on the volume — so it survives a redeploy — and loaded into the
-> environment where the watcher reads it; a `GOOGLE_REFRESH_TOKEN` fly secret
-> works too and is the fallback. There is no "look while DocProof is closed"
+> environment where the watcher reads it, **with the client id and secret you
+> signed in with**; the three travel together, because a refresh token belongs
+> to one OAuth client and presenting it with another is refused exactly the way
+> a revoked sign-in is. So a sign-in here takes precedence over the
+> `GOOGLE_REFRESH_TOKEN`/`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` fly secrets
+> as a set, and those remain the fallback as a set — used when nobody has
+> signed in on the tab, and restored whole by **Forget this sign-in**. Before
+> v0.223.0 only the token was carried over, which left it beside whatever
+> client the secrets held: every Drive call then failed as "Google no longer
+> accepts the saved sign-in", and signing in again produced another token that
+> failed the same way. There is no "look while DocProof is closed"
 > schedule on the server (it never closes); the **Look automatically** toggle is
 > the clock, and it runs the same in-app timer described under
 > [Letting it run itself](#letting-it-run-itself).

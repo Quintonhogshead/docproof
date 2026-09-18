@@ -213,8 +213,10 @@ def refresh_access_token(client_id: str, client_secret: str,
         if "invalid_grant" in str(e) or "400" in str(e):
             raise AuthExpired(
                 "Google no longer accepts the saved sign-in — it may have been "
-                "revoked, or the OAuth client rebuilt. Run `docproof-watch "
-                "auth` to sign in again.") from e
+                "revoked, or the OAuth client rebuilt, or the token presented "
+                f"with a client that did not mint it (this one ends "
+                f"{client_id[-14:] or '?'}). Run `docproof-watch auth` to sign "
+                "in again.") from e
         raise
     token = str(answer.get("access_token", ""))
     if not token:

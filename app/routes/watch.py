@@ -37,7 +37,8 @@ from ..watch import schedule as schedulelib
 from ..watch import status as watchlib
 from ..watch.drive import DriveError
 from ..watch.runner import WatchRunner
-from ..watch.settings import GOOGLE_KEY, WatchSettings, folder_id_from, google_client
+from ..watch.settings import (GOOGLE_KEY, WatchSettings, folder_id_from,
+                             google_client, set_google_environment)
 
 log = logging.getLogger("docproof.app.watch")
 from ..watch.tick import NotConfigured
@@ -451,13 +452,20 @@ def register(app: FastAPI) -> None:
         scheme = "http" if local else "https"
         return f"{scheme}://{host}/api/watch/auth/callback"
 
-    def store_google_token(token: str) -> None:
+    def store_google_token(token: str, client_id: str,
+                           client_secret: str) -> None:
         """Keep the refresh token the way the web build keeps every other key:
         in the volume's keystore and live in the environment at once, where
         `get_api_key` already looks first. The Mac Keychain is not on a Linux
-        server, so `set_api_key` is not the road here."""
+        server, so `set_api_key` is not the road here.
+
+        The client that minted it goes into the environment with it. A token
+        written on its own sat beside whatever client the fly secrets held,
+        which Google reads as a revoked sign-in — so signing in again through
+        this very callback produced another token that failed the same way.
+        `set_google_environment` writes the three or none."""
         app.state.keystore.set(GOOGLE_KEY, token)
-        os.environ[ENV_VARS[GOOGLE_KEY]] = token
+        set_google_environment(client_id, client_secret, token)
 
     def watch_payload() -> dict:
         watch: WatchRunner = app.state.watch
@@ -677,7 +685,8 @@ def register(app: FastAPI) -> None:
                 pending["redirect_uri"])
         except DriveError as e:
             return back(str(e))
-        store_google_token(token)
+        store_google_token(token, pending["client_id"],
+                           pending["client_secret"])
         return back()
 
     @app.delete("/api/watch/auth", dependencies=[Depends(may_manage)])
@@ -685,17 +694,19 @@ def register(app: FastAPI) -> None:
         """Forget the sign-in, keep the client.
 
         The client id and secret are not the secret — an installed application
-        cannot keep one — and signing in again needs them. On the web build the
-        token is a key in the volume's keystore, so it is cleared there and in
-        the environment; a token the server was given as an env secret at boot
-        comes back, the way removing a portal provider key does."""
+        cannot keep one — and signing in again needs them, so `watch.json`
+        keeps them. On the web build the token is a key in the volume's
+        keystore, so it is cleared there and in the environment; the sign-in
+        the server was given as env secrets at boot comes back, the way
+        removing a portal provider key does.
+
+        Restored as the triple it was. Putting back a boot token beside the
+        client this sign-in used would leave exactly the mismatched pair this
+        route is meant to clean up after."""
         if app.state.web:
             app.state.keystore.delete(GOOGLE_KEY)
-            restore = getattr(app.state, "google_env", None)
-            if restore:
-                os.environ[ENV_VARS[GOOGLE_KEY]] = restore
-            else:
-                os.environ.pop(ENV_VARS[GOOGLE_KEY], None)
+            restore = getattr(app.state, "google_env", None) or ("", "", "")
+            set_google_environment(*restore)
         else:
             settingslib.delete_api_key("google")
         return watch_payload()
