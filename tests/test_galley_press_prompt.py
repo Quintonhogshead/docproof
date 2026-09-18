@@ -178,3 +178,41 @@ def test_walkthrough_and_continuity_prompts_are_bound_into_the_recipe_identity(m
         assert press_prompt.policy_identity() != before
         monkeypatch.undo()
         assert press_prompt.policy_identity() == before
+
+
+# --- where the chapters start and stop ----------------------------------------
+
+def test_matter_regions_splits_front_body_and_back():
+    """The gate waives a placeholder outside the chapters, so it has to know
+    where they are: a copyright-page credit and an author biography are matter,
+    a hole in chapter two is not."""
+    from galley.press_checks import matter_regions
+    paragraphs = [para("t1", "The Spies From Camp X"), para("c1", "Cover design by XXX"),
+                  para("h1", "CHAPTER ONE", style="Heading1"), para("p1", "Body one."),
+                  para("h2", "CHAPTER TWO", style="Heading1"), para("p2", "Body two."),
+                  para("h3", "ACKNOWLEDGEMENTS", style="Heading1"), para("p3", "Thanks."),
+                  para("r1", "12 | CAMP X", part="word/header1.xml", location="header")]
+    regions = matter_regions(paragraphs, lambda style: style.startswith("Heading"))
+    assert regions["front"] == {"t1", "c1", "r1"}
+    assert regions["body"] == {"h1", "p1", "h2", "p2"}
+    assert regions["back"] == {"h3", "p3"}
+
+
+def test_matter_regions_keeps_an_authors_note_that_opens_the_book_in_front():
+    """Position decides: the same heading is front matter before the chapters
+    and back matter after them."""
+    from galley.press_checks import matter_regions
+    front_first = [para("h0", "AUTHOR'S NOTE", style="Heading1"), para("p0", "A word first."),
+                   para("h1", "CHAPTER ONE", style="Heading1"), para("p1", "Body.")]
+    regions = matter_regions(front_first, lambda style: style.startswith("Heading"))
+    assert regions["front"] == {"h0", "p0"} and regions["back"] == set()
+    assert regions["body"] == {"h1", "p1"}
+
+
+def test_a_book_with_no_findable_headings_is_all_body():
+    """The stricter reading when the structure is unknown: nothing is waived."""
+    from galley.press_checks import matter_regions
+    paragraphs = [para("p1", "Just prose."), para("p2", "More prose.")]
+    regions = matter_regions(paragraphs, lambda style: False)
+    assert regions["body"] == {"p1", "p2"}
+    assert regions["front"] == set() and regions["back"] == set()

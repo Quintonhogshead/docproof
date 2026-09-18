@@ -100,7 +100,8 @@ The agreed sequence is:
     **publication blockers** — problems a proofread cannot repair (missing,
     duplicated or garbled passages, placeholder text, a chapter out of order,
     damage an earlier correction did), each anchored to an exact paragraph
-    and verbatim quote that code verifies. Its propagation pass and the
+    and verbatim quote that code verifies, and each carrying a `kind` so code
+    can tell a placeholder from a defect. Its propagation pass and the
     press-method final audit run on the resulting text.
 
 ## The verdict
@@ -115,7 +116,31 @@ human proofreader, and the rule is code's, not the reader's
   question), **or**
 - any verified publication blocker
 
-is `needs_human`; otherwise the proofread is complete (`done`). A reader's own
+is `needs_human`; otherwise the proofread is complete (`done`).
+
+### A placeholder outside the chapters is the designer's
+
+A proofread book goes to an interior designer next, not to press, so the two
+are not judged alike. An unfilled credit line on the copyright page, a
+placeholder in an author biography, `Cover design by XXX` — these are the
+ordinary state of a book at this stage and the designer fills them (Quinton,
+2026-09-18). A blocker whose `kind` is `placeholder` and whose paragraph falls
+outside the chapters is **waived**: it does not count towards the verdict, and
+it is kept in `waived_blockers` and named in the report under *For the interior
+designer*, so nothing is lost. The same placeholder inside chapter prose is a
+hole in the manuscript and still blocks.
+
+`press_checks.matter_regions` draws the line. The body starts at the first
+heading that reads as a chapter — not merely the first heading, or a book
+opening with an author's note would start its body there — and ends at the
+first heading after the last chapter that opens the after-matter
+(acknowledgements, about the author, an appendix). A book with no chapter
+headings it can find is treated as all body, so nothing is waived when the
+structure is unknown.
+
+Gunn - Book One is why. On 2026-09-18 it went to a human proofreader over
+`Cover design by XXX` on its copyright page, holding 24 of an allowed 25
+mechanical errors: a pass, failed by a rule written for a book going to press. A reader's own
 window verdict, an earlier stage's verdict, a skipped (unavailable) window and
 a skipped model review in any earlier stage are recorded as evidence and never
 decide: an operational failure is not an editorial judgment. The outcome file's

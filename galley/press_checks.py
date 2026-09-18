@@ -141,6 +141,61 @@ def book_map(paragraphs, is_heading_style):
                      "A caps_line heading is a shape guess; style and chapter_title are established.")}
 
 
+# Headings that open the matter after the last chapter. Position decides the
+# rest: an author's note before the first chapter is front matter, the same
+# note after the last one is back matter, and this list is only consulted once
+# the body has started.
+_BACK_MATTER_HEADINGS = (
+    "acknowledgment", "acknowledgement", "about the author", "about the type",
+    "about the publisher", "a note on the type", "author's note", "authors note",
+    "afterword", "appendix", "glossary", "bibliography", "works cited",
+    "further reading", "index", "colophon", "credits", "also by",
+    "discussion questions", "reading group guide", "book club",
+)
+
+
+def matter_regions(paragraphs, is_heading_style):
+    """Which paragraphs are the book's chapters, and which are its matter.
+
+    The press sends a proofread book to an interior designer next, not to
+    press, so the two are not judged alike: an unfilled credit line on the
+    copyright page ("Cover design by XXX") is the ordinary state of a book at
+    this stage and the designer fills it, while the same placeholder inside
+    chapter prose is a hole in the manuscript. Only code can tell them apart,
+    because only code knows where the chapters start and stop.
+
+    The chapters are the body, so the body starts at the first heading that
+    reads as a chapter — not merely the first heading, because a book that
+    opens with an author's note or a foreword would otherwise start its body
+    there. Everything before it is front matter. Back matter starts at the
+    first heading after that whose text opens the after-matter —
+    acknowledgements, about the author, an appendix. A book with no chapter
+    headings this can find has no front or back matter here and is all body,
+    which keeps the stricter reading for the case where the structure is
+    unknown.
+    """
+    from docproof.continuity import looks_like_chapter_heading
+    from docproof.headings import is_structural_heading
+
+    body = [p for p in paragraphs if p.location == "body" and p.text.strip()]
+    chapters = [i for i, p in enumerate(body) if looks_like_chapter_heading(p)]
+    if not chapters:
+        return {"front": set(), "body": {p.para_id for p in paragraphs}, "back": set()}
+    first = chapters[0]
+    headings = [i for i, p in enumerate(body)
+                if is_structural_heading(p, is_heading_style) or looks_like_chapter_heading(p)]
+    back_at = next((i for i in headings if i > chapters[-1]
+                    and any(body[i].text.strip().lower().lstrip("# ").startswith(name)
+                            for name in _BACK_MATTER_HEADINGS)), len(body))
+    front = {p.para_id for p in body[:first]}
+    back = {p.para_id for p in body[back_at:]}
+    # A paragraph outside the main document body — a header, a footer, a text
+    # box — belongs to no chapter, so it is matter rather than body.
+    outside = {p.para_id for p in paragraphs if p.location != "body"}
+    return {"front": front | outside, "back": back,
+            "body": {p.para_id for p in body[first:back_at]}}
+
+
 def citation_context(paragraphs):
     """Current whole-book references/citation-bearing paragraphs, with locations.
 

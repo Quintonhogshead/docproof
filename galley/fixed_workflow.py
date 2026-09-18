@@ -166,7 +166,12 @@ FRONTIER_SCHEMA = _object(**{**READ_SCHEMA["properties"], "findings": _array(FRO
                           reviewed_check_ids=_array(S))
 # A problem that should stop publication and that a proofread cannot repair,
 # anchored to an exact current paragraph; code discards one it cannot anchor.
-BLOCKER = _object(para_id=S, quote=S, problem=S, reason=S)
+# `kind` so code, not the reader, decides what a placeholder means: the press
+# sends a proofread book to an interior designer, who fills the credit lines
+# and copyright-page placeholders that are the ordinary state of a book at this
+# stage. See `final_review_verdict`.
+BLOCKER = _object(para_id=S, quote=S, problem=S, reason=S,
+                  kind=_enum("placeholder", "text_defect", "structure", "other"))
 FINAL_REVIEW_SCHEMA = _object(**FRONTIER_SCHEMA["properties"], publication_blockers=_array(BLOCKER))
 CONTINUITY_FINDING = _object(para_id=S, quote=S, occurrence=I, replacement=S,
                              action=_enum("edit", "query"), category=_enum("continuity"),
@@ -474,7 +479,8 @@ def _harmonize_consistency(sites, agreed):
     return updated, log
 
 
-def final_review_verdict(accepted, coverage, *, ceiling=FINAL_REVIEW_ERROR_CEILING):
+def final_review_verdict(accepted, coverage, *, ceiling=FINAL_REVIEW_ERROR_CEILING,
+                         body_ids=None):
     """The fixed rule the second Astra reading is judged by, owned by code.
 
     `accepted` is that reading's adjudicated proposals; `coverage` its window
@@ -483,10 +489,29 @@ def final_review_verdict(accepted, coverage, *, ceiling=FINAL_REVIEW_ERROR_CEILI
     mechanical corrections still found, or any verified blocker, is
     needs_human; otherwise the proofread is complete. A skipped window or a
     reader's own window verdict is reported, never turned into the verdict: an
-    operational failure is not an editorial judgment."""
+    operational failure is not an editorial judgment.
+
+    `body_ids` names the chapters (see `press_checks.matter_regions`). A
+    placeholder outside them is waived rather than counted: the press sends a
+    proofread book to an interior designer next, who fills the credit lines and
+    copyright-page placeholders that are the ordinary state of a book at this
+    stage (Quinton, 2026-09-18). Gunn - Book One was sent to a human
+    proofreader over "Cover design by XXX" with 24 of an allowed 25 mechanical
+    errors — a pass, failed by a rule written for a book going to press. A
+    waived blocker is kept in the verdict, not dropped, so the report still
+    shows the designer what to fill. A placeholder inside chapter prose is a
+    hole in the manuscript and still blocks."""
     core = [row for row in accepted if row.get("action") == "edit" and not row.get("format")
             and row.get("category") in CORE_MECHANICAL_CATEGORIES]
-    blockers = [b for window in coverage for b in window.get("publication_blockers", [])]
+    found = [b for window in coverage for b in window.get("publication_blockers", [])]
+    blockers, waived = [], []
+    for blocker in found:
+        matter = body_ids is not None and blocker.get("para_id") not in body_ids
+        if blocker.get("kind") == "placeholder" and matter:
+            waived.append({**blocker, "waived": "A placeholder outside the chapters is the "
+                                                "interior designer's to fill, not a proofreading defect."})
+        else:
+            blockers.append(blocker)
     unverified = [b for window in coverage for b in window.get("unverified_blockers", [])]
     skipped = sum(1 for window in coverage if window.get("status") == "skipped")
     window_verdicts = {}
@@ -503,11 +528,15 @@ def final_review_verdict(accepted, coverage, *, ceiling=FINAL_REVIEW_ERROR_CEILI
                   f"(ceiling {ceiling}) and no publication blocker; proofread complete.")
     if skipped:
         reason += f" {skipped} reading window(s) were unavailable and are recorded as skipped."
+    if waived:
+        reason += (f" {len(waived)} placeholder(s) outside the chapters are left for the "
+                   f"interior designer and did not count.")
     return {"stage": FINAL_REVIEW_STAGE, "verdict": "needs_human" if needs_human else "ready",
             "reason": reason, "core_mechanical_errors": len(core), "ceiling": ceiling,
             "core_mechanical_edits": [{k: row.get(k) for k in ("id", "para_id", "category", "before", "replacement")}
                                       for row in core],
             "publication_blockers": blockers, "unverified_blockers": unverified,
+            "waived_blockers": waived,
             "skipped_windows": skipped, "window_verdicts": window_verdicts}
 
 
@@ -1955,10 +1984,14 @@ class FixedWorkflow:
                 if stage == FINAL_REVIEW_STAGE:
                     # The only needs_human gate. A reader's window verdict is
                     # recorded evidence; the verdict itself is the fixed rule.
-                    self.final_review = final_review_verdict(accepted, read_coverage)
-                    self.needs_human = self.final_review["verdict"] == "needs_human"
-                    from galley.press_checks import final_audit
+                    from galley.press_checks import final_audit, matter_regions
                     from galley.fixed_local import _paragraphs
+                    regions = matter_regions(
+                        _paragraphs(prose_prepared, self.current, self.poetry_ids),
+                        self.cfg.skip.is_sweep_only)
+                    self.final_review = final_review_verdict(accepted, read_coverage,
+                                                             body_ids=regions["body"])
+                    self.needs_human = self.final_review["verdict"] == "needs_human"
                     audit = final_audit(prose_prepared,
                         _paragraphs(prose_prepared, self.current, self.poetry_ids), self.cfg)
                     audit["accepted_sha256"] = _hash(self.current)
