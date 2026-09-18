@@ -421,6 +421,14 @@ def _report(result, details, receipt=None):
         for blocker in review["publication_blockers"]:
             lines.append(f"  - {labels.get(blocker['para_id'], blocker['para_id'])}: {blocker['problem']} "
                          f"({json.dumps(blocker['quote'], ensure_ascii=False)})")
+        if review.get("waived_blockers"):
+            # Not a defect and not the proofreader's, but the designer still
+            # has to fill it, so it is named rather than silently dropped.
+            lines += ["", f"- For the interior designer: {len(review['waived_blockers'])} placeholder(s) "
+                      f"outside the chapters. These did not count towards the verdict."]
+            for blocker in review["waived_blockers"]:
+                lines.append(f"  - {labels.get(blocker['para_id'], blocker['para_id'])}: {blocker['problem']} "
+                             f"({json.dumps(blocker['quote'], ensure_ascii=False)})")
         if review.get("skipped_windows"):
             lines.append(f"- {review['skipped_windows']} reading window(s) were unavailable and are recorded as skipped.")
     rejected = [h for h in result["history"] if h.get("rejected_proposal")]
@@ -582,6 +590,7 @@ def package_result(driver, result):
         record["final_review"] = {k: review[k] for k in ("stage", "verdict", "core_mechanical_errors", "ceiling",
                                                           "skipped_windows")}
         record["final_review"]["publication_blockers"] = len(review["publication_blockers"])
+        record["final_review"]["waived_blockers"] = len(review.get("waived_blockers", []))
     _save(outcome, record)
     _save(run / "outcome.json", json.loads(outcome.read_text()))
     certificate_path = run / "fixed-certificate.json"
