@@ -144,6 +144,13 @@ fly secrets set \
   not consulted. Setting the token alone and leaving an older client in the
   watcher's `watch.json` is what stopped every DocWatch tick in September 2026
   — silently, because a tick stamps `last_tick` before its first network call.
+  The same trap from the other side — a sign-in on the DocWatch tab landing
+  beside an older `GOOGLE_CLIENT_ID` secret, so each fresh token failed as a
+  revoked one — is closed as of v0.223.0: a panel sign-in now carries its own
+  client into the environment and takes precedence over all three secrets,
+  which come back as a set when the sign-in is forgotten. Nothing about the
+  secrets changes; they are the fallback, and the pair they make must still be
+  a real one.
 
 To confirm what's set (values are hidden):
 

@@ -59,6 +59,17 @@ def google_client(ws: "WatchSettings") -> tuple[str, str]:
     So: an environment that supplies the token supplies the client with it.
     A desktop install, whose token comes from the Keychain and whose client
     comes from `docproof-watch auth`, keeps both.
+
+    That rule is only as good as the writers of the environment, and in
+    September 2026 it broke again from the other side: a sign-in through the
+    DocWatch panel wrote its fresh token to `GOOGLE_REFRESH_TOKEN` and its
+    client to `watch.json` alone, so this returned the older client the fly
+    secrets still held and every refresh afterwards was `invalid_grant` —
+    which the panel reports as a sign-in that needs doing again, so the next
+    sign-in walked into the same trap. Nothing here could tell: a token and a
+    client are only a pair or not a pair to Google. The answer is that
+    `set_google_environment` is now the one way the three are written, always
+    together, and boot and the panel both go through it.
     """
     if os.environ.get(REFRESH_TOKEN_ENV):
         env = (os.environ.get(CLIENT_ID_ENV) or "",
@@ -66,6 +77,35 @@ def google_client(ws: "WatchSettings") -> tuple[str, str]:
         if all(env):
             return env
     return ws.client_id, ws.client_secret
+
+
+def google_environment() -> tuple[str, str, str]:
+    """The Google sign-in the environment holds, as the one piece it is:
+    client id, client secret, refresh token."""
+    return (os.environ.get(CLIENT_ID_ENV) or "",
+            os.environ.get(CLIENT_SECRET_ENV) or "",
+            os.environ.get(REFRESH_TOKEN_ENV) or "")
+
+
+def set_google_environment(client_id: str, client_secret: str,
+                           refresh_token: str) -> None:
+    """Put a sign-in in the environment, or an empty triple to take one out.
+
+    All three or none, because a refresh token belongs to exactly one OAuth
+    client and the two are worth nothing apart: writing a token beside a
+    client that did not mint it is not a half-configured watcher but a broken
+    one, and it fails at Google as a revoked sign-in rather than as the
+    mismatch it is. Partial writes are what `google_client` cannot see and
+    what this exists to make impossible."""
+    triple = ((CLIENT_ID_ENV, client_id),
+              (CLIENT_SECRET_ENV, client_secret),
+              (REFRESH_TOKEN_ENV, refresh_token))
+    if not all(value for _, value in triple):
+        for name, _ in triple:
+            os.environ.pop(name, None)
+        return
+    for name, value in triple:
+        os.environ[name] = value
 
 _ID = re.compile(r"^[A-Za-z0-9_-]{8,}$")
 
