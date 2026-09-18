@@ -882,6 +882,19 @@ def validate_fixed_call_evidence(directory: Path, *, identity: dict | None = Non
             raise FixedCallError("Fixed-call budget contains a nonterminal attempt")
         by_request.setdefault(sha, {})[int(attempt_text)] = entry
     folders = {path.name: path for path in (directory / "calls").iterdir() if path.is_dir()} if (directory / "calls").exists() else {}
+    # A directory holding a request and nothing else, with no line anywhere in
+    # the budget, is a call that was never submitted: the request file is
+    # written first and the reservation second, so a run that stopped between
+    # the two leaves exactly this. The budget is the call inventory, and a
+    # reservation that exists but never reconciled is caught above as an
+    # unresolved submission — so nothing was asked, nothing was answered and
+    # nothing was spent here. Gunn - Book 1 (2026-09-17) stopped this way when
+    # the final comment review's coverage inventory was refused, and the shell
+    # it left behind would have blocked the delivery of the resumed run.
+    unsubmitted = {sha for sha, folder in folders.items()
+                   if sha not in by_request
+                   and {p.name for p in folder.iterdir()} <= {"request.json", "request.lock"}}
+    folders = {sha: folder for sha, folder in folders.items() if sha not in unsubmitted}
     # Check preflight failures explicitly before comparing the charged inventory.
     for sha, folder in folders.items():
         receipt = _load(folder / "receipt.json")
