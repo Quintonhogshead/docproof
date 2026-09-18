@@ -31,7 +31,8 @@ from pathlib import Path
 from docproof import prep as preplib
 from docproof.batch import new_job_id
 from docproof.ingest import IngestError
-from docproof.prep.convert import ConversionError, ensure_docx
+from docproof.prep.convert import (ConversionError, ensure_docx,
+                                   holds_legacy_doc)
 from docproof.prep.verify import VerificationFailed
 
 from app.jobs import REFUSED, Job, JobRunner, JobStore
@@ -73,13 +74,36 @@ def local_name(file: DriveFile) -> str:
     if file.is_google_doc:
         return f"{safe}.docx"
     # A Word file whose extension was dropped — a "<surname> - Book Original"
-    # someone renamed — still holds .docx bytes; give the extension back so
+    # someone renamed — usually holds .docx bytes; give the extension back so
     # `ensure_docx` reads it rather than refusing a file that has no suffix.
     # `classify` only lets an extensionless file through when it carries the
     # house label, so anything reaching here is a manuscript, not a stray.
+    # Usually, not always: `fetch` reads the bytes before believing this.
     if not Path(safe).suffix:
         return f"{safe}.docx"
     return safe
+
+
+def as_its_bytes_say(target: Path) -> Path:
+    """The downloaded manuscript, under the name its contents deserve.
+
+    The name a manuscript arrives with is a claim, not a fact, and an
+    extensionless one is a claim this intake made up. A Word 97-2003 file
+    called .docx used to reach `ensure_docx`, match on the suffix, skip the
+    converter and be refused as unreadable — a manuscript LibreOffice could
+    have read perfectly, failed for want of four characters. So the bytes
+    decide the extension here, before anything downstream trusts it.
+
+    Only this one lie is worth catching: a zip could honestly be .docx or
+    .odt, and there the extension is the better guide.
+    """
+    if target.suffix.lower() == ".doc" or not holds_legacy_doc(target):
+        return target
+    renamed = target.with_suffix(".doc")
+    target.replace(renamed)
+    log.info("%s holds Word 97-2003 bytes; converting it as %s",
+             target.name, renamed.name)
+    return renamed
 
 
 def fetch(token: str, file: DriveFile, dest_dir: str | Path, *,
@@ -96,6 +120,7 @@ def fetch(token: str, file: DriveFile, dest_dir: str | Path, *,
         drive.export_docx(token, file.id, target, opener=opener)
     else:
         drive.download(token, file.id, target, opener=opener)
+        target = as_its_bytes_say(target)
     source, note = ensure_docx(target, folder)
     if note:
         log.info("%s: %s", file.name, note)

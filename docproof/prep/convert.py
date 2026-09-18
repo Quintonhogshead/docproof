@@ -20,6 +20,12 @@ log = logging.getLogger("docproof.prep.convert")
 CONVERTIBLE = (".doc", ".rtf", ".odt", ".fodt", ".txt", ".wpd", ".docm")
 NO_FORMATTING = (".txt",)
 
+# What a Word 97-2003 file starts with; a .docx is a zip and never does.
+OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+# Stream names as an OLE2 directory stores them: UTF-16, little-endian.
+_WORD_STREAM = "WordDocument".encode("utf-16-le")
+SCAN_CHUNK = 1 << 20
+
 CANDIDATES = (
     "/Applications/LibreOffice.app/Contents/MacOS/soffice",
     "/usr/local/bin/soffice",
@@ -50,6 +56,41 @@ def available() -> bool:
 
 def needs_conversion(path: str | Path) -> bool:
     return Path(path).suffix.lower() in CONVERTIBLE
+
+
+def holds_legacy_doc(path: str | Path) -> bool:
+    """Whether these bytes are a Word 97-2003 .doc, whatever the name says.
+
+    Worth asking because the name lies. A manuscript arrives from Drive as
+    "<surname> - Book Original", with no extension at all, and the intake gives
+    it the one nearly all of them deserve — .docx. A legacy .doc wearing that
+    name then sails past the converter on the strength of a suffix nobody
+    checked, and is refused pages later as unreadable. The first eight bytes are
+    the only honest account of what the file is, so they get the last word.
+
+    A .doc is an OLE2 compound file, and so is a password-protected .docx: the
+    directory tells them apart. A real .doc carries a `WordDocument` stream; an
+    encrypted package carries `EncryptedPackage` and no such stream. Only the
+    first is convertible, so only the first is claimed here — the encrypted one
+    keeps the refusal that tells its author to take the password off.
+    """
+    source = Path(path)
+    try:
+        with source.open("rb") as fh:
+            if fh.read(len(OLE2_MAGIC)) != OLE2_MAGIC:
+                return False
+            fh.seek(0)
+            # The directory sector holding the stream names can sit anywhere in
+            # the file, so this is a scan; the overlap is what keeps a name
+            # straddling two chunks from being missed.
+            overlap = b""
+            while chunk := fh.read(SCAN_CHUNK):
+                if _WORD_STREAM in overlap + chunk:
+                    return True
+                overlap = chunk[-(len(_WORD_STREAM) - 1):]
+    except OSError:
+        return False
+    return False
 
 
 def loses_formatting(path: str | Path) -> bool:

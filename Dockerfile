@@ -12,6 +12,19 @@ RUN apt-get update \
        ca-certificates curl git \
     && rm -rf /var/lib/apt/lists/*
 
+# Authors send .doc, .rtf and .odt, and prep has always converted them with
+# LibreOffice — on a Mac. Hosted intake had no converter at all, so a legacy
+# .doc dropped in the watched folder was refused rather than prepared, with
+# nobody on the far end to Save As .docx. Writer alone, without the rest of
+# the suite, is what a headless --convert-to docx needs.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libreoffice-writer \
+    && rm -rf /var/lib/apt/lists/* \
+    && printf 'smoke\n' > /tmp/smoke.txt \
+    && soffice --headless --convert-to docx --outdir /tmp /tmp/smoke.txt \
+    && test -s /tmp/smoke.docx \
+    && rm -f /tmp/smoke.txt /tmp/smoke.docx
+
 # Claude Code, the Galley brain, as its native binary — used only by the
 # `agent` process group (fly.toml), which runs `docproof galley agent` and
 # spawns one `claude -p` session per phase on the Max subscription. The web
