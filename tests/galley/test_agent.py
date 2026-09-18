@@ -1304,3 +1304,55 @@ def test_a_different_block_each_time_is_not_a_repeat(env, tmp_path):
         agent.poll_once()
     assert len(ran) == 3
     assert agent.ledger().claimed("drive-1")["operational_status"] == "blocked"
+
+
+def test_a_book_docwatch_stops_listing_releases_its_claim(env, tmp_path):
+    """Gunn - Book 1, 2026-09-17: released from the practitioner queue while
+    this machine still held the claim. Nothing told the agent, which held it
+    for good. Two polls without it on the list is DocWatch having moved on."""
+    app, alerts = FakeApp([BOOK]), []
+    agent = _agent(env, tmp_path, opener=app, download=_downloader(tmp_path),
+                   run_driver=lambda **kw: FakeResult(
+                       outcome="blocked", reason="Coverage inventory needs "
+                       "unique string IDs", uploaded=()),
+                   alert=lambda s, b: alerts.append(s))
+    agent.poll_once()
+    assert agent.ledger().state("drive-1") == ga.CLAIMED
+
+    app.books = []                                   # released in the portal
+    agent.poll_once()                                # one miss: still claimed
+    assert agent.ledger().state("drive-1") == ga.CLAIMED
+    report = agent.poll_once()
+    entry = agent.ledger().claimed("drive-1")
+    assert entry["state"] == ga.FAILED
+    assert entry["outcome"] == "released"
+    assert any("released by DocWatch" in s for s in report.skipped)
+    assert any("released from Galley without a verdict" in s for s in alerts)
+
+
+def test_a_book_that_comes_back_before_the_second_poll_keeps_its_claim(env, tmp_path):
+    app = FakeApp([BOOK])
+    agent = _agent(env, tmp_path, opener=app, download=_downloader(tmp_path),
+                   run_driver=lambda **kw: FakeResult(
+                       outcome="blocked", reason="Drive said no", uploaded=()))
+    agent.poll_once()
+    app.books = []
+    agent.poll_once()
+    app.books = [BOOK]
+    agent.poll_once()
+    agent.poll_once()
+    assert agent.ledger().state("drive-1") == ga.CLAIMED
+
+
+def test_a_poll_that_could_not_ask_releases_nothing(env, tmp_path):
+    """An empty list because the app refused says nothing about what is
+    awaiting."""
+    agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
+                   download=_downloader(tmp_path),
+                   run_driver=lambda **kw: FakeResult(
+                       outcome="blocked", reason="Drive said no", uploaded=()))
+    agent.poll_once()
+    agent.opener = FakeApp([], status=503)
+    for _ in range(4):
+        agent.poll_once()
+    assert agent.ledger().state("drive-1") == ga.CLAIMED

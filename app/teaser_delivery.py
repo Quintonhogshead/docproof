@@ -10,16 +10,16 @@ from docproof.teasers.document import write_document
 from docproof.teasers.models import Draft, Review, Storysheet, approval_issues
 from .teasers import TeaserError, lock
 from .watch import drive
-from .watch.settings import GOOGLE_KEY, WatchSettings
+from .watch.settings import GOOGLE_KEY, WatchSettings, google_client
 
 
 def token_for(home, *, opener=drive._open_url):
     from app.settings import get_api_key
     ws = WatchSettings.load(Path(home))
-    refresh = get_api_key(GOOGLE_KEY)
-    if not refresh or not ws.client_id or not ws.client_secret:
+    refresh, client = get_api_key(GOOGLE_KEY), google_client(ws)
+    if not refresh or not all(client):
         raise TeaserError("The formatting workflow's Google sign-in is unavailable.")
-    return drive.refresh_access_token(ws.client_id, ws.client_secret, refresh, opener=opener)
+    return drive.refresh_access_token(*client, refresh, opener=opener)
 
 
 def ensure_folder(queue, token, *, opener=drive._open_url):

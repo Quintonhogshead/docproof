@@ -59,6 +59,10 @@ DEFAULT_BOOK_SPACING_S = 5 * 3600.0
 #: two hours to reach the same refused coverage inventory, and would have gone
 #: on doing so every five minutes.
 REPEATED_BLOCK_LIMIT = 2
+#: Consecutive successful polls a claimed book must be missing from the
+#: awaiting list before the agent lets the claim go. One poll can miss it while
+#: DocWatch is rewriting its own state; two is DocWatch having moved on.
+RELEASED_BOOK_POLLS = 2
 #: What the server calls the read-only route this poller lives on.
 AWAITING_PATH = "/api/watch/awaiting"
 KEYS_PATH = "/api/watch/agent-keys"
@@ -769,6 +773,12 @@ class Agent:
                 ledger.record(book.file_id, entry["state"],
                               archive_folder_id=book.archive_folder_id)
 
+        # An empty list because the app could not be asked says nothing about
+        # what is still awaiting, so only a poll that actually answered may
+        # release a claim.
+        if not error:
+            self._release_abandoned_claims(books, ledger, report)
+
         # Older releases permanently abandoned a finished package after six
         # upload failures. Recover only the same still-requested, validated
         # package; a reset/cancellation or missing/changed artifact stays put.
@@ -1204,6 +1214,50 @@ class Agent:
                    last_reason=reason[:600], last_book=book.name,
                    finished_at=_now(), delivery="uploaded" if uploaded
                    else "none")
+
+    def _release_abandoned_claims(self, books: list[AwaitingBook],
+                                  ledger: Ledger, report: RunReport) -> None:
+        """Let go of a book DocWatch has stopped listing as awaiting.
+
+        A claim is one half of an arrangement: DocWatch marks a book awaiting,
+        this machine works it and writes a verdict back. When the book leaves
+        the awaiting list without one — released from the queue by an
+        administrator, or its marker moved by hand — nothing tells the agent,
+        which holds the claim for good and never looks at the book again.
+        Gunn - Book 1 sat claimed and blocked from 2026-09-17 with nobody
+        waiting for it and nothing anywhere saying so.
+
+        Only a plain claim is let go. A pending delivery belongs to
+        `retry_deliveries`: there the verdict exists and the upload is the one
+        thing outstanding, so the awaiting list has nothing to say about it.
+        """
+        listed = {book.file_id for book in books}
+        for file_id in ledger.pending():
+            entry = ledger.claimed(file_id)
+            if file_id in listed:
+                if entry.get("unlisted_polls"):
+                    ledger.record(file_id, CLAIMED, unlisted_polls=0)
+                continue
+            misses = int(entry.get("unlisted_polls") or 0) + 1
+            if misses < RELEASED_BOOK_POLLS:
+                ledger.record(file_id, CLAIMED, unlisted_polls=misses)
+                continue
+            name = str(entry.get("name") or file_id)
+            ledger.record(file_id, FAILED, outcome="released",
+                          operational_status="", unlisted_polls=0,
+                          reason="DocWatch stopped listing this book as "
+                                 "awaiting before a verdict was written, so "
+                                 "the claim was released. Nothing was "
+                                 "delivered; the workspace is kept.")
+            report.skipped.append(f"{name} (released by DocWatch)")
+            self.log(f"{name}: released — no longer on the awaiting list.")
+            self._alarm(
+                f"{name}: released from Galley without a verdict",
+                f"DocWatch stopped listing {name} as awaiting while this "
+                f"machine still held the claim, so Galley has let it go. No "
+                f"verdict was written and nothing was delivered. The "
+                f"workspace and every checkpoint are kept; putting the book "
+                f"back at the ready value in HubSpot queues it again.")
 
     def _operational_block(self, book: AwaitingBook, ledger: Ledger,
                            report: RunReport, slug: str, folder: str,

@@ -24,7 +24,7 @@ from . import corrections
 from . import daily
 from . import schedule as schedulelib
 from .schedule import ScheduleError
-from .settings import GOOGLE_KEY, WatchSettings
+from .settings import GOOGLE_KEY, WatchSettings, google_client
 from .stages import PREVIEW_GATED
 from .state import STATE_FILE, WatchState, last_tick
 
@@ -81,7 +81,7 @@ def missing(ws: WatchSettings, *, get_key=None) -> str | None:
     if not ws.folder_id:
         return "folder"
     read = get_key or get_api_key
-    if not ws.client_id or not ws.client_secret or not read(GOOGLE_KEY):
+    if not all(google_client(ws)) or not read(GOOGLE_KEY):
         return "auth"
     return None
 
@@ -92,7 +92,7 @@ def status(home: str | Path, *, get_key=None,
     root = Path(home)
     ws = WatchSettings.load(root)
     read = get_key or get_api_key
-    signed = authlib.token_source(read, bool(ws.client_id))
+    signed = authlib.token_source(read, bool(google_client(ws)[0]))
     times = schedulelib.current(path=agent_path) if _agent_readable() else None
     stamp = last_tick(root)
     state = WatchState.load(root / STATE_FILE)
@@ -170,7 +170,7 @@ def status(home: str | Path, *, get_key=None,
         "archive_include_source": ws.archive_include_source,
         "signed_in": signed["configured"],
         "token_source": signed["source"],
-        "has_client": bool(ws.client_id and ws.client_secret),
+        "has_client": all(google_client(ws)),
         "missing": missing(ws, get_key=read),
         "times": [f"{h:02d}:{m:02d}" for h, m in times] if times else [],
         "last_tick_at": stamp.isoformat() if stamp else None,

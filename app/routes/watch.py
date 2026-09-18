@@ -37,7 +37,7 @@ from ..watch import schedule as schedulelib
 from ..watch import status as watchlib
 from ..watch.drive import DriveError
 from ..watch.runner import WatchRunner
-from ..watch.settings import GOOGLE_KEY, WatchSettings, folder_id_from
+from ..watch.settings import GOOGLE_KEY, WatchSettings, folder_id_from, google_client
 
 log = logging.getLogger("docproof.app.watch")
 from ..watch.tick import NotConfigured
@@ -264,14 +264,14 @@ def _drive_token_or_none(home) -> str | None:
     from ..watch import drive
 
     ws = WatchSettings.load(home)
-    if not (ws.client_id and ws.client_secret):
+    client = google_client(ws)
+    if not all(client):
         return None
     refresh = settingslib.get_api_key(GOOGLE_KEY)
     if not refresh:
         return None
     try:
-        return drive.refresh_access_token(ws.client_id, ws.client_secret,
-                                          refresh)
+        return drive.refresh_access_token(*client, refresh)
     except DriveError as e:
         log.warning("Could not sign in to Google for the release (%s).", e)
         return None
@@ -788,7 +788,14 @@ def register(app: FastAPI) -> None:
         value with the reason and who did it, so the awaiting list no longer
         carries the book and the agent leaves it alone. Nothing is deleted;
         moving the HubSpot record back to the ready value makes DocWatch mark
-        it awaiting again on its next pass."""
+        it awaiting again on its next pass.
+
+        The Drive marker is the release, not a copy of it. It used to be
+        written where it could be and skipped where it could not, leaving the
+        local record terminal while Drive still read `awaiting` — which is how
+        Gunn - Book 1 left the agent's list on 2026-09-17 while the agent went
+        on holding the claim, with nothing anywhere saying the two disagreed.
+        A release that cannot reach Drive is now refused and says why."""
         from ..watch import proof as prooflib
         from ..watch.drive import DriveFile
         from ..watch.stages import PROOF_AWAITING, PROOF_FAILED
@@ -804,23 +811,23 @@ def register(app: FastAPI) -> None:
         who = getattr(user, "email", "") or "an administrator"
         reason = f"released from the practitioner queue by {who}"
         token = _drive_token_or_none(watch.home)
-        marked_drive = False
-        if token:
-            try:
-                prooflib.mark_source(
-                    token, DriveFile(id=rec.file_id, name=rec.name,
-                                     mime_type=""),
-                    rec, state, status=PROOF_FAILED, reason=reason)
-                marked_drive = True
-            except DriveError as e:
-                log.warning("Release of %s: Drive marker not written (%s); "
-                            "the watch state is released regardless.",
-                            rec.name, e)
-        if not marked_drive:
-            rec.proof_marked = PROOF_FAILED
-            state.record(rec)
+        if not token:
+            raise HTTPException(
+                503, "Google Drive is not connected, so the release cannot be "
+                     "written where the next pass reads it. Sign in again, "
+                     "then release the book.")
+        try:
+            prooflib.mark_source(
+                token, DriveFile(id=rec.file_id, name=rec.name, mime_type=""),
+                rec, state, status=PROOF_FAILED, reason=reason)
+        except DriveError as e:
+            log.warning("Release of %s: Drive refused the marker (%s); "
+                        "nothing was changed.", rec.name, e)
+            raise HTTPException(
+                502, f"Drive would not take the release marker ({e}). Nothing "
+                     f"was changed; the book is still with the practitioner.")
         return {"released": rec.file_id, "name": rec.name,
-                "drive_marked": marked_drive, **watch_payload()}
+                "drive_marked": True, **watch_payload()}
 
     @app.post("/api/watch/clear", dependencies=[Depends(may_manage)])
     def clear_marker(update: ClearMarker, request: Request) -> dict:

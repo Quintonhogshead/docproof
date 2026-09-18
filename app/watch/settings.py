@@ -32,6 +32,40 @@ HUBSPOT_KEY = "hubspot"
 # What the app calls this in ENV_VARS/Keychain, spelled once so the CLI and the
 # docs can point at the same thing.
 REFRESH_TOKEN_ENV = "GOOGLE_REFRESH_TOKEN"
+# The OAuth client the deployment was given, beside the token in the same
+# environment. `fly secrets set` writes all three together (DEPLOY.md), and the
+# Galley worker's entrypoint already copies these two into its own watch.json.
+CLIENT_ID_ENV = "GOOGLE_CLIENT_ID"
+CLIENT_SECRET_ENV = "GOOGLE_CLIENT_SECRET"
+
+
+def google_client(ws: "WatchSettings") -> tuple[str, str]:
+    """The OAuth client the refresh token in hand was actually issued to.
+
+    A refresh token belongs to one client; presenting it with another is a
+    flat Unauthorized, indistinguishable from a revoked sign-in. The token
+    already prefers the environment over the stored one (`get_api_key`), so
+    the client has to resolve the same way or the pair can come from two
+    different places.
+
+    It did. From 2026-09-15 the hosted app's `watch.json` held the previous
+    OAuth client while `GOOGLE_REFRESH_TOKEN` in the environment belonged to
+    the new one, so every DocWatch tick died at its token refresh — stamping
+    `last_tick` on the way, because that stamp is written first — and every
+    Drive write from the portal fell back to whatever it does without a
+    token. Nothing said so; the Gunn book was released from the practitioner
+    queue in local state alone while Drive still read `awaiting`.
+
+    So: an environment that supplies the token supplies the client with it.
+    A desktop install, whose token comes from the Keychain and whose client
+    comes from `docproof-watch auth`, keeps both.
+    """
+    if os.environ.get(REFRESH_TOKEN_ENV):
+        env = (os.environ.get(CLIENT_ID_ENV) or "",
+               os.environ.get(CLIENT_SECRET_ENV) or "")
+        if all(env):
+            return env
+    return ws.client_id, ws.client_secret
 
 _ID = re.compile(r"^[A-Za-z0-9_-]{8,}$")
 

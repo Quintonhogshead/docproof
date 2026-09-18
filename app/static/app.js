@@ -8802,12 +8802,6 @@ async function releaseProof(f, btn) {
       body: JSON.stringify({ file_id: f.file_id }),
     });
     renderWatch(body, true);
-    if (!body.drive_marked) {
-      watchNote($('wf-proof-note'), `${f.name} released. DocWatch is not `
-        + 'signed in to Google, so only its own record changed; if the '
-        + 'HubSpot status is still at the ready value the next pass may mark '
-        + 'it awaiting again.', 'warn');
-    }
   } catch (e) {
     btn.disabled = false;
     watchNote($('wf-proof-note'), e.message, 'error');

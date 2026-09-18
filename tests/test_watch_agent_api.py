@@ -278,6 +278,28 @@ def test_the_heartbeat_is_bounded(tmp_path, monkeypatch):
 
 # --- taking a book back --------------------------------------------------------
 
+def _signed_in(app, monkeypatch, tmp_path, *, refuse=False):
+    """A watcher with a Google client and a token, and a Drive that answers."""
+    from app.watch import drive, proof as prooflib
+    home = app.state.watch.home
+    ws = WatchSettings.load(home)
+    ws.client_id, ws.client_secret = "client-id-value", "client-secret-value"
+    ws.folder_id = "shared-folder"
+    ws.save(home)
+    monkeypatch.setenv(ENV_VARS[GOOGLE_KEY], "a-refresh-token")
+    monkeypatch.setattr(drive, "refresh_access_token",
+                        lambda *a, **kw: "an-access-token")
+    written = []
+
+    def set_props(token, file_id, props, opener=None):
+        if refuse:
+            raise drive.DriveError("Drive said no")
+        written.append((file_id, props))
+
+    monkeypatch.setattr(prooflib.drive, "set_app_properties", set_props)
+    return written
+
+
 def test_an_admin_can_release_an_awaiting_book(tmp_path, monkeypatch):
     """A killed test run must not come back at the agent's next boot: releasing
     the book takes it off the awaiting list the agent resumes from."""
@@ -285,6 +307,7 @@ def test_an_admin_can_release_an_awaiting_book(tmp_path, monkeypatch):
     app = make_app(tmp_path)
     home = app.state.watch.home
     seed(home, [awaiting_record()])
+    written = _signed_in(app, monkeypatch, tmp_path)
     boss = _boss(app)
     auth = {"Authorization": f"Bearer {TOKEN}"}
     assert len(TestClient(app).get("/api/watch/awaiting",
@@ -295,7 +318,10 @@ def test_an_admin_can_release_an_awaiting_book(tmp_path, monkeypatch):
     body = answer.json()
     assert body["released"] == "drive-1"
     assert body["name"] == "Test - Book 1.docx"
-    assert body["drive_marked"] is False           # no Google sign-in here
+    assert body["drive_marked"] is True
+    # The release reached Drive, where the next pass reads it.
+    assert written and written[0][0] == "drive-1"
+    assert written[0][1]["docproof.proof"] == "failed"
     # Gone from the agent's list, and from the drawer's awaiting rows.
     assert TestClient(app).get("/api/watch/awaiting",
                                headers=auth).json()["books"] == []
@@ -306,6 +332,31 @@ def test_an_admin_can_release_an_awaiting_book(tmp_path, monkeypatch):
                      json={"file_id": "drive-1"}).status_code == 404
     assert boss.post("/api/watch/proof/release",
                      json={"file_id": "nope"}).status_code == 404
+
+
+def test_a_release_that_cannot_reach_drive_changes_nothing(tmp_path, monkeypatch):
+    """Gunn - Book 1, 2026-09-17: the release wrote the local record alone
+    while Drive still read `awaiting`, so the book left the agent's list and
+    the agent went on holding the claim. A marker that cannot be written is a
+    refusal, not a half-release."""
+    monkeypatch.setenv(AGENT_TOKEN_ENV, TOKEN)
+    app = make_app(tmp_path)
+    seed(app.state.watch.home, [awaiting_record()])
+    boss = _boss(app)
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+
+    # No Google sign-in at all.
+    assert boss.post("/api/watch/proof/release",
+                     json={"file_id": "drive-1"}).status_code == 503
+    assert len(TestClient(app).get("/api/watch/awaiting",
+                                   headers=auth).json()["books"]) == 1
+
+    # Signed in, but Drive refuses the marker.
+    _signed_in(app, monkeypatch, tmp_path, refuse=True)
+    assert boss.post("/api/watch/proof/release",
+                     json={"file_id": "drive-1"}).status_code == 502
+    assert len(TestClient(app).get("/api/watch/awaiting",
+                                   headers=auth).json()["books"]) == 1
 
 
 def test_release_is_for_administrators_only(tmp_path, monkeypatch):
