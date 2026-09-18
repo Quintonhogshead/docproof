@@ -52,6 +52,13 @@ DEFAULT_POLL_INTERVAL_S = 300.0
 #: file or the process environment; 0 switches spacing off.
 BOOK_SPACING_KEY = "GALLEY_BOOK_SPACING_HOURS"
 DEFAULT_BOOK_SPACING_S = 5 * 3600.0
+#: How many times one book may block on the same reason before it is held for
+#: new code instead of polled again. A fixed run resumes by replaying its call
+#: cache, so the second identical block has already spent the whole run twice
+#: and the third would learn nothing new. The Gunn run of 2026-09-17 replayed
+#: two hours to reach the same refused coverage inventory, and would have gone
+#: on doing so every five minutes.
+REPEATED_BLOCK_LIMIT = 2
 #: What the server calls the read-only route this poller lives on.
 AWAITING_PATH = "/api/watch/awaiting"
 KEYS_PATH = "/api/watch/agent-keys"
@@ -1127,7 +1134,8 @@ class Agent:
             log.exception("The proofread of %s crashed", book.name)
             self._operational_block(book, ledger, report, slug, folder,
                                     f"The proofreading run over {book.name} "
-                                    f"crashed ({e}); recovery is pending.")
+                                    f"crashed ({e}); recovery is pending.",
+                                    count_repeats=True)
             return
 
         outcome = getattr(result, "outcome", "needs_human")
@@ -1155,7 +1163,11 @@ class Agent:
                            last_reason=reason[:600], last_book=book.name,
                            delivery="pending")
             else:
-                self._operational_block(book, ledger, report, slug, folder, reason)
+                self._operational_block(
+                    book, ledger, report, slug, folder, reason,
+                    # A driver that asked for a later retry gets one, however
+                    # many times it asks.
+                    count_repeats=not getattr(result, "retry_later", False))
             return
         uploaded = list(getattr(result, "uploaded", []) or [])
         handoff = [Path(p) for p in (getattr(result, "handoff", []) or [])]
@@ -1184,7 +1196,9 @@ class Agent:
         ledger.record(book.file_id, FINISHED if outcome == "done" else FAILED,
                       name=book.name, slug=slug, folder_id=folder,
                       outcome=outcome, reason=reason[:400],
-                      uploaded=uploaded)
+                      uploaded=uploaded,
+                      # The run got past whatever it blocked on before.
+                      block_signature="", block_repeats=0)
         self.log(f"{book.name}: {outcome} — {reason[:200]}")
         self._rest_beat(state="idle", last_outcome=outcome,
                    last_reason=reason[:600], last_book=book.name,
@@ -1193,11 +1207,34 @@ class Agent:
 
     def _operational_block(self, book: AwaitingBook, ledger: Ledger,
                            report: RunReport, slug: str, folder: str,
-                           reason: str) -> None:
+                           reason: str, *, count_repeats: bool = False) -> None:
+        """`count_repeats` for a block that cost a whole run to reach.
+
+        A book whose download failed is free to try again next poll and often
+        should. A run that got underway and stopped is not: the fixed lane
+        replays its call cache to reach the same place, so an identical second
+        block is a standing failure, not bad luck.
+
+        A transport wobble is still allowed to repeat itself. Only a failure
+        that says nothing temporary about itself — and that the driver did not
+        ask to be retried — is counted towards the hold.
+        """
+        from galley.recovery import transient_failure
         report.outcome, report.reason = "blocked", reason
+        signature = reason[:400]
+        entry = ledger.claimed(book.file_id)
+        repeats = (int(entry.get("block_repeats") or 0) + 1
+                   if entry.get("block_signature") == signature else 1)
+        if count_repeats and not transient_failure(reason) and repeats >= REPEATED_BLOCK_LIMIT:
+            # The same book, the same failure, the same evidence. Whatever the
+            # driver made of it, this one is not clearing itself: hold it for a
+            # release that changes something rather than spend the run again.
+            self._hold_for_new_code(book, ledger, report, slug, folder, reason)
+            return
         ledger.record(book.file_id, CLAIMED, name=book.name, slug=slug,
                       folder_id=folder, operational_status="blocked",
-                      reason=reason[:400])
+                      reason=signature, block_signature=signature,
+                      block_repeats=repeats)
         self._rest_beat(state="idle", last_outcome="blocked",
                    last_reason=reason[:600], last_book=book.name,
                    delivery="pending")

@@ -1244,3 +1244,63 @@ def test_spacing_is_configurable_and_zero_switches_it_off(env, tmp_path):
     assert agent._spacing_s() == 7200.0
     env.values[ga.BOOK_SPACING_KEY] = "soon"
     assert agent._spacing_s() == ga.DEFAULT_BOOK_SPACING_S
+
+
+def test_the_same_block_twice_holds_the_book_instead_of_running_it_again(env, tmp_path):
+    """The Gunn run of 2026-09-17 replayed two hours of cached calls to reach
+    the same refused coverage inventory, and would have gone on doing that
+    every poll. A driver that blocks on the same reason twice is standing
+    still: hold the book for a release that changes something."""
+    ran, alerts = [], []
+
+    def blocked(**kw):
+        ran.append(kw)
+        return FakeResult(outcome="blocked", uploaded=(),
+                          reason="Coverage inventory needs unique string IDs")
+
+    agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
+                   download=_downloader(tmp_path), run_driver=blocked,
+                   alert=lambda s, b: alerts.append(s))
+    agent.poll_once()
+    assert agent.ledger().claimed("drive-1")["operational_status"] == "blocked"
+    agent.poll_once()
+    entry = agent.ledger().claimed("drive-1")
+    assert entry["state"] == ga.CLAIMED
+    assert entry["operational_status"] == ga.HELD_FOR_CODE
+    assert any("automatic recovery could not finish" in s for s in alerts)
+    report = agent.poll_once()
+    assert len(ran) == 2
+    assert any("held for new code" in s for s in report.skipped)
+
+
+def test_a_block_that_reads_as_temporary_keeps_its_retries(env, tmp_path):
+    """Only a failure that says nothing temporary about itself is counted."""
+    ran = []
+
+    def blocked(**kw):
+        ran.append(kw)
+        return FakeResult(outcome="blocked", uploaded=(),
+                          reason="Drive is temporarily unavailable")
+
+    agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
+                   download=_downloader(tmp_path), run_driver=blocked)
+    for _ in range(3):
+        agent.poll_once()
+    assert len(ran) == 3
+    assert agent.ledger().claimed("drive-1")["operational_status"] == "blocked"
+
+
+def test_a_different_block_each_time_is_not_a_repeat(env, tmp_path):
+    ran = []
+
+    def blocked(**kw):
+        ran.append(kw)
+        return FakeResult(outcome="blocked", uploaded=(),
+                          reason=f"The upload failed on attempt {len(ran)}")
+
+    agent = _agent(env, tmp_path, opener=FakeApp([BOOK]),
+                   download=_downloader(tmp_path), run_driver=blocked)
+    for _ in range(3):
+        agent.poll_once()
+    assert len(ran) == 3
+    assert agent.ledger().claimed("drive-1")["operational_status"] == "blocked"

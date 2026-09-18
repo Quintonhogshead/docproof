@@ -1730,3 +1730,108 @@ def test_a_final_reader_never_demotes_a_label_edit_into_a_question():
                 "reason": "Label out of style.", "para_id": "h1", "start": 0, "end": 11, "evidence": []}
     assert FixedWorkflow._frontier_demotion("fable", {"proposals": [proposal]}, "CHAPTER ONE") is None
     assert FixedWorkflow._frontier_demotion("fable", {"proposals": [proposal]}, "The sun set in the east.") is not None
+
+
+# --- one question, one id ----------------------------------------------------
+
+def test_question_two_stages_raise_is_held_once(make_book, tmp_path):
+    """The Gunn run of 2026-09-17: a later stage demoted a rejected edit into
+    the question an earlier stage already held. The child check workflow's own
+    guard saw only its empty list, so the parent ended up holding one id twice
+    and the next comment review's coverage inventory was refused."""
+    def handler(stage, model, payload, kwargs):
+        if stage == "fable_checks_meaning":
+            return {"decisions": [{"id": "p", "verdict": "reject", "reason": "Invented identity."}]}
+        if stage == "fable_checks_meaning_sonnet":
+            return {"decisions": [{"id": "p", "verdict": "approve", "reason": "Reads correctly."}]}
+        if stage == "fable_checks_meaning_disputes":
+            return {"decisions": [{"id": "p", "action": "query", "replacement": "",
+                                   "question": "Who was he waiting for?",
+                                   "missing_knowledge": "The intended identity",
+                                   "reason": "An unresolved reference."}]}
+    flow = _flow(make_book, tmp_path, Readers(handler=handler))
+    flow._question("p", flow.current["p"], "Who was he waiting for?",
+                   "The intended identity", "An unresolved reference.", "typed")
+    held = flow.questions[0]["id"]
+    before = flow._apply("fable", [_candidate(finding("p", "someone", "Mary"), flow.current, FABLE)])
+    flow._checks("fable_checks", before)
+    assert [q["id"] for q in flow.questions] == [held]
+
+
+def test_replaced_comment_takes_the_id_its_new_wording_hashes_to(make_book, tmp_path):
+    """An id is a hash of the question's content, so a review that replaces the
+    wording re-keys the row and retires the id it left behind — otherwise a
+    later stage regenerating the original wording mints that id a second
+    time."""
+    from galley.fixed_workflow import _question_id
+    flow = _flow(make_book, tmp_path, text="He saw the visitor.")
+    flow._question("p", flow.current["p"], "Who is the visitor?",
+                   "The visitor's identity", "An unresolved identity.", "fable")
+    retired = flow.questions[0]["id"]
+    decision = comment_decision(flow.questions[0], quote="the visitor")
+    decision["missing_knowledge"] = "The visitor's name"
+    flow._comments([decision], "astra", model=ASTRA)
+    assert [q["id"] for q in flow.questions] == [
+        _question_id("p", "the visitor", "The visitor's name")]
+    kept = flow.questions[0]["id"]
+    assert kept != retired
+    # The retired wording, raised again by a later stage, is already asked.
+    flow._question("p", "He saw the visitor.", "Who is the visitor?",
+                   "The visitor's identity", "An unresolved identity.", "final_astra")
+    assert [q["id"] for q in flow.questions] == [kept]
+
+
+def test_duplicate_question_ids_are_named_where_they_become_an_inventory(make_book, tmp_path):
+    """Whatever produced them, a duplicate id is reported as a duplicate id and
+    not as the coverage contract two layers down refusing the call."""
+    flow = _flow(make_book, tmp_path)
+    flow._question("p", flow.current["p"], "Who was he waiting for?",
+                   "The intended identity", "An unresolved reference.", "typed")
+    flow.questions.append(dict(flow.questions[0]))     # only a defect can do this
+    with pytest.raises(FixedWorkflowError, match="duplicate ids"):
+        flow._comments([comment_decision(flow.questions[0])], "astra", model=ASTRA)
+
+
+def test_a_failure_that_replays_identically_is_reported_as_exhausted():
+    """A resume replays the call cache to reach the same place, so the agent is
+    told not to spend the run again; a lock another worker holds is not that."""
+    from galley.fixed_calls import FixedCallContractError
+    from galley.fixed_workflow import FixedWorkflowBusy, deterministic_failure
+    assert deterministic_failure(FixedCallContractError("Coverage inventory needs unique string IDs"))
+    assert deterministic_failure(FixedWorkflowError("Preparation silently changed source text"))
+    assert deterministic_failure(RuntimeError("wrapped")) is False
+    assert deterministic_failure(FixedWorkflowBusy("Another worker owns this fixed proofread")) is False
+    try:
+        try:
+            raise FixedCallContractError("Coverage inventory needs unique string IDs")
+        except FixedCallContractError as exc:
+            raise RuntimeError("the stage failed") from exc
+    except RuntimeError as exc:
+        assert deterministic_failure(exc)
+
+
+def test_a_refused_contract_reaches_the_agent_as_exhausted_recovery(make_book, tmp_path):
+    """The driver's own report, not just the classifier: a block the resume
+    would reproduce is handed over as exhausted so the agent holds the book."""
+    import types
+    from galley import fixed_workflow as fw
+    from galley.fixed_calls import FixedCallContractError
+
+    def refuse(self):
+        raise FixedCallContractError("Coverage inventory needs unique string IDs")
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    driver = types.SimpleNamespace(
+        workspace=workspace, book=make_book("He waited for someone."),
+        budget_usd=10.0, drive_folder_id="", source_id="", slug="test",
+        drive_archive_folder_id="", upload=None, verify_upload=None,
+        _write_ledger=lambda result: None, _progress=lambda *a, **kw: None)
+    original, fw.FixedWorkflow.run = fw.FixedWorkflow.run, refuse
+    try:
+        result = fw.run_fixed_driver(driver)
+    finally:
+        fw.FixedWorkflow.run = original
+    assert result.outcome == "blocked"
+    assert result.stopped_at == "fixed"
+    assert result.recovery_exhausted is True
