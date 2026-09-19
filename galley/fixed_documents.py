@@ -422,13 +422,15 @@ def _report(result, details, receipt=None):
             lines.append(f"  - {labels.get(blocker['para_id'], blocker['para_id'])}: {blocker['problem']} "
                          f"({json.dumps(blocker['quote'], ensure_ascii=False)})")
         if review.get("waived_blockers"):
-            # Not a defect and not the proofreader's, but the designer still
-            # has to fill it, so it is named rather than silently dropped.
-            lines += ["", f"- For the interior designer: {len(review['waived_blockers'])} placeholder(s) "
-                      f"outside the chapters. These did not count towards the verdict."]
+            # Not a blocker — a placeholder to fill, a question to ask, a
+            # correction to make — but somebody still has to do that, so each
+            # is named with why it did not count rather than silently dropped.
+            lines += ["", f"- Reported and not counted towards the verdict: "
+                      f"{len(review['waived_blockers'])} item(s) a placeholder fill, a question for the "
+                      f"author or a correction resolves."]
             for blocker in review["waived_blockers"]:
                 lines.append(f"  - {labels.get(blocker['para_id'], blocker['para_id'])}: {blocker['problem']} "
-                             f"({json.dumps(blocker['quote'], ensure_ascii=False)})")
+                             f"({json.dumps(blocker['quote'], ensure_ascii=False)}) — {blocker.get('waived', '')}")
         if review.get("skipped_windows"):
             lines.append(f"- {review['skipped_windows']} reading window(s) were unavailable and are recorded as skipped.")
     rejected = [h for h in result["history"] if h.get("rejected_proposal")]

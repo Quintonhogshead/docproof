@@ -130,55 +130,59 @@ def test_a_clean_second_reading_is_proofread_complete_with_the_reason_recorded(m
 
 # --- a placeholder the interior designer fills --------------------------------
 
-def _blocker(para_id, kind="placeholder", quote="Cover design by XXX"):
-    return {"para_id": para_id, "quote": quote, "kind": kind,
+def _blocker(para_id, kind="placeholder", quote="Cover design by XXX", resolution="none"):
+    return {"para_id": para_id, "quote": quote, "kind": kind, "resolution": resolution,
             "problem": "Unresolved cover-credit placeholder.",
             "reason": "The final credit requires the designer's name."}
 
 
-def test_a_placeholder_outside_the_chapters_is_the_designers_not_a_blocker():
-    """Gunn - Book One, 2026-09-18: sent to a human proofreader over "Cover
-    design by XXX" on the copyright page, with 24 of an allowed 25 mechanical
-    errors. The press sends a proofread book to an interior designer next, so a
-    placeholder in the matter around the chapters is the ordinary state of a
-    book at this stage (Quinton, 2026-09-18)."""
-    coverage = [{"verdict": "ready", "publication_blockers": [_blocker("body-0058")]}]
-    review = final_review_verdict([], coverage, body_ids={"body-0400"})
+def test_a_placeholder_is_never_a_blocker_wherever_it_sits():
+    """Gunn - Book One (2026-09-18) went to a human proofreader over "Cover
+    design by XXX" on its copyright page, and Jimenez - Book 1 the same day
+    over "Copyright Page Placeholder" in a poetry book with no chapter
+    headings to place it outside of. A blocker never triggers on something
+    that could be a query or an easy fix (Quinton, 2026-09-18): the designer
+    or the author fills a placeholder, so it is waived wherever it sits."""
+    coverage = [{"verdict": "ready", "publication_blockers": [
+        _blocker("body-0024", quote="Copyright Page Placeholder"),
+        _blocker("body-0400", quote="TK TK")]}]
+    review = final_review_verdict([], coverage)
     assert review["verdict"] == "ready"
     assert review["publication_blockers"] == []
-    # Waived, not dropped: the designer still has to fill it.
-    assert [b["para_id"] for b in review["waived_blockers"]] == ["body-0058"]
-    assert "interior designer" in review["waived_blockers"][0]["waived"]
+    # Waived, not dropped: somebody still has to fill it.
+    assert [b["para_id"] for b in review["waived_blockers"]] == ["body-0024", "body-0400"]
+    assert "designer" in review["waived_blockers"][0]["waived"]
     assert "did not count" in review["reason"]
 
 
-def test_a_placeholder_inside_the_chapters_still_blocks():
-    coverage = [{"verdict": "ready", "publication_blockers": [_blocker("body-0400", quote="TK TK")]}]
-    review = final_review_verdict([], coverage, body_ids={"body-0400"})
+@pytest.mark.parametrize("resolution, word", [("query", "question"), ("edit", "correction")])
+def test_a_blocker_a_query_or_an_edit_resolves_is_waived(resolution, word):
+    """What could be asked or fixed is asked or fixed, never a blocker."""
+    blocker = _blocker("body-0400", kind="text_defect", quote="garbled", resolution=resolution)
+    review = final_review_verdict([], [{"verdict": "ready", "publication_blockers": [blocker]}])
+    assert review["verdict"] == "ready" and review["publication_blockers"] == []
+    assert word in review["waived_blockers"][0]["waived"]
+
+
+@pytest.mark.parametrize("kind", ["text_defect", "structure", "other"])
+def test_only_what_neither_a_query_nor_an_edit_resolves_blocks(kind):
+    """A garbled passage nobody can reconstruct or ask about still blocks."""
+    blocker = _blocker("body-0400", kind=kind, quote="garbled", resolution="none")
+    review = final_review_verdict([], [{"verdict": "ready", "publication_blockers": [blocker]}])
     assert review["verdict"] == "needs_human" and review["waived_blockers"] == []
     assert [b["para_id"] for b in review["publication_blockers"]] == ["body-0400"]
 
 
-@pytest.mark.parametrize("kind", ["text_defect", "structure", "other", None])
-def test_only_a_placeholder_is_waived_wherever_it_sits(kind):
-    """A garbled passage on the copyright page is still a garbled passage."""
-    blocker = _blocker("body-0058", kind=kind) if kind else {
-        k: v for k, v in _blocker("body-0058").items() if k != "kind"}
-    review = final_review_verdict([], [{"verdict": "ready", "publication_blockers": [blocker]}],
-                                  body_ids={"body-0400"})
-    assert review["verdict"] == "needs_human" and review["waived_blockers"] == []
-
-
-def test_without_a_body_map_every_blocker_counts():
-    """The stricter reading when the structure is unknown."""
-    review = final_review_verdict([], [{"verdict": "ready", "publication_blockers": [_blocker("body-0058")]}])
+def test_a_blocker_with_no_resolution_recorded_still_counts():
+    """The stricter reading when the reader did not say."""
+    blocker = {k: v for k, v in _blocker("body-0400", kind="other").items() if k != "resolution"}
+    review = final_review_verdict([], [{"verdict": "ready", "publication_blockers": [blocker]}])
     assert review["verdict"] == "needs_human" and review["waived_blockers"] == []
 
 
 def test_the_ceiling_still_decides_when_a_placeholder_is_waived():
     """Waiving the blocker does not waive the count."""
     over = [_edit(i) for i in range(FINAL_REVIEW_ERROR_CEILING + 1)]
-    review = final_review_verdict(over, [{"verdict": "ready", "publication_blockers": [_blocker("body-0058")]}],
-                                  body_ids={"body-0400"})
+    review = final_review_verdict(over, [{"verdict": "ready", "publication_blockers": [_blocker("body-0058")]}])
     assert review["verdict"] == "needs_human"
     assert review["publication_blockers"] == [] and len(review["waived_blockers"]) == 1

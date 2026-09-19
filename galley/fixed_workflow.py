@@ -164,14 +164,15 @@ FRONTIER_FINDING = _object(**{**FINDING["properties"], "category": _enum(*FRONTI
                            evidence=_array(EVIDENCE))
 FRONTIER_SCHEMA = _object(**{**READ_SCHEMA["properties"], "findings": _array(FRONTIER_FINDING)},
                           reviewed_check_ids=_array(S))
-# A problem that should stop publication and that a proofread cannot repair,
-# anchored to an exact current paragraph; code discards one it cannot anchor.
-# `kind` so code, not the reader, decides what a placeholder means: the press
-# sends a proofread book to an interior designer, who fills the credit lines
-# and copyright-page placeholders that are the ordinary state of a book at this
-# stage. See `final_review_verdict`.
+# A problem that should stop publication, anchored to an exact current
+# paragraph; code discards one it cannot anchor. `kind` and `resolution` are
+# so code, not the reader, decides what blocks: a placeholder is never a
+# blocker (the designer or the author fills it), and neither is anything a
+# question to the author or a correction would resolve — only what neither
+# can (`resolution: none`) counts. See `final_review_verdict`.
 BLOCKER = _object(para_id=S, quote=S, problem=S, reason=S,
-                  kind=_enum("placeholder", "text_defect", "structure", "other"))
+                  kind=_enum("placeholder", "text_defect", "structure", "other"),
+                  resolution=_enum("query", "edit", "none"))
 FINAL_REVIEW_SCHEMA = _object(**FRONTIER_SCHEMA["properties"], publication_blockers=_array(BLOCKER))
 CONTINUITY_FINDING = _object(para_id=S, quote=S, occurrence=I, replacement=S,
                              action=_enum("edit", "query"), category=_enum("continuity"),
@@ -479,8 +480,26 @@ def _harmonize_consistency(sites, agreed):
     return updated, log
 
 
-def final_review_verdict(accepted, coverage, *, ceiling=FINAL_REVIEW_ERROR_CEILING,
-                         body_ids=None):
+WAIVED_PLACEHOLDER = ("A placeholder is the interior designer's or the author's to fill, "
+                      "not a proofreading defect.")
+WAIVED_QUERY = "A question for the author resolves this; it is raised, not a blocker."
+WAIVED_EDIT = "A correction resolves this; it is an ordinary edit, not a blocker."
+
+
+def waiver_reason(blocker):
+    """Why a reported blocker does not count, or "" when it does.
+
+    A blocker never triggers on something that could be a query or an easy
+    fix (Quinton, 2026-09-18): a placeholder wherever it sits, and anything the
+    reader says a question or a correction would resolve, is waived. Only
+    `resolution: none` — or no resolution at all, the stricter reading when the
+    reader did not say — blocks."""
+    if blocker.get("kind") == "placeholder":
+        return WAIVED_PLACEHOLDER
+    return {"query": WAIVED_QUERY, "edit": WAIVED_EDIT}.get(blocker.get("resolution"), "")
+
+
+def final_review_verdict(accepted, coverage, *, ceiling=FINAL_REVIEW_ERROR_CEILING):
     """The fixed rule the second Astra reading is judged by, owned by code.
 
     `accepted` is that reading's adjudicated proposals; `coverage` its window
@@ -491,25 +510,26 @@ def final_review_verdict(accepted, coverage, *, ceiling=FINAL_REVIEW_ERROR_CEILI
     reader's own window verdict is reported, never turned into the verdict: an
     operational failure is not an editorial judgment.
 
-    `body_ids` names the chapters (see `press_checks.matter_regions`). A
-    placeholder outside them is waived rather than counted: the press sends a
-    proofread book to an interior designer next, who fills the credit lines and
-    copyright-page placeholders that are the ordinary state of a book at this
-    stage (Quinton, 2026-09-18). Gunn - Book One was sent to a human
-    proofreader over "Cover design by XXX" with 24 of an allowed 25 mechanical
-    errors — a pass, failed by a rule written for a book going to press. A
-    waived blocker is kept in the verdict, not dropped, so the report still
-    shows the designer what to fill. A placeholder inside chapter prose is a
-    hole in the manuscript and still blocks."""
+    A blocker never triggers on something that could be a question for the
+    author or an easy fix (Quinton, 2026-09-18). Gunn - Book One went to a
+    human proofreader over "Cover design by XXX" on its copyright page, and
+    Jimenez - Book 1 over "Copyright Page Placeholder" on its own, with 24 and
+    17 of an allowed 25 mechanical errors: passes, failed by a rule written for
+    a book going to press. So a `placeholder` is waived wherever it sits — the
+    interior designer or the author fills it — and so is any blocker the reader
+    says a query or an edit would resolve. Only a blocker with `resolution:
+    none` counts; one with no resolution recorded counts too, the stricter
+    reading when the reader did not say. A waived blocker is kept in the
+    verdict, not dropped, so the report still names what somebody has to
+    fill, ask or fix."""
     core = [row for row in accepted if row.get("action") == "edit" and not row.get("format")
             and row.get("category") in CORE_MECHANICAL_CATEGORIES]
     found = [b for window in coverage for b in window.get("publication_blockers", [])]
     blockers, waived = [], []
     for blocker in found:
-        matter = body_ids is not None and blocker.get("para_id") not in body_ids
-        if blocker.get("kind") == "placeholder" and matter:
-            waived.append({**blocker, "waived": "A placeholder outside the chapters is the "
-                                                "interior designer's to fill, not a proofreading defect."})
+        why = waiver_reason(blocker)
+        if why:
+            waived.append({**blocker, "waived": why})
         else:
             blockers.append(blocker)
     unverified = [b for window in coverage for b in window.get("unverified_blockers", [])]
@@ -529,8 +549,8 @@ def final_review_verdict(accepted, coverage, *, ceiling=FINAL_REVIEW_ERROR_CEILI
     if skipped:
         reason += f" {skipped} reading window(s) were unavailable and are recorded as skipped."
     if waived:
-        reason += (f" {len(waived)} placeholder(s) outside the chapters are left for the "
-                   f"interior designer and did not count.")
+        reason += (f" {len(waived)} reported blocker(s) that a placeholder fill, a question "
+                   f"for the author or a correction resolves did not count.")
     return {"stage": FINAL_REVIEW_STAGE, "verdict": "needs_human" if needs_human else "ready",
             "reason": reason, "core_mechanical_errors": len(core), "ceiling": ceiling,
             "core_mechanical_edits": [{k: row.get(k) for k in ("id", "para_id", "category", "before", "replacement")}
@@ -1984,13 +2004,9 @@ class FixedWorkflow:
                 if stage == FINAL_REVIEW_STAGE:
                     # The only needs_human gate. A reader's window verdict is
                     # recorded evidence; the verdict itself is the fixed rule.
-                    from galley.press_checks import final_audit, matter_regions
+                    from galley.press_checks import final_audit
                     from galley.fixed_local import _paragraphs
-                    regions = matter_regions(
-                        _paragraphs(prose_prepared, self.current, self.poetry_ids),
-                        self.cfg.skip.is_sweep_only)
-                    self.final_review = final_review_verdict(accepted, read_coverage,
-                                                             body_ids=regions["body"])
+                    self.final_review = final_review_verdict(accepted, read_coverage)
                     self.needs_human = self.final_review["verdict"] == "needs_human"
                     audit = final_audit(prose_prepared,
                         _paragraphs(prose_prepared, self.current, self.poetry_ids), self.cfg)
