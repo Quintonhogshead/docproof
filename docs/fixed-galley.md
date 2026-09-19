@@ -100,8 +100,9 @@ The agreed sequence is:
     **publication blockers** — problems a proofread cannot repair (missing,
     duplicated or garbled passages, placeholder text, a chapter out of order,
     damage an earlier correction did), each anchored to an exact paragraph
-    and verbatim quote that code verifies, and each carrying a `kind` so code
-    can tell a placeholder from a defect. Its propagation pass and the
+    and verbatim quote that code verifies, and each carrying a `kind` and a
+    `resolution` so code can tell what blocks from what is filled, asked or
+    fixed. Its propagation pass and the
     press-method final audit run on the resulting text.
 
 ## The verdict
@@ -118,29 +119,32 @@ human proofreader, and the rule is code's, not the reader's
 
 is `needs_human`; otherwise the proofread is complete (`done`).
 
-### A placeholder outside the chapters is the designer's
+### A blocker is only what neither a question nor a correction resolves
 
-A proofread book goes to an interior designer next, not to press, so the two
-are not judged alike. An unfilled credit line on the copyright page, a
-placeholder in an author biography, `Cover design by XXX` — these are the
-ordinary state of a book at this stage and the designer fills them (Quinton,
-2026-09-18). A blocker whose `kind` is `placeholder` and whose paragraph falls
-outside the chapters is **waived**: it does not count towards the verdict, and
-it is kept in `waived_blockers` and named in the report under *For the interior
-designer*, so nothing is lost. The same placeholder inside chapter prose is a
-hole in the manuscript and still blocks.
+A publication blocker never triggers on something that could be a query to
+the author or an easy fix (Quinton, 2026-09-18). The reader is told to make
+the edit or raise the question instead, and each blocker it still names
+carries a `kind` and a `resolution` (`query`, `edit` or `none`) so code, not
+the reader, decides what counts:
 
-`press_checks.matter_regions` draws the line. The body starts at the first
-heading that reads as a chapter — not merely the first heading, or a book
-opening with an author's note would start its body there — and ends at the
-first heading after the last chapter that opens the after-matter
-(acknowledgements, about the author, an appendix). A book with no chapter
-headings it can find is treated as all body, so nothing is waived when the
-structure is unknown.
+- a `placeholder` — `Cover design by XXX`, `Copyright Page Placeholder`, TK,
+  TBD — is **waived wherever it sits**: a proofread book goes to an interior
+  designer next, not to press, and the designer or the author fills it;
+- a blocker whose `resolution` is `query` or `edit` is **waived**: what can
+  be asked or fixed is asked or fixed;
+- only a blocker with `resolution: none` counts — or one with no resolution
+  recorded, the stricter reading when the reader did not say.
 
-Gunn - Book One is why. On 2026-09-18 it went to a human proofreader over
-`Cover design by XXX` on its copyright page, holding 24 of an allowed 25
-mechanical errors: a pass, failed by a rule written for a book going to press. A reader's own
+A waived blocker is kept in `waived_blockers` with the reason it did not
+count, and the report names each under *Reported and not counted*, so
+nothing is lost.
+
+Gunn - Book One and Jimenez - Book 1 are why. On 2026-09-18 Gunn went to a
+human proofreader over `Cover design by XXX` on its copyright page, holding 24
+of an allowed 25 mechanical errors, and Jimenez over `Copyright Page
+Placeholder` with 17 — a poetry book with no chapter headings, which the
+first, location-based waiver could not place outside the chapters. Passes,
+failed by a rule written for a book going to press. A reader's own
 window verdict, an earlier stage's verdict, a skipped (unavailable) window and
 a skipped model review in any earlier stage are recorded as evidence and never
 decide: an operational failure is not an editorial judgment. The outcome file's

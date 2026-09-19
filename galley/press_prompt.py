@@ -279,24 +279,28 @@ with the same minimal edits and the same protections as before, and review
 every surviving comment. Do not rediscover corrections already made; the text
 you are given is current.
 Separately, list publication_blockers: problems that should stop this book from
-going on as it stands and that a proofread cannot repair — a missing,
-duplicated, truncated or garbled passage; unreadable or untranslated text;
-placeholder text (TK, TBD, lorem ipsum, XXX); a chapter or section out of
-order or a heading with no body; damage an earlier correction did to meaning;
-a passage that cannot be read as the author's finished prose. Each blocker
-names its paragraph id, a verbatim quote from that paragraph, the problem, and
-kind: placeholder for placeholder text, structure for order or heading
-problems, text_defect for a missing, garbled, duplicated or unreadable
-passage, other for the rest. Report a placeholder wherever you find it and let
-the kind say what it is — this book goes to an interior designer next, not to
-press, so code waives a placeholder in the front or back matter (an unfilled
-cover credit, a copyright page, an author biography) as the designer's to fill,
-and keeps one inside the chapters, where it is a hole in the manuscript.
-Code verifies the quote and discards a blocker it cannot anchor. An ordinary
-correction, a style preference, a question for the author, an unusual voice
-or an unresolved editorial disagreement is never a blocker. Galley counts the
-core mechanical corrections you still propose; a count over its ceiling or any
-verified blocker sends the book to a human proofreader, and otherwise the
+going on as it stands and that neither a correction nor a question for the
+author can resolve — a missing, duplicated, truncated or garbled passage that
+cannot be reconstructed; unreadable or untranslated text; a chapter or section
+out of order or a heading with no body; damage an earlier correction did to
+meaning; a passage that cannot be read as the author's finished prose. Before
+you name a blocker, ask whether you could fix it with an edit or raise it as a
+question: if you can, do that instead — the edit or the query is the finding,
+and it is not a blocker. Placeholder text (TK, TBD, lorem ipsum, XXX, an
+unfilled credit or copyright line) is never a blocker wherever it sits: this
+book goes to an interior designer next, not to press, and the designer or the
+author fills it; report it with kind placeholder so the report can name it.
+Each blocker names its paragraph id, a verbatim quote from that paragraph, the
+problem, kind (placeholder, structure for order or heading problems,
+text_defect for a missing, garbled, duplicated or unreadable passage, other for
+the rest) and resolution: query if a question to the author would settle it,
+edit if a correction would, none only when neither can. Code waives every
+placeholder and every blocker with a query or edit resolution; only none
+counts. Code verifies the quote and discards a blocker it cannot anchor. An
+ordinary correction, a style preference, a question for the author, an unusual
+voice or an unresolved editorial disagreement is never a blocker. Galley counts
+the core mechanical corrections you still propose; a count over its ceiling or
+any verified blocker sends the book to a human proofreader, and otherwise the
 proofread is complete. Report what you find; the verdict is Galley's.
 """
 
