@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from app.jobs import REFUSED, Job, JobRunner, JobStore
+from app.jobs import MODEL_DOWN, REFUSED, Job, JobRunner, JobStore
 from app.settings import Paths, get_api_key, resource_root
 
 from . import (corrections, drive, flags, folders, hubspot, naming, notify, plan,
@@ -126,6 +126,11 @@ class TickReport:
     # Each is (filename, the file that proves it). Informational: nothing is
     # wrong, so it rides no alert, but `status` can say why a book was skipped.
     already_formatted: list[tuple[str, str]] = field(default_factory=list)
+    # Manuscripts the model stopped answering on — an account out of credit,
+    # a dead key. Left unmarked, so the next pass tries again from the
+    # checkpoint; said in the alert email, because the fix is a person's.
+    # Each is (filename, reason).
+    model_down: list[tuple[str, str]] = field(default_factory=list)
     plan: list[tuple[str, str]] = field(default_factory=list)
     # Dry run only: files in the folder a pass would leave alone — already
     # prepared, DocProof's own outputs, not manuscripts, marked failed. Counted
@@ -1741,6 +1746,18 @@ def _one(token: str, home: Path, ws: WatchSettings, file: DriveFile,
         prep.mark_source(token, file, job, rec, state, failed=reason,
                          opener=opener)
         report.failed.append((file.name, reason))
+        return
+    if job.state == "failed" and job.error_kind == MODEL_DOWN:
+        # The model stopped answering — the account, not the book. No marker
+        # and no attempt counted: three passes during one outage would
+        # otherwise give up on a manuscript nothing is wrong with. The next
+        # pass resumes the job from its checkpoint; the email says why it is
+        # waiting, since the fix (credit, a key) is a person's.
+        reason = job.error or "The model could not be reached."
+        log.warning("Waiting: %s was not formatted because %s", file.name,
+                    reason)
+        report.model_down.append((file.name, reason))
+        report.waiting += 1
         return
     if job.state != "done":
         # Something transient — a model that would not answer, a disk that

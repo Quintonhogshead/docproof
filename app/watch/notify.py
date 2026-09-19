@@ -97,10 +97,19 @@ def summary(report) -> tuple[str, str] | None:
     "two need a look" lands differently beside twelve that went through than
     beside none."""
     if not (report.needs_human or report.failed or report.missing_source
-            or report.stuck_ready or report.awaiting_proof):
+            or report.stuck_ready or report.awaiting_proof
+            or report.model_down):
         return None
     lines: list[str] = []
+    if report.model_down:
+        lines.append("The model stopped answering, so these were left for the "
+                     "next pass (check the provider's account and credit; "
+                     "nothing was uploaded):")
+        lines += [f"  - {name}: {reason}"
+                  for name, reason in report.model_down]
     if report.needs_human:
+        if lines:
+            lines.append("")
         lines.append("Manuscripts DocProof could not place:")
         lines += [f"  - {name}: {reason}"
                   for name, reason in report.needs_human]
@@ -133,7 +142,7 @@ def summary(report) -> tuple[str, str] | None:
         lines += [f"  - {name}: {reason}" for name, reason in report.failed]
     count = (len(report.needs_human) + len(report.missing_source)
              + len(report.stuck_ready) + len(report.awaiting_proof)
-             + len(report.failed))
+             + len(report.failed) + len(report.model_down))
     # Successful jobs across all four stages. Each list is appended to only once
     # the job reached "done" (see tick.run_prep / run_proof / run_promo /
     # run_plans), and a book is never in two stages in one pass, so the sum is a
@@ -801,7 +810,7 @@ def maybe_notify(token: str, ws, report, *, opener=drive._open_url) -> None:
                  ws.notify_email,
                  len(report.needs_human) + len(report.missing_source)
                  + len(report.stuck_ready) + len(report.awaiting_proof)
-                 + len(report.failed))
+                 + len(report.failed) + len(report.model_down))
     except DriveError as e:
         log.warning("Could not email %s about a pass that needs a person (%s). "
                     "If Gmail refused the scope, run `docproof-watch auth` again "

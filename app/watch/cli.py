@@ -1042,6 +1042,17 @@ def cmd_status(args, home: Path) -> int:
         print("Runs at (while open):   — off")
     if s["missing"]:
         print(f"\nStill needed: {_NEEDS[s['missing']]}")
+    last = s.get("last_pass")
+    if last:
+        if last.get("ok"):
+            how = (f"ok — {len(last.get('prepped') or [])} prepared, "
+                   f"{last.get('waiting', 0)} waiting")
+        elif last.get("skipped"):
+            how = f"stood aside ({last.get('error') or 'folder in use'})"
+        else:
+            how = (f"FAILED ({last.get('error_kind') or 'error'}: "
+                   f"{last.get('error') or 'no reason recorded'})")
+        print(f"Last pass:  {last.get('finished_at') or '?'} — {how}")
 
     if not s["files"]:
         print("\nNothing has been prepared yet.")

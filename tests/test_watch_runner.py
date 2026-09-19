@@ -22,7 +22,7 @@ from app.watch import tick as ticklib
 from app.watch.drive import AuthExpired, DriveError
 from app.watch.runner import WatchRunner
 from app.watch.settings import WatchSettings
-from app.watch.state import note_tick
+from app.watch.state import last_pass, note_tick
 from app.watch.tick import TickReport
 
 
@@ -517,3 +517,33 @@ def test_a_finished_job_is_not_progress(tmp_path):
 
 def test_a_watcher_that_has_never_run_has_no_jobs(tmp_path):
     assert WatchRunner(tmp_path / "nothing").jobs() == []
+
+
+# --- how the pass ended, on disk ---------------------------------------------
+
+def test_a_finished_pass_is_recorded_beside_last_tick(runner, tmp_path):
+    """`last_tick` says a pass started; this says how it ended, so a scheduled
+    pass that failed overnight leaves its reason where `status` can read it."""
+    runner.pass_once()
+
+    recorded = last_pass(tmp_path)
+    assert recorded["ok"] is True
+    assert recorded["prepped"] == ["Wolves.docx"]
+    assert recorded["finished_at"]
+
+
+def test_a_failed_pass_records_its_kind_and_reason(runner, tmp_path):
+    def broken(home, ws, **kw):
+        raise DriveError("Drive said 500")
+    runner._tick = broken
+
+    runner.pass_once()
+
+    recorded = last_pass(tmp_path)
+    assert recorded["ok"] is False
+    assert recorded["error_kind"] == "drive"
+    assert "500" in recorded["error"]
+
+
+def test_no_pass_yet_is_none(tmp_path):
+    assert last_pass(tmp_path) is None
