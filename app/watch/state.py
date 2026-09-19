@@ -22,6 +22,7 @@ log = logging.getLogger("docproof.app.watch.state")
 
 STATE_FILE = "state.json"
 LAST_TICK = "last_tick"
+LAST_PASS = "last_pass.json"
 VERSION = 1
 
 
@@ -317,3 +318,28 @@ def last_tick(home: str | Path) -> datetime | None:
         return datetime.fromisoformat(path.read_text("utf-8").strip())
     except (OSError, ValueError):
         return None
+
+
+def note_pass(home: str | Path, outcome: dict | None) -> None:
+    """Say how the last pass ended — beside `last_tick`, which only says that
+    one started. Best effort: a pass that finished is not failed because its
+    record could not be written."""
+    if outcome is None:
+        return
+    path = Path(home) / LAST_PASS
+    try:
+        staging = path.with_name(path.name + ".writing")
+        staging.write_text(json.dumps(outcome, indent=2), encoding="utf-8")
+        os.replace(staging, path)
+    except OSError as e:
+        log.warning("Could not record how the pass ended (%s)", e)
+
+
+def last_pass(home: str | Path) -> dict | None:
+    """How the most recent pass ended, or None before one has."""
+    path = Path(home) / LAST_PASS
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None

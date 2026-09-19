@@ -26,7 +26,7 @@ from . import schedule as schedulelib
 from .schedule import ScheduleError
 from .settings import GOOGLE_KEY, WatchSettings, google_client
 from .stages import PREVIEW_GATED
-from .state import STATE_FILE, WatchState, last_tick
+from .state import STATE_FILE, WatchState, last_pass, last_tick
 
 log = logging.getLogger("docproof.app.watch.status")
 
@@ -174,6 +174,9 @@ def status(home: str | Path, *, get_key=None,
         "missing": missing(ws, get_key=read),
         "times": [f"{h:02d}:{m:02d}" for h, m in times] if times else [],
         "last_tick_at": stamp.isoformat() if stamp else None,
+        # How that pass ended (runner.note_pass) — None until one has finished
+        # in-app; the launchd/CLI path prints its own report instead.
+        "last_pass": last_pass(root),
         "files": _files(root),
         # The practitioner agent's last heartbeat (galley/agent.py), so the
         # Proofread drawer can say what the machine is doing right now.

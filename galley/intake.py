@@ -102,8 +102,19 @@ def format_for_proof(source: Path, workspace: Path, *, progress=None) -> Path:
         "prompt": prepared.prompt.render(prepared.sheet),
     })
     checkpoint.load()
-    tags, usage = prep.run(cfg, prepared, build_provider(cfg),
-                           checkpoint=checkpoint, progress=progress)
+    try:
+        tags, usage = prep.run(cfg, prepared, build_provider(cfg),
+                               checkpoint=checkpoint, progress=progress)
+    except prep.ModelUnavailable as e:
+        # The model stopped answering — an account out of credit, a dead key —
+        # so prep gave up before the whole book was defaulted to body. Same
+        # answer as the unclassified case below: no proofread starts, retry
+        # formatting. The checkpoint is kept, since the windows it holds were
+        # answered and the retry replays them for nothing.
+        raise IntakeError(
+            f"Formatting left {e.unanswered or 'the'} paragraph(s) "
+            f"unclassified ({e.reason}); proofreading has not started. "
+            "Retry formatting once the model is back.") from e
     unanswered = [tag for tag in tags if tag.source == "unanswered"]
     if unanswered:
         # Prep's interactive fallback needs a person. An unattended intake

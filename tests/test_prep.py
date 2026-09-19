@@ -21,7 +21,9 @@ from docproof.prep.chunker import preview, split, windows
 from docproof.prep.ingest import BODY_PART, build_structure, preflight
 from docproof.prep.styles import (BODY, SPACING, StyleSheetError,
                                   build_styles_xml, load_style_sheet)
-from docproof.prep.tagger import (Tagger, load_tagging_prompt, render_window)
+from docproof.prep.tagger import (ERROR_STREAK, ModelUnavailable, Tagger,
+                                  is_account_error, load_tagging_prompt,
+                                  render_window)
 from docproof.prep.model import Tag
 from docproof.providers import ProviderResult
 from docproof.utils.xml_helpers import DocxPackage, paragraph_text, qn, walk_package
@@ -901,34 +903,166 @@ def test_windows_carry_the_tail_of_the_one_before(prepared):
     assert [p.para_id for p in made[1].context] == ["body-0003", "body-0004"]
 
 
+def _halves() -> tuple[ProviderResult, ProviderResult]:
+    """What the model says to each half of a 14-paragraph window."""
+    def answer(ids):
+        return ProviderResult(parsed={"paragraphs": [
+            {"para_id": f"body-{i:04d}", "role": "body", "flag": ""}
+            for i in ids]}, usage=USAGE)
+    return answer(range(7)), answer(range(7, 14))
+
+
 def test_a_window_the_model_cannot_answer_is_retried_smaller(prepared, sheet,
                                                               cfg):
     """A failed window costs every paragraph in it, so it is halved and retried
     before anything is given up on."""
     prompt = load_tagging_prompt(CONFIG_DIR / cfg.prep.tagging_prompt)
-    ok = ProviderResult(parsed={"paragraphs": [
-        {"para_id": f"body-{i:04d}", "role": "body", "flag": ""}
-        for i in range(7)]}, usage=USAGE)
+    first, second = _halves()
     provider = FakeProvider([ProviderResult(stop_reason="max_tokens",
-                                            error="too long"), ok, ok])
+                                            error="too long"), first, second])
     tagger = Tagger(sheet, prompt, provider, model="test", max_paragraphs=14)
     usage = Usage()
     tags = tagger.tag(prepared.structure, usage)
     assert len(provider.calls) == 3                 # one failure, two halves
     assert len(tags) == 14
+    assert all(t.source != "unanswered" for t in tags)
 
 
 def test_paragraphs_the_model_skipped_are_flagged_not_guessed(prepared, sheet,
                                                               cfg):
+    """A couple of paragraphs the model left out are flagged, not guessed —
+    and a couple is fine to ship. Most of the book left out is not (see
+    `test_a_book_the_model_mostly_did_not_label_is_not_shipped`)."""
     prompt = load_tagging_prompt(CONFIG_DIR / cfg.prep.tagging_prompt)
     partial = ProviderResult(parsed={"paragraphs": [
-        {"para_id": "body-0000", "role": "title page", "flag": ""}]},
-        usage=USAGE)
+        {"para_id": "body-0000", "role": "title page", "flag": ""}]
+        + [{"para_id": f"body-{i:04d}", "role": "body", "flag": ""}
+           for i in range(1, 14) if i not in (3, 9)]}, usage=USAGE)
     tagger = Tagger(sheet, prompt, FakeProvider([partial]), model="test")
     tags = {t.para_id: t for t in tagger.tag(prepared.structure, Usage())}
     assert tags["body-0000"].source == "model"
     assert tags["body-0003"].source == "unanswered"
+    assert tags["body-0009"].source == "unanswered"
     assert "by hand" in tags["body-0003"].flag
+
+
+# --- when the model has stopped answering --------------------------------------
+#
+# A 39,000-word book once finished "done" at $0 with every paragraph labelled
+# "body" and flagged, because the OpenAI account was out of credit and every
+# failed window was halved and retried down to single paragraphs — 2,717 calls
+# over two hours — each of which was then "unanswered" and defaulted. These
+# hold the run to stopping instead.
+
+def _error(text: str) -> ProviderResult:
+    return ProviderResult(stop_reason="error", error=text)
+
+
+def test_an_account_error_stops_the_run_on_the_first_call(prepared, sheet, cfg):
+    prompt = load_tagging_prompt(CONFIG_DIR / cfg.prep.tagging_prompt)
+    provider = FakeProvider([_error("429: You exceeded your current quota, "
+                                    "please check your plan and billing.")])
+    tagger = Tagger(sheet, prompt, provider, model="test")
+
+    with pytest.raises(ModelUnavailable) as caught:
+        tagger.tag(prepared.structure, Usage())
+
+    assert len(provider.calls) == 1             # not halved, not retried
+    assert "quota" in str(caught.value) and "not formatted" in str(caught.value)
+
+
+@pytest.mark.parametrize("text", [
+    "401: Incorrect API key provided",
+    "403: Your account is not authorized",
+    "402: Payment required",
+    "insufficient_quota",
+])
+def test_errors_about_the_account_are_recognised(text):
+    assert is_account_error(text)
+
+
+@pytest.mark.parametrize("text", [
+    "500: The server had an error",
+    "Connection error.",
+    "max_tokens",
+    "400: This model's maximum context length is 4035 tokens",   # not a 403
+])
+def test_errors_about_one_request_are_not(text):
+    assert not is_account_error(text)
+
+
+def test_a_run_of_errors_stops_the_run_rather_than_halving_forever(
+        prepared, sheet, cfg):
+    """A plain rate limit carries no account tell, so it is the streak that
+    catches it: after ERROR_STREAK failures in a row the run stops."""
+    prompt = load_tagging_prompt(CONFIG_DIR / cfg.prep.tagging_prompt)
+    provider = FakeProvider([_error("429: Rate limit reached")] * 50)
+    tagger = Tagger(sheet, prompt, provider, model="test", max_paragraphs=14)
+
+    with pytest.raises(ModelUnavailable) as caught:
+        tagger.tag(prepared.structure, Usage())
+
+    assert len(provider.calls) == ERROR_STREAK
+    assert "in a row" in str(caught.value)
+
+
+def test_a_window_that_fails_once_is_still_halved_and_retried(prepared, sheet,
+                                                              cfg):
+    """The old behaviour survives for a one-off: a failure, two good halves,
+    and the streak is forgotten once the model answers again."""
+    prompt = load_tagging_prompt(CONFIG_DIR / cfg.prep.tagging_prompt)
+    first, second = _halves()
+    provider = FakeProvider([_error("500: server error"), first, second])
+    tagger = Tagger(sheet, prompt, provider, model="test", max_paragraphs=14)
+
+    tags = tagger.tag(prepared.structure, Usage())
+
+    assert len(tags) == 14 and tagger._errors_in_a_row == 0
+
+
+def test_a_book_the_model_mostly_did_not_label_is_not_shipped(prepared, sheet,
+                                                              cfg):
+    """The backstop: whatever the errors looked like, a manuscript with most
+    of its paragraphs unlabelled is not a formatted manuscript."""
+    prompt = load_tagging_prompt(CONFIG_DIR / cfg.prep.tagging_prompt)
+    one = ProviderResult(parsed={"paragraphs": [
+        {"para_id": "body-0000", "role": "title page", "flag": ""}]},
+        usage=USAGE)
+    tagger = Tagger(sheet, prompt, FakeProvider([one]), model="test")
+
+    with pytest.raises(ModelUnavailable) as caught:
+        tagger.tag(prepared.structure, Usage())
+
+    assert caught.value.unanswered > caught.value.answered
+    assert "unlabelled" in str(caught.value)
+
+
+def test_a_window_the_model_left_unanswered_is_not_checkpointed(prepared, sheet,
+                                                                 cfg, tmp_path):
+    """A retry must ask again, not replay the silence: the intake that once
+    kept an all-unanswered window in its checkpoint retried into the same
+    unformatted book."""
+    from docproof.checkpoint import Checkpoint
+
+    prompt = load_tagging_prompt(CONFIG_DIR / cfg.prep.tagging_prompt)
+    silent = ProviderResult(parsed={"paragraphs": []}, usage=USAGE)
+    tagger = Tagger(sheet, prompt, FakeProvider([silent]), model="test")
+    checkpoint = Checkpoint(tmp_path / "checkpoint.json", fingerprint={"t": 1})
+    checkpoint.load()
+
+    with pytest.raises(ModelUnavailable):
+        tagger.tag(prepared.structure, Usage(), checkpoint=checkpoint)
+
+    assert checkpoint.get("w0") is None
+
+    # Answered now: the same checkpoint, the window asked again and kept.
+    first, second = _halves()
+    full = ProviderResult(parsed={"paragraphs": first.parsed["paragraphs"]
+                                  + second.parsed["paragraphs"]}, usage=USAGE)
+    tagger = Tagger(sheet, prompt, FakeProvider([full]), model="test")
+    tags = tagger.tag(prepared.structure, Usage(), checkpoint=checkpoint)
+    assert all(t.source != "unanswered" for t in tags)
+    assert checkpoint.get("w0") is not None
 
 
 def test_the_schema_only_admits_styles_the_template_has(sheet, cfg):

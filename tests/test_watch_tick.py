@@ -105,6 +105,73 @@ def test_explicit_retry_downloads_fixed_manuscript(tmp_path, ws, provider, failu
     assert provider.calls
 
 
+# --- the model stopped answering ----------------------------------------------
+
+def test_a_manuscript_the_model_could_not_label_waits_unmarked(tmp_path, ws,
+                                                               monkeypatch):
+    """An account out of credit is not a fact about the book: no marker, no
+    attempt counted, nothing uploaded — and the mail says why it is waiting."""
+    from app.jobs import MODEL_DOWN
+    from docproof.providers import ProviderResult
+
+    class Broke:
+        name = "broke"
+        calls = 0
+
+        def complete_structured(self, **kw):
+            Broke.calls += 1
+            return ProviderResult(stop_reason="error",
+                                  error="429: You exceeded your current quota")
+
+    monkeypatch.setattr("app.jobs.build_provider",
+                        lambda cfg, api_key=None: Broke())
+    monkeypatch.setattr("app.jobs.get_api_key", lambda p: "test-key")
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")),
+                        docx=MANUSCRIPT)
+
+    report = run(tmp_path, ws, opener)
+
+    assert Broke.calls == 1                          # stopped at once
+    assert report.prepped == [] and report.failed == []
+    assert report.model_down and report.model_down[0][0] == "Wolves.docx"
+    assert "quota" in report.model_down[0][1]
+    assert report.waiting == 1
+    assert uploads_in(opener) == {}                  # nothing in the folder
+    assert STATE_PROP not in opener.files["f-1"]["appProperties"]
+    rec = WatchState.load(tmp_path / "state.json").get("f-1")
+    assert rec.attempts == 0                         # not counted against it
+    job = JobStore(Paths(tmp_path)).get(rec.job_id)
+    assert job.state == "failed" and job.error_kind == MODEL_DOWN
+
+
+def test_once_the_model_is_back_the_same_job_is_finished(tmp_path, ws,
+                                                          monkeypatch, provider):
+    """The next pass picks the failed job up again rather than starting a
+    second one — the checkpoint holds whatever was answered."""
+    from app.jobs import MODEL_DOWN, Job
+    from app.watch.state import FileRecord
+
+    source = tmp_path / "Wolves.docx"
+    source.write_bytes(MANUSCRIPT)
+    store = JobStore(Paths(tmp_path).ensure())
+    store.save(Job(id="stalled", filename="Wolves.docx", source_path=str(source),
+                   model=ws.model, mode="now", kind="prep", state="failed",
+                   error="The model refused the request (429: quota).",
+                   error_kind=MODEL_DOWN))
+    state = WatchState(tmp_path / "state.json")
+    state.record(FileRecord(file_id="f-1", name="Wolves.docx", job_id="stalled"))
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")),
+                        docx=MANUSCRIPT)
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.ok and report.prepped == ["Wolves.docx"]
+    rec = WatchState.load(tmp_path / "state.json").get("f-1")
+    assert rec.job_id == "stalled"
+    assert store.get("stalled").state == "done"
+    assert opener.files["f-1"]["appProperties"][STATE_PROP] == FORMATTED
+
+
 # --- the ordinary case --------------------------------------------------------
 
 def test_a_new_manuscript_is_prepared_uploaded_and_marked(tmp_path, ws,

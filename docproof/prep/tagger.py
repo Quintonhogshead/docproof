@@ -27,9 +27,57 @@ log = logging.getLogger("docproof.prep.tagger")
 
 TAGGING_FILE = "tagging.yaml"
 
+# When the model has stopped answering, the run stops too — it does not label
+# the rest of the book "body" and ship it. Two tells, either one enough:
+#
+# - `ERROR_STREAK`: this many provider errors in a row. One failed window is
+#   halved and retried, as it always was; a dozen in a row is an account that
+#   is out of credit or a key that no longer works, and halving a window can
+#   not fix either. A 39,000-word book once spent two hours and 2,717 calls
+#   discovering that, one paragraph at a time.
+# - `MAX_UNANSWERED_SHARE`: however the run went, a book with this share of
+#   its paragraphs unlabelled is not a formatted book. A healthy run leaves a
+#   handful unanswered at most.
+ERROR_STREAK = 8
+MAX_UNANSWERED_SHARE = 0.25
+
+# Provider errors that mean the account, not the window: the run stops on the
+# first one. Everything else (a 500, a timeout, an answer that did not parse)
+# keeps the old halve-and-retry, because the next call may well succeed.
+_ACCOUNT_STATUSES = ("401", "402", "403")
+_ACCOUNT_TELLS = ("insufficient_quota", "quota", "billing", "credit",
+                  "invalid_api_key", "api key", "authentication")
+
 
 class TaggingPromptError(Exception):
     """A tagging prompt file that cannot be used."""
+
+
+class ModelUnavailable(RuntimeError):
+    """The model stopped answering, so the manuscript was not labelled.
+
+    Raised rather than absorbed: every unanswered paragraph used to become
+    "body, flagged", which is the right reading for one window nobody could
+    label and the wrong one for a whole book — that run finished "done", at
+    $0, with every paragraph flagged, and was uploaded to the author's folder.
+    The windows already answered are in the checkpoint; a retry once the
+    account is back replays them for nothing."""
+
+    def __init__(self, reason: str, *, answered: int = 0, unanswered: int = 0):
+        super().__init__(reason)
+        self.reason = reason
+        self.answered = answered
+        self.unanswered = unanswered
+
+
+def is_account_error(error: str | None) -> bool:
+    """Whether a provider error says the account is the problem — no credit,
+    no key, no permission — rather than this one request."""
+    text = (error or "").strip().lower()
+    # The providers format an HTTP failure as "<status>: <message>".
+    if text.split(":", 1)[0].strip() in _ACCOUNT_STATUSES:
+        return True
+    return any(tell in text for tell in _ACCOUNT_TELLS)
 
 
 @dataclass(frozen=True)
@@ -146,6 +194,8 @@ class Tagger:
         self.system_prompt = prompt.render(sheet)
         self.output_model = build_output_model(sheet.model_choices)
         self.schema = strict_json_schema(self.output_model)
+        self._errors_in_a_row = 0
+        self._last_error = ""
 
 
     def plan_windows(self, structure: Structure) -> list[Window]:
@@ -167,6 +217,8 @@ class Tagger:
         planned = self.plan_windows(structure)
         assigned: dict[str, str] = {}
         tags: list[Tag] = []
+        self._errors_in_a_row = 0
+        self._last_error = ""
         for done, window in enumerate(planned, start=1):
             key = f"w{window.index}"
             cached = checkpoint.get(key) if checkpoint else None
@@ -180,14 +232,28 @@ class Tagger:
                 before = snapshot(usage)
                 fresh = self._tag_window(window, assigned, usage)
                 tags.extend(fresh)
-                if checkpoint:
+                # Only an answered window is worth keeping: a retry should
+                # ask again about paragraphs the model left out, not replay
+                # the silence. This is what lets a run stopped by
+                # `ModelUnavailable` resume without carrying its defaults.
+                answered = all(t.source != "unanswered" for t in fresh)
+                if checkpoint and answered:
                     checkpoint.put(
                         key,
                         items=[dataclasses.asdict(t) for t in fresh],
                         usage=usage_delta(before, usage), ok=True)
             if progress:
                 progress(done, len(planned))
-        return self._order(tags, structure)
+        ordered = self._order(tags, structure)
+        unanswered = sum(1 for t in ordered if t.source == "unanswered")
+        if ordered and unanswered / len(ordered) > MAX_UNANSWERED_SHARE:
+            raise ModelUnavailable(
+                f"The model left {unanswered} of {len(ordered)} paragraphs "
+                f"unlabelled" + (f" (last error: {self._last_error})"
+                                 if self._last_error else "")
+                + ". The manuscript was not formatted.",
+                answered=len(ordered) - unanswered, unanswered=unanswered)
+        return ordered
 
 
     def _tag_window(self, window: Window, assigned: dict[str, str],
@@ -238,15 +304,37 @@ class Tagger:
         )
         usage.add(result.usage, model=self.model)
         if result.stop_reason != "ok" or result.parsed is None:
-            log.error("Window %d: %s", window.index,
-                      result.error or result.stop_reason)
+            error = result.error or result.stop_reason
+            log.error("Window %d: %s", window.index, error)
+            self._note_error(error)
             return None
         try:
-            return self.output_model.model_validate(result.parsed)
+            parsed = self.output_model.model_validate(result.parsed)
         except ValidationError as e:
             log.error("Window %d: the answer did not match the label schema: %s",
                       window.index, e)
+            self._note_error(f"the answer did not match the label schema: {e}")
             return None
+        self._errors_in_a_row = 0
+        return parsed
+
+    def _note_error(self, error: str) -> None:
+        """One more call the model did not answer. An account-level error
+        stops the run at once; anything else stops it after `ERROR_STREAK`
+        in a row, which is when halving windows has stopped being a retry
+        and become a way of asking the same dead account 2,000 times."""
+        self._last_error = error
+        self._errors_in_a_row += 1
+        if is_account_error(error):
+            raise ModelUnavailable(
+                f"The model refused the request ({error}). Check the "
+                f"provider's account and credit; the manuscript was not "
+                f"formatted and will be retried.")
+        if self._errors_in_a_row >= ERROR_STREAK:
+            raise ModelUnavailable(
+                f"The model failed {self._errors_in_a_row} requests in a row "
+                f"(last: {error}). The manuscript was not formatted and will "
+                f"be retried.")
 
     def _unanswered(self, window: Window,
                     assigned: dict[str, str]) -> list[Tag]:

@@ -41,7 +41,7 @@ from .drive import AuthExpired, DriveError
 from .schedule import ScheduleError
 from .hubspot import HubSpotAuthError, HubSpotError
 from .settings import WatchSettings
-from .state import last_tick
+from .state import last_tick, note_pass
 from .status import missing
 
 log = logging.getLogger("docproof.app.watch.runner")
@@ -257,6 +257,12 @@ class WatchRunner:
             out.failed = report.failed
             out.ok = report.ok
         out.finished_at = _now()
+        # On disk as well as in memory. A scheduled pass on a server that
+        # failed at three in the morning used to leave nothing but a
+        # `last_tick` stamp: the reason lived in this process and in a log
+        # buffer that was gone by breakfast. Now `status` can say what
+        # happened without anyone having been there to watch.
+        note_pass(self.home, _outcome(out))
         with self._mutex:
             self._last = out
             if not _claimed:

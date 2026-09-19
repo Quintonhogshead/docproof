@@ -38,6 +38,11 @@ from docproof.prep.convert import ConversionError
 # `Job.error_kind` for a prep job whose file was turned away at the door — a
 # deterministic refusal the watcher must not spend retries on.
 REFUSED = "refused"
+# `Job.error_kind` for a prep job the model stopped answering — an account out
+# of credit, a key that no longer works. Nothing about the file: the watcher
+# leaves it unmarked and tries again on the next pass, and the checkpoint
+# replays whatever was answered before the account gave out.
+MODEL_DOWN = "model_unavailable"
 from docproof.prep.styles import StyleSheetError
 from docproof.prep.verify import VerificationFailed
 from docproof.promo import PromoError, PromoTooLarge
@@ -1596,6 +1601,15 @@ class JobRunner:
                                       checkpoint=checkpoint, progress=progress)
         except JobCancelled:
             self._abort(job_id)
+            return
+        except preplib.ModelUnavailable as e:
+            # The model stopped answering partway. Nothing is written: a book
+            # labelled "body" throughout with every paragraph flagged is not a
+            # formatted book, however cleanly it verifies. The checkpoint
+            # keeps the windows that were answered.
+            log.error("Prep for %s stopped: %s", job_id, e)
+            self.store.update(job_id, state="failed", error=str(e),
+                              error_kind=MODEL_DOWN)
             return
         # The book output's three facts: whatever the operator typed wins,
         # field by field; the detector fills the rest with one small call. A

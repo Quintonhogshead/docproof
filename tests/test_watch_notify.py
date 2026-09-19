@@ -123,6 +123,21 @@ def test_the_summary_names_the_needs_human_and_the_failed():
     assert "could not format" in body and "docproof-watch clear" in body
 
 
+def test_the_summary_says_when_the_model_stopped_answering():
+    """An account out of credit is a person's to fix, so it leads the mail
+    and says what was NOT uploaded."""
+    report = TickReport()
+    report.model_down.append(("Hampton - Book Original",
+                              "The model refused the request (429: quota)."))
+
+    subject, body = notify.summary(report)
+
+    assert "1" in subject
+    assert "stopped answering" in body and "credit" in body
+    assert "Hampton - Book Original" in body and "429: quota" in body
+    assert "nothing was uploaded" in body
+
+
 def test_the_summary_names_a_ready_author_missing_its_book_original():
     report = TickReport()
     report.missing_source.append(

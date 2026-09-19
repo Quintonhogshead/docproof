@@ -16,6 +16,7 @@ from .model import Flag, ParagraphPlan, PrepPlan, Structure, Tag
 from .pipeline import (OUTPUT_KINDS, PrepOutputs, PreparedPrep, default_meta,
                        detect_meta, finish, merge_meta, prepare, run, run_mock)
 from .styles import StyleSheet, StyleSheetError, load_style_sheet
+from .tagger import ModelUnavailable
 from .verify import VerificationFailed
 
 __all__ = ["Flag", "ParagraphPlan", "PrepPlan", "Structure", "Tag",
