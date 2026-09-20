@@ -81,7 +81,7 @@ class Queue:
             return settings
 
     def add(self, job):
-        if not self.settings().get("enabled") or not job.is_prep or job.state != "done":
+        if not self.settings().get("enabled") or not job.is_prep or job.state not in ("running", "done"):
             return None
         source = Path(job.source_path)
         identity = digest({"job_id": job.id, "source_path": str(source.resolve())})[:32]
@@ -125,7 +125,19 @@ class Queue:
                 return None
             conn.execute("UPDATE tasks SET worker=?,lease=? WHERE id=?",
                          (worker, time.time() + LEASE_SECONDS, row["id"]))
-        return self.get(row["id"])
+        task = self.get(row["id"])
+        # Production v2 used one shared brief and a different writer. Restart only
+        # unfinished teaser work under the new contract; preserve its full audit.
+        if task.get("version") == 2:
+            task.setdefault("prior_workflows", []).append({k: task.get(k) for k in
+                ("version", "state", "storysheet", "drafts", "reviews", "feedback", "document_id", "document_url", "upload_session")})
+            for key in ("storysheet", "writer_brief", "writer_brief_story", "feedback", "resume_state",
+                        "writer_token_limit", "error", "generation_times", "document_id", "document_url", "upload_session"):
+                task.pop(key, None)
+            task.update(version=VERSION, drafts=[], reviews=[], progress="Preparing five individual fact sheets")
+            self.save(task, "queued")
+            task = self.get(task["id"])
+        return task
 
     def retry(self, task, error, *, delay=None, resume=None):
         task["failures"] = task.get("failures", 0) + 1
@@ -178,7 +190,7 @@ class Queue:
         for row in rows:
             task = self.get(row["id"])
             item = {k: task.get(k) for k in ("id", "job_id", "book_label", "owner", "state",
-                    "progress", "error", "retry_at", "document_url")}
+                    "progress", "error", "retry_at", "document_url", "guide_url", "folder_url")}
             path = self.root / (task["id"] + ".progress.json")
             if path.exists() and task["state"] in STATES:
                 try:
@@ -208,7 +220,7 @@ def accept_story(queue, task, raw):
     if task["state"] != "queued":
         raise TeaserError("This task is not waiting for a storysheet.")
     task["storysheet"] = story.model_dump()
-    task["progress"] = "Sol's finished copy is ready for Qwen to rephrase"
+    task["progress"] = "Sol's selected facts are ready for the teaser writer"
     queue.save(task, "story_ready")
     return queue.get(task["id"])
 
@@ -218,6 +230,9 @@ def generate_draft(queue, task, *, provider=None):
         return task
     if task["state"] != "story_ready":
         raise TeaserError("This task cannot generate another draft.")
+    if task.get("version", 1) == 3:
+        from app.teaser_writer import generate
+        return generate(queue, task, provider=provider)
     story = Storysheet.model_validate(task["storysheet"])
     if not story.writer_brief.public_setup or not current_writer_brief(task).author_copy.teasers:
         task.setdefault("prior_storysheets", []).append(task.pop("storysheet"))
@@ -426,6 +441,6 @@ def accept_writer_brief(queue, task, raw):
     task["writer_brief"] = brief.model_dump()
     task["writer_brief_story"] = digest(task["storysheet"])
     task["writer_brief_review"] = raw["review_sha256"]
-    task["progress"] = "Sol's corrected copy is ready for Qwen to rephrase"
+    task["progress"] = "Sol's corrected brief is ready for the teaser writer"
     queue.save(task, "story_ready")
     return queue.get(task["id"])

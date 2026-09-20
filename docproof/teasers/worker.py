@@ -31,7 +31,7 @@ class Client:
 
     def call(self, action, task_id="", payload=None):
         request = urllib.request.Request(self.url + "/api/teasers/worker", method="POST",
-            data=json.dumps({"action": action, "worker": self.worker,
+            data=json.dumps({"protocol": 3, "action": action, "worker": self.worker,
                             "task_id": task_id, "payload": payload or {}}).encode(),
             headers={"Authorization": "Bearer " + self.token, "Content-Type": "application/json"})
         try:
@@ -75,7 +75,8 @@ def process(task, client, home, *, runner=None):
     try:
         if task["state"] == "queued":
             story = pipeline.analyze(task["chunks"], work, runner=runner, progress=progress,
-                                     feedback=task.get("feedback"), attempt=task.get("failures", 0))
+                                     feedback=task.get("feedback"), attempt=task.get("failures", 0),
+                                     public_briefs=task.get("version", 1) == 3)
             task = client.call("story", task["id"], story.model_dump())["task"]
         while task["state"] in ("brief_ready", "story_ready", "drafted", "approved"):
             if task["state"] == "brief_ready":
@@ -86,7 +87,7 @@ def process(task, client, home, *, runner=None):
                     "draft_sha256": task["drafts"][-1]["sha256"],
                     "review_sha256": digest(Review.model_validate(task["reviews"][-1]))})["task"]
             elif task["state"] == "story_ready":
-                progress("Qwen is rephrasing Sol's finished teasers and guide")
+                progress("Writing five distinct teasers from Sol's selected facts")
                 task = client.call("draft", task["id"])["task"]
             elif task["state"] == "drafted":
                 story = Storysheet.model_validate(task["storysheet"])

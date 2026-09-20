@@ -27,6 +27,7 @@ class SettingsUpdate(BaseModel):
 
 
 class WorkerMessage(BaseModel):
+    protocol: int = 2
     action: Literal["poll", "heartbeat", "story", "brief", "draft", "review", "deliver", "error"]
     worker: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
     task_id: str = Field(default="", max_length=32, pattern=r"^[a-f0-9]*$")
@@ -43,7 +44,7 @@ def recover_new_jobs(app, queue):
     stores = [app.state.store, JobStore(Paths(Path(app.state.watch.home)).ensure())]
     for store in stores:
         for job in store.all():
-            if job.is_prep and job.state == "done" and job.created_at >= since:
+            if job.is_prep and job.state in ("running", "done") and job.created_at >= since:
                 teasers.enqueue_completed(app.state.watch.home, job)
 
 
@@ -51,6 +52,8 @@ def dispatch(app, message):
     home = app.state.watch.home
     queue = teasers.Queue(home)
     if message.action == "poll":
+        if message.protocol < 3:
+            return {"task": None, "upgrade_required": True}
         queue.recover()
         recover_new_jobs(app, queue)
         return {"task": queue.claim(message.worker)}

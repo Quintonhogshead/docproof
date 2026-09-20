@@ -26,7 +26,16 @@ class Reading(Record):
     source_limitations: list[str]
 
 
+class OptionBrief(Record):
+    number: int
+    angle: str
+    # Only facts selected for this particular public teaser; never exclusions.
+    facts: list[str]
+    direction: str
+
+
 class WriterBrief(Record):
+    option_briefs: list[OptionBrief] = Field(default_factory=list)
     title: str = ""
     author: str = ""
     public_setup: str = ""
@@ -77,6 +86,7 @@ class Element(Record):
 
 
 class Draft(Record):
+    version: int = 1
     teasers: list[Teaser]
     opening_hooks: list[str]
     editorial_note: str
@@ -139,7 +149,15 @@ class Review(Record):
 def digest(value) -> str:
     if isinstance(value, BaseModel):
         value = value.model_dump()
-    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+    # Preserve hashes for queued version-one packages written before these fields existed.
+    def canonical(item):
+        if isinstance(item, dict):
+            return {k: canonical(v) for k, v in item.items()
+                    if not (k == "version" and v == 1) and not (k == "option_briefs" and v == [])}
+        if isinstance(item, list):
+            return [canonical(v) for v in item]
+        return item
+    return hashlib.sha256(json.dumps(canonical(value), sort_keys=True, ensure_ascii=False,
                                      separators=(",", ":")).encode()).hexdigest()
 
 
@@ -147,13 +165,14 @@ def word_count(text: str) -> int:
     return len(re.findall(r"\b[\w]+(?:[’'−-][\w]+)*\b", text))
 
 
-def teaser_issues(teaser: Teaser) -> list[str]:
+def teaser_issues(teaser: Teaser, *, version: int = 1) -> list[str]:
     issues = []
     text = "\n\n".join(teaser.paragraphs)
-    if not 2 <= len(teaser.paragraphs) <= 4 or any(not p.strip() for p in teaser.paragraphs):
-        issues.append(f"Option {teaser.number} needs two to four nonempty paragraphs.")
-    if not 140 <= word_count(text) <= 190:
-        issues.append(f"Option {teaser.number} has {word_count(text)} words; use 140–190.")
+    if (len(teaser.paragraphs) != 3 if version == 2 else not 2 <= len(teaser.paragraphs) <= 4) or any(not p.strip() for p in teaser.paragraphs):
+        issues.append(f"Option {teaser.number} needs {'three' if version == 2 else 'two to four'} nonempty paragraphs.")
+    low, high = (150, 200) if version == 2 else (140, 190)
+    if not low <= word_count(text) <= high:
+        issues.append(f"Option {teaser.number} has {word_count(text)} words; use {low}–{high}.")
     if not teaser.angle.strip():
         issues.append(f"Option {teaser.number} needs an accurate angle label.")
     return issues
@@ -170,7 +189,9 @@ def draft_issues(draft: Draft) -> list[str]:
         if key in normalized:
             issues.append(f"Option {t.number} duplicates another option.")
         normalized.add(key)
-        issues.extend(teaser_issues(t))
+        issues.extend(teaser_issues(t, version=draft.version))
+    if draft.version == 2:
+        return issues
     if len(draft.opening_hooks) != 3 or any(not 5 <= word_count(h) <= 18 for h in draft.opening_hooks):
         issues.append("Supply three opening hooks, each 5–18 words.")
     if not draft.editorial_note.strip() or word_count(draft.editorial_note) > 180:

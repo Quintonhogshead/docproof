@@ -76,11 +76,12 @@ def evidence_for(facts, source_chunks):
     return [paragraphs[i] for i in sorted(ids)]
 
 
-def analyze(source_chunks, work, *, runner=None, progress=lambda stage: None, feedback=None, attempt=0):
-    candidate_path = Path(work) / "prepared-copy.json"
+def analyze(source_chunks, work, *, runner=None, progress=lambda stage: None, feedback=None, attempt=0, public_briefs=False):
+    candidate_path = Path(work) / ("prepared-briefs.json" if public_briefs else "prepared-copy.json")
     if candidate_path.exists():
         candidate = json.loads(candidate_path.read_text())
-        if candidate["source_sha256"] == digest(source_chunks):
+        if (candidate["source_sha256"] == digest(source_chunks) and
+                (not public_briefs or candidate.get("feedback_sha256") == digest(feedback))):
             story = Storysheet.model_validate(candidate["story"])
             validate_story(story, source_chunks)
             return approve_prepared_copy(story, candidate["evidence"], source_chunks, work,
@@ -102,15 +103,20 @@ def analyze(source_chunks, work, *, runner=None, progress=lambda stage: None, fe
         readings.append(reading)
     evidence = (evidence_for([f for r in readings for f in r.facts], source_chunks)
                 if readings else source_chunks[0]["paragraphs"])
-    progress("Sol is writing five complete teasers and the author guide")
-    prompt = prompts.story_prompt([r.model_dump() for r in readings], evidence, feedback)
+    progress("Sol is selecting facts for five distinct teaser angles" if public_briefs else "Sol is preparing author copy")
+    if public_briefs:
+        from .facts import story_prompt
+    else:
+        story_prompt = prompts.story_prompt
+    prompt = story_prompt([r.model_dump() for r in readings], evidence, feedback)
     story = sol(prompt, Storysheet, work, "story-" + digest(prompt), runner=runner,
                 attempt=attempt, validate=lambda value: validate_story(value, source_chunks))
     # Save finished writing before its copy edit; retries must not rewrite it all.
     candidate_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = candidate_path.with_suffix(".tmp")
     temporary.write_text(json.dumps({"source_sha256": digest(source_chunks),
-                                    "story": story.model_dump(), "evidence": evidence}))
+                                    "story": story.model_dump(), "evidence": evidence,
+                                    "feedback_sha256": digest(feedback)}))
     temporary.replace(candidate_path)
     return approve_prepared_copy(story, evidence, source_chunks, work, runner=runner,
         progress=progress, attempt=attempt, candidate_path=candidate_path)
@@ -118,6 +124,9 @@ def analyze(source_chunks, work, *, runner=None, progress=lambda stage: None, fe
 
 def approve_prepared_copy(story, evidence, source_chunks, work, *, runner=None,
                           progress=lambda stage: None, attempt=0, candidate_path=None):
+    if story.writer_brief.option_briefs:
+        from .facts import approve_brief
+        return approve_brief(story, evidence, source_chunks, work, runner=runner, attempt=attempt)
     progress("Sol is checking and correcting its finished copy before rephrasing")
     brief_hash = digest(story.writer_brief)
     prompt = prompts.brief_review_prompt(story.model_dump(), evidence, brief_hash)
@@ -163,6 +172,10 @@ def validate_writer_brief(brief):
             any(not getattr(brief, name).strip() for name in ("public_setup", "reader_promise",
                 "central_pressure", "stakes", "genre_and_audience", "voice", "writing_instructions"))):
         raise ValueError("The public-only writing brief is incomplete.")
+    if brief.option_briefs:
+        from .facts import validate_brief
+        validate_brief(brief)
+        return
     if not brief.author_copy.teasers:
         raise ValueError("Sol must write the complete author copy before Qwen can rephrase it.")
     issues = draft_issues(brief.author_copy)
@@ -174,7 +187,11 @@ def revise_writer_brief(story, previous, feedback, source_chunks, work, *, runne
                         progress=lambda stage: None, attempt=0):
     evidence = (source_chunks[0]["paragraphs"] if len(source_chunks) == 1
                 else evidence_for(story.public_facts, source_chunks))
-    prompt = prompts.revise_brief_prompt(story.model_dump(), previous.model_dump(), feedback, evidence)
+    if previous.option_briefs:
+        from .facts import revise_prompt
+        prompt = revise_prompt(story.model_dump(), previous.model_dump(), feedback, evidence)
+    else:
+        prompt = prompts.revise_brief_prompt(story.model_dump(), previous.model_dump(), feedback, evidence)
     progress("Sol is correcting the finished copy before rephrasing")
     def validate(brief):
         validate_writer_brief(brief)
@@ -200,7 +217,11 @@ def review(story, draft, source_chunks, work, *, runner=None,
                     attempt=attempt, validate=validate_check)
         checks.append(check.model_dump())
     progress("Reviewing all five options and author guidance")
-    prompt = prompts.review_prompt(story.model_dump(), draft.model_dump(), checks,
+    if draft.version == 2:
+        from .facts import review_prompt
+    else:
+        review_prompt = prompts.review_prompt
+    prompt = review_prompt(story.model_dump(), draft.model_dump(), checks,
                                    draft_issues(draft), draft_hash,
                                    source_chunks=source_chunks if len(source_chunks) == 1 else None)
     def validate_final(result):

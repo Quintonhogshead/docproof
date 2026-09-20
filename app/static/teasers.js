@@ -30,8 +30,16 @@
           link.href = job.document_url;
           link.target = '_blank';
           link.rel = 'noopener noreferrer';
-          link.textContent = 'Open five teasers and editing guide';
+          link.textContent = 'Open five teasers';
           row.append(link);
+          if (job.guide_url && /^https:\/\/(drive|docs)\.google\.com\//.test(job.guide_url)) {
+            const guide = document.createElement('a');
+            guide.href = job.guide_url;
+            guide.target = '_blank';
+            guide.rel = 'noopener noreferrer';
+            guide.textContent = 'Open two-page dos and donts';
+            row.append(document.createTextNode(' · '), guide);
+          }
         } else {
           row.append(document.createTextNode(job.progress || 'Waiting for cloud processing'));
         }

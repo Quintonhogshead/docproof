@@ -90,7 +90,11 @@ def queued(tmp_path):
     queue = Queue(tmp_path / "watch")
     queue.configure(enabled=True)
     queue.add(job)
-    return queue, job, queue.claim("worker")
+    task = queue.claim("worker")
+    # These regression cases exercise already queued version-one packages.
+    task["version"] = 1
+    queue.save(task)
+    return queue, job, task
 
 
 def drafted(queued, story, draft):
@@ -660,7 +664,7 @@ def test_worker_path_authenticates_and_settings_stay_private(tmp_path, monkeypat
         assert client.get("/api/teasers").status_code == 401
         assert client.put("/api/teasers/settings", json={"enabled": True}).status_code == 401
         response = client.post("/api/teasers/worker", headers={"Authorization": "Bearer secret-long-enough-for-the-agent-gate"},
-                               json={"action": "poll", "worker": "fly-test"})
+                               json={"protocol": 3, "action": "poll", "worker": "fly-test"})
         assert response.status_code == 200, response.text
         assert response.json() == {"task": None}
 
