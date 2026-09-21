@@ -1608,9 +1608,12 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
           once. <code>docs/watch.md</code> walks through it, including which
           consent screen to pick.</p>
         <p class="muted small" id="watch-client-web" hidden>On the web, use a
-          <strong>Web application</strong> client and add this app's
-          <code>/api/watch/auth/callback</code> address as an authorized
-          redirect URI.</p>
+          <strong>Web application</strong> client (a Desktop app client cannot
+          be given a redirect address) and add this exact address under its
+          authorized redirect URIs:
+          <code id="watch-redirect-uri">/api/watch/auth/callback</code>.
+          Signing in checks this with Google first and says what to add if it
+          would be refused.</p>
         <label class="field">
           <span>Client ID</span>
           <input type="text" id="watch-client-id"
