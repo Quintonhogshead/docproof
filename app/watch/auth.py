@@ -13,11 +13,15 @@ flow can be exercised without a socket.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import http.server
 import logging
 import os
+import re
 import secrets
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -239,6 +243,58 @@ def web_consent(client_id: str, redirect_uri: str) -> tuple[str, str]:
     the browser to. The state is what the callback checks the answer against."""
     state = secrets.token_urlsafe(24)
     return state, consent_url(client_id, redirect_uri, state)
+
+
+ERROR_PATH = "/signin/oauth/error"
+PREFLIGHT_TIMEOUT = 15
+
+
+def preflight_consent(url: str, *, opener=drive._open_url) -> str | None:
+    """Ask Google, before the browser does, whether it will take this request.
+
+    Google checks the client and the redirect against the OAuth client's
+    settings before it asks anyone to sign in, and a request it will not take
+    lands on `/signin/oauth/error` with the reason in the query — the same
+    "Access blocked: this app's request is invalid" page a person sees, which
+    names `redirect_uri_mismatch` but never the redirect it was sent. So the
+    server fetches the consent page itself first and reads the reason off the
+    landing address, and the panel can say "add this exact address to the
+    client" rather than sending somebody to Google to be refused.
+
+    Returns Google's reason (`redirect_uri_mismatch`, `invalid_client`, …) or
+    None when there is nothing to refuse. Anything else — a timeout, a network
+    that cannot reach Google, a page that is not the error page — is None too:
+    this is a courtesy, not a gate, and the browser can always be the judge."""
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "Mozilla/5.0 (DocProof preflight)"})
+    try:
+        try:
+            answer = opener(request, PREFLIGHT_TIMEOUT)
+            landed = answer.geturl()
+        except urllib.error.HTTPError as e:
+            landed = e.geturl() or ""
+    except Exception as e:                # noqa: BLE001 - never in the way
+        log.info("Could not preflight the Google consent page (%s)", e)
+        return None
+    parts = urllib.parse.urlsplit(landed or "")
+    if not parts.path.endswith(ERROR_PATH):
+        return None
+    raw = urllib.parse.parse_qs(parts.query).get("authError", [""])[0]
+    return _error_reason(raw) or "unknown"
+
+
+def _error_reason(raw: str) -> str:
+    """The reason inside `authError`: a base64url protobuf whose first field
+    is the OAuth error code as plain text."""
+    if not raw:
+        return ""
+    try:
+        padded = raw + "=" * (-len(raw) % 4)
+        decoded = base64.urlsafe_b64decode(padded).decode("latin-1")
+    except (ValueError, binascii.Error):
+        return ""
+    found = re.findall(r"[a-z][a-z_]{4,}", decoded)
+    return found[0] if found else ""
 
 
 def token_source(get_key, has_client: bool) -> dict:

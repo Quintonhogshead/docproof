@@ -36,6 +36,8 @@ from app.settings import Paths
 from . import auth as authlib
 from . import corrections
 from . import daily
+from . import notify
+from . import settings as settingslib
 from . import tick as ticklib
 from .drive import AuthExpired, DriveError
 from .schedule import ScheduleError
@@ -119,6 +121,14 @@ class WatchRunner:
         # from firing for a time already past today, and a fresh start re-arming
         # to "now" costs at most a slightly late first pass, never a repeat.
         self._armed_at: datetime | None = None
+        # Other Google sign-ins this process knows, as (client id, client
+        # secret, refresh token) triples: on the hosted app the one the fly
+        # secrets hold, set by main.py at boot. Used for one thing — sending
+        # the "your sign-in died" email when the sign-in that would normally
+        # carry it is the one that died. On the desktop build there is none,
+        # and the panel is where the death shows.
+        self.fallback_google: list[tuple[str, str, str]] = []
+        self.web = False
 
 
     def start(self) -> None:
@@ -257,6 +267,7 @@ class WatchRunner:
             out.failed = report.failed
             out.ok = report.ok
         out.finished_at = _now()
+        self._alert_on_dead_sign_in(ws, out)
         # On disk as well as in memory. A scheduled pass on a server that
         # failed at three in the morning used to leave nothing but a
         # `last_tick` stamp: the reason lived in this process and in a log
@@ -268,6 +279,23 @@ class WatchRunner:
             if not _claimed:
                 self._running = False
         return out
+
+    def _alert_on_dead_sign_in(self, ws: WatchSettings,
+                               out: TickOutcome) -> None:
+        """A pass that died on the sign-in emails the owner, once a day, over
+        whichever other sign-in still works; a pass that got through resets
+        that clock. Either way it never touches the pass's own outcome."""
+        try:
+            if out.error_kind == "auth_expired":
+                current = tuple(settingslib.google_environment())
+                fallbacks = [t for t in self.fallback_google
+                             if all(t) and tuple(t) != current]
+                notify.sign_in_dead(self.home, ws, out.error,
+                                    fallbacks=fallbacks, web=self.web)
+            elif out.ok and not out.skipped:
+                notify.clear_sign_in_alert(self.home)
+        except Exception:                  # noqa: BLE001 - never a second failure
+            log.warning("Could not send the dead-sign-in alert", exc_info=True)
 
     def preview(self) -> ticklib.TickReport:
         """What a pass would do. Synchronous, and claims nothing.

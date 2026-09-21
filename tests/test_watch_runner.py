@@ -547,3 +547,103 @@ def test_a_failed_pass_records_its_kind_and_reason(runner, tmp_path):
 
 def test_no_pass_yet_is_none(tmp_path):
     assert last_pass(tmp_path) is None
+
+
+# --- the sign-in dying is emailed, over a sign-in that still works ------------
+
+def _sent_via(monkeypatch):
+    """Stub the two Google calls the alert makes; record what went out."""
+    from app.watch import drive, notify
+    sent = []
+    refreshed = []
+    monkeypatch.setattr(drive, "refresh_access_token",
+                        lambda cid, cs, rt, **k: refreshed.append(cid) or "access")
+    monkeypatch.setattr(notify, "send",
+                        lambda token, to, subject, body, **k: sent.append(
+                            (to, subject, body)))
+    return sent, refreshed
+
+
+def _dead(runner):
+    def expired(home, ws, **kw):
+        raise AuthExpired("Google no longer accepts the saved sign-in.")
+    runner._tick = expired
+
+
+def test_a_dead_sign_in_emails_the_owner_over_the_fallback(runner, monkeypatch):
+    from app.watch.settings import WatchSettings
+    ws = WatchSettings.load(runner.home)
+    ws.notify_email = "boss@press.com"
+    ws.save(runner.home)
+    sent, refreshed = _sent_via(monkeypatch)
+    runner.fallback_google = [("fly-id", "fly-secret", "fly-token")]
+    runner.web = True
+    _dead(runner)
+
+    out = runner.pass_once()
+
+    assert out.error_kind == "auth_expired"
+    assert refreshed == ["fly-id"]            # the fallback, not the dead one
+    (to, subject, body), = sent
+    assert to == "boss@press.com"
+    assert "[High][Action]" in subject and "stopped working" in subject
+    assert "no longer accepts" in body and "Sign in to Google" in body
+    assert "fallback sign-in" in body
+
+
+def test_the_alert_is_sent_once_a_day_not_once_a_pass(runner, monkeypatch):
+    from app.watch import notify
+    from app.watch.settings import WatchSettings
+    ws = WatchSettings.load(runner.home)
+    ws.notify_email = "boss@press.com"
+    ws.save(runner.home)
+    sent, _ = _sent_via(monkeypatch)
+    runner.fallback_google = [("fly-id", "fly-secret", "fly-token")]
+    _dead(runner)
+
+    runner.pass_once()
+    runner.pass_once()
+    assert len(sent) == 1
+    # A day later it is worth saying again.
+    from datetime import datetime, timedelta, timezone
+    later = datetime.now(timezone.utc) + timedelta(hours=25)
+    assert notify.sign_in_alert_due(runner.home, now=later)
+    # A pass that gets through resets the clock entirely.
+    runner._tick = lambda home, ws, **kw: TickReport()
+    runner.pass_once()
+    assert notify.sign_in_alert_due(runner.home)
+
+
+def test_no_fallback_means_no_email_and_no_crash(runner, monkeypatch):
+    from app.watch.settings import WatchSettings
+    ws = WatchSettings.load(runner.home)
+    ws.notify_email = "boss@press.com"
+    ws.save(runner.home)
+    sent, refreshed = _sent_via(monkeypatch)
+    _dead(runner)
+
+    out = runner.pass_once()
+
+    assert out.error_kind == "auth_expired" and not sent and not refreshed
+
+
+def test_a_fallback_that_is_the_dead_sign_in_itself_is_not_tried(runner,
+                                                                monkeypatch):
+    """On the hosted app the environment holds whichever sign-in is current;
+    when that is the fly secrets themselves, they are what died."""
+    import os
+    from app.watch.settings import (CLIENT_ID_ENV, CLIENT_SECRET_ENV,
+                                    REFRESH_TOKEN_ENV, WatchSettings)
+    ws = WatchSettings.load(runner.home)
+    ws.notify_email = "boss@press.com"
+    ws.save(runner.home)
+    sent, refreshed = _sent_via(monkeypatch)
+    for name, value in ((CLIENT_ID_ENV, "fly-id"), (CLIENT_SECRET_ENV, "fly-secret"),
+                        (REFRESH_TOKEN_ENV, "fly-token")):
+        monkeypatch.setenv(name, value)
+    runner.fallback_google = [("fly-id", "fly-secret", "fly-token")]
+    _dead(runner)
+
+    runner.pass_once()
+
+    assert not refreshed and not sent

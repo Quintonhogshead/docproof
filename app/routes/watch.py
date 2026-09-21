@@ -452,6 +452,41 @@ def register(app: FastAPI) -> None:
         scheme = "http" if local else "https"
         return f"{scheme}://{host}/api/watch/auth/callback"
 
+    def refused_consent(reason: str, client_id: str,
+                        redirect_uri: str) -> str:
+        """Google's refusal, said with the fix in it.
+
+        Google's own page for this — "Access blocked: this app's request is
+        invalid, redirect_uri_mismatch" — names the error and not the address,
+        and its "error details" adds nothing. This names both. A client that
+        is the one the server's environment secrets hold gets a further word,
+        because that one was minted for the Mac watcher as a Desktop client,
+        and a Desktop client cannot be given a redirect address at all."""
+        tail = client_id[-14:]
+        env_client = (getattr(app.state, "google_env", None) or ("",))[0]
+        if reason == "redirect_uri_mismatch":
+            text = ("Google refused this sign-in before it started: the OAuth "
+                    f"client (ending {tail}) does not list this app's callback "
+                    "as an authorized redirect URI. In the Google Cloud "
+                    "console, open that client and add exactly: "
+                    f"{redirect_uri} — then try again. Nothing was saved.")
+            if env_client and client_id == env_client:
+                text += (" This is the client the server's environment secrets "
+                         "hold, made for the Mac's watcher as a Desktop app "
+                         "client, and a Desktop client cannot be given a "
+                         "redirect address. Make a new Web application client "
+                         "with that address and paste its id and secret here "
+                         "instead.")
+            return text
+        if reason == "invalid_client":
+            return ("Google does not recognise this OAuth client (ending "
+                    f"{tail}). Check the client id against the Google Cloud "
+                    "console; a deleted client reads this way too. Nothing "
+                    "was saved.")
+        return (f"Google refused this sign-in before it started ({reason}). "
+                f"The client ends {tail} and the redirect it was sent is "
+                f"{redirect_uri}. Nothing was saved.")
+
     def store_google_token(token: str, client_id: str,
                            client_secret: str) -> None:
         """Keep the refresh token the way the web build keeps every other key:
@@ -467,7 +502,7 @@ def register(app: FastAPI) -> None:
         app.state.keystore.set(GOOGLE_KEY, token)
         set_google_environment(client_id, client_secret, token)
 
-    def watch_payload() -> dict:
+    def watch_payload(request: Request | None = None) -> dict:
         watch: WatchRunner = app.state.watch
         signing = watch.sign_in_state()
         status = watchlib.status(watch.home, agent_path=watch.agent_path)
@@ -480,12 +515,18 @@ def register(app: FastAPI) -> None:
         # rides here rather than in `watchlib.status`, which has no runner to
         # read it off — it lives on the one `WatchRunner` this server holds.
         status["corrections_rehearsal"] = watch.last_rehearsal
-        return {
+        payload = {
             "watch": status,
             "run": watch.state(),
             "sign_in": asdict(signing) if signing else None,
             "can_schedule": sys.platform == "darwin",
         }
+        if app.state.web and request is not None:
+            # The exact address the OAuth client must list, so the panel can
+            # show it beside the fields rather than leaving a person to guess
+            # at what Google's "redirect_uri_mismatch" page will not say.
+            payload["redirect_uri"] = callback_uri(request)
+        return payload
 
     def watch_needs(ws: WatchSettings) -> None:
         """Refuse in the app's own words.
@@ -502,8 +543,8 @@ def register(app: FastAPI) -> None:
                                      "card on this screen.")
 
     @app.get("/api/watch", dependencies=[Depends(may_manage)])
-    def read_watch() -> dict:
-        return watch_payload()
+    def read_watch(request: Request) -> dict:
+        return watch_payload(request)
 
     @app.put("/api/watch", dependencies=[Depends(may_manage)])
     def write_watch(update: WatchUpdate) -> dict:
@@ -621,8 +662,8 @@ def register(app: FastAPI) -> None:
         return watch_payload()
 
     @app.get("/api/watch/auth", dependencies=[Depends(may_manage)])
-    def read_watch_auth() -> dict:
-        return watch_payload()
+    def read_watch_auth(request: Request) -> dict:
+        return watch_payload(request)
 
     @app.post("/api/watch/auth", dependencies=[Depends(may_manage)])
     def start_watch_auth(body: WatchAuth, request: Request) -> dict:
@@ -647,6 +688,10 @@ def register(app: FastAPI) -> None:
         if app.state.web:
             redirect_uri = callback_uri(request)
             state, url = authlib.web_consent(client_id, redirect_uri)
+            refused = authlib.preflight_consent(url)
+            if refused:
+                raise HTTPException(400, refused_consent(
+                    refused, client_id, redirect_uri))
             # Saved now so the callback — a bare GET from Google, carrying no
             # body — has the client to finish with. Unlike the desktop flow this
             # is safe before the token exists: the panel reads "signed in" from

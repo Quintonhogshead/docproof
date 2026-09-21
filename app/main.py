@@ -234,6 +234,11 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
                                      google_environment,
                                      set_google_environment)
         app.state.google_env = google_environment()
+        # The runner emails the owner if the sign-in dies, and the sign-in
+        # that died cannot carry that email — so it is told about the boot
+        # triple, the fly secrets, as the one to send it with instead.
+        watch.fallback_google = [tuple(app.state.google_env)]
+        watch.web = True
         stored_google = keystore.get(GOOGLE_KEY)
         if stored_google:
             signed_in = WatchSettings.load(wh)
