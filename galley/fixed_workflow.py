@@ -61,7 +61,7 @@ FRONTIER_QUESTION_CATEGORIES = frozenset({"fact_logic", "continuity", "structure
 # swap at one site, every other site of the same swap in the same
 # adjudication moves with it. The Wilder run (2026-09-14) applied OK -> okay
 # at one of the book's two "OK"s and left "Is everything OK?" standing.
-CONSISTENCY_CATEGORIES = frozenset({"term_consistency", "case_split"})
+CONSISTENCY_CATEGORIES = frozenset({"term_consistency", "case_split", "variant_spelling"})
 # A chapter or part label's number or style is mechanics the house corrects,
 # never an author question (Quinton, 2026-09-04): the code-generated
 # chapter_label rows are applied, and a screen's "query" on one is overruled.
@@ -393,6 +393,64 @@ def _overlaps(a, b):
     if a["start"] == a["end"] or b["start"] == b["end"]:
         return max(a["start"], b["start"]) <= min(a["end"], b["end"])
     return max(a["start"], b["start"]) < min(a["end"], b["end"])
+
+
+_RELATIVE_PRONOUNS = {"that": "which", "which": "that"}
+
+
+def _relative_swap(row):
+    """('that', 'which') for a row that swaps one relative pronoun for the
+    other and nothing else, else None."""
+    before, after = row.get("before", "").strip().lower(), row.get("replacement", "").strip().lower()
+    return (before, after) if _RELATIVE_PRONOUNS.get(before) == after else None
+
+
+def _comma_edit(row):
+    """+1 for a row that inserts a comma, -1 for one that deletes a comma
+    (each with nothing but whitespace changing besides), else 0."""
+    before, after = row.get("before", ""), row.get("replacement", "")
+    if before.strip() == "" and after.strip() == ",":
+        return 1
+    if before.strip() == "," and after.strip() == "":
+        return -1
+    return 0
+
+
+def contradictory_relative_swaps(rows, texts):
+    """The relative-pronoun swaps in `rows` whose premise another row of the
+    same batch removes, with the reason each is dropped.
+
+    "a marble pillar, that had been gashed" (Georgis, 2026-09-15): the typed
+    screen approved deleting the comma (the clause is restrictive) AND
+    swapping that -> which (the clause is nonrestrictive, "set off by a
+    comma"), and the book shipped "pillar which had been gashed". The two
+    edits are readings of one clause and cannot both hold. The comma edit is
+    kept: it is the smaller change, and the pronoun swap's own stated
+    premise is the comma it would sit behind. A comma deletion beside
+    which -> that, or an insertion beside that -> which, agrees with itself
+    and is left alone."""
+    dropped = {}
+    for row in rows:
+        swap = _relative_swap(row)
+        if swap is None:
+            continue
+        text = texts.get(row["para_id"], "")
+        for other in rows:
+            if other is row or other["para_id"] != row["para_id"]:
+                continue
+            comma = _comma_edit(other)
+            if not comma or other["end"] > row["start"]:
+                continue
+            if text[other["end"]:row["start"]].strip():
+                continue
+            if (comma < 0 and swap == ("that", "which")) or (comma > 0 and swap == ("which", "that")):
+                dropped[id(row)] = (row, (
+                    f"guard: the same batch {'removes' if comma < 0 else 'adds'} the comma before this "
+                    f"clause, which reads it as {'restrictive' if comma < 0 else 'nonrestrictive'}; the "
+                    f"{swap[0]} -> {swap[1]} swap reads it the other way. One clause cannot be both; the "
+                    f"comma edit stands and the pronoun keeps the author's word."))
+                break
+    return list(dropped.values())
 
 
 def _groups(candidates):
@@ -1394,6 +1452,14 @@ class FixedWorkflow:
             unique.append(group[0])
         from galley.fixed_policy import verse_safe
         from galley.proposal_guards import proposal_problem
+        # Two agreed edits can still contradict each other about one clause
+        # (Georgis, 2026-09-15); the batch is read as a whole before any of it
+        # lands, and the loser leaves a receipt like any other dropped row.
+        contradicted = {}
+        for row, reason in contradictory_relative_swaps(unique, before):
+            self.history.append({"stage": stage, "dropped": row, "reason": reason})
+            contradicted[id(row)] = row
+        unique = [row for row in unique if id(row) not in contradicted]
         for row in sorted(unique, key=lambda x: (x["para_id"], x["start"], x["end"]), reverse=True):
             pid, lo, hi = row["para_id"], row["start"], row["end"]
             if pid in self.poetry_ids and pid in self.current:

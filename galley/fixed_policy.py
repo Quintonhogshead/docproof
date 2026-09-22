@@ -52,6 +52,35 @@ LOCAL_CANDIDATE_TYPES = tuple(
     key for key in INITIAL_CANDIDATE_TYPES if key not in EXCLUDED_LOCAL_TYPES)
 DIAGNOSTIC_ONLY_TYPES = frozenset({"word_echo", "reading_level"})
 
+# Spellings Merriam-Webster accepts but does not head, on a U.S. run. The
+# dictionary passes them (en_US knows "towards"), LanguageTool passes them,
+# and the query-only consistency scan proposes the form the book uses MOST,
+# which on the Georgis memoir was the British one (towards 29, toward 18).
+# The classic pipeline respells the variant's own map in its adjudication
+# pass; the fixed lane has no such pass, so these sites reached no reader at
+# all until Beale listed them (2026-09-21). Every entry is the American
+# headword Chicago and Merriam-Webster give; the -s adverbs and prepositions
+# are the pairs config/consistency/chicago.yaml already annotates.
+VARIANT_RESPELL_US = {
+    "towards": "toward", "forwards": "forward", "backwards": "backward",
+    "upwards": "upward", "downwards": "downward", "afterwards": "afterward",
+    "inwards": "inward", "outwards": "outward", "amongst": "among",
+    "amidst": "amid", "whilst": "while", "grey": "gray",
+}
+VARIANT_SPELLING_CATEGORY = "variant_spelling"
+
+
+def variant_respellings(variant) -> dict[str, str]:
+    """Every lowercase form the fixed lane respells for this English, mapped
+    to the variant's own form: the variant's respell map (grey -> gray on a
+    U.S. run, gray -> grey on a U.K. one), plus the U.S. headword table on a
+    U.S. run only: Canadian Oxford, like Oxford, accepts both forms of each
+    pair. An unknown or absent variant respells nothing."""
+    out = {str(k).lower(): str(v) for k, v in (getattr(variant, "respell_map", None) or {}).items()}
+    if getattr(variant, "key", None) == "us":
+        out.update(VARIANT_RESPELL_US)
+    return out
+
 # Jev (TypeSafe System One) reads the same brute-force sites the comma sweep
 # above was too expensive to screen, but ranks them itself for about a cent a
 # thousand sites, so only the survivors reach the paid Sonnet/Luna screen.
@@ -491,6 +520,7 @@ def poetry_samples(paragraphs: Mapping[str, str], count: int = 6,
 
 
 __all__ = ["configuration", "EXCLUDED_LOCAL_TYPES", "LOCAL_CANDIDATE_TYPES",
-           "DIAGNOSTIC_ONLY_TYPES", "JEV_PRESCREEN_RULE", "JEV_PRESCREEN_THRESHOLD",
+           "DIAGNOSTIC_ONLY_TYPES", "VARIANT_RESPELL_US", "VARIANT_SPELLING_CATEGORY",
+           "variant_respellings", "JEV_PRESCREEN_RULE", "JEV_PRESCREEN_THRESHOLD",
            "NUMBER_POLICY", "PROOFREADING_POLICY", "VERSE_CATEGORIES",
            "extract_numbers", "number_proposal_problem", "poetry_samples", "verse_safe"]

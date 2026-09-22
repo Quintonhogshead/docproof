@@ -541,7 +541,63 @@ def _house_findings(paragraphs, prepared, cfg):
         reports.append(report)
     if cfg.style.heading_vocab_queries:
         found += heading_vocab_findings(paragraphs, cfg.skip)
+    found += _variant_findings(paragraphs, prepared)
     return found, [asdict(report) for report in reports]
+
+
+# An abbreviated title whose period the sentence splitter reads as a full
+# stop, so the capitalized name after it looks sentence-initial.
+_HONORIFIC = re.compile(r"\b(?:Mr|Mrs|Ms|Mx|Dr|St|Jr|Sr|Prof|Rev|Fr|Sgt|Capt|Lt|Col|Gen|Cpl|Pvt|Hon|Sen|Rep|Gov|Pres|Messrs|Mme|Mlle)\.\s*[“\"‘']?\Z")
+
+
+def _variant_findings(paragraphs, prepared):
+    """A tracked edit for every spelling the manuscript's English respells
+    (towards -> toward, grey -> gray on a U.S. run), one per occurrence,
+    quoted by its sentence like the other house sweeps. The screen still
+    reads each site in context: a name (Mr. Grey), a word standing capitalized
+    mid-sentence, an all-capitals heading token and a word the spell scan
+    protected as the author's own are never proposed here, and dialect in
+    dialogue is the readers' call under the house rule."""
+    from docproof.spellscan import _sentence_initial
+    from docproof.sweeps import sentence_window
+    from galley.fixed_policy import VARIANT_SPELLING_CATEGORY, variant_respellings
+    table = variant_respellings(getattr(prepared, "variant", None))
+    if not table:
+        return []
+    protected = {w.lower() for w in getattr(getattr(prepared, "spell", None), "lexicon", ()) or ()}
+    word = re.compile(r"(?<![\w'’\-‐‑])([^\W\d_]+)(?![\w'’\-‐‑])", re.UNICODE)
+    # A form the book capitalizes anywhere mid-sentence is a name in this
+    # book (Grey, the surname), and stays a name when it happens to open a
+    # sentence or follow an honorific's period ("Mr. Grey went home").
+    names = set()
+    for para in paragraphs:
+        for m in word.finditer(para.text or ""):
+            raw = m.group(1)
+            if (raw.lower() in table and raw[:1].isupper() and not raw.isupper()
+                    and (not _sentence_initial(para.text, m.start()) or _HONORIFIC.search(para.text[:m.start()]))):
+                names.add(raw.lower())
+    findings = []
+    for para in paragraphs:
+        if not getattr(para, "reviewable", True) or not para.text:
+            continue
+        for m in word.finditer(para.text):
+            raw = m.group(1)
+            key = raw.lower()
+            if key not in table or key in protected or raw.isupper():
+                continue
+            if raw[:1].isupper() and (key in names or not _sentence_initial(para.text, m.start())):
+                continue
+            fix = table[key]
+            if raw[:1].isupper():
+                fix = fix[:1].upper() + fix[1:]
+            window, lo, occurrence = sentence_window(para.text, m.start(), m.end())
+            corrected = window[:m.start() - lo] + fix + window[m.end() - lo:]
+            findings.append(Finding(f"variant-{len(findings) + 1}", "house", para.para_id, VARIANT_SPELLING_CATEGORY,
+                window, occurrence, corrected,
+                f"House spelling for this manuscript's English: “{fix}”, not “{raw}” "
+                f"(Merriam-Webster heads the U.S. form; the other is chiefly British).",
+                "high", status="validated"))
+    return findings
 
 
 def _consistency_findings(paragraphs, prepared, cfg, **overrides):

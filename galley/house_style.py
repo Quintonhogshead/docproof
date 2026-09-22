@@ -99,8 +99,11 @@ COMMON_RULES: tuple[str, ...] = (
     "proper name (“She drove south.” / “the West Coast”).",
     "Spelling follows the manuscript's English variant consistently — "
     "U.S.: Merriam-Webster (color, organize, traveled); U.K.: Oxford "
-    "(colour, organise, travelled). Intentional variation, such as dialect "
-    "in dialogue, is respected.",
+    "(colour, organise, travelled). Where Merriam-Webster accepts a British "
+    "form as a variant, U.S. prose still takes the headword: toward, "
+    "forward, backward, afterward, among, amid, while, gray — not towards, "
+    "forwards, backwards, afterwards, amongst, amidst, whilst, grey. "
+    "Intentional variation, such as dialect in dialogue, is respected.",
     "Author preference wins: a clearly communicated, consistently applied "
     "stylistic choice or intentional deviation is never an error.",
 )
