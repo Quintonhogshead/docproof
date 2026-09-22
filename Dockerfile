@@ -28,8 +28,12 @@ RUN apt-get update \
 # Claude Code, the Galley brain, as its native binary — used only by the
 # `agent` process group (fly.toml), which runs `docproof galley agent` and
 # spawns one `claude -p` session per phase on the Max subscription. The web
-# process never runs it.
-RUN curl -fsSL https://claude.ai/install.sh | bash -s latest \
+# process never runs it. The fixed recipe's subagent turns use it too
+# (docproof.agent_lane.cli_path): the Agent SDK's bundled CLI trails, and
+# Opus 5.5 needs 2.1.280 or newer. A pinned version also keeps a cached
+# builder layer from serving an older "latest"; raise it when a model needs it.
+ARG CLAUDE_CODE_VERSION=2.1.280
+RUN curl -fsSL https://claude.ai/install.sh | bash -s ${CLAUDE_CODE_VERSION} \
     && ln -sf /root/.local/bin/claude /usr/local/bin/claude \
     && claude --version
 

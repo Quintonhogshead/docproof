@@ -331,6 +331,25 @@ def test_unavailable_provider_is_preflight_failure_without_spending(tmp_path):
         caller.assert_complete()
 
 
+def test_an_outdated_claude_cli_stops_the_run_instead_of_skipping_reads(tmp_path):
+    """The API refuses Opus 5.5 from Claude Code older than 2.1.280. Frozen as
+    skips, every Opus read would vanish and the book would ship unread."""
+    from docproof.agent_lane import ClaudeCliOutdated
+
+    def outdated(*args, **kwargs):
+        raise ClaudeCliOutdated("claude-opus-5-5 needs Claude Code 2.1.280 or newer; the newest here is 2.1.251.")
+
+    caller = fc.FixedCalls(tmp_path, {}, Config(), provider_factory=outdated, continue_on_model_failure=True)
+    with pytest.raises(fc.FixedCallContractError, match="2.1.280"):
+        ask(caller, model="claude-opus-5-5")
+    assert not list((tmp_path / "calls").glob("*/skipped.json"))
+    from galley.fixed_workflow import deterministic_failure
+    try:
+        ask(caller, model="claude-opus-5-5")
+    except fc.FixedCallContractError as exc:
+        assert deterministic_failure(exc)
+
+
 def test_provider_adapter_counts_only_new_usage(tmp_path):
     provider = FakeProvider()
     caller = calls(tmp_path, provider)

@@ -20,12 +20,16 @@ from functools import partial
 
 from docproof.utils.files import write_atomic
 
-VERSION = "fixed-proofreading-v7"
+VERSION = "fixed-proofreading-v8"
 SONNET = "claude-sonnet-5"
 LUNA = "gpt-5.6-luna"
-OPUS = "claude-opus-5"
+# Opus 5.5 took every Opus 5 and Fable role in v8 (Quinton, 2026-09-22): the
+# Story Sheet and the opening read, every dispute, broken-sentence repair, the
+# ensemble sweep, both halves of continuity, the first final read and the gate
+# on Astra's changes. It needs Claude Code 2.1.280 or newer; see
+# docproof.agent_lane.require_cli_for.
+OPUS = "claude-opus-5-5"
 SOL = "gpt-5.6-sol"
-FABLE = "claude-fable-5-1"
 ASTRA = "gpt-6-astra"
 # TypeSafe's System One judgment model. It proposes sites for the typed stage's
 # screen and never decides anything; see galley/fixed_jev.py.
@@ -36,9 +40,20 @@ JEV = "jev"
 # The second Astra reading is the last stage and the only one that can send a
 # book to a human proofreader; its verdict is code's (see final_review_verdict).
 FINAL_REVIEW_STAGE = "final_astra"
-# The three final readers share the walk-through scope, the frontier schema,
-# the query rider and the fact/continuity/structure demotion of dropped edits.
-FRONTIER_STAGES = frozenset({"fable", "astra", FINAL_REVIEW_STAGE})
+# The opening salvo: the Story Sheet model reads the whole original book with
+# the final readers' brief before any other reader has touched it. Its findings
+# join the typed stage's candidates and are screened with them.
+OPENING_READ_STAGE = "opening_read"
+# The first final reading of the corrected book (Fable's until v8).
+OPUS_READ_STAGE = "opus_read"
+# Stage 13: Opus 5.5 gates the meaning and correctness of every change the two
+# Astra readings made, after the verdict; a rejected paragraph returns to its
+# pre-Astra text.
+ASTRA_GATE_STAGE = "astra_gate"
+# The opening and final readers share the walk-through scope, the frontier
+# schema, the query rider and the fact/continuity/structure demotion of
+# dropped edits.
+FRONTIER_STAGES = frozenset({OPENING_READ_STAGE, OPUS_READ_STAGE, "astra", FINAL_REVIEW_STAGE})
 WHOLE_BOOK_STAGES = frozenset({"ensemble_sweep_opus", "ensemble_sweep_sol"}) | FRONTIER_STAGES
 # What the last gate counts as an error still standing after the whole recipe:
 # the mechanical categories, not the walk-through's typesetting, continuity,
@@ -100,16 +115,18 @@ def workflow_plan():
     return [
         {"stage": "intake", "model": "code", "description": "Freeze the original manuscript and paragraph identities"},
         {"stage": "poetry", "model": SONNET, "description": "Classify fixed samples; verse receives house mechanics, never a change to its structure"},
-        {"stage": "story_sheet", "model": LUNA, "description": "Read the manuscript for the Story Sheet through the ChatGPT subscription"},
-        {"stage": "typed", "model": f"{SONNET} + {LUNA}; disputes: {OPUS}; sites: {JEV}", "description": "Local proofreading checks, including LanguageTool, plus the typed ensemble and Jev's judged comma and confusion sites; number and currency review remains separate"},
+        {"stage": "story_sheet", "model": OPUS, "description": "Read the manuscript for the Story Sheet"},
+        {"stage": OPENING_READ_STAGE, "model": OPUS, "description": "Opening salvo: the Story Sheet model reads the whole original manuscript with the final readers' brief; its findings are screened with the typed stage's"},
+        {"stage": "typed", "model": f"{SONNET} + {LUNA}; disputes: {OPUS}; sites: {JEV}", "description": "Local proofreading checks, including LanguageTool, plus the typed ensemble, Jev's judged comma and confusion sites and the opening read's findings; number and currency review remains separate"},
         {"stage": "numbers", "model": f"{SONNET} + {LUNA}; disputes: {OPUS}", "description": "Review every extracted number in context against the existing house policy"},
         {"stage": "broken_repair", "model": OPUS, "description": "Repair triggered broken sentences with clear intended meaning"},
         {"stage": "checks", "model": LUNA, "description": "Meaning preservation and correction checks through the ChatGPT subscription"},
         {"stage": "ensemble_sweep", "model": f"{OPUS} + {SOL}; disputes: {OPUS}", "description": "Independent complete reads, followed by deterministic recurrence, casing and residual checks"},
-        {"stage": "continuity", "model": f"{FABLE}; edits: {OPUS}", "description": "Whole-book continuity read with cited evidence; Opus rules on evidenced edits, unresolved contradictions become author questions"},
-        {"stage": "fable", "model": FABLE, "description": "Read the corrected book and decide every proposed Galley comment, then propagate its accepted corrections and casing decisions book-wide"},
-        {"stage": "astra", "model": ASTRA, "description": "Read the Fable-corrected book and review every surviving comment, then run the final propagation and consistency sweep"},
+        {"stage": "continuity", "model": f"{OPUS}; edits: {OPUS}", "description": "Whole-book continuity read with cited evidence; Opus rules on evidenced edits, unresolved contradictions become author questions"},
+        {"stage": OPUS_READ_STAGE, "model": OPUS, "description": "Read the corrected book and decide every proposed Galley comment, then propagate its accepted corrections and casing decisions book-wide"},
+        {"stage": "astra", "model": ASTRA, "description": "Read the Opus-corrected book and review every surviving comment, then run the final propagation and consistency sweep"},
         {"stage": FINAL_REVIEW_STAGE, "model": ASTRA, "description": "Second Astra reading of the finished book: correct what remains, list publication blockers, and decide needs_human by the fixed rule"},
+        {"stage": ASTRA_GATE_STAGE, "model": OPUS, "description": "Meaning and correction gate on every change the two Astra readings made; a rejected paragraph returns to its pre-Astra text"},
     ]
 
 
@@ -800,9 +817,9 @@ class FixedWorkflow:
         from docproof.storysheet import StorySheet, prompt_section
         from docproof.providers.base import strict_json_schema
         from galley.press_prompt import STORY_TASK
-        body = self._ask("story_sheet", LUNA, STORY_TASK,
+        body = self._ask("story_sheet", OPUS, STORY_TASK,
                          {"manuscript": [{"id": pid, "text": text} for pid, text in self.original.items()]},
-                         strict_json_schema(StorySheet))
+                         strict_json_schema(StorySheet), effort="medium", max_tokens=32000)
         if body is None:
             self._record("story_sheet", sheet={})
             return
@@ -1164,29 +1181,35 @@ class FixedWorkflow:
         drops it, is not discarded: it becomes the author question Astra's
         comment review judges in the reader's own scope, as the readers'
         questions already are. Returns (question, missing_knowledge, quote) or None."""
-        if not (stage in FRONTIER_STAGES or stage.startswith("walkthrough_questions")):
+        frontier_stage = stage in FRONTIER_STAGES or stage.startswith("walkthrough_questions")
+        if not (frontier_stage or any(p.get("origin") == OPENING_READ_STAGE for p in site["proposals"])):
             return None
         from docproof.chapter_labels import is_chapter_label
         if text is not None and is_chapter_label(text):
             return None            # a label's number or style is mechanics, never a question
         rows = [p for p in site["proposals"]
-                if p.get("action") == "edit" and p.get("category") in FRONTIER_QUESTION_CATEGORIES]
+                if p.get("action") == "edit" and p.get("category") in FRONTIER_QUESTION_CATEGORIES
+                and (frontier_stage or p.get("origin") == OPENING_READ_STAGE)]
         if not rows:
             return None
         return _demoted_question(rows[0], text=text)
 
     def _adjudicate(self, stage, candidates, expected_models=(), *, force=False):
         accepted, disputed = [], []
-        if stage in FRONTIER_STAGES or stage.startswith("walkthrough_questions"):
-            kept = []
-            for row in candidates:
-                if row["action"] == "query" and row["category"] in FRONTIER_QUESTION_CATEGORIES:
-                    self.history.append({"stage": stage + "_frontier_question", "candidate": row})
-                    self._question(row["para_id"], row["before"], row["reason"], row["missing_knowledge"],
-                                   row["reason"], stage, model="/".join(row["models"]))
-                else:
-                    kept.append(row)
-            candidates = kept
+        frontier_stage = stage in FRONTIER_STAGES or stage.startswith("walkthrough_questions")
+        # The opening read's findings are screened with the typed stage's, but
+        # its whole-book questions are a final reader's and are treated as one.
+        kept = []
+        for row in candidates:
+            if ((frontier_stage or row.get("origin") == OPENING_READ_STAGE)
+                    and row["action"] == "query" and row["category"] in FRONTIER_QUESTION_CATEGORIES):
+                source = row.get("origin", stage)
+                self.history.append({"stage": stage + "_frontier_question", "candidate": row})
+                self._question(row["para_id"], row["before"], row["reason"], row["missing_knowledge"],
+                               row["reason"], source, model="/".join(row["models"]))
+            else:
+                kept.append(row)
+        candidates = kept
         for group in _groups(candidates):
             row = group[0]
             if row["para_id"] in self.poetry_ids:
@@ -1348,7 +1371,7 @@ class FixedWorkflow:
                     continue
                 row = dict(site["proposals"][0])
                 row.update(start=site["start"], end=site["end"], before=site["before"], replacement=d["replacement"],
-                           reason=d["reason"], action="edit", format="", models=[FABLE, OPUS])
+                           reason=d["reason"], action="edit", format="", models=[OPUS])
                 problem = _replacement_problem(row["before"], row["replacement"], self.current[pid], row["start"], row["end"])
                 if xml_safe(row["replacement"]) != row["replacement"]:
                     problem = "Adjudicated correction contains unsupported control characters"
@@ -1359,9 +1382,9 @@ class FixedWorkflow:
         return accepted
 
     def _continuity(self):
-        """Fable reads the whole current book once for what it contradicts
-        about itself. Evidenced edits go to Opus; unresolved contradictions
-        become author questions; nothing here proofreads."""
+        """Opus reads the whole current book once for what it contradicts
+        about itself. Evidenced edits go to a separate Opus ruling; unresolved
+        contradictions become author questions; nothing here proofreads."""
         from galley.fixed_local import _paragraphs
         from galley.press_prompt import CONTINUITY_TASK, EDITORIAL_RULES, FINAL_WALKTHROUGH_CHECK
         snapshot = dict(self.current)
@@ -1380,7 +1403,7 @@ class FixedWorkflow:
             payload = {"story_sheet": self.context, "book": window,
                        "poetry_ids": sorted(self.poetry_ids & {r["id"] for r in window}),
                        "complete_book": len(windows) == 1, "part": [index, len(windows)]}
-            jobs.append((FABLE, partial(self._ask, "continuity", FABLE, system + part, payload,
+            jobs.append((OPUS, partial(self._ask, "continuity", OPUS, system + part, payload,
                                         CONTINUITY_SCHEMA, effort="high", max_tokens=32000)))
         candidates, queries, coverage = [], [], []
         for window, result in zip(windows, self.scheduler.map(jobs)):
@@ -1390,7 +1413,7 @@ class FixedWorkflow:
                 continue
             texts = {r["id"]: r["text"] for r in window}
             for row in result["findings"]:
-                candidate = self._continuity_candidate("continuity", row, texts, FABLE, snapshot)
+                candidate = self._continuity_candidate("continuity", row, texts, OPUS, snapshot)
                 if candidate:
                     (queries if candidate["action"] == "query" else candidates).append(candidate)
             coverage.append({"paragraph_ids": ids, "status": "completed", "findings": len(result["findings"]),
@@ -1402,7 +1425,7 @@ class FixedWorkflow:
         for q in queries:
             pid = q["para_id"]
             quote = q["before"] if self.current[pid].count(q["before"]) == 1 else self.current[pid]
-            self._question(pid, quote, q["question"], q["missing_knowledge"], q["reason"], "continuity", model=FABLE)
+            self._question(pid, quote, q["question"], q["missing_knowledge"], q["reason"], "continuity", model=OPUS)
         self._record("continuity", coverage=coverage, requests=len(windows),
                      candidates=len(candidates), queries=len(queries))
 
@@ -1932,6 +1955,94 @@ class FixedWorkflow:
         self._checked_format_count = len(self.formats)
         return changed
 
+    def _astra_gate(self, before, format_start):
+        """Stage 13: Opus judges every paragraph the two Astra readings changed,
+        in text or formatting, for meaning and then for correctness. It runs
+        after Luna's checks approved those changes and after the verdict was
+        counted, so it never decides needs_human. A rejection returns the
+        paragraph to its pre-Astra text and drops Astra's formatting there;
+        a fact, continuity or structure edit undone that way is put to the
+        author, as a final reader's rejected edit always is. An unavailable
+        gate read leaves the checked text standing, because a skipped review
+        never decides anything. Nothing is asked when Astra changed nothing."""
+        from galley.press_prompt import FINAL_WALKTHROUGH_CHECK
+        labels = {"astra", FINAL_REVIEW_STAGE, "local_completion_astra", "local_completion_" + FINAL_REVIEW_STAGE}
+        applied = {}
+        for entry in self.history:
+            if entry.get("applied") and entry.get("stage") in labels:
+                applied.setdefault(entry["applied"]["para_id"], []).append(entry["applied"])
+        formats = self.formats[format_start:]
+        changes = []
+        for pid, text in self.current.items():
+            pending = [f for f in formats if f["para_id"] == pid]
+            if text == before[pid] and not pending:
+                continue
+            cited = [e for row in applied.get(pid, []) for e in row.get("evidence") or []]
+            changes.append({"id": pid, "source": self.original[pid], "before": before[pid], "after": text,
+                            "categories": sorted({row["category"] for row in applied.get(pid, [])}),
+                            "format_proposals": pending,
+                            **({"evidence": [{**e, "text": self.current.get(e["para_id"], "")} for e in cited]}
+                               if cited else {})})
+        rejected, unavailable = {}, []
+        for kind in ("meaning", "correction"):
+            active = [dict(x, format_proposals=[f for f in x["format_proposals"] if f in self.formats])
+                      for x in changes if x["id"] not in rejected]
+            windows = list(_windows(active, 16000))
+            jobs = [(OPUS, partial(self._ask, ASTRA_GATE_STAGE + "_" + kind, OPUS,
+                ("Judge whether ALL changes preserve meaning, facts, voice, deliberate fragments and dialect. " if kind == "meaning" else
+                 "Judge whether ALL text AND formatting changes fix clear proofreading errors without new errors, stylistic rewriting, unnecessary changes or violations of house rules. ") +
+                "before is the paragraph as the two Astra readings received it, after is their result, and source is the author's original. "
+                "Return one verdict per paragraph id. Approve only when the complete after paragraph is justified; otherwise reject, which returns the paragraph to before. "
+                "No new corrections or author comments. categories names the proofreading categories of the corrections Astra applied in that paragraph. " + FINAL_WALKTHROUGH_CHECK,
+                {"story_sheet": self.context, "changes": window,
+                 "verse_ids": sorted(self.poetry_ids & {x["id"] for x in window})},
+                CHECK_SCHEMA, effort="high")) for window in windows]
+            for window, result in zip(windows, self.scheduler.map(jobs)):
+                ids = [x["id"] for x in window]
+                if result is None:
+                    unavailable.extend(ids)
+                    self.history.append({"stage": ASTRA_GATE_STAGE + "_" + kind, "unavailable": ids,
+                                         "reason": "Gate review unavailable; the checked Astra text stands."})
+                    continue
+                _exact_ids([d["id"] for d in result["decisions"]], ids, "Astra gate " + kind)
+                for d in result["decisions"]:
+                    self.history.append({"stage": ASTRA_GATE_STAGE + "_" + kind, "decision": d})
+                    if d["verdict"] == "reject":
+                        rejected[d["id"]] = (kind, d["reason"])
+            for pid, (verdict_kind, reason) in rejected.items():
+                if verdict_kind != kind:
+                    continue
+                self.current[pid] = before[pid]
+                self.formats = [f for f in self.formats if not (f in formats and f["para_id"] == pid)]
+                for row in applied.get(pid, []):
+                    if row["category"] not in FRONTIER_QUESTION_CATEGORIES or row.get("format"):
+                        continue
+                    question, missing, quote = _demoted_question(row, reason, before[pid])
+                    if before[pid].count(quote) != 1:
+                        quote = before[pid]
+                    self.history.append({"stage": ASTRA_GATE_STAGE + "_demoted", "site": row["id"], "question": question,
+                                         "reason": "An Astra fact, continuity or structure edit the gate rejected is put to the author"})
+                    self._question(pid, quote, question, missing, reason, ASTRA_GATE_STAGE)
+        # A question Astra asked about its own wording may no longer find that
+        # wording in a restored paragraph; it moves to the whole paragraph.
+        kept = []
+        for q in self.questions:
+            pid = q["para_id"]
+            if pid in rejected and self.current[pid].count(q["quote"]) != 1:
+                if not self.current[pid].strip():
+                    self.history.append({"stage": ASTRA_GATE_STAGE + "_dropped_question", "question": q,
+                                         "reason": "The restored paragraph is empty; the question cannot be anchored"})
+                    continue
+                q = {**q, "quote": self.current[pid]}
+                self.history.append({"stage": ASTRA_GATE_STAGE + "_reanchored", "question": q["id"],
+                                     "reason": "The question's quote left with the restored Astra change"})
+            kept.append(q)
+        self.questions = kept
+        return {"changed_paragraphs": len(changes),
+                "rejected": {kind: sorted(pid for pid, (k, _) in rejected.items() if k == kind)
+                             for kind in ("meaning", "correction")},
+                "unavailable": sorted(set(unavailable))}
+
     def _validate_source(self):
         from galley.manifest import sha256_file
         if self.intake is not None:
@@ -1984,14 +2095,18 @@ class FixedWorkflow:
                 self._stage("story_sheet")
                 self._story()
             prepared_modes = list(zip(modes, [future.result() for future in preparations]))
-        self._stage("typed")
         candidates, coverage, local_evidence, verse_evidence, jev_evidence = [], [], None, None, None
         prose_prepared = next((prepared for poetry, prepared in prepared_modes if not poetry), None)
         verse_prepared = next((prepared for poetry, prepared in prepared_modes if poetry), None)
         self.prose_prepared = prose_prepared
-        # Poetry/prose detectors and the independent local scans share no edits.
-        # Their findings are committed below in the original deterministic order.
-        with ThreadPoolExecutor(max_workers=len(modes) + 3) as pool:
+        if not all_poetry:
+            self._stage(OPENING_READ_STAGE)
+        self._stage("typed")
+        # Poetry/prose detectors, the independent local scans and the opening
+        # read all see the untouched original and share no edits. Their
+        # findings are committed below in a fixed deterministic order.
+        with ThreadPoolExecutor(max_workers=len(modes) + 4) as pool:
+            opening_future = None if all_poetry else _submit(pool, self._read, OPENING_READ_STAGE, OPUS)
             local_future = _submit(pool, self._local_initial, prose_prepared) if prose_prepared else None
             jev_future = _submit(pool, self._jev_initial, prose_prepared) if prose_prepared else None
             verse_future = _submit(pool, self._local_verse, verse_prepared) if verse_prepared else None
@@ -2009,9 +2124,19 @@ class FixedWorkflow:
                 found, covered = reading.result()
                 candidates.extend(found)
                 coverage.extend(covered)
+            if opening_future is not None:
+                opening, _, opening_coverage = opening_future.result()
+                for row in opening:
+                    row["origin"] = OPENING_READ_STAGE
+                candidates.extend(opening)
+                self._record(OPENING_READ_STAGE, coverage=opening_coverage, findings=len(opening))
         initial = dict(self.current)
         accepted = self._adjudicate("typed", candidates, (SONNET, LUNA))
         self._apply("typed", accepted)
+        # The opening read's whole-book edits carry verified evidence the
+        # paragraph checks need to see, as the final readers' do.
+        opening_evidence = {r["para_id"]: r["evidence"] for r in accepted
+                            if r.get("origin") == OPENING_READ_STAGE and r.get("evidence")}
         self._record("typed", coverage=coverage, candidates=candidates, local=local_evidence,
                      **({"jev": jev_evidence} if jev_evidence is not None else {}),
                      **({"verse_local": verse_evidence} if verse_evidence is not None else {}))
@@ -2030,14 +2155,17 @@ class FixedWorkflow:
             self._stage("numbers")
             self._numbers()
             self._stage("broken_repair")
-            trigger = {x["para_id"] for x in candidates if any(s in x["category"] for s in
-                       ("missing", "grammar", "sentence", "agreement", "preposition", "tense"))}
+            # The trigger is the detectors' error density. The opening read's
+            # findings carry their own repairs and were screened with the rest.
+            trigger = {x["para_id"] for x in candidates if x.get("origin") != OPENING_READ_STAGE
+                       and any(s in x["category"] for s in
+                               ("missing", "grammar", "sentence", "agreement", "preposition", "tense"))}
             trigger -= self.poetry_ids
             repairs, _, repair_coverage = self._read("broken_repair", OPUS, ids=sorted(trigger)) if trigger else ([], [], [])
             self._apply("broken_repair", self._adjudicate("broken_repair", repairs, (OPUS,)))
             self._record("broken_repair", coverage=repair_coverage)
             self._stage("checks")
-            self._checks("checks", initial)
+            self._checks("checks", initial, evidence=opening_evidence)
             self._record("checks")
             self._stage("ensemble_sweep")
             snapshot = dict(self.current)
@@ -2053,9 +2181,12 @@ class FixedWorkflow:
             self._stage("continuity")
             self._continuity()
             from galley.press_prompt import FINAL_WALKTHROUGH_CHECK
-            for stage, model in (("fable", FABLE), ("astra", ASTRA), (FINAL_REVIEW_STAGE, ASTRA)):
+            pre_astra, astra_formats = None, 0
+            for stage, model in ((OPUS_READ_STAGE, OPUS), ("astra", ASTRA), (FINAL_REVIEW_STAGE, ASTRA)):
                 self._stage(stage)
                 snapshot = dict(self.current)
+                if stage == "astra":
+                    pre_astra, astra_formats = snapshot, len(self.formats)
                 rows, comments, read_coverage = self._read(stage, model, comments=True)
                 # Overlapping proposals first require independent pair screening.
                 accepted = self._adjudicate(stage, rows, (model,))
@@ -2070,17 +2201,21 @@ class FixedWorkflow:
                 if stage == FINAL_REVIEW_STAGE:
                     # The only needs_human gate. A reader's window verdict is
                     # recorded evidence; the verdict itself is the fixed rule.
-                    from galley.press_checks import final_audit
-                    from galley.fixed_local import _paragraphs
                     self.final_review = final_review_verdict(accepted, read_coverage)
                     self.needs_human = self.final_review["verdict"] == "needs_human"
-                    audit = final_audit(prose_prepared,
-                        _paragraphs(prose_prepared, self.current, self.poetry_ids), self.cfg)
-                    audit["accepted_sha256"] = _hash(self.current)
-                    self._record(stage, coverage=read_coverage, press_audit=audit, local=completion,
+                    self._record(stage, coverage=read_coverage, local=completion,
                                  final_review=self.final_review)
                 else:
                     self._record(stage, coverage=read_coverage, local=completion)
+            self._stage(ASTRA_GATE_STAGE)
+            gate = self._astra_gate(pre_astra, astra_formats)
+            # The press-method final scan covers the text that is delivered,
+            # which is the gate's.
+            from galley.press_checks import final_audit
+            from galley.fixed_local import _paragraphs
+            audit = final_audit(prose_prepared, _paragraphs(prose_prepared, self.current, self.poetry_ids), self.cfg)
+            audit["accepted_sha256"] = _hash(self.current)
+            self._record(ASTRA_GATE_STAGE, press_audit=audit, gate=gate)
         return self._write_result(all_poetry)
 
     def _write_result(self, all_poetry):

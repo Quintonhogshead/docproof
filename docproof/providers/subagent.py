@@ -375,6 +375,9 @@ class SubagentProvider:
                  "CLAUDE_CODE_EFFORT_LEVEL": self.effort or "auto"},
             effort=self.effort,
             stderr=stderr,
+            # The newest CLI here, not necessarily the SDK's bundled one: a
+            # model newer than the bundled CLI is refused by the API.
+            cli_path=agent_lane.cli_path(),
         )
 
     async def _turn(self, sdk: Any, model: str, system: str,

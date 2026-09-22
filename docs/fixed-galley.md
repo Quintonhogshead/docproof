@@ -50,7 +50,13 @@ so rejecting Galley's corrections restores the joined baseline. This is
 `fixed-intake-v2`. Clean files that need none of the three transformations
 keep their existing source identity; no baseline is created.
 
-The agreed sequence is:
+The agreed sequence (`fixed-proofreading-v8`, 2026-09-22) is below. From v8,
+"Opus" means **Opus 5.5** (`claude-opus-5-5`) everywhere: it took every Opus 5
+role and every Fable role. It needs Claude Code 2.1.280 or newer: the subagent
+lane runs the newest CLI on the machine (`docproof.agent_lane.cli_path`), and
+an older one stops the run as a deterministic failure rather than turning
+every Opus read into a skipped review.
+
 
 1. Preserve and identify the incoming manuscript, accept its revisions and
    rejoin its page-runover paragraphs.
@@ -62,11 +68,19 @@ The agreed sequence is:
    the prose stages or requiring a ChatGPT login. In a mixed book the
    whole-book readers see the verse too, and their verse proposals pass the
    same mechanics-only gate.
-3. Luna creates the Story Sheet through the ChatGPT subscription.
+3. Opus creates the Story Sheet, then opens the proofread (`opening_read`):
+   it reads the whole untouched manuscript under the final readers' brief —
+   the same windowed read, walk-through scope and focused sites as the final
+   readers — concurrently with the typed detectors below.
 4. Sonnet and Luna independently run the typed detectors. The full local
-   checking pass supplies additional candidates. Unresolved candidates receive
+   checking pass supplies additional candidates, and so do the opening read's
+   findings (tagged `origin: opening_read`). Unresolved candidates receive
    independent Sonnet and Luna screening; Opus receives only their explicit
-   conflicting decisions. An omitted finding is not a rejection vote.
+   conflicting decisions. An omitted finding is not a rejection vote. The
+   opening read's fact/logic, continuity and structure questions skip that
+   screen and go to the comment reviews, and a screen that drops one of its
+   evidenced edits in those categories puts it to the author, exactly as for
+   a final reader. Its findings never trigger the broken-sentence repair.
 5. Code collects numerals, times, and spelled-out number expressions with their
    surrounding text. Luna and Sonnet check those extracts against the existing
    Galley number policy; Opus adjudicates disagreements. This dedicated sweep
@@ -78,7 +92,7 @@ The agreed sequence is:
    Sol uses the saved ChatGPT subscription login. Unresolved proposals go to
    Sonnet and Luna screening, with Opus settling only disagreements from that pair.
    The deterministic propagation and consistency sweep then runs (below).
-9. Fable 5.1 reads the whole current book in one request for continuity:
+9. Opus reads the whole current book in one request for continuity:
    names, places, businesses, relationships, timeline and geography the book
    contradicts about itself. Every finding cites verbatim evidence elsewhere in
    the book, verified by code. Evidenced edits go straight to Opus adjudication
@@ -88,10 +102,10 @@ The agreed sequence is:
    is not discarded but demoted to an author question (Wilder 2026-09-14:
    "Mad Crabber" for the Rusty Hook Tavern was dropped as "not settled by the
    evidence" and never reached the author).
-10. Fable 5.1 sweeps the resulting book under the final walk-through scope and
+10. Opus (`opus_read`, `fable` before v8) sweeps the resulting book under the final walk-through scope and
     reviews every proposed Galley comment; the propagation and consistency
     sweep then carries its accepted decisions book-wide.
-11. Astra sweeps the Fable-corrected book under the same scope and reviews
+11. Astra sweeps the Opus-corrected book under the same scope and reviews
     every surviving comment, followed by the final propagation and
     consistency sweep.
 12. Astra reads the finished book a second time (`final_astra`), under the
@@ -102,8 +116,18 @@ The agreed sequence is:
     damage an earlier correction did), each anchored to an exact paragraph
     and verbatim quote that code verifies, and each carrying a `kind` and a
     `resolution` so code can tell what blocks from what is filled, asked or
-    fixed. Its propagation pass and the
-    press-method final audit run on the resulting text.
+    fixed. Its propagation pass runs on the resulting text, and the verdict
+    below is counted here.
+13. Opus gates Astra (`astra_gate`): every paragraph the two Astra readings
+    changed, in text or formatting, is judged for meaning and then for
+    correctness against the text Astra received. A rejection returns the
+    paragraph to its pre-Astra text and drops Astra's formatting there; a
+    fact, continuity or structure edit so undone becomes an author question,
+    and an Astra question whose quote left with the restored text moves to
+    the whole paragraph. Nothing is asked when Astra changed nothing, and an
+    unavailable gate read leaves the (already Luna-checked) text standing. The
+    gate never revisits the verdict. The press-method final audit runs on the
+    gate's text, which is the delivered text.
 
 ## The verdict
 
@@ -185,7 +209,7 @@ it always has — the HubSpot write still obeys `proof_write_back`.
 
 ## Final walk-through scope
 
-Fable and Astra are the last human-grade pass before the book is presentable,
+Opus and Astra are the last human-grade pass before the book is presentable,
 so their read is widened beyond clear mechanical errors — still minimal edits,
 never rewrites: typesetting and layout artifacts (a line-break hyphen inside a
 word, page-split fragments, stray characters); a continuity backstop with
@@ -221,7 +245,7 @@ an evidenced name reconciliation is not bounced as a fact change.
 
 Every request is headed by a contract. The poetry, Story Sheet and continuity
 requests get the bare proofreading contract. The number stage, the whole-book
-readers (Opus, Sol, Fable and Astra, who may raise number errors themselves)
+readers (Opus, Sol and Astra, who may raise number errors themselves)
 and any screening, adjudication or check request whose payload carries a
 `number_style` or `currency_style` proposal get the complete number policy.
 Every other request gets the editorial brief alone: on the first production
@@ -271,7 +295,7 @@ took 48 of the run's 103 minutes.
 
 ## Screening a final reader's questions
 
-A Fable or Astra edit is accepted directly; a Fable or Astra question is a
+An Opus or Astra edit is accepted directly; an Opus or Astra question is a
 disputed site and goes to the Sonnet/Luna screen, with Opus on disagreement.
 That screen, and that Opus ruling, carry the walk-through rider: a question
 about a fact or logic a general reader would notice, a continuity
@@ -359,13 +383,13 @@ requested API read). Concurrent batches
 share these ceilings; they do not multiply them. The explicit serial diagnostic
 setting still enforces one call globally.
 
-Preparation overlaps Story Sheet generation. Local scans overlap typed reads,
+Preparation overlaps Story Sheet generation. Local scans and the opening read overlap typed reads,
 and embedded-poetry and prose detectors can run together. Each independent
 correction window advances through meaning review and correction review. A Luna
 rejection receives an independent Sonnet check, and only a Sonnet approval against
 a Luna rejection goes to Opus. These chains proceed without waiting for unrelated
-windows. Changes remain isolated until committed in manuscript order. Fable
-waits for the checked ensemble result; Astra waits for the checked Fable result
+windows. Changes remain isolated until committed in manuscript order. Opus
+waits for the checked ensemble result; Astra waits for the checked Opus result
 and comment dispositions. These are genuine text dependencies.
 
 Sol and Astra use one [Codex App Server](https://learn.chatgpt.com/docs/app-server)
@@ -401,7 +425,7 @@ not invent a separate number policy from the Story Sheet.
 
 Model disagreement does not automatically create an author comment. Opus can
 apply a supported correction, drop a false alarm, or identify a question that
-requires author knowledge. Fable must resolve, remove, combine, or retain each
+requires author knowledge. Opus must resolve, remove, combine, or retain each
 proposed comment after reading the corrected manuscript. Astra checks the
 survivors. Late corrections receive targeted verification of their changed
 passages. The original source and author-supplied comments remain preserved.
@@ -453,14 +477,14 @@ resubmission; exhaustion never grants a fresh retry allowance.
 The supplied Atmosphere pasted-chat method is preserved with an
 [item-level coverage review](galley-press-prompt-coverage.md). Its 120 indexed
 rules plus prose and table instructions become 149 accounted-for source items.
-Fable and Astra share the extracted editorial brief; Opus adjudication and Luna
+Opus and Astra share the extracted editorial brief; Opus adjudication and Luna
 checks use the same rules. Narrow typed readers retain their category prompts
 plus the shared scope, variant and punctuation guards. The original chat prompt
 cannot schedule additional agents, change the existing number policy, make
 silent edits, or broaden proofreading into stylistic rewrites.
 
 The Story Sheet records variant/genre evidence, vocabulary choices and intended
-tense/person with explicit section exceptions. Fable and Astra receive current
+tense/person with explicit section exceptions. Opus and Astra receive current
 dialogue-matrix, serial-comma, quotation and narrative-tense sites and must
 acknowledge every assigned site ID. The local tense profiler is a heuristic,
 not authority to rewrite a deliberately present-tense chapter. Applicable
@@ -480,7 +504,7 @@ number stage so they do not receive a second independent number policy.
 Quote and space normalization and possible speaker boundaries are recorded as
 proposals; scanning never reformats the incoming manuscript. Citation-pattern
 consistency and a deterministic structure extract supply further evidence.
-Fable and Astra receive the current opening/heading excerpt when reading
+Opus and Astra receive the current opening/heading excerpt when reading
 structural or opening passages. This excerpt is explicitly incomplete and
 cannot establish that a contents entry is missing; only supported wording or
 numbering mismatches qualify for proofreading review.
@@ -491,7 +515,7 @@ sections excluded from the prose checking pass and swept by the verse packet
 instead; an edit that would add a terminal mark, recase a line head or change
 a line break is dropped at application whatever reader proposed it.
 
-After the ensemble sweep, and again after each of the Fable and Astra reads,
+After the ensemble sweep, and again after each of the Opus and Astra reads,
 the deterministic propagation and consistency sweep runs over the current book
 so that every accepted decision is applied consistently. It re-emits every
 accepted word or short-phrase swap at its other occurrences, including casing
@@ -545,7 +569,7 @@ two replacements for one folded surface.
 Every candidate receives Sonnet and Luna screening, Opus on disagreement, and
 the usual correction checks; each pass has its own local receipt
 (`completion`, `completion_fable`, `completion_astra`, `completion_final_astra`). Local rules never
-authorize an edit on their own, and Fable and Astra still review any resulting
+authorize an edit on their own, and Opus and Astra still review any resulting
 comments.
 
 Local scan receipts record paragraph coverage, configuration, implementation
@@ -631,7 +655,7 @@ fresh run. Fixed checkpoint identity also survives an interruption before the
 first driver result is written.
 
 The compulsory local checks belong to fixed recipe version 2; the continuity
-lane, the final walk-through scope, the post-Fable and post-Astra propagation
+lane, the final walk-through scope, the post-Opus and post-Astra propagation
 passes and the casing sweep belong to version 3; the stage-specific contracts,
 shared window context, focused-site and metadata diet, screening caps and the
 removal of the comma-boundary generator belong to version 4; silent

@@ -77,7 +77,7 @@ def test_first_astra_window_verdict_no_longer_decides(make_book, tmp_path):
     result = FixedWorkflow(make_book("She walked home."), tmp_path / "run", calls=readers).run()
     assert result["editorial_verdict"] == "ready"
     assert result["final_review"]["verdict"] == "ready" and result["final_review"]["core_mechanical_errors"] == 0
-    assert [r["stage"] for r in result["stages"]][-2:] == ["astra", FINAL_REVIEW_STAGE]
+    assert [r["stage"] for r in result["stages"]][-3:] == ["astra", FINAL_REVIEW_STAGE, "astra_gate"]
     final = next(r for r in readers.events if r["stage"] == FINAL_REVIEW_STAGE)
     assert final["model"] == ASTRA and "publication_blockers" in final["schema"]["properties"]
 

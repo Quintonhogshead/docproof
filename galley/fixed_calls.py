@@ -337,7 +337,7 @@ def _transport(model: str, requested: str | None) -> str:
 
 CLAUDE_READ_TIMEOUT_SECONDS = 900
 # A whole-book read at high effort needs longer than a windowed one.
-CLAUDE_STAGE_TIMEOUT_SECONDS = {"continuity": 1800}
+CLAUDE_STAGE_TIMEOUT_SECONDS = {"continuity": 1800, "story_sheet": 1800}
 
 
 def _make_provider(factory, cfg, model, stage):
@@ -356,10 +356,12 @@ def _make_provider(factory, cfg, model, stage):
 def _default_provider(cfg: Config, *, model: str, stage: str | None = None):
     if not model.startswith("claude-"):
         return build_provider(cfg, model=model)
+    from docproof.agent_lane import require_cli_for
     from docproof.providers.subagent import SubagentProvider, availability
     ok, why = availability()
     if not ok:
         raise ProviderError("Claude subscription unavailable; no API fallback: " + str(why))
+    require_cli_for(model)
 
     class CheckedSubagentProvider(SubagentProvider):
         async def _turn(self, *args, evidence, **kwargs):
@@ -770,6 +772,12 @@ class FixedCalls:
                         pause = _queue_pause(exc)
                         if pause is not None:
                             raise pause
+                        from docproof.agent_lane import ClaudeCliOutdated
+                        if isinstance(exc, ClaudeCliOutdated):
+                            # Every read on this model would be refused the
+                            # same way; skipping them would deliver a book
+                            # nobody read. The run stops until the CLI is fixed.
+                            raise FixedCallContractError(f"{stage}: {exc}") from exc
                         raise FixedReadUnavailable(f"{stage}: provider is unavailable before submission; no API fallback was submitted.") from exc
                 try:
                     self._reserve(request, sha, attempt)
