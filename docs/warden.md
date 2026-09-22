@@ -128,7 +128,7 @@ an approval.
 
 ## Verbs, tiers, and what a Tier-0 fix will and won't touch
 
-See `galley/practitioner/skills/warden/references/runbook.md` for the exact
+See `galley/practitioner/references/warden-runbook.md` for the exact
 verb per rule. The short version: every verb that could touch a running
 book refuses outright while Galley's heartbeat shows one claimed
 (`needs_idle_agent`, enforced in `app/warden/verbs.py`, not by convention).

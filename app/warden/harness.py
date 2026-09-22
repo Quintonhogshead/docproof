@@ -28,7 +28,7 @@ SKILL_PATH = Path("galley/practitioner/skills/warden/SKILL.md")
 
 _FALLBACK_SYSTEM_PROMPT = (
     "Follow docs/monitoring-agent-plan.md and "
-    "galley/practitioner/skills/warden/references/runbook.md. Act only "
+    "galley/practitioner/references/warden-runbook.md. Act only "
     "through `docproof-warden verb ...`, `docproof-warden say \"...\"`, "
     "`docproof-warden email --subject ... --body ...`, and "
     "`docproof-warden code-request ...`. One action per tick. Never deploy, "
@@ -79,7 +79,7 @@ def _prompt(home: str | Path, *, mode: str, question: str) -> str:
             "(`app/warden/commands.py`) don't cover:\n\n"
             f"{question}\n\n"
             "Follow the runbook in "
-            "galley/practitioner/skills/warden/references/runbook.md. Answer "
+            "galley/practitioner/references/warden-runbook.md. Answer "
             "it, or act on it, only through `docproof-warden verb ...`, "
             "`docproof-warden say \"...\"`, `docproof-warden email "
             "--subject ... --body ...`, and `docproof-warden code-request "
@@ -95,7 +95,7 @@ def _prompt(home: str | Path, *, mode: str, question: str) -> str:
         "This tick's findings and actions (tick/latest.json):\n\n"
         f"{body}\n\n"
         "Follow the runbook in "
-        "galley/practitioner/skills/warden/references/runbook.md for every "
+        "galley/practitioner/references/warden-runbook.md for every "
         "finding under `needs_model`. Act only through `docproof-warden "
         "verb ...`, `docproof-warden say \"...\"`, `docproof-warden email "
         "--subject ... --body ...`, and `docproof-warden code-request "

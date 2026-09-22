@@ -13,7 +13,7 @@ what is left: findings with no verb to call, or a question a person's text
 or email did not match the fixed command vocabulary (`status`, `yes N`,
 `no N`, `pause`, `resume`, `quiet Nh`, `forget <surname>`, `why <surname>`).
 
-Read `references/runbook.md` once. It has one entry per rule: the causes
+Read `references/warden-runbook.md` once. It has one entry per rule: the causes
 seen in practice and the exact verb (if any) that fixes each. Do not read
 `docs/monitoring-agent-plan.md` in full — the runbook is that document's
 "stuck rules" and "fix tiers" sections, kept current.
