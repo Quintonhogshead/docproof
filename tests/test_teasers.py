@@ -9,25 +9,23 @@ import time
 from docx import Document
 from fastapi.testclient import TestClient
 import pytest
-from pydantic import ValidationError
 
 from app.jobs import Job, JobRunner, JobStore
 from app.main import create_app
 from app.settings import Paths, Settings
-from app.teasers import (Queue, accept_story, generate_draft, accept_review, revision_context,
-                         MAX_DRAFTS_PER_CYCLE, MAX_DRAFTS_PER_DAY, MAX_BACKOFF_SECONDS, YIELD_SECONDS,
-                         GATE_ROUNDS, INITIAL_WRITER_TOKENS, MAX_WRITER_TOKENS, TeaserError)
+from app.teasers import (Queue, accept_story, generate_draft, accept_review,
+                         MAX_DRAFTS_PER_CYCLE, MAX_DRAFTS_PER_DAY, TeaserError, accept_writer_brief)
 from app.teaser_delivery import deliver, ensure_folder, verify_document
 from docproof.providers.base import ProviderResult
-from docproof.teasers import WRITER_MODEL, WRITER_PROVIDER, SOL_MODEL
+from docproof.teasers import QWEN_MODEL, SOL_MODEL
 from docproof.teasers import pipeline
 from docproof.teasers.document import write_document
-from docproof.teasers.models import (Draft, Teaser, Element, Fact, Storysheet, Review, OptionCheck,
-                                     WriterBrief, digest, draft_issues, approval_issues)
+from docproof.teasers.models import (Draft, Teaser, Element, Fact, Storysheet,
+    Review, OptionCheck, SmallEdit, WriterBrief, apply_small_edits, digest, draft_issues, approval_issues)
 
 
 @pytest.fixture
-def story():
+def story(draft):
     return Storysheet(title="The Ferry Ledger", author="", source_complete=True,
         source_limitations=[], reader_promise="A quiet family reconciliation on a working island.",
         narrative_center="Mara and her brother", premise="Mara returns to repair the island ferry.",
@@ -36,13 +34,14 @@ def story():
         public_facts=[Fact(claim="Mara returns to repair the ferry.", paragraph_ids=[1])],
         conditional_disclosures=[], protected_revelations=["The final decision about the boat."],
         five_angles=["Return", "Siblings", "Island", "Inheritance", "Repair"],
+        qwen_instructions="Ground all five options in Mara's return and the siblings' dilemma.",
         writer_brief=WriterBrief(title="The Ferry Ledger", author="",
             public_setup="Mara returns to repair the ferry; her brother wants to sell it.",
             reader_promise="A restrained family story.", central_pressure="A disputed inheritance.",
             stakes="Their relationship and the ferry's future.", genre_and_audience="Adult family fiction",
             voice="Restrained and concrete", public_facts=["Mara returns; her brother wants to sell the ferry."],
             five_angles=["Return", "Siblings", "Island", "Inheritance", "Repair"],
-            writing_instructions="Leave the final decision unresolved."))
+            writing_instructions="Leave the final decision unresolved.", author_copy=draft.model_copy(deep=True)))
 
 
 @pytest.fixture
@@ -79,13 +78,6 @@ def approved(draft, chunk_ids=(1,)):
                                        faithful_voice=True, distinct_angle=True, feedback="") for i in range(1, 6)])
 
 
-@pytest.fixture(autouse=True)
-def feature_available(monkeypatch):
-    """The engine tests run with the kill switch lifted; the switch itself is
-    covered by test_switched_off_*."""
-    monkeypatch.setattr("app.teasers.AVAILABLE", True)
-
-
 @pytest.fixture
 def queued(tmp_path):
     path = tmp_path / "manuscript.docx"
@@ -98,36 +90,28 @@ def queued(tmp_path):
     queue = Queue(tmp_path / "watch")
     queue.configure(enabled=True)
     queue.add(job)
-    return queue, job, queue.claim("worker")
-
-
-class Writer:
-    """A provider that returns each response in turn and records every call."""
-    def __init__(self, *responses):
-        self.responses, self.calls = list(responses), []
-
-    def complete_structured(self, **kw):
-        assert kw["model"] == WRITER_MODEL
-        assert "EDITORIAL BRIEF" in kw["user"] and "YOU ARE THE WRITER" in kw["system"]
-        self.calls.append(kw)
-        response = self.responses.pop(0)
-        return response if isinstance(response, ProviderResult) else ProviderResult(parsed=response.model_dump())
+    task = queue.claim("worker")
+    # These regression cases exercise already queued version-one packages.
+    task["version"] = 1
+    queue.save(task)
+    return queue, job, task
 
 
 def drafted(queued, story, draft):
     queue, job, task = queued
     task = accept_story(queue, task, story.model_dump())
-    return queue, generate_draft(queue, task, provider=Writer(draft))
+    class Provider:
+        def complete_structured(self, **kw):
+            assert kw["model"] == QWEN_MODEL
+            assert "five" in kw["user"]
+            return ProviderResult(parsed=draft.model_dump())
+    return queue, generate_draft(queue, task, provider=Provider())
 
 
-def rejected(draft, notes=("Option 1: keep the brother's decision open.",)):
-    review = approved(draft)
-    review.approved = False
-    review.options[0].accurate = False
-    review.options[0].feedback = "Option 1 states the boat is sold, which the ending reverses."
-    review.options[0].writer_notes = notes[0].split(": ", 1)[1]
-    review.writer_notes = list(notes[1:])
-    return review
+def next_brief(queue, task, story):
+    return accept_writer_brief(queue, task, {"brief": story.writer_brief.model_dump(),
+        "draft_sha256": task["drafts"][-1]["sha256"],
+        "review_sha256": digest(Review.model_validate(task["reviews"][-1]))})
 
 
 def test_five_options_and_gate(draft):
@@ -153,26 +137,19 @@ def test_wire_schema_preserves_book_title(story):
     _check_schema(schema)
 
 
-def test_review_schema_has_no_room_for_replacement_text(draft):
-    review = approved(draft).model_dump()
-    review["edits"] = [{"field": "teaser", "index": 1, "before": "Mara", "after": "Mara Ellis"}]
-    with pytest.raises(ValidationError):
-        Review.model_validate(review)
-
-
-def test_writer_is_the_catalog_deepinfra_model_with_default_reasoning():
-    from docproof.providers.catalog import lookup
+def test_rephrasing_requests_direct_responses_without_changing_provider_defaults():
     from docproof.providers.deepinfra_provider import DeepInfraProvider
-    info = lookup(WRITER_MODEL)
-    assert info is not None and info.provider == WRITER_PROVIDER == "deepinfra"
-    body = DeepInfraProvider(api_key="test-key", effort=None)._body(
-        model=WRITER_MODEL, system="Write.", user="Brief.",
-        schema={"type": "object", "properties": {}, "additionalProperties": False},
-        schema_name="teaser", max_tokens=100)
-    assert "extra_body" not in body and "reasoning_effort" not in body
+    args = dict(model=QWEN_MODEL, system="Rephrase faithfully.", user="Finished copy.",
+                schema={"type": "object", "properties": {}, "additionalProperties": False},
+                schema_name="teaser", max_tokens=100)
+    direct = DeepInfraProvider(api_key="test-key", effort=None, reasoning_enabled=False)._body(**args)
+    assert direct["extra_body"] == {"reasoning": {"enabled": False}}
+    assert "reasoning_effort" not in direct
+    default = DeepInfraProvider(api_key="test-key")._body(**args)
+    assert "extra_body" not in default
 
 
-def test_writer_never_receives_private_ending_manuscript_or_private_feedback(queued, story, draft):
+def test_qwen_never_receives_private_ending_or_rejected_copy(queued, story, draft):
     secret = "PRIVATE_ENDING_SENTINEL"
     for name, value in story.model_dump().items():
         if isinstance(value, str):
@@ -183,27 +160,37 @@ def test_writer_never_receives_private_ending_manuscript_or_private_feedback(que
     task["chunks"][0]["paragraphs"][0]["text"] += " " + secret
     queue.save(task)
     task = accept_story(queue, task, story.model_dump())
-    first = Writer(draft)
-    task = generate_draft(queue, task, provider=first)
-    call = first.calls[0]
-    assert secret not in call["user"] and secret not in call["system"]
-    assert json.dumps(story.writer_brief.model_dump(), ensure_ascii=False) in call["user"]
-    review = rejected(draft)
-    review.feedback = ["Option 1 reveals " + secret]
-    review.options[0].feedback = "It names " + secret
+    bad = draft.model_copy(deep=True)
+    bad.teasers[0].paragraphs[0] += " " + secret
+    class Initial:
+        def complete_structured(self, **kw):
+            assert secret not in kw["user"] and secret not in kw["system"]
+            assert "SOL'S FINISHED COPY" in kw["user"]
+            assert json.dumps(story.writer_brief.author_copy.model_dump(), ensure_ascii=False) in kw["user"]
+            assert story.writer_brief.public_setup not in kw["user"]
+            assert story.writer_brief.writing_instructions not in kw["user"]
+            return ProviderResult(parsed=bad.model_dump())
+    task = generate_draft(queue, task, provider=Initial())
+    review = approved(bad)
+    review.approved = False
+    review.options[0].spoiler_safe = False
+    review.guidance_approved = False
+    review.feedback = ["Remove " + secret]
     task = accept_review(queue, task, review.model_dump())
-    assert task["state"] == "story_ready"
-    assert any(secret in line for line in task["feedback"])
-    second = Writer(draft)
-    task = generate_draft(queue, task, provider=second)
-    call = second.calls[0]
-    assert secret not in call["user"] and secret not in call["system"]
-    assert "Option 1: keep the brother's decision open." in call["user"]
-    assert "APPROVED OPTIONS TO RETURN UNCHANGED:\n[2, 3, 4, 5]" in call["user"]
-    assert secret not in json.dumps(task["writer_handoffs"])
+    task["feedback"].append(secret)
+    class Revision:
+        def complete_structured(self, **kw):
+            assert secret not in kw["user"] and secret not in kw["system"]
+            assert "Make no editorial decisions" in kw["system"]
+            assert "PUBLIC REVISION NOTES" not in kw["user"]
+            assert "APPROVED OPTIONS TO PRESERVE:\n[2, 3, 4, 5]" in kw["user"]
+            return ProviderResult(parsed=draft.model_dump())
+    task = next_brief(queue, task, story)
+    result = generate_draft(queue, task, provider=Revision())
+    assert secret not in json.dumps(result["writer_handoffs"])
 
 
-def test_legacy_storysheet_without_brief_returns_to_sol(queued, story):
+def test_legacy_task_refreshes_private_brief_before_any_writer_call(queued, story):
     queue, _, task = queued
     task["storysheet"] = story.model_dump(exclude={"writer_brief"})
     task["state"] = "story_ready"
@@ -214,42 +201,71 @@ def test_legacy_storysheet_without_brief_returns_to_sol(queued, story):
     assert result["prior_storysheets"]
 
 
-def test_every_saved_draft_is_the_writers(queued, story, draft):
+def test_outline_only_task_must_get_finished_sol_copy(queued, story):
+    queue, _, task = queued
+    task["storysheet"] = story.model_dump()
+    task["storysheet"]["writer_brief"].pop("author_copy")
+    queue.save(task, "story_ready")
+    result = generate_draft(queue, queue.get(task["id"]), provider=object())
+    assert result["state"] == "queued" and "generation_times" not in result
+
+
+def test_changed_sol_copy_invalidates_previously_passing_rephrasing(queued, story, draft):
     queue, task = drafted(queued, story, draft)
-    entry = task["drafts"][-1]
-    assert entry["model"] == WRITER_MODEL and entry["provider"] == WRITER_PROVIDER
-    assert entry["operation"] == "generation" and entry["gate_rounds"] == 1
-    assert entry["brief_sha256"] == digest(story.writer_brief.model_dump())
+    review = approved(draft)
+    review.approved = False
+    task = accept_review(queue, task, review.model_dump())
+    story.writer_brief.author_copy.teasers[0].paragraphs[0] = (
+        story.writer_brief.author_copy.teasers[0].paragraphs[0].replace("Mara returns", "Mara comes back"))
+    task = next_brief(queue, task, story)
+    class Provider:
+        def complete_structured(self, **kw):
+            assert "APPROVED OPTIONS TO PRESERVE:\n[2, 3, 4, 5]" in kw["user"]
+            return ProviderResult(parsed=story.writer_brief.author_copy.model_dump())
+    task = generate_draft(queue, task, provider=Provider())
+    assert "Mara comes back" in task["drafts"][-1]["content"]["teasers"][0]["paragraphs"][0]
 
 
-def test_mechanical_gate_retries_the_writer_before_sol_sees_a_draft(queued, story, draft):
-    long = draft.model_copy(deep=True)
-    long.teasers[0].paragraphs[0] += " extra" * 70
-    queue, _, task = queued
-    task = accept_story(queue, task, story.model_dump())
-    writer = Writer(long, draft)
-    result = generate_draft(queue, task, provider=writer)
-    assert result["state"] == "drafted" and len(writer.calls) == 2
-    assert "REQUIRED FIXES" in writer.calls[1]["user"]
-    assert "Option 1 has" in writer.calls[1]["user"]
-    assert json.dumps(long.model_dump(), ensure_ascii=False) in writer.calls[1]["user"]
-    assert result["drafts"][-1]["content"] == draft.model_dump()
-    assert result["drafts"][-1]["gate_rounds"] == 2
-    assert len(result["generation_receipts"]) == 2
+def test_revised_spoiler_boundary_does_not_reuse_old_approved_copy(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    review = approved(draft)
+    review.approved = False
+    task = accept_review(queue, task, review.model_dump())
+    task["storysheet"]["protected_revelations"].append("A newly protected development.")
+    class Revision:
+        def complete_structured(self, **kw):
+            assert 'APPROVED COPY ONLY:\n{"teasers": []}' in kw["user"]
+            return ProviderResult(parsed=draft.model_dump())
+    task = next_brief(queue, task, story)
+    result = generate_draft(queue, task, provider=Revision())
+    assert result["drafts"][-1]["retained_from"] is None
 
 
-def test_persistent_mechanical_failure_retries_without_saving_a_draft(queued, story, draft):
-    long = draft.model_copy(deep=True)
-    long.opening_hooks = ["short"] * 3
-    queue, _, task = queued
-    task = accept_story(queue, task, story.model_dump())
-    writer = Writer(*[long] * GATE_ROUNDS)
-    with pytest.raises(TeaserError, match="mechanical checks"):
-        generate_draft(queue, task, provider=writer)
-    result = queue.get(task["id"])
-    assert result["state"] == "retry_wait" and not result["drafts"]
-    assert len(writer.calls) == GATE_ROUNDS
-    assert result.get("feedback") in (None, [])
+def test_broader_revision_waits_for_bound_public_brief(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    review = approved(draft)
+    review.approved = False
+    review.options[0].accurate = False
+    task = accept_review(queue, task, review.model_dump())
+    assert task["state"] == "brief_ready"
+    with pytest.raises(TeaserError, match="cannot generate"):
+        generate_draft(queue, task, provider=object())
+    brief = story.writer_brief.model_copy(deep=True)
+    brief.writing_instructions = "Describe the ferry as temporarily out of service for inspection."
+    payload = {"brief": brief.model_dump(), "draft_sha256": digest(draft), "review_sha256": "wrong"}
+    with pytest.raises(TeaserError, match="does not match"):
+        accept_writer_brief(queue, task, payload)
+    payload["review_sha256"] = digest(review)
+    task = accept_writer_brief(queue, task, payload)
+    assert task["state"] == "story_ready"
+    assert accept_writer_brief(queue, task, payload)["writer_brief"] == brief.model_dump()
+    class Revision:
+        def complete_structured(self, **kw):
+            assert brief.writing_instructions not in kw["user"]
+            assert json.dumps(brief.author_copy.model_dump(), ensure_ascii=False) in kw["user"]
+            return ProviderResult(parsed=draft.model_dump())
+    result = generate_draft(queue, task, provider=Revision())
+    assert result["writer_handoffs"][-1]["author_copy"] == brief.author_copy.model_dump()
 
 
 def test_count_structure_and_guidance_cannot_be_omitted(draft):
@@ -307,7 +323,7 @@ def test_complete_source_can_have_qualified_character_perspectives(queued, story
         pipeline.validate_story(story, task["chunks"])
 
 
-def test_writer_result_reused_and_wrong_review_blocked(queued, story, draft):
+def test_qwen_result_reused_and_wrong_review_blocked(queued, story, draft):
     queue, task = drafted(queued, story, draft)
     assert generate_draft(queue, task, provider=object())["drafts"] == task["drafts"]
     review = approved(draft)
@@ -316,29 +332,30 @@ def test_writer_result_reused_and_wrong_review_blocked(queued, story, draft):
         accept_review(queue, task, review.model_dump())
     assert queue.get(task["id"])["state"] == "drafted"
     task = accept_review(queue, task, approved(draft).model_dump())
-    assert task["state"] == "approved" and task["feedback"] == []
+    assert task["state"] == "approved"
 
 
-def test_failed_review_sends_notes_to_the_writer_then_rebriefs(queued, story, draft):
+def test_failed_review_revises_automatically_and_refreshes_brief(queued, story, draft):
     queue, task = drafted(queued, story, draft)
-    review = rejected(draft, ("Option 1: keep the brother's decision open.", "Shorten the editorial note."))
+    review = approved(draft)
+    review.approved = False
+    review.feedback = ["Make the relationship pressure more specific."]
     task = accept_review(queue, task, review.model_dump())
-    assert task["state"] == "story_ready"
-    assert any(line.startswith("One or more options") for line in task["feedback"])
-    assert "Option 1: Option 1 states the boat is sold" in task["feedback"][-1]
-    previous, retained, notes = revision_context(task)
-    assert previous == draft.model_dump() and sorted(retained) == [2, 3, 4, 5]
-    assert notes == ["Shorten the editorial note.", "Option 1: keep the brother's decision open."]
+    assert task["state"] == "brief_ready"
     task["drafts"] *= MAX_DRAFTS_PER_CYCLE
     task["state"] = "drafted"
     queue.save(task)
     task = accept_review(queue, task, review.model_dump())
-    assert task["state"] == "queued" and "storysheet" not in task
-    assert task["prior_storysheets"] == [story.model_dump()]
-    assert any("boat is sold" in line for line in task["feedback"])
+    assert task["state"] == "retry_wait"
+    assert task["resume_state"] == "queued"
+    assert "storysheet" not in task
+    task["retry_at"] = 0
+    queue.save(task)
+    queue.recover()
+    assert queue.get(task["id"])["state"] == "queued"
 
 
-def test_revision_preserves_passing_options_but_requires_fresh_review(queued, story, draft):
+def test_revision_preserves_passing_qwen_options_but_requires_fresh_review(queued, story, draft):
     queue, task = drafted(queued, story, draft)
     prior_hash = task["drafts"][-1]["sha256"]
     review = approved(draft)
@@ -350,40 +367,166 @@ def test_revision_preserves_passing_options_but_requires_fresh_review(queued, st
     changed = draft.model_copy(deep=True)
     for option in changed.teasers:
         option.paragraphs[0] = "New wording. " + option.paragraphs[0]
-    writer = Writer(changed)
-    result = generate_draft(queue, task, provider=writer)
-    assert "APPROVED OPTIONS TO RETURN UNCHANGED:\n[2]" in writer.calls[0]["user"]
-    assert "Option 1: revise this option" in writer.calls[0]["user"]
+    class Revision:
+        def complete_structured(self, **kw):
+            assert "APPROVED OPTIONS TO PRESERVE:\n[2]" in kw["user"]
+            return ProviderResult(parsed=changed.model_dump())
+    task = next_brief(queue, task, story)
+    result = generate_draft(queue, task, provider=Revision())
     content = Draft.model_validate(result["drafts"][-1]["content"])
     assert content.teasers[1] == draft.teasers[1]
     assert content.teasers[0] == changed.teasers[0]
-    assert result["drafts"][-1]["retained_from"] == {"draft_sha256": prior_hash, "options": [2]}
+    assert result["drafts"][-1]["retained_from"]["options"] == [2]
     assert result["drafts"][-1]["sha256"] != prior_hash
     assert result["state"] == "drafted"
     with pytest.raises(TeaserError, match="different draft"):
         accept_review(queue, result, approved(draft).model_dump())
 
 
-def test_rebriefed_story_starts_the_writer_clean(queued, story, draft):
-    queue, task = drafted(queued, story, draft)
-    task = accept_review(queue, task, rejected(draft).model_dump())
-    task["storysheet"]["protected_revelations"].append("A newly protected development.")
-    queue.save(task)
-    writer = Writer(draft)
-    result = generate_draft(queue, task, provider=writer)
-    assert 'PREVIOUS DRAFT (revise it; absent on a first draft):\nnull' in writer.calls[0]["user"]
-    assert "APPROVED OPTIONS TO RETURN UNCHANGED:\n[]" in writer.calls[0]["user"]
-    assert result["drafts"][-1]["retained_from"] is None
-
-
-def test_generation_daily_ceiling_resumes_without_counting_a_failure(queued, story, draft):
+def test_generation_daily_ceiling_resumes_without_editor(queued, story, draft):
     queue, _, task = queued
     task = accept_story(queue, task, story.model_dump())
     task["generation_times"] = [time.time()] * MAX_DRAFTS_PER_DAY
     task = generate_draft(queue, task, provider=object())
     assert task["state"] == "retry_wait"
     assert task["retry_at"] > time.time() + 86000
-    assert task.get("failures", 0) == 0
+
+
+def correction(draft):
+    review = approved(draft)
+    review.approved = False
+    review.options[0].accurate = False
+    review.edits = [SmallEdit(field="teaser", index=1, paragraph=1, before="Mara returns",
+                             after="Mara comes back", reason="Clarify the return.", paragraph_ids=[1])]
+    return review
+
+
+def test_small_sol_edit_is_exact_durable_and_requires_new_approval(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    review = correction(draft)
+    corrected = accept_review(queue, task, review.model_dump())
+    assert corrected["state"] == "drafted"
+    entry = corrected["drafts"][-1]
+    result = Draft.model_validate(entry["content"])
+    assert result.teasers[0].paragraphs[0] == draft.teasers[0].paragraphs[0].replace("Mara returns", "Mara comes back")
+    assert result.teasers[0].paragraphs[1] == draft.teasers[0].paragraphs[1]
+    assert result.teasers[1:] == draft.teasers[1:]
+    assert result.elements == draft.elements
+    assert entry["model"] == SOL_MODEL and entry["base_sha256"] == digest(draft)
+    assert entry["sha256"] != digest(draft)
+    assert accept_review(queue, corrected, review.model_dump())["drafts"] == corrected["drafts"]
+    with pytest.raises(TeaserError, match="Only an approved"):
+        deliver(queue, corrected, queue.root.parent)
+    assert approval_issues(draft, review, [1])
+    assert accept_review(queue, corrected, approved(result).model_dump())["state"] == "approved"
+
+
+def test_sol_can_correct_and_approve_in_one_pass(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    review = correction(draft)
+    review.approved = True
+    review.options[0].accurate = True
+    result = accept_review(queue, task, review.model_dump())
+    assert result["state"] == "approved"
+    corrected = Draft.model_validate(result["drafts"][-1]["content"])
+    final_review = Review.model_validate(result["reviews"][-1])
+    assert not approval_issues(corrected, final_review, [1])
+    assert len(result["reviews"]) == 1 and len(result["drafts"]) == 2
+    assert result["correction_approvals"] == [review.model_dump()]
+    assert result["drafts"][-1]["review_sha256"] == digest(review)
+    replay = accept_review(queue, result, review.model_dump())
+    assert replay["drafts"] == result["drafts"] and replay["state"] == "approved"
+    review.edits[0].after = "Unapproved different wording"
+    with pytest.raises(TeaserError):
+        accept_review(queue, result, review.model_dump())
+
+
+def test_edit_and_approve_cannot_hide_an_unresolved_option(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    review = correction(draft)
+    review.approved = True
+    result = accept_review(queue, task, review.model_dump())
+    assert result["state"] == "brief_ready" and len(result["drafts"]) == 1
+
+
+def test_repeated_phrase_corrections_do_not_force_a_rewrite(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    review = approved(draft)
+    review.edits = [SmallEdit(field="teaser", index=n, paragraph=p,
+        before="Mara returns", after="Mara comes back", reason="Clarify the return.", paragraph_ids=[1])
+        for n, p in [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (1, 2)]]
+    result = accept_review(queue, task, review.model_dump())
+    assert result["state"] == "approved" and len(result["reviews"]) == 1
+    assert len(result["correction_approvals"][0]["edits"]) == 6
+
+
+@pytest.mark.parametrize("change", [
+    {"before": "not in draft"}, {"before": "the"}, {"paragraph_ids": [999]},
+    {"paragraph_ids": []}, {"index": 0}, {"paragraph": 99},
+    {"after": "word " * 41}, {"after": "x" * 321}, {"after": ""},
+    {"after": "A new paragraph.\nAnother paragraph."},
+])
+def test_invalid_small_edit_falls_back_to_qwen_without_changing_copy(queued, story, draft, change):
+    queue, task = drafted(queued, story, draft)
+    review = correction(draft)
+    review.edits[0] = SmallEdit.model_validate({**review.edits[0].model_dump(), **change})
+    result = accept_review(queue, task, review.model_dump())
+    assert result["state"] == "brief_ready"
+    assert len(result["drafts"]) == 1
+    assert result["drafts"][-1]["content"] == draft.model_dump()
+
+
+def test_small_edit_batch_is_atomic_bounded_and_covers_guidance(draft):
+    first = correction(draft).edits[0]
+    second = SmallEdit(field="hook", index=1, paragraph=1,
+                      before="ticket", after="boat ticket", reason="Clarify the hook.", paragraph_ids=[1])
+    result = apply_small_edits(draft, [first, second], {1})
+    assert result.opening_hooks[0] == draft.opening_hooks[0].replace("ticket", "boat ticket")
+    second.before = "missing"
+    with pytest.raises(ValueError):
+        apply_small_edits(draft, [first, second], {1})
+    assert "Mara returns" in draft.teasers[0].paragraphs[0]
+    with pytest.raises(ValueError, match="at most 5"):
+        apply_small_edits(draft, [first] * 6, {1})
+    with pytest.raises(ValueError, match="80 words"):
+        apply_small_edits(draft, [first.model_copy(update={"after": "word " * 30})] * 3, {1})
+
+
+def test_small_edit_loop_returns_to_qwen_and_does_not_count_as_generation(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    task["small_edit_rounds"] = 2
+    task["drafts"] += [{**task["drafts"][0], "operation": "bounded_correction"}] * 4
+    result = accept_review(queue, task, correction(draft).model_dump())
+    assert result["state"] == "brief_ready" and "storysheet" in result
+    assert len(result["drafts"]) == 5
+
+
+def test_small_edit_cannot_skip_manuscript_coverage(queued, story, draft):
+    queue, task = drafted(queued, story, draft)
+    review = correction(draft)
+    review.covered_chunk_ids = []
+    result = accept_review(queue, task, review.model_dump())
+    assert result["state"] == "brief_ready" and len(result["drafts"]) == 1
+
+
+def test_valid_option_survives_unrelated_length_errors(queued, story, draft):
+    draft.teasers[0].paragraphs[0] += " extra" * 70
+    draft.opening_hooks[0] += " extra" * 20
+    queue, task = drafted(queued, story, draft)
+    review = approved(draft)
+    review.approved = False
+    review.options[0].clear = False
+    review.guidance_approved = False
+    task = accept_review(queue, task, review.model_dump())
+    class Revision:
+        def complete_structured(self, **kw):
+            assert "APPROVED OPTIONS TO PRESERVE:\n[2, 3, 4, 5]" in kw["user"]
+            replacement = draft.model_copy(deep=True)
+            replacement.teasers[1].paragraphs[0] += " Changed."
+            return ProviderResult(parsed=replacement.model_dump())
+    task = next_brief(queue, task, story)
+    result = generate_draft(queue, task, provider=Revision())
+    assert result["drafts"][-1]["content"]["teasers"][1:] == draft.model_dump()["teasers"][1:]
 
 
 def test_provider_failure_retries_and_does_not_publish(queued, story):
@@ -398,53 +541,37 @@ def test_provider_failure_retries_and_does_not_publish(queued, story):
     assert not queue.get(task["id"])["drafts"]
 
 
-def test_truncated_package_doubles_the_allowance_in_the_same_call(queued, story, draft):
-    queue, _, task = queued
-    task = accept_story(queue, task, story.model_dump())
-    writer = Writer(ProviderResult(stop_reason="max_tokens", error="truncated"), draft)
-    result = generate_draft(queue, task, provider=writer)
-    assert [c["max_tokens"] for c in writer.calls] == [INITIAL_WRITER_TOKENS, MAX_WRITER_TOKENS]
-    assert result["state"] == "drafted" and result["writer_token_limit"] == MAX_WRITER_TOKENS
-    assert result["generation_receipts"][0]["stop_reason"] == "max_tokens"
+def test_truncated_package_retries_with_more_room_and_keeps_prior_draft(queued, story, draft):
+    from app.teasers import INITIAL_WRITER_TOKENS, MAX_WRITER_TOKENS
+    queue, task = drafted(queued, story, draft)
+    review = approved(draft)
+    review.approved = False
+    review.feedback = ["Correct the ferry repair chronology."]
+    task = accept_review(queue, task, review.model_dump())
+    class Truncated:
+        def complete_structured(self, **kw):
+            assert kw["max_tokens"] == INITIAL_WRITER_TOKENS
+            return ProviderResult(stop_reason="max_tokens", error="truncated")
+    task = next_brief(queue, task, story)
+    result = generate_draft(queue, task, provider=Truncated())
+    assert result["state"] == "retry_wait"
+    assert result["writer_token_limit"] == MAX_WRITER_TOKENS
+    assert result["retry_at"] < time.time() + 31
+    assert result["drafts"] == task["drafts"]
+    assert result["generation_receipts"][-1]["stop_reason"] == "max_tokens"
 
 
-def test_retry_caps_backoff_and_never_feeds_errors_to_sol(queued):
-    queue, _, task = queued
-    task["feedback"] = ["Option 2: the ferry belongs to both siblings."]
-    task["failures"] = 20
-    queue.retry(task, "HTTP 503 from the writer")
-    saved = queue.get(task["id"])
-    assert saved["failures"] == 21
-    assert saved["retry_at"] <= time.time() + MAX_BACKOFF_SECONDS
-    assert saved["feedback"] == ["Option 2: the ferry belongs to both siblings."]
-    assert saved["error"] == "HTTP 503 from the writer"
-    queue.retry(saved, "The subscription reviewer is busy; no new request was submitted.", counted=False)
-    yielded = queue.get(task["id"])
-    assert yielded["failures"] == 21
-    assert yielded["retry_at"] <= time.time() + YIELD_SECONDS
-
-
-def test_worker_error_route_distinguishes_transient_from_failure(queued):
+def test_duplicate_worker_error_does_not_extend_saved_retry(queued):
     from types import SimpleNamespace
     from app.routes.teasers import dispatch, WorkerMessage
     queue, _, task = queued
+    queue.retry(task, "Temporary provider failure", delay=30)
+    before = queue.get(task["id"])
     app = SimpleNamespace(state=SimpleNamespace(watch=SimpleNamespace(home=queue.root.parent)))
     result = dispatch(app, WorkerMessage(action="error", worker="worker", task_id=task["id"],
-                                        payload={"error": "busy", "transient": True}))["task"]
-    assert result["state"] == "retry_wait" and result.get("failures", 0) == 0
-    before = result
-    result = dispatch(app, WorkerMessage(action="error", worker="worker", task_id=task["id"],
                                         payload={"error": "Duplicate transport report"}))["task"]
-    assert result.get("failures", 0) == before.get("failures", 0)
+    assert result["failures"] == before["failures"]
     assert result["retry_at"] == before["retry_at"]
-
-
-def test_busy_lock_is_transient_for_the_worker():
-    from galley.astra_review import AstraReviewError
-    from docproof.teasers.worker import transient
-    assert transient(AstraReviewError("The subscription reviewer is busy; no new request was submitted."))
-    assert not transient(AstraReviewError("Unsupported subscription model or reasoning effort."))
-    assert not transient(ValueError("busy"))
 
 
 def test_document_contains_all_options_guide_and_no_internal_evidence(tmp_path, story, draft):
@@ -454,7 +581,7 @@ def test_document_contains_all_options_guide_and_no_internal_evidence(tmp_path, 
     assert text.index("Option 2 — Recommended") < text.index("Option 1")
     assert all(p in text for t in draft.teasers for p in t.paragraphs)
     assert "Teaser elements & best practices" in text
-    assert "paragraph_ids" not in text and "DeepSeek" not in text and "Sol" not in text
+    assert "paragraph_ids" not in text and "Qwen" not in text and "Sol" not in text
     assert story.protected_revelations[0] not in text
     assert doc.styles["Heading 1"].font.size.pt == 18
 
@@ -537,26 +664,16 @@ def test_worker_path_authenticates_and_settings_stay_private(tmp_path, monkeypat
         assert client.get("/api/teasers").status_code == 401
         assert client.put("/api/teasers/settings", json={"enabled": True}).status_code == 401
         response = client.post("/api/teasers/worker", headers={"Authorization": "Bearer secret-long-enough-for-the-agent-gate"},
-                               json={"action": "poll", "worker": "fly-test"})
+                               json={"protocol": 3, "action": "poll", "worker": "fly-test"})
         assert response.status_code == 200, response.text
         assert response.json() == {"task": None}
-        rejected_action = client.post("/api/teasers/worker", headers={"Authorization": "Bearer secret-long-enough-for-the-agent-gate"},
-                                      json={"action": "brief", "worker": "fly-test"})
-        assert rejected_action.status_code == 409
 
 
-def sol_runner(story, *, check=lambda brief_hash: dict(accurate=True, spoiler_safe=True, feedback=[]),
-               vary=False):
-    """`vary` makes each briefing call return a slightly different brief, as a
-    real rebrief would; without it an identical brief reuses its cached check."""
+def test_sol_is_subscription_high_and_validated_answers_resume(tmp_path, story):
+    from docproof.teasers.models import Reading
     calls = []
     def runner(prompt, schema, work, **kw):
-        calls.append((prompt, schema, kw))
-        if vary and "writer_brief" in schema["properties"]:
-            rounds = sum("writer_brief" in c[1]["properties"] for c in calls)
-            varied = story.model_copy(deep=True)
-            varied.writer_brief.writing_instructions += f" (brief {rounds})"
-            return varied.model_dump()
+        calls.append(kw)
         assert kw["model"] == SOL_MODEL and kw["reasoning_effort"] == "high"
         assert kw["no_tools"] is True
         from galley.codex_runner import _check_schema
@@ -565,100 +682,89 @@ def sol_runner(story, *, check=lambda brief_hash: dict(accurate=True, spoiler_sa
             return dict(chunk_id=1, first_paragraph=1, last_paragraph=1, narrative="Mara returns.",
                         facts=[dict(claim="Mara returns.", paragraph_ids=[1])], revelations=[], source_limitations=[])
         if "brief_sha256" in schema["properties"]:
-            brief_hash = json.loads(prompt[prompt.index('{"private_storysheet"'):])["brief_sha256"]
-            return dict(brief_sha256=brief_hash, **check(brief_hash))
+            return dict(brief_sha256=digest(story.writer_brief), accurate=True, spoiler_safe=True, feedback=[])
         return story.model_dump()
-    return runner, calls
-
-
-def test_sol_is_subscription_high_and_validated_answers_resume(tmp_path, story):
-    runner, calls = sol_runner(story)
     source = pipeline.chunks("Mara returns to repair the ferry.")
     assert pipeline.analyze(source, tmp_path, runner=runner) == story
     assert len(calls) == 2
-    assert "that is the writer's job" in calls[0][0]
     pipeline.analyze(source, tmp_path, runner=runner, attempt=1)
     assert len(calls) == 2
-    assert (tmp_path / "prepared-brief.json").exists()
 
 
-def test_rebrief_uses_the_review_findings(tmp_path, story):
-    runner, calls = sol_runner(story)
-    source = pipeline.chunks("Mara returns to repair the ferry.")
-    pipeline.analyze(source, tmp_path, runner=runner)
-    assert len(calls) == 2
-    finding = "Option 3 invents a storm the book never has."
-    pipeline.analyze(source, tmp_path, runner=runner, feedback=[finding], attempt=1)
-    # The story is rewritten with the finding; the mock returns the same brief,
-    # whose check is already cached by its hash.
-    assert len(calls) == 3
-    assert finding in calls[2][0]
-    pipeline.analyze(source, tmp_path, runner=runner, feedback=[finding], attempt=2)
-    assert len(calls) == 3
+def test_public_brief_must_pass_sol_check_before_leaving_analysis(tmp_path, story):
+    def runner(prompt, schema, work, **kw):
+        if "narrative" in schema["properties"]:
+            return dict(chunk_id=1, first_paragraph=1, last_paragraph=1, narrative="Mara returns.",
+                facts=[dict(claim="Mara returns.", paragraph_ids=[1])], revelations=[], source_limitations=[])
+        if "brief_sha256" in schema["properties"]:
+            return dict(brief_sha256=digest(story.writer_brief), accurate=True, spoiler_safe=False,
+                        feedback=["The public brief reveals a late decision."])
+        return story.model_dump()
+    with pytest.raises(ValueError, match="before Qwen can receive it"):
+        pipeline.analyze(pipeline.chunks("Mara returns."), tmp_path, runner=runner)
+    saved = [json.loads(p.read_text())["answer"] for p in (tmp_path / "answers").glob("*.json")]
+    assert any("writer_brief" in answer for answer in saved)
+    assert not (tmp_path / "prepared-copy.json").exists()
+    assert list(tmp_path.glob("rejected-copy-*.json"))
 
 
-def test_rejected_brief_is_rebriefed_from_the_checkers_findings(tmp_path, story):
-    verdicts = iter([dict(accurate=True, spoiler_safe=False, feedback=["The brief names the final decision."]),
-                     dict(accurate=True, spoiler_safe=True, feedback=[])])
-    runner, calls = sol_runner(story, check=lambda h: next(verdicts), vary=True)
-    source = pipeline.chunks("Mara returns to repair the ferry.")
+def test_sol_copy_editor_applies_specific_changes_without_rewriting(tmp_path, story):
+    calls = []
+    original = story.writer_brief.author_copy.model_copy(deep=True)
+    edit = correction(original).edits[0]
+    def runner(prompt, schema, work, **kw):
+        calls.append(schema)
+        if "writer_brief" in schema["properties"]:
+            return story.model_dump()
+        return dict(brief_sha256=digest(story.writer_brief), accurate=True, spoiler_safe=True,
+                    feedback=[], edits=[edit.model_dump()])
+    source = pipeline.chunks("Mara comes home to repair the ferry.")
     result = pipeline.analyze(source, tmp_path, runner=runner)
-    assert result.writer_brief.writing_instructions.endswith("(brief 2)")
-    assert len(calls) == 4
-    assert "The brief names the final decision." in calls[2][0]
-    assert (tmp_path / "prepared-brief.json").exists()
+    assert result.writer_brief.author_copy == apply_small_edits(original, [edit], {1})
+    assert len(calls) == 2
+    assert pipeline.analyze(source, tmp_path, runner=runner) == result
+    assert len(calls) == 2  # The saved original and exact correction both resume.
 
 
-def test_twice_rejected_brief_is_forgotten_for_the_next_attempt(tmp_path, story):
-    runner, calls = sol_runner(story, check=lambda h: dict(
-        accurate=False, spoiler_safe=True, feedback=["The brief invents a second boat."]), vary=True)
-    source = pipeline.chunks("Mara returns to repair the ferry.")
-    with pytest.raises(ValueError, match="publication-safe brief"):
-        pipeline.analyze(source, tmp_path, runner=runner)
-    assert len(calls) == 4
-    assert not (tmp_path / "prepared-brief.json").exists()
-    assert len(list((tmp_path / "answers").glob("*.json"))) == 2
-    with pytest.raises(ValueError):
-        pipeline.analyze(source, tmp_path, runner=runner, attempt=1)
-    assert len(calls) == 6
+def test_copy_editor_cannot_approve_invalid_edits(tmp_path, story):
+    edit = correction(story.writer_brief.author_copy).edits[0]
+    edit.before = "This phrase does not occur"
+    def runner(prompt, schema, work, **kw):
+        if "writer_brief" in schema["properties"]:
+            return story.model_dump()
+        return dict(brief_sha256=digest(story.writer_brief), accurate=True, spoiler_safe=True,
+                    feedback=[], edits=[edit.model_dump()])
+    with pytest.raises(ValueError, match="match exactly once"):
+        pipeline.analyze(pipeline.chunks("Mara comes home."), tmp_path, runner=runner)
+    assert (tmp_path / "prepared-copy.json").exists()
 
 
-def test_single_portion_review_reads_original_and_brief_in_one_call(tmp_path, story, draft):
+def test_single_portion_review_reads_original_and_sol_copy_in_one_call(tmp_path, story, draft):
     source = pipeline.chunks("ORIGINAL_OPENING\nORIGINAL_ENDING")
     calls = []
     def runner(prompt, schema, work, **kw):
         calls.append(prompt)
         assert "ORIGINAL_OPENING" in prompt and "ORIGINAL_ENDING" in prompt
-        assert "writer_brief" in prompt and "YOU DO NOT WRITE OR CORRECT COPY" in prompt
+        assert "author_copy" in prompt and "baseline" in prompt
         return approved(draft).model_dump()
     assert pipeline.review(story, draft, source, tmp_path, runner=runner).approved
     assert len(calls) == 1
 
 
-def test_switched_off_hook_enqueues_nothing_and_settings_read_off(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.teasers.AVAILABLE", False)
-    queue = Queue(tmp_path / "watch")
-    (queue.root / "settings.json").write_text(json.dumps({"enabled": True, "folder_id": "f1"}))
-    assert queue.settings()["enabled"] is False and queue.settings()["available"] is False
-    job = Job(id="format-2", filename="Smith - Book Original.docx", source_path="x.docx",
-              model="test", mode="now", kind="prep", state="done", owner_id="owner")
-    assert queue.add(job) is None and queue.list() == []
-    assert queue.claim("worker") is None
-    with pytest.raises(TeaserError):
-        queue.configure(enabled=True)
-    queue.configure(enabled=False)                     # turning it off still works
-
-
-def test_switched_off_routes_refuse_enable_and_hand_the_worker_nothing(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.teasers.AVAILABLE", False)
-    monkeypatch.setenv("DOCPROOF_AGENT_TOKEN", "secret-long-enough-for-the-agent-gate")
-    app = create_app(tmp_path, start_runner=False, web=False)
-    with TestClient(app) as client:
-        assert client.put("/api/teasers/settings", json={"enabled": True}).status_code == 409
-        assert client.get("/api/teasers").json()["settings"]["enabled"] is False
-        response = client.post("/api/teasers/worker", headers={"Authorization": "Bearer secret-long-enough-for-the-agent-gate"},
-                               json={"action": "poll", "worker": "fly-test"})
-        assert response.json() == {"task": None}
+def test_revision_translates_private_findings_and_rechecks_public_brief(tmp_path, story):
+    revised = story.writer_brief.model_copy(deep=True)
+    revised.writing_instructions = "Describe the service pause precisely and leave outcomes open."
+    seen = []
+    def runner(prompt, schema, work, **kw):
+        seen.append(schema)
+        if "public_setup" in schema["properties"]:
+            assert "PRIVATE_FINDING" in prompt
+            return revised.model_dump()
+        return dict(brief_sha256=digest(revised), accurate=True, spoiler_safe=True, feedback=[])
+    result = pipeline.revise_writer_brief(story, story.writer_brief, ["PRIVATE_FINDING"],
+        pipeline.chunks("Mara returns to the ferry."), tmp_path, runner=runner)
+    assert result == revised and len(seen) == 2
+    assert "PRIVATE_FINDING" not in result.model_dump_json()
 
 
 def test_completion_hook_queues_before_archiving(queued, tmp_path, monkeypatch):

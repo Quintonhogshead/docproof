@@ -5,7 +5,7 @@
   const toggle = document.getElementById('author-teasers-enabled');
   const note = document.getElementById('author-teasers-note');
   const jobs = document.getElementById('author-teasers-jobs');
-  if (!card || card.hidden) return;   // switched off: no polling, no toggle
+  if (!card) return;
   let saving = false;
   async function request(path, options) {
     const response = await fetch(path, options);
@@ -30,8 +30,16 @@
           link.href = job.document_url;
           link.target = '_blank';
           link.rel = 'noopener noreferrer';
-          link.textContent = 'Open five teasers and editing guide';
+          link.textContent = 'Open five teasers';
           row.append(link);
+          if (job.guide_url && /^https:\/\/(drive|docs)\.google\.com\//.test(job.guide_url)) {
+            const guide = document.createElement('a');
+            guide.href = job.guide_url;
+            guide.target = '_blank';
+            guide.rel = 'noopener noreferrer';
+            guide.textContent = 'Open two-page dos and donts';
+            row.append(document.createTextNode(' · '), guide);
+          }
         } else {
           row.append(document.createTextNode(job.progress || 'Waiting for cloud processing'));
         }
