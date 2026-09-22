@@ -1585,6 +1585,12 @@ class JobRunner:
                                 words=prepared.structure.word_count) is None:
             return
 
+        # Start the independent teaser lane as soon as formatting accepts the source.
+        # Enqueue failures are isolated and recovered by the teaser poller.
+        if self.notify_home:
+            from app.teasers import enqueue_completed
+            enqueue_completed(self.notify_home, self.store.get(job_id))
+
         # Prep reads its windows in order, one call at a time, so an abort just
         # rides the progress callback: it raises between windows, after the last
         # finished one is checkpointed and before the next is paid for.

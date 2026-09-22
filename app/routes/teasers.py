@@ -1,6 +1,8 @@
 """Cloud worker and administrator interfaces for formatting-triggered teasers."""
 from __future__ import annotations
 
+import json
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -25,7 +27,8 @@ class SettingsUpdate(BaseModel):
 
 
 class WorkerMessage(BaseModel):
-    action: Literal["poll", "heartbeat", "story", "draft", "review", "deliver", "error"]
+    protocol: int = 2
+    action: Literal["poll", "heartbeat", "story", "brief", "draft", "review", "deliver", "error"]
     worker: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
     task_id: str = Field(default="", max_length=32, pattern=r"^[a-f0-9]*$")
     payload: dict = Field(default_factory=dict)
@@ -41,7 +44,7 @@ def recover_new_jobs(app, queue):
     stores = [app.state.store, JobStore(Paths(Path(app.state.watch.home)).ensure())]
     for store in stores:
         for job in store.all():
-            if job.is_prep and job.state == "done" and job.created_at >= since:
+            if job.is_prep and job.state in ("running", "done") and job.created_at >= since:
                 teasers.enqueue_completed(app.state.watch.home, job)
 
 
@@ -49,8 +52,8 @@ def dispatch(app, message):
     home = app.state.watch.home
     queue = teasers.Queue(home)
     if message.action == "poll":
-        if not teasers.AVAILABLE:
-            return {"task": None}
+        if message.protocol < 3:
+            return {"task": None, "upgrade_required": True}
         queue.recover()
         recover_new_jobs(app, queue)
         return {"task": queue.claim(message.worker)}
@@ -63,6 +66,8 @@ def dispatch(app, message):
             raise teasers.TeaserError("Author teaser generation is paused.")
         if message.action == "story":
             task = teasers.accept_story(queue, task, message.payload)
+        elif message.action == "brief":
+            task = teasers.accept_writer_brief(queue, task, message.payload)
         elif message.action == "draft":
             task = teasers.generate_draft(queue, task)
         elif message.action == "review":
@@ -71,10 +76,7 @@ def dispatch(app, message):
             task = deliver(queue, task, home)
         elif message.action == "error":
             if task["state"] not in ("complete", "retry_wait"):
-                # A busy subscription lock is reported as transient: the task
-                # waits briefly and nothing counts against the book.
-                queue.retry(task, str(message.payload.get("error", "Worker failed")),
-                            counted=not bool(message.payload.get("transient")))
+                queue.retry(task, str(message.payload.get("error", "Worker failed")))
                 task = queue.get(task["id"])
         return {"task": task}
 
@@ -105,8 +107,6 @@ def register(app):
         if update.folder_id is not None and update.folder_id and not all(
                 c.isalnum() or c in "_-" for c in update.folder_id):
             raise HTTPException(400, "Invalid Google folder ID.")
-        if update.enabled and not teasers.AVAILABLE:
-            raise HTTPException(409, teasers.UNAVAILABLE_MESSAGE)
         values = {"enabled": update.enabled}
         if update.folder_id is not None:
             values["folder_id"] = update.folder_id

@@ -4,6 +4,7 @@ from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.oxml.ns import qn
 from .models import word_count
+from . import AUTHOR_WARNING
 
 
 def write_document(path: Path, story, draft, review, *, book_label: str):
@@ -29,39 +30,52 @@ def write_document(path: Path, story, draft, review, *, book_label: str):
     if story.author:
         doc.add_paragraph(story.author, "Subtitle")
     doc.add_paragraph("Five back-cover teaser options", "Subtitle")
-    doc.add_paragraph(f"Recommended starting point: Option {review.recommended_option}. "
-                      "Each option offers a different approach to the same book. "
-                      "Use the guide at the end to adapt your preferred version.")
-    ordered = sorted(draft.teasers, key=lambda t: (t.number != review.recommended_option, t.number))
-    for index, teaser in enumerate(ordered):
-        suffix = " — Recommended" if teaser.number == review.recommended_option else ""
-        doc.add_heading(f"Option {teaser.number}{suffix}", 1)
-        doc.add_paragraph(teaser.angle, "Subtitle")
-        count = doc.add_paragraph(f"{word_count(' '.join(teaser.paragraphs))} words")
-        count.paragraph_format.keep_with_next = True
-        for number, paragraph in enumerate(teaser.paragraphs):
-            p = doc.add_paragraph(paragraph)
-            p.paragraph_format.keep_together = True
-            p.paragraph_format.keep_with_next = number < len(teaser.paragraphs) - 1
-    doc.add_heading("Optional opening hooks", 1)
-    doc.add_paragraph("Choose one if it suits your preferred teaser; these are alternatives.")
-    for hook in draft.opening_hooks:
-        doc.add_paragraph(hook, "List Bullet")
-    doc.add_heading("Editorial note", 1)
-    doc.add_paragraph(draft.editorial_note)
-    doc.add_page_break()
-    doc.add_heading("Teaser elements & best practices", 1)
-    doc.add_paragraph("Keep the promise of the book clear while protecting what makes it worth finishing.")
-    for element in draft.elements:
-        doc.add_heading(element.name, 2)
-        doc.add_paragraph(element.purpose)
-        doc.add_paragraph(element.book_specific_guidance)
-    doc.add_heading("Best practices", 2)
-    for item in draft.best_practices:
-        doc.add_paragraph(item, "List Bullet")
-    doc.add_heading("Before you use your revised teaser", 2)
-    for item in draft.modification_checklist:
-        doc.add_paragraph(item, "List Bullet")
+    if draft.version == 2:
+        doc.add_paragraph(AUTHOR_WARNING)
+        doc.add_paragraph("Choose and adapt any of these five options. The accompanying two-page "
+                          "dos and donts sheet offers guidance for revising your choice.")
+        for index, teaser in enumerate(sorted(draft.teasers, key=lambda t: t.number)):
+            if index:
+                doc.add_page_break()
+            doc.add_heading(f"Option {teaser.number}", 1)
+            doc.add_paragraph(teaser.angle, "Subtitle")
+            for paragraph in teaser.paragraphs:
+                p = doc.add_paragraph(paragraph)
+                p.paragraph_format.keep_together = True
+    else:
+        doc.add_paragraph(f"Recommended starting point: Option {review.recommended_option}. "
+                          "Each option offers a different approach to the same book. "
+                          "Use the guide at the end to adapt your preferred version.")
+        ordered = sorted(draft.teasers, key=lambda t: (t.number != review.recommended_option, t.number))
+        for index, teaser in enumerate(ordered):
+            suffix = " — Recommended" if teaser.number == review.recommended_option else ""
+            doc.add_heading(f"Option {teaser.number}{suffix}", 1)
+            doc.add_paragraph(teaser.angle, "Subtitle")
+            count = doc.add_paragraph(f"{word_count(' '.join(teaser.paragraphs))} words")
+            count.paragraph_format.keep_with_next = True
+            for number, paragraph in enumerate(teaser.paragraphs):
+                p = doc.add_paragraph(paragraph)
+                p.paragraph_format.keep_together = True
+                p.paragraph_format.keep_with_next = number < len(teaser.paragraphs) - 1
+        doc.add_heading("Optional opening hooks", 1)
+        doc.add_paragraph("Choose one if it suits your preferred teaser; these are alternatives.")
+        for hook in draft.opening_hooks:
+            doc.add_paragraph(hook, "List Bullet")
+        doc.add_heading("Editorial note", 1)
+        doc.add_paragraph(draft.editorial_note)
+        doc.add_page_break()
+        doc.add_heading("Teaser elements & best practices", 1)
+        doc.add_paragraph("Keep the promise of the book clear while protecting what makes it worth finishing.")
+        for element in draft.elements:
+            doc.add_heading(element.name, 2)
+            doc.add_paragraph(element.purpose)
+            doc.add_paragraph(element.book_specific_guidance)
+        doc.add_heading("Best practices", 2)
+        for item in draft.best_practices:
+            doc.add_paragraph(item, "List Bullet")
+        doc.add_heading("Before you use your revised teaser", 2)
+        for item in draft.modification_checklist:
+            doc.add_paragraph(item, "List Bullet")
     doc.core_properties.title = (story.title or book_label) + " — Author teasers"
     doc.core_properties.author = "DocProof"
     path = Path(path)
