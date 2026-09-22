@@ -56,6 +56,9 @@ def clean_env(monkeypatch):
         os.environ.pop(name, None)
     import keyring
     monkeypatch.setattr(keyring, "get_password", lambda *a, **k: None)
+    # The button asks Google whether it will take the request before sending
+    # the browser there. Not from a test: Google says nothing here.
+    monkeypatch.setattr(authlib, "preflight_consent", lambda url, **k: None)
     yield
     for name, value in before.items():
         os.environ.pop(name, None)
@@ -319,3 +322,65 @@ def test_the_desktop_sign_in_is_untouched(tmp_path):
     # reports through the sign_in state the poll reads, not a URL.
     assert "consent_url" not in body
     assert body["sign_in"] is not None
+
+
+# --- Google refusing before the browser goes ----------------------------------
+
+def test_a_client_google_would_refuse_is_refused_here_with_the_address(
+        tmp_path, monkeypatch):
+    """Google's "redirect_uri_mismatch" page never says which address it
+    wanted. The panel checks first and says exactly what to add."""
+    app = make_app(tmp_path)
+    boss = _as(app, "boss@press.com")
+    seen = []
+    monkeypatch.setattr(authlib, "preflight_consent",
+                        lambda url, **k: seen.append(url) or "redirect_uri_mismatch")
+
+    answer = boss.post("/api/watch/auth",
+                       json={"client_id": "desktop-id",
+                             "client_secret": "desktop-secret"})
+
+    assert answer.status_code == 400
+    detail = answer.json()["detail"]
+    assert "https://testserver/api/watch/auth/callback" in detail
+    assert "authorized redirect URI" in detail
+    assert seen and "accounts.google.com" in seen[0]
+    # Nothing was saved and nothing is pending: the next try starts clean.
+    assert WatchSettings.load(app.state.watch.home).client_id == ""
+    assert app.state.watch_auth is None
+
+
+def test_the_fly_secret_client_is_named_as_the_macs_desktop_client(
+        tmp_path, monkeypatch):
+    fly_secrets(monkeypatch, client_id="mac-desktop-id")
+    app = make_app(tmp_path)
+    boss = _as(app, "boss@press.com")
+    monkeypatch.setattr(authlib, "preflight_consent",
+                        lambda url, **k: "redirect_uri_mismatch")
+
+    detail = boss.post("/api/watch/auth",
+                       json={"client_id": "mac-desktop-id",
+                             "client_secret": "s"}).json()["detail"]
+
+    assert "Desktop" in detail and "Web application" in detail
+
+
+def test_the_panel_is_told_the_exact_redirect_to_allow(tmp_path):
+    boss = _as(make_app(tmp_path), "boss@press.com")
+
+    body = boss.get("/api/watch").json()
+
+    assert body["redirect_uri"] == "https://testserver/api/watch/auth/callback"
+
+
+def test_a_preflight_google_cannot_answer_does_not_block(tmp_path,
+                                                          monkeypatch):
+    app = make_app(tmp_path)
+    boss = _as(app, "boss@press.com")
+    monkeypatch.setattr(authlib, "preflight_consent", lambda url, **k: None)
+
+    body = boss.post("/api/watch/auth",
+                     json={"client_id": "web-id",
+                           "client_secret": "web-secret"}).json()
+
+    assert "consent_url" in body

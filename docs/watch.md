@@ -102,7 +102,25 @@ At [console.cloud.google.com](https://console.cloud.google.com):
 > Then skip the CLI below — sign in from the **DocWatch** tab (an admin-only tab
 > there): paste the client id and secret under *The Google sign-in DocProof
 > uses*, click **Sign in to Google**, approve on Google's own page, and it
-> returns you to the tab signed in. The refresh token is kept in the server's
+> returns you to the tab signed in. The tab shows the exact callback address
+> beside the fields, and the button asks Google first whether it will take the
+> request: a client that would land on Google's "Access blocked: this app's
+> request is invalid (redirect_uri_mismatch)" page — which never says which
+> address it wanted — is refused on the tab instead, with the address to add.
+> A **Desktop app** client (the kind the Mac's `docproof-watch auth` uses, and
+> the kind the fly secrets hold) cannot be given a redirect address at all, so
+> it is always the wrong client here; make a Web application one.
+>
+> **If the sign-in dies** — Google revokes a refresh token on a password
+> change, and drops the oldest once a client holds more than fifty for one
+> account — every pass ends "Google no longer accepts the saved sign-in" and
+> nothing in the folder moves. The server emails the notify address
+> (`[DocProof][High][Action] DocWatch's Google sign-in stopped working`) on
+> the first such pass and once a day after, sent through the sign-in the
+> fly secrets hold, since the one that died cannot carry it. That fallback is
+> why the secrets should stay set and be a *different* client from the panel's:
+> one client for the Mac and the secrets, one Web client for the hosted tab,
+> and neither is minting tokens on the other's count. The refresh token is kept in the server's
 > keystore on the volume — so it survives a redeploy — and loaded into the
 > environment where the watcher reads it, **with the client id and secret you
 > signed in with**; the three travel together, because a refresh token belongs

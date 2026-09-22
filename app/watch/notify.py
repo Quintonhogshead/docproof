@@ -20,7 +20,7 @@ import base64
 import html as htmllib
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -894,3 +894,149 @@ def plan_too_large(token: str, ws, file, job, *,
 __all__ = ["SEND_URL", "send", "summary", "maybe_notify", "completion",
            "maybe_complete", "completion_for_job", "send_job_completion",
            "send_test", "promo_too_large", "plan_too_large"]
+
+
+# --- the sign-in itself dying --------------------------------------------------
+
+# Beside `last_pass.json`: when the owner was last told the sign-in is dead,
+# so a clock that looks every hour does not send the same email every hour.
+ALERTS_FILE = "alerts.json"
+SIGN_IN_ALERT = "sign_in_dead"
+# A reminder this often while it stays dead. A dead sign-in stops every
+# workflow on the folder, so one email at breakfast is not enough if breakfast
+# was a week ago.
+REMIND_HOURS = 24
+
+
+def _alerts(home) -> dict:
+    try:
+        data = json.loads((Path(home) / ALERTS_FILE).read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_alerts(home, data: dict) -> None:
+    path = Path(home) / ALERTS_FILE
+    try:
+        staging = path.with_name(path.name + ".writing")
+        staging.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        staging.replace(path)
+    except OSError as e:
+        log.warning("Could not record the alert (%s)", e)
+
+
+def sign_in_alert_due(home, *, now: datetime | None = None) -> bool:
+    """Whether the owner should hear about a dead sign-in now: never told, or
+    told more than `REMIND_HOURS` ago."""
+    stamp = _alerts(home).get(SIGN_IN_ALERT, {}).get("alerted_at")
+    if not stamp:
+        return True
+    try:
+        then = datetime.fromisoformat(stamp)
+    except ValueError:
+        return True
+    now = now or datetime.now(then.tzinfo)
+    return (now - then).total_seconds() >= REMIND_HOURS * 3600
+
+
+def clear_sign_in_alert(home) -> None:
+    """A pass got through, so the next death is news again."""
+    data = _alerts(home)
+    if data.pop(SIGN_IN_ALERT, None) is not None:
+        _write_alerts(home, data)
+
+
+def sign_in_dead_message(ws, error: str, *, web: bool,
+                         via_fallback: bool) -> tuple[str, str]:
+    where = ("the DocWatch tab of the hosted app" if web
+             else "the DocWatch tab, or `docproof-watch auth` in a terminal")
+    lines = [
+        "DocWatch's Google sign-in stopped working, so nothing in the watched "
+        "folder is being formatted, proofread or corrected until somebody "
+        "signs in again.",
+        "",
+        "What Google said:",
+        f"  {error}",
+        "",
+        "What to do:",
+        f"  1. Open {where}.",
+        "  2. Click \"Sign in to Google\" and approve on Google's page.",
+    ]
+    if web:
+        lines += [
+            "     The client must be a Web application client whose authorized "
+            "redirect URIs include the address the tab shows; the tab refuses "
+            "one that Google would.",
+        ]
+    lines += [
+        "",
+        "Passes keep running on their clock and will pick up where they left "
+        "off once the sign-in is back. This email repeats once a day while "
+        "the sign-in stays dead.",
+    ]
+    if via_fallback:
+        lines += [
+            "",
+            "(Sent through the fallback sign-in from the server's environment "
+            "secrets, since the one DocWatch uses is the one that died.)",
+        ]
+    return (f"{ALERT_TAGS} DocWatch's Google sign-in stopped working",
+            "\n".join(lines))
+
+
+def sign_in_dead(home, ws, error: str, *, fallbacks=(), web: bool = False,
+                 opener=drive._open_url, now: datetime | None = None) -> bool:
+    """Tell the owner the sign-in died — through a sign-in that still works.
+
+    The alert email rides Gmail on the same Google sign-in the Drive calls use,
+    which is exactly what just failed, so it cannot carry this one. `fallbacks`
+    are the other (client id, client secret, refresh token) triples the process
+    knows — on the hosted app, the sign-in the fly secrets hold, which is a
+    different client from the panel's — and the first that refreshes sends.
+    Without one there is nothing to send with, and that is said in the log so
+    the reason is not a mystery. Never raises: a dead sign-in is already the
+    pass's failure, and this must not be a second one.
+
+    True when an email went out. Sends at most once per `REMIND_HOURS`; a pass
+    that succeeds (`clear_sign_in_alert`) resets the clock."""
+    if not ws.notify_email:
+        log.warning("The Google sign-in is dead and no notify address is set, "
+                    "so nobody has been emailed. Add one under Alerts on the "
+                    "DocWatch tab.")
+        return False
+    if not sign_in_alert_due(home, now=now):
+        return False
+    subject, body = sign_in_dead_message(ws, error, web=web,
+                                         via_fallback=bool(fallbacks))
+    tried = 0
+    for client_id, client_secret, refresh in fallbacks:
+        if not (client_id and client_secret and refresh):
+            continue
+        tried += 1
+        try:
+            token = drive.refresh_access_token(client_id, client_secret,
+                                               refresh, opener=opener)
+            send(token, ws.notify_email, subject, body, opener=opener)
+        except DriveError as e:
+            log.warning("The fallback sign-in (client ending %s) could not "
+                        "send the dead-sign-in alert: %s", client_id[-14:], e)
+            continue
+        data = _alerts(home)
+        data[SIGN_IN_ALERT] = {
+            "alerted_at": (now or datetime.now(timezone.utc)).isoformat(
+                timespec="seconds"),
+            "error": error, "to": ws.notify_email}
+        _write_alerts(home, data)
+        log.info("Emailed %s that the Google sign-in is dead.",
+                 ws.notify_email)
+        return True
+    if tried:
+        log.warning("The Google sign-in is dead and no fallback sign-in could "
+                    "send the alert; %s has not been emailed.", ws.notify_email)
+    else:
+        log.warning("The Google sign-in is dead and there is no other sign-in "
+                    "to send the alert with; %s has not been emailed. On the "
+                    "hosted app the fly secrets are that fallback.",
+                    ws.notify_email)
+    return False

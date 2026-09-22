@@ -7876,6 +7876,10 @@ function renderWatch(body, quiet) {
   $('watch-client-id').value = '';
   $('watch-client-secret').value = '';
   $('watch-client').open = !w.has_client;
+  // The exact redirect the server sends Google, for the OAuth client's
+  // allow-list. Only reads that carry a request know it; the rest leave the
+  // last one showing.
+  if (body.redirect_uri) $('watch-redirect-uri').textContent = body.redirect_uri;
 
   const picker = $('watch-model');
   picker.innerHTML = '';
