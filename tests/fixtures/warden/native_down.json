@@ -1,0 +1,191 @@
+{
+  "at": "2026-09-22T14:00:00+00:00",
+  "warden_version": "0.228.0",
+  "fly": {
+    "app": {
+      "machines": [
+        {
+          "id": "286d2d7c11e738",
+          "state": "started",
+          "region": "iad",
+          "updated_at": "2026-09-21T21:11:06Z",
+          "checks": [
+            {
+              "name": "http",
+              "status": "passing"
+            }
+          ]
+        }
+      ],
+      "image": "registry.fly.io/atmosphere-docproof:deployment-01M32WSGDA8ZMPYDFHZT2SX7EX",
+      "release": {
+        "version": 467,
+        "created_at": "2026-09-21T21:11:06Z"
+      }
+    },
+    "agent": {
+      "machines": [
+        {
+          "id": "78126d2f0d7e28",
+          "state": "started",
+          "region": "iad",
+          "updated_at": "2026-09-11T10:32:40Z",
+          "checks": []
+        }
+      ],
+      "image": "registry.fly.io/atmosphere-docproof:author-teasers-worker-20260920-final",
+      "release": {
+        "version": 464,
+        "created_at": "2026-09-11T10:32:40Z"
+      }
+    },
+    "logs": {
+      "app": [
+        "2026-09-22T13:59:00Z app[286d2d7c11e738] iad [info]INFO:     GET /api/watch HTTP/1.1 200 OK"
+      ],
+      "agent": [
+        "2026-09-22T13:59:05Z app[78126d2f0d7e28] iad [info]INFO docproof.galley.agent: 1 book(s) awaiting; all already handled here."
+      ]
+    }
+  },
+  "docwatch": {
+    "server_version": "0.228.0",
+    "server_time": "2026-09-22T14:00:00+00:00",
+    "watch": {
+      "auto_ticks": true,
+      "tick_every_minutes": 20,
+      "next_tick_at": "2026-09-22T14:15:00+00:00",
+      "last_tick_at": "2026-09-22T13:55:00+00:00",
+      "missing": null,
+      "hubspot_first_property": "author_first_name",
+      "hubspot_last_property": "author_last_name",
+      "hubspot_key_property": "isbn",
+      "hubspot_status_property": "docproof",
+      "corrections_native_form_id": "2be3b465-b0d6-4bab-b32e-6bd74dcca403"
+    },
+    "run": {
+      "running": false
+    },
+    "sign_in": {
+      "started_at": "2026-09-01T00:00:00Z",
+      "state": "done",
+      "message": ""
+    },
+    "agent": {
+      "agent": "warden-mini",
+      "version": "0.228.0",
+      "at": "2026-09-22T13:59:30+00:00",
+      "poll_interval_s": 300.0,
+      "heartbeat_interval_s": 60.0,
+      "state": "idle",
+      "phase": null,
+      "book": "",
+      "turns": 0,
+      "age_s": 30.0,
+      "stale": false,
+      "credentials_error": "",
+      "usage_limit": "",
+      "usage_resets_at": "",
+      "last_error": "",
+      "last_outcome": "",
+      "awaiting": 0,
+      "usage_pause": null,
+      "ledger": {
+        "claimed": [],
+        "pending_delivery": [],
+        "counts": {
+          "finished": 12
+        }
+      }
+    },
+    "last_pass": {
+      "note": "ok",
+      "error": ""
+    },
+    "last_tick": "2026-09-22T13:55:00+00:00",
+    "awaiting": [],
+    "files": [
+      {
+        "file_id": "file-agree-1",
+        "name": "Casey - Book 1.docx",
+        "marked": "",
+        "proof_marked": "",
+        "corrections_marked": "",
+        "attempts": 0,
+        "updated_at": "2026-09-22T10:00:00+00:00",
+        "author_first": "Jordan",
+        "author_last": "Casey",
+        "subfolder_name": "Casey, Jordan",
+        "job_id": "",
+        "byline": "Jordan Casey",
+        "completion_emailed": true,
+        "hubspot_id": "hs-agree-1",
+        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      }
+    ],
+    "native": {
+      "worker": null,
+      "intake": null
+    }
+  },
+  "hubspot": {
+    "projects": [
+      {
+        "id": "hs-agree-1",
+        "created_at": "2026-09-20T00:00:00Z",
+        "updated_at": "2026-09-21T00:00:00Z",
+        "author_first": "Jordan",
+        "author_last": "Casey",
+        "book_title": "The Long Way",
+        "created_by": "editor-1",
+        "owner": "editor-1",
+        "status": "Ready for Proofing"
+      }
+    ],
+    "form_submissions": []
+  },
+  "native": {
+    "installed": true,
+    "agents": {
+      "com.docproof.interior-review-worker": {
+        "running": false,
+        "pid": null
+      },
+      "com.docproof.interior-review-ui": {
+        "running": true,
+        "pid": 502
+      }
+    },
+    "worker": {
+      "state": "idle",
+      "started_at": "2026-09-22T14:00:00+00:00",
+      "finished_at": "2026-09-22T14:00:00+00:00",
+      "error": null,
+      "report": {}
+    },
+    "intake": {
+      "unmatched": [],
+      "count": 0,
+      "checked_at": "2026-09-22T14:00:00+00:00",
+      "error": null
+    },
+    "indesign": {
+      "alive": false,
+      "version": "",
+      "error": "InDesign did not answer."
+    },
+    "batches": []
+  },
+  "email": {
+    "inbox": [],
+    "replies": []
+  },
+  "journal": {
+    "open_findings": [],
+    "open_requests": [],
+    "recent_actions": [],
+    "paused": false,
+    "quiet_until": null,
+    "last_tick_at": "2026-09-22T13:55:00+00:00"
+  }
+}

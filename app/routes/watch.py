@@ -160,6 +160,13 @@ class WatchSchedule(BaseModel):
 # for an agent does not answer one.
 AGENT_TOKEN_ENV = "DOCPROOF_AGENT_TOKEN"
 
+# The env var holding the shared secret the Warden monitoring agent presents.
+# Same idea as AGENT_TOKEN_ENV, and deliberately a different value: a token
+# that can nudge Galley, reset a flag or resend an email is a wider hole than
+# the read-only proofing-agent poller, and the two should be able to rotate
+# independently of each other.
+WARDEN_TOKEN_ENV = "DOCPROOF_WARDEN_TOKEN"
+
 #: The portal keys `/api/watch/agent-keys` will hand the Galley agent, by
 #: provider name. An allow-list, not the whole keystore: the agent needs the
 #: keys its own lanes call with, and nothing else on that machine should be
@@ -175,26 +182,31 @@ MIN_AGENT_TOKEN = 24
 AGENT_STATUS_MAX_BYTES = 16 * 1024
 
 
-def agent_gate(request: Request) -> None:
-    """Let the proofing agent's poller through, and nothing else.
+def _bearer_gate(request: Request, env_name: str, who: dict[str, str]) -> None:
+    """The mechanics behind `agent_gate` and `warden_gate`: a bearer token
+    compared in constant time against the server's `env_name` variable.
 
-    A bearer token compared in constant time against `DOCPROOF_AGENT_TOKEN`.
     Three refusals, each saying which of the three things is wrong, because
     they have three different fixes and the person debugging is the owner:
     the server has no token, the server's token is too short to be a secret,
-    or the caller's token does not match."""
+    or the caller's token does not match. `who` supplies the words specific
+    to the caller — `token_label` names the kind of token that is missing,
+    `requests_label` names the kind of request that goes unanswered,
+    `location` says where the matching value belongs, and `name` is what a
+    wrong bearer "is not" — so the two callers can keep their own sentences
+    while sharing the one place that parses the header and compares it."""
     import hmac
 
-    expected = (os.environ.get(AGENT_TOKEN_ENV) or "").strip()
+    expected = (os.environ.get(env_name) or "").strip()
     if not expected:
         raise HTTPException(
-            403, f"This server has no proofing-agent token, so it does not "
-                 f"answer agent requests. Set {AGENT_TOKEN_ENV} on the server "
-                 f"to a long random string and give the same value to the "
-                 f"Mac's ~/.galley/agent.env.")
+            403, f"This server has no {who['token_label']} token, so it "
+                 f"does not answer {who['requests_label']} requests. Set "
+                 f"{env_name} on the server to a long random string and "
+                 f"give the same value to {who['location']}.")
     if len(expected) < MIN_AGENT_TOKEN:
         raise HTTPException(
-            403, f"The server's {AGENT_TOKEN_ENV} is shorter than "
+            403, f"The server's {env_name} is shorter than "
                  f"{MIN_AGENT_TOKEN} characters, which is not a secret. "
                  f"Replace it with `python -c \"import secrets; "
                  f"print(secrets.token_urlsafe(32))\"`.")
@@ -202,7 +214,27 @@ def agent_gate(request: Request) -> None:
     scheme, _, presented = header.partition(" ")
     if scheme.lower() != "bearer" or not hmac.compare_digest(
             presented.strip(), expected):
-        raise HTTPException(401, "Not the proofing agent.")
+        raise HTTPException(401, f"Not {who['name']}.")
+
+
+def agent_gate(request: Request) -> None:
+    """Let the proofing agent's poller through, and nothing else."""
+    _bearer_gate(request, AGENT_TOKEN_ENV, {
+        "token_label": "proofing-agent", "requests_label": "agent",
+        "location": "the Mac's ~/.galley/agent.env",
+        "name": "the proofing agent"})
+
+
+def warden_gate(request: Request) -> None:
+    """Let the Warden monitoring agent through, and nothing else.
+
+    Same shape as `agent_gate`, a different token: a hole that can nudge
+    Galley, reset a flag or resend an email is wider than the read-only
+    proofing-agent poller, and the two must be able to rotate apart."""
+    _bearer_gate(request, WARDEN_TOKEN_ENV, {
+        "token_label": "Warden", "requests_label": "Warden",
+        "location": "the Warden's warden.yaml (DOCPROOF_WARDEN_TOKEN)",
+        "name": "the Warden"})
 
 
 class ProofRelease(BaseModel):
@@ -216,6 +248,18 @@ class ClearMarker(BaseModel):
 class ResetFlag(ClearMarker):
     stage: Literal["format", "proof", "promo", "plan", "corrections"]
     updated_at: str = Field(min_length=1, max_length=100)
+
+
+class WardenResetFlag(BaseModel):
+    """Like `ResetFlag`, minus `updated_at`: the Warden has no screen that
+    could have gone stale."""
+
+    file_id: str = Field(min_length=1, max_length=200)
+    stage: Literal["format", "proof", "promo", "plan", "corrections"]
+
+
+class WardenResendCompletion(BaseModel):
+    file_id: str = Field(min_length=1, max_length=200)
 
 
 class CorrectionsRehearse(BaseModel):
@@ -927,10 +971,31 @@ def register(app: FastAPI) -> None:
         return {"cleared": rec.file_id, "name": rec.name, "removed": removed,
                 **watch_payload()}
 
+    def _reset_flag(watch: WatchRunner, state, rec, stage: str, who: str) -> None:
+        """Clear one workflow's finished flag on `rec`, in Drive and in the
+        state the caller already holds under its own `FolderLock`.
+
+        Shared by the admin route, which checks `rec.updated_at` against
+        what the panel last showed before calling this, and the Warden
+        route, which has no screen to have gone stale and skips that check."""
+        from ..watch import flags
+
+        label, field, _, terminal = flags.STAGES[stage]
+        if getattr(rec, field) not in terminal:
+            raise HTTPException(409, "This workflow has no finished flag to clear.")
+        token = _drive_token_or_none(watch.home)
+        if not token:
+            raise HTTPException(400, "Sign in to Google first to clear the flag in Drive.")
+        try:
+            flags.reset(token, rec, state, stage, who=who)
+        except DriveError as exc:
+            raise HTTPException(502, f"Google Drive could not clear the flag: {exc}") from exc
+        log.info("%s cleared the %s flag on %s (%s).", who, label,
+                 rec.name, rec.file_id)
+
     @app.post("/api/watch/flags/reset", dependencies=[Depends(may_manage)])
     def reset_flag(update: ResetFlag, request: Request) -> dict:
         from ..lock import FolderInUse, FolderLock
-        from ..watch import flags
         from ..watch.state import STATE_FILE, WatchState
 
         watch: WatchRunner = app.state.watch
@@ -944,20 +1009,9 @@ def register(app: FastAPI) -> None:
                     raise HTTPException(404, "This book is no longer in the activity list.")
                 if rec.updated_at != update.updated_at:
                     raise HTTPException(409, "This book changed. Refresh the list and try again.")
-                label, field, _, terminal = flags.STAGES[update.stage]
-                if getattr(rec, field) not in terminal:
-                    raise HTTPException(409, "This workflow has no finished flag to clear.")
-                token = _drive_token_or_none(watch.home)
-                if not token:
-                    raise HTTPException(400, "Sign in to Google first to clear the flag in Drive.")
                 user = getattr(request.state, "user", None)
                 who = getattr(user, "email", "") or "an administrator"
-                try:
-                    flags.reset(token, rec, state, update.stage, who=who)
-                except DriveError as exc:
-                    raise HTTPException(502, f"Google Drive could not clear the flag: {exc}") from exc
-                log.info("%s cleared the %s flag on %s (%s).", who, label,
-                         rec.name, rec.file_id)
+                _reset_flag(watch, state, rec, update.stage, who)
         except FolderInUse:
             raise HTTPException(409, "Wait for the current automation check to finish.") from None
         return {"cleared": rec.file_id, "name": rec.name, "stage": update.stage,
@@ -972,6 +1026,79 @@ def register(app: FastAPI) -> None:
         # pass runs, so this is only ever a double click, and answering "it is
         # already doing what you asked" in red would be the wrong noise.
         return {"started": started, **watch_payload()}
+
+    # --- the Warden's four routes -------------------------------------------
+    #
+    # Behind `warden_gate`, not `may_manage`: the Warden has no browser
+    # session, the same shape of hole as `/api/watch/agent` and
+    # `/api/watch/awaiting`. Small on purpose — a read of the whole picture,
+    # and three writes that mirror buttons already on the panel — because a
+    # bearer token that can do anything an administrator can is not a small
+    # hole any more.
+
+    @app.get("/api/watch/warden")
+    def read_warden(request: Request) -> dict:
+        """The whole `docwatch` section of the Warden's snapshot."""
+        from docproof import __version__
+
+        warden_gate(request)
+        watch: WatchRunner = app.state.watch
+        signing = watch.sign_in_state()
+        return watchlib.warden_payload(
+            watch.home, runner_state=watch.state(),
+            sign_in=asdict(signing) if signing else None,
+            server_version=__version__)
+
+    @app.post("/api/watch/warden/flags/reset")
+    def warden_reset_flag(update: WardenResetFlag, request: Request) -> dict:
+        """The `docwatch-requeue` verb's first half: clear a finished flag so
+        the next run looks at the book again."""
+        from ..lock import FolderInUse, FolderLock
+        from ..watch.state import STATE_FILE, WatchState
+
+        warden_gate(request)
+        watch: WatchRunner = app.state.watch
+        if watch.busy:
+            raise HTTPException(409, "Wait for the current automation check to finish.")
+        try:
+            with FolderLock(watch.home):
+                state = WatchState.load(Path(watch.home) / STATE_FILE)
+                rec = state.files.get(update.file_id)
+                if rec is None:
+                    raise HTTPException(404, "This book is no longer in the activity list.")
+                _reset_flag(watch, state, rec, update.stage, "the Warden")
+        except FolderInUse:
+            raise HTTPException(409, "Wait for the current automation check to finish.") from None
+        return {"cleared": rec.file_id, "name": rec.name, "stage": update.stage}
+
+    @app.post("/api/watch/warden/run")
+    def warden_run(request: Request) -> dict:
+        """The `docwatch-run` verb: start a pass now, same as the panel's own
+        button."""
+        warden_gate(request)
+        watch: WatchRunner = app.state.watch
+        watch_needs(WatchSettings.load(watch.home))
+        started = watch.run_now()
+        return {"started": started}
+
+    @app.post("/api/watch/warden/resend-completion")
+    def warden_resend_completion(body: WardenResendCompletion, request: Request) -> dict:
+        """The `resend-completion` verb: find the book's job and ask notify
+        to email its completion log again."""
+        from ..jobs import JobStore
+        from ..watch.state import STATE_FILE, WatchState
+
+        warden_gate(request)
+        watch: WatchRunner = app.state.watch
+        state = WatchState.load(Path(watch.home) / STATE_FILE)
+        rec = state.files.get(body.file_id)
+        if rec is None or not rec.job_id:
+            raise HTTPException(404, "No job is recorded for that file.")
+        job = JobStore(settingslib.Paths(watch.home)).get(rec.job_id)
+        if job is None:
+            raise HTTPException(404, "That job's record could not be found.")
+        sent = notifylib.send_job_completion(watch.home, job)
+        return {"sent": sent, "file_id": rec.file_id, "job_id": job.id}
 
     @app.post("/api/watch/corrections/rehearse", dependencies=[Depends(may_manage)])
     def rehearse_corrections(body: CorrectionsRehearse) -> dict:

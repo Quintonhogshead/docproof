@@ -46,7 +46,8 @@ DRIVE_FOLDER = "https://drive.google.com/drive/folders/{}"
 
 
 def _raw(to: str, subject: str, body: str, *, html: str | None = None,
-         attachment: tuple[str, bytes] | None = None) -> str:
+         attachment: tuple[str, bytes] | None = None,
+         reply_to: str | None = None) -> str:
     """One message, base64url-encoded the way Gmail's API wants it.
 
     Plain text always; an HTML alternative when there is one, so an inbox shows
@@ -55,6 +56,10 @@ def _raw(to: str, subject: str, body: str, *, html: str | None = None,
     msg = EmailMessage()
     msg["To"] = to
     msg["Subject"] = subject
+    if reply_to:
+        # The Warden sends through the notify mailbox but wants answers back
+        # there, not to whoever the sign-in belongs to.
+        msg["Reply-To"] = reply_to
     msg.set_content(body)
     if html is not None:
         msg.add_alternative(html, subtype="html")
@@ -67,13 +72,14 @@ def _raw(to: str, subject: str, body: str, *, html: str | None = None,
 
 def send(token: str, to: str, subject: str, body: str, *,
          html: str | None = None, attachment: tuple[str, bytes] | None = None,
-         opener=drive._open_url) -> None:
+         reply_to: str | None = None, opener=drive._open_url) -> None:
     """Send one email as the signed-in Google account.
 
     `token` is a Google access token carrying the gmail.send scope — the same
     token the Drive calls use, once the sign-in has been re-consented."""
     payload = json.dumps(
-        {"raw": _raw(to, subject, body, html=html, attachment=attachment)}
+        {"raw": _raw(to, subject, body, html=html, attachment=attachment,
+                     reply_to=reply_to)}
     ).encode()
     request = drive._request(SEND_URL, token, data=payload, method="POST",
                              content_type="application/json")

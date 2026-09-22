@@ -77,6 +77,11 @@ ALERT_TAGS = "[DocProof][Galley][Agent]"
 #: While a book runs, how often the drawer hears from the agent even when no
 #: phase boundary passes. 0 disables the timer (tests).
 DEFAULT_HEARTBEAT_S = 60.0
+#: Mirrors `app.routes.watch.AGENT_STATUS_MAX_BYTES` — the heartbeat route's
+#: own hard ceiling on what a token holder may make the server store. Kept
+#: as its own constant, not an import, so this lean poller never has to pull
+#: in the web app (FastAPI and all) just to know a number.
+HEARTBEAT_MAX_BYTES = 16 * 1024
 #: How long the sign-in check may take before it counts as a failure.
 PREFLIGHT_TIMEOUT_S = 180.0
 #: What to do when the subscription token is rejected. One place, quoted by
@@ -525,6 +530,33 @@ class Ledger:
         return sorted(k for k, v in self.books.items()
                       if v.get("state") == PENDING_DELIVERY)
 
+    #: Each list `summary()` returns is capped here. A heartbeat is read
+    #: live, not paged, and the Warden only needs enough of a stuck ledger
+    #: to name the book — not every claim this agent has ever made.
+    SUMMARY_CAP = 20
+
+    def summary(self) -> dict[str, Any]:
+        """A compact, bounded readout for the heartbeat: what is claimed
+        right now, what is written but waiting on delivery, and how many
+        books sit in each state — enough for the Warden to see a stuck
+        claim without reading the whole ledger file itself."""
+        def rows(states: set[str]) -> list[dict[str, Any]]:
+            picked = [(file_id, book) for file_id, book in self.books.items()
+                      if book.get("state") in states]
+            picked.sort(key=lambda item: str(item[1].get("updated_at", "")))
+            return [{"file_id": file_id, "name": book.get("name", ""),
+                     "state": book.get("state", ""),
+                     "updated_at": book.get("updated_at", "")}
+                    for file_id, book in picked[:self.SUMMARY_CAP]]
+
+        counts: dict[str, int] = {}
+        for book in self.books.values():
+            state = str(book.get("state", ""))
+            counts[state] = counts.get(state, 0) + 1
+        return {"claimed": rows({CLAIMED}),
+                "pending_delivery": rows({PENDING_DELIVERY}),
+                "counts": counts}
+
 
 
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
@@ -624,14 +656,24 @@ class Agent:
     # --- what the drawer sees ------------------------------------------------
 
     def _beat(self, **changes: Any) -> dict[str, Any]:
-        """Merge `changes` into the agent's status and send it. Never raises."""
+        """Merge `changes` into the agent's status and send it. Never raises.
+
+        Every beat also carries the ledger's own readout — what is claimed
+        and what is waiting on delivery, not only whatever this poll cycle
+        happened to be doing — and the usage pause, if the subscription
+        window is why nothing is claimed. Both ride along on `_rest_beat`
+        too: neither describes a book being read right now, so neither is a
+        `RUN_KEYS` entry, and "idle" still means idle."""
         from docproof import __version__
 
         self._status.update({k: v for k, v in changes.items()})
         payload = {"agent": self.host, "version": __version__, "at": _now(),
                    "poll_interval_s": self.poll_interval_s,
                    "heartbeat_interval_s": self.heartbeat_interval_s,
-                   "app": self.env.awaiting_url, **self._status}
+                   "app": self.env.awaiting_url, **self._status,
+                   "ledger": self._ledger_summary(),
+                   "usage_pause": self._usage_pause() or None}
+        payload = self._bounded(payload)
         try:
             if self.heartbeat is not None:
                 self.heartbeat(payload)
@@ -639,6 +681,37 @@ class Agent:
                 post_status(self.env, payload, opener=self.opener)
         except Exception:                                   # noqa: BLE001
             log.warning("heartbeat failed", exc_info=True)
+        return payload
+
+    def _ledger_summary(self) -> dict[str, Any]:
+        """The ledger's readout, or an empty one — a heartbeat must never
+        fail to send because the ledger file on disk could not be read."""
+        try:
+            return self.ledger().summary()
+        except Exception:                                   # noqa: BLE001
+            return {"claimed": [], "pending_delivery": [], "counts": {}}
+
+    @staticmethod
+    def _bounded(payload: dict[str, Any]) -> dict[str, Any]:
+        """Shrink the ledger's two lists, in steps, until the heartbeat's
+        JSON fits under `HEARTBEAT_MAX_BYTES` — the same ceiling the server
+        enforces on `/api/watch/agent`. A heartbeat with the ledger trimmed
+        away still says the agent is alive; one the server refuses outright
+        for its size says nothing at all."""
+        ledger = payload.get("ledger")
+        if not isinstance(ledger, dict):
+            return payload
+
+        def size() -> int:
+            return len(json.dumps(payload, default=str).encode("utf-8"))
+
+        for cap in (Ledger.SUMMARY_CAP, 10, 5, 2, 0):
+            for key in ("claimed", "pending_delivery"):
+                rows = ledger.get(key)
+                if isinstance(rows, list):
+                    ledger[key] = rows[:cap]
+            if size() <= HEARTBEAT_MAX_BYTES:
+                break
         return payload
 
     def _rest_beat(self, **changes: Any) -> dict[str, Any]:

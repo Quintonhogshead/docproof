@@ -390,6 +390,76 @@ def awaiting(home: str | Path) -> list[dict]:
     return out
 
 
+def warden_payload(home: str | Path, *, runner_state: dict, sign_in: dict | None,
+                   server_version: str, now: datetime | None = None) -> dict:
+    """The `docwatch` section of the Warden's snapshot.
+
+    Everything the monitoring agent needs to judge whether DocWatch is
+    stuck — the same facts `/api/watch` shows an administrator, plus the
+    heartbeat and the awaiting list, minus every setting and every secret.
+    `runner_state` and `sign_in` are handed in rather than read here because
+    they live on the one `WatchRunner` the server holds (`watch.state()`,
+    `watch.sign_in_state()`), which this module has no handle to; passing
+    them in keeps this a pure function of the filesystem plus two small
+    dicts, which is what makes it testable without the app.
+
+    Every top-level source `status()` already reads either exists or fails
+    quietly on its own (a missing receipt file is `None`, never a raised
+    error), so nothing here needs its own try/except to keep one bad file
+    from blanking the rest of the answer."""
+    root = Path(home)
+    moment = now or datetime.now(timezone.utc)
+    full = status(root)
+    stamp = last_tick(root)
+    return {
+        "server_version": server_version,
+        "server_time": moment.isoformat(),
+        "watch": full,
+        "run": runner_state,
+        "sign_in": sign_in,
+        "agent": agent_status(root, now=moment),
+        "last_pass": last_pass(root),
+        "last_tick": stamp.isoformat() if stamp else None,
+        "awaiting": awaiting(root),
+        "files": _warden_files(root),
+        "native": {
+            "worker": native_worker(root) if (root / NATIVE_WORKER_FILE).is_file() else None,
+            "intake": native_intake(root) if (root / NATIVE_INTAKE_FILE).is_file() else None,
+        },
+    }
+
+
+def _warden_files(root: Path) -> list[dict]:
+    """One compact, nonsecret row per manuscript, for the Warden.
+
+    Not `_files()`'s rows: those carry job cost, words and upload lists a
+    monitoring agent has no use for. This is the smaller set the rules in
+    `app/warden/rules.py` and `app/warden/names.py` actually read."""
+    state = WatchState.load(root / STATE_FILE)
+    rows = []
+    for rec in sorted(state.files.values(), key=lambda r: r.updated_at,
+                      reverse=True):
+        row = {
+            "file_id": rec.file_id,
+            "name": rec.name,
+            "marked": rec.marked,
+            "proof_marked": rec.proof_marked,
+            "corrections_marked": rec.corrections_marked,
+            "attempts": rec.attempts,
+            "updated_at": rec.updated_at,
+            "author_first": rec.author_first,
+            "author_last": rec.author_last,
+            "subfolder_name": rec.subfolder_name,
+            "job_id": rec.job_id,
+            "completion_emailed": rec.completion_emailed,
+            "hubspot_id": rec.hubspot_id,
+        }
+        if hasattr(rec, "mime_type"):
+            row["mime_type"] = rec.mime_type
+        rows.append(row)
+    return rows
+
+
 def _next_tick(ws: WatchSettings) -> str | None:
     """When the in-app clock will next look, as ISO UTC, for the panel to show.
 
