@@ -26,7 +26,8 @@ from galley.fixed_workflow import ASTRA, FixedWorkflow, FixedWorkflowError, VERS
 
 STAGE = "walkthrough_questions"
 REINSTATED_CATEGORIES = frozenset({"fact_logic", "continuity", "structure"})
-SOURCE_STAGES = frozenset({"fable_screened", "astra_screened", "fable_disputes", "astra_disputes"})
+SOURCE_STAGES = frozenset({"fable_screened", "opus_read_screened", "astra_screened",
+                           "fable_disputes", "opus_read_disputes", "astra_disputes"})
 
 
 class FixedReinstateError(ValueError):

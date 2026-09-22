@@ -13,7 +13,7 @@ from docx import Document
 from docproof.providers import NormalizedUsage, ProviderResult
 from galley import codex_runner, driver as gd, fixed_calls as fc
 from galley.fixed_documents import paragraph_views, validate_delivery_package
-from galley.fixed_workflow import ASTRA, FABLE, LUNA, OPUS, SOL, SONNET
+from galley.fixed_workflow import ASTRA, LUNA, OPUS, SOL, SONNET
 
 
 @pytest.fixture(autouse=True)
@@ -130,7 +130,7 @@ def test_real_fixed_driver_delivers_and_resumes_without_new_generations(tmp_path
         assert list(paragraph_views(path).values()) == ["She received two letters."]
     assert paragraph_views(corrected, "reject") == paragraph_views(source)
     models = {model for model, _ in readers.requests}
-    assert models == ({SONNET, LUNA} if poetry else {SONNET, LUNA, OPUS, SOL, FABLE, ASTRA})
+    assert models == ({SONNET, LUNA} if poetry else {SONNET, LUNA, OPUS, SOL, ASTRA})
     count = len(readers.requests)
     assert local_transport == ([] if poetry else ["She recieved two letters."])
     hashes = {x["name"]: x["sha256"] for x in package["artifacts"]}
@@ -157,7 +157,7 @@ def test_interrupted_stage_resumes_from_paid_read_receipts(tmp_path, monkeypatch
     stage_start = FixedWorkflow._stage
 
     def interrupt(self, stage):
-        if stage == "fable":
+        if stage == "opus_read":
             raise OSError("Simulated local interruption between completed reads")
         stage_start(self, stage)
 
@@ -166,14 +166,14 @@ def test_interrupted_stage_resumes_from_paid_read_receipts(tmp_path, monkeypatch
     stopped = worker.run()
     assert stopped.outcome == "blocked" and "Simulated local interruption" in stopped.reason
     count = len(readers.requests)
-    # Fable's whole-book continuity read precedes the interrupted stage; its
-    # final windowed read (the one with focused_sites) must not have started.
-    assert count > 0 and not any(model == FABLE and "focused_sites" in user for model, user in readers.requests)
-    assert sum(model == FABLE for model, _ in readers.requests) == 1
+    # The opening read and the whole-book continuity read precede the
+    # interrupted stage; the first final read (the second Opus request with
+    # focused_sites) must not have started.
+    assert count > 0 and sum(model == OPUS and "focused_sites" in user for model, user in readers.requests) == 1
     monkeypatch.setattr(FixedWorkflow, "_stage", stage_start)
     resumed = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode=None).run()
     assert resumed.outcome == "done", resumed.reason
-    assert [model for model, _ in readers.requests[count:]] == [FABLE, ASTRA, ASTRA]
+    assert [model for model, _ in readers.requests[count:]] == [OPUS, ASTRA, ASTRA]
     package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
     assert validate_delivery_package(package)["delivery_ready"] is True
 
@@ -195,7 +195,7 @@ def test_failed_local_code_repair_resumes_without_repeating_paid_intake(tmp_path
     worker = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode="fixed")
     result = worker.run()
     assert result.outcome == "blocked" and "Simulated" in result.reason
-    assert [model for model, _ in readers.requests][:2] == [SONNET, LUNA]
+    assert [model for model, _ in readers.requests][:2] == [SONNET, OPUS]
     paid_before = list(readers.requests)
     monkeypatch.setattr(fixed_local, "_versions", lambda: {"checker.py": "repaired"})
     monkeypatch.setattr(fixed_local, "_language_tool", language_tool)
@@ -381,7 +381,7 @@ def _rehash_stage_and_result(directory, result, name, payload):
     _write_json(directory / "workflow.json", marker)
 
 
-@pytest.mark.parametrize("donor,target", [("typed", "ensemble_sweep"), ("ensemble_sweep", "fable"), ("fable", "astra"), ("astra", "final_astra")])
+@pytest.mark.parametrize("donor,target", [("typed", "ensemble_sweep"), ("ensemble_sweep", "opus_read"), ("opus_read", "astra"), ("astra", "final_astra")])
 def test_a_local_receipt_cannot_certify_another_stage(completed_prose_review, donor, target):
     from galley.fixed_documents import FixedDocumentError, _verify_result
     from galley.fixed_local import validate_local_evidence
@@ -449,14 +449,14 @@ def test_self_consistent_local_packet_must_match_the_reviewed_source(
 def test_press_method_final_scan_cannot_be_omitted_from_delivery(completed_prose_review):
     from galley.fixed_documents import FixedDocumentError, _verify_result
     directory, result = completed_prose_review
-    stage = json.loads((directory / "stages/final_astra.json").read_text())
+    stage = json.loads((directory / "stages/astra_gate.json").read_text())
     del stage["evidence"]["press_audit"]
-    _rehash_stage_and_result(directory, result, "final_astra", stage)
+    _rehash_stage_and_result(directory, result, "astra_gate", stage)
     with pytest.raises(FixedDocumentError, match="press-method final scan"):
         _verify_result(result, directory)
 
 
-def test_all_six_reader_models_recover_incomplete_coverage_before_stage_completion(tmp_path, monkeypatch):
+def test_every_reader_model_recovers_incomplete_coverage_before_stage_completion(tmp_path, monkeypatch):
     source = tmp_path / "Writer.docx"
     document = Document()
     document.add_paragraph("She recieved 20 letters while waiting in the quiet room.")
@@ -478,9 +478,9 @@ def test_all_six_reader_models_recover_incomplete_coverage_before_stage_completi
     worker = gd.Driver(source, "writer", workspace_root=tmp_path / "work", execution_mode="fixed")
     result = worker.run()
     assert result.outcome == "done", result.reason
-    assert failed_models == {SONNET, LUNA, OPUS, SOL, FABLE, ASTRA}
+    assert failed_models == {SONNET, LUNA, OPUS, SOL, ASTRA}
     budget = json.loads((worker.workspace / "runs/fixed/calls/budget.json").read_text())
-    assert sum(row["status"] == "failed" for row in budget["entries"].values()) == 6
+    assert sum(row["status"] == "failed" for row in budget["entries"].values()) == 5
     assert all(row["status"] in {"completed", "failed"} for row in budget["entries"].values())
     package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
     assert validate_delivery_package(package)["delivery_ready"] is True
@@ -510,7 +510,10 @@ def test_invalid_suggestions_across_all_reader_stages_preserve_valid_edits_and_r
             payload = json.loads(user)
             number = "sites" in payload
             pid = payload["sites"][0]["para_id"] if number else payload["paragraphs"][0]["id"]
-            category = "number_style" if number else "broken_sentence" if model == OPUS else "format" if model == FABLE else "author_question" if model == ASTRA else "grammar"
+            # The final readers (and the opening read) answer the frontier schema.
+            frontier = "reviewed_check_ids" in result
+            category = ("number_style" if number else "format" if frontier and model == OPUS
+                        else "broken_sentence" if model == OPUS else "author_question" if model == ASTRA else "grammar")
             bad = {"para_id": pid, "quote": "A nonexistent quotation spanning several imaginary paragraphs.",
                    "occurrence": 1, "replacement": "Unsupported correction.", "category": category,
                    "action": "query" if model == ASTRA else "edit", "reason": "Synthetic unanchored proposal.",
@@ -519,7 +522,7 @@ def test_invalid_suggestions_across_all_reader_stages_preserve_valid_edits_and_r
                 bad["quote"] = payload["paragraphs"][pid] if number else payload["paragraphs"][0]["text"]
                 if number:
                     bad["category"] = "grammar"
-                elif model != FABLE:
+                elif not (frontier and model == OPUS):
                     bad["replacement"] = "Unsafe\x00text"
             if "reviewed_check_ids" in result:
                 bad["evidence"] = []
@@ -533,8 +536,9 @@ def test_invalid_suggestions_across_all_reader_stages_preserve_valid_edits_and_r
     assert result.outcome == "done", result.reason
     final = json.loads((worker.workspace / "runs/fixed/result.json").read_text())
     rejected = [h for h in final["history"] if h.get("rejected_proposal")]
-    assert {h["stage"] for h in rejected} == {"typed", "numbers", "ensemble_sweep_opus", "ensemble_sweep_sol", "fable", "astra", "final_astra"}
-    assert {h["rejected_proposal"]["model"] for h in rejected} == {SONNET, LUNA, OPUS, SOL, FABLE, ASTRA}
+    assert {h["stage"] for h in rejected} == {"opening_read", "typed", "numbers", "ensemble_sweep_opus", "ensemble_sweep_sol",
+                                              "opus_read", "astra", "final_astra"}
+    assert {h["rejected_proposal"]["model"] for h in rejected} == {SONNET, LUNA, OPUS, SOL, ASTRA}
     assert final["questions"] == [] and source.read_bytes() == original_bytes
     assert list(final["accepted"].values()) == ["She received 20 letters while waiting in the quiet room."]
     package = json.loads((worker.workspace / "runs/driver/package.json").read_text())
@@ -619,7 +623,7 @@ def test_nested_dispute_ids_reach_certified_book_and_resume_without_new_calls(tm
     assert len(readers.requests) == count and all(p.read_bytes() == data for p, data in raw.items())
 
 
-@pytest.mark.parametrize("failure", ["poetry", "story", "typed", "numbers", "dispute", "check", "opus", "sol", "continuity", "fable", "astra", "final_gate"])
+@pytest.mark.parametrize("failure", ["poetry", "story", "typed", "numbers", "dispute", "check", "opus", "sol", "continuity", "opus_read", "astra", "final_gate"])
 def test_unattended_default_finishes_and_resumes_after_exhausted_reads(tmp_path, monkeypatch, failure):
     source = tmp_path / "Writer.docx"
     doc = Document()
@@ -643,7 +647,7 @@ def test_unattended_default_finishes_and_resumes_after_exhausted_reads(tmp_path,
                 failure == "opus" and model == OPUS and "reviewed_ids" in fields or
                 failure == "sol" and model == SOL or
                 failure == "continuity" and "reading_notes" in fields or
-                failure == "fable" and model == FABLE and "reading_notes" not in fields or
+                failure == "opus_read" and model == OPUS and "reviewed_check_ids" in fields or
                 failure == "astra" and model == ASTRA or
                 failure == "final_gate" and "publication_blockers" in fields)
         return {} if fail else body

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import types
 
+import pytest
+
 from docproof import agent_lane
 from docproof.providers import subagent
 
@@ -89,6 +91,7 @@ def test_complete_structured_runs_one_fenced_turn_and_parses_the_reply(
     assert opts["env"] == {**agent_lane.child_env(), "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "100",
                            "CLAUDE_CODE_EFFORT_LEVEL": "low"}
     assert opts["effort"] == "low"
+    assert opts["cli_path"] == agent_lane.cli_path()   # the newest CLI, not always the bundled one
     assert opts["cwd"] == str(tmp_path) and opts["model"] == "claude-opus-5"
     assert opts["system_prompt"] == "SYS"
 
@@ -487,3 +490,41 @@ def test_control_error_finds_the_limit_anywhere_in_the_chain():
     textual = subagent.control_error(RuntimeError("CLI said: session limit reached"))
     assert isinstance(textual, UsageLimitError)
     assert subagent.control_error(RuntimeError("ordinary")) is None
+
+
+def test_cli_path_takes_the_newest_claude_code_and_the_guard_names_the_fix(monkeypatch):
+    """The Agent SDK runs its bundled CLI unless told otherwise, and that copy
+    trails the release: 0.2.157 bundles 2.1.277, which the API refuses for
+    Opus 5.5. The lane takes the newest binary on the machine instead."""
+    versions = {"/usr/local/bin/claude": (2, 1, 280), "/sdk/_bundled/claude": (2, 1, 251)}
+    monkeypatch.setattr(agent_lane.shutil, "which", lambda name: "/usr/local/bin/claude")
+    monkeypatch.setattr(agent_lane, "_bundled_cli", lambda: "/sdk/_bundled/claude")
+    monkeypatch.setattr(agent_lane, "cli_version", lambda path: versions.get(path))
+    assert agent_lane.cli_path() == "/usr/local/bin/claude"
+    agent_lane.require_cli_for("claude-opus-5-5")
+    agent_lane.require_cli_for("claude-sonnet-5")            # no minimum recorded
+    versions["/usr/local/bin/claude"] = (2, 1, 263)
+    assert agent_lane.cli_path() == "/usr/local/bin/claude"
+    with pytest.raises(agent_lane.ClaudeCliOutdated, match=r"2\.1\.280.*2\.1\.263.*claude update"):
+        agent_lane.require_cli_for("claude-opus-5-5")
+    versions["/sdk/_bundled/claude"] = (2, 1, 290)
+    assert agent_lane.cli_path() == "/sdk/_bundled/claude"
+    monkeypatch.setattr(agent_lane.shutil, "which", lambda name: None)
+    monkeypatch.setattr(agent_lane, "_bundled_cli", lambda: None)
+    assert agent_lane.cli_path() is None
+    with pytest.raises(agent_lane.ClaudeCliOutdated, match="none"):
+        agent_lane.require_cli_for("claude-opus-5-5")
+
+
+def test_cli_version_reads_and_caches_the_version_line(monkeypatch):
+    import subprocess
+    seen = []
+
+    def run(cmd, **kw):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="2.1.280 (Claude Code)\n", stderr="")
+    monkeypatch.setattr(agent_lane.subprocess, "run", run)
+    monkeypatch.setattr(agent_lane, "_CLI_VERSIONS", {})
+    assert agent_lane.cli_version("/opt/claude") == (2, 1, 280)
+    assert agent_lane.cli_version("/opt/claude") == (2, 1, 280)
+    assert seen == [["/opt/claude", "--version"]]

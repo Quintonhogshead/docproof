@@ -28,6 +28,7 @@ thing that failed was a cover job running on a server.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import json
 import logging
 import os
@@ -214,6 +215,68 @@ def require_login(hint: str) -> None:
 # The cached answer of `probe_login` for this process: (logged_in, detail).
 # `logged_in` is None when the probe could not be made (no CLI, a timeout, an
 # unparseable reply) — "unknown", which the file check above then decides.
+#: The oldest Claude Code each model can run on. The API refuses an older
+#: CLI outright ("Claude Code 2.1.251 does not support this model; version
+#: 2.1.280 or newer is required", 2026-09-22), and a refusal at every turn
+#: would read to the fixed lane as reads that were merely unavailable.
+MODEL_MIN_CLI: dict[str, tuple[int, ...]] = {"claude-opus-5-5": (2, 1, 280)}
+_CLI_VERSIONS: dict[str, tuple[int, ...] | None] = {}
+
+
+class ClaudeCliOutdated(AgentLaneUnavailable):
+    """No Claude Code on this machine is new enough for the model asked for."""
+
+
+def _bundled_cli() -> str | None:
+    """The CLI the Agent SDK ships inside its own wheel, if installed."""
+    try:
+        spec = importlib.util.find_spec("claude_agent_sdk")
+    except (ImportError, ValueError):
+        return None
+    if spec is None or not spec.origin:
+        return None
+    path = Path(spec.origin).parent / "_bundled" / ("claude.exe" if os.name == "nt" else "claude")
+    return str(path) if path.is_file() else None
+
+
+def cli_version(path: str) -> tuple[int, ...] | None:
+    """`claude --version` as a tuple, cached per binary; None when it cannot run."""
+    if path not in _CLI_VERSIONS:
+        try:
+            proc = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=PROBE_TIMEOUT)
+            match = re.search(r"(\d+)\.(\d+)\.(\d+)", proc.stdout or "")
+            _CLI_VERSIONS[path] = tuple(int(x) for x in match.groups()) if match else None
+        except (OSError, subprocess.SubprocessError):
+            _CLI_VERSIONS[path] = None
+    return _CLI_VERSIONS[path]
+
+
+def cli_path() -> str | None:
+    """The newest Claude Code on this machine: the one on PATH or the one the
+    Agent SDK bundles. Left alone the SDK runs its bundled copy, which trails
+    the released CLI (0.2.157 ships 2.1.277, too old for Opus 5.5); the Fly
+    image installs a current CLI on PATH. None when neither runs, and the SDK
+    then finds its own."""
+    found = [(cli_version(p), p) for p in (shutil.which("claude"), _bundled_cli()) if p]
+    found = [(v, p) for v, p in found if v is not None]
+    return max(found)[1] if found else None
+
+
+def require_cli_for(model: str) -> None:
+    """Refuse, with the fix, when the newest CLI here is too old for `model`."""
+    needed = MODEL_MIN_CLI.get(model)
+    if needed is None:
+        return
+    path = cli_path()
+    have = cli_version(path) if path else None
+    if have is None or have < needed:
+        wanted = ".".join(map(str, needed))
+        found = ".".join(map(str, have)) if have else "none"
+        raise ClaudeCliOutdated(
+            f"{model} needs Claude Code {wanted} or newer; the newest here is {found}. "
+            "Run `claude update` (or rebuild the worker image) and run the verb again.")
+
+
 _LOGIN_PROBE: tuple[bool | None, str] | None = None
 PROBE_TIMEOUT = 20.0
 

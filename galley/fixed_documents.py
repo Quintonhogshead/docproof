@@ -229,23 +229,37 @@ _LOCAL_EVIDENCE_VERSIONS = {
     "fixed-proofreading-v7": {"typed": "initial", "ensemble_sweep": "completion",
                               "fable": "completion_fable", "astra": "completion_astra",
                               "final_astra": "completion_final_astra"},
+    # v8: Opus 5.5 replaces Opus 5 and Fable. The first final reading is
+    # `opus_read`; the opening read and the Astra gate carry no local packet.
+    "fixed-proofreading-v8": {"typed": "initial", "ensemble_sweep": "completion",
+                              "opus_read": "completion_opus_read", "astra": "completion_astra",
+                              "final_astra": "completion_final_astra"},
 }
 # From v6 a book with any poetry carries a verse sweep packet on its typed
 # stage, and a poetry-only book runs the number stage and the checks.
-_VERSE_EVIDENCE_VERSIONS = {"fixed-proofreading-v6", "fixed-proofreading-v7"}
+_VERSE_EVIDENCE_VERSIONS = {"fixed-proofreading-v6", "fixed-proofreading-v7", "fixed-proofreading-v8"}
 # The prose stage list, by recipe version, and which stage carries the
-# press-method final audit (the last reading stage: its accepted text must be
-# the delivered text).
+# press-method final audit (the last stage: its accepted text must be the
+# delivered text).
 _PROSE_STAGES = ["poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks",
                  "ensemble_sweep", "continuity", "fable", "astra"]
-_FINAL_GATE_VERSIONS = {"fixed-proofreading-v7"}
+_FINAL_GATE_VERSIONS = {"fixed-proofreading-v7", "fixed-proofreading-v8"}
+# v8 opens with Opus 5.5's reading of the original, renames the first final
+# reading and closes with Opus 5.5's gate on Astra's changes.
+_OPUS_RECIPE_VERSIONS = {"fixed-proofreading-v8"}
+_OPUS_PROSE_STAGES = ["poetry", "story_sheet", "opening_read", "typed", "numbers", "broken_repair", "checks",
+                      "ensemble_sweep", "continuity", "opus_read", "astra", "final_astra", "astra_gate"]
 
 
 def _prose_stages(version):
+    if version in _OPUS_RECIPE_VERSIONS:
+        return list(_OPUS_PROSE_STAGES)
     return _PROSE_STAGES + (["final_astra"] if version in _FINAL_GATE_VERSIONS else [])
 
 
 def _audit_stage(version):
+    if version in _OPUS_RECIPE_VERSIONS:
+        return "astra_gate"
     return "final_astra" if version in _FINAL_GATE_VERSIONS else "astra"
 
 
@@ -388,10 +402,13 @@ def _report(result, details, receipt=None):
     stage_labels = {"poetry": "Poetry classification", "story_sheet": "Story Sheet",
         "typed": "Proofreading detectors", "numbers": "Number style review",
         "broken_repair": "Broken sentence repair", "checks": "Meaning and correction checks",
-        "ensemble_sweep": "Opus and Sol complete readings", "continuity": "Fable whole-book continuity reading",
+        "opening_read": "Opening Opus reading of the original manuscript",
+        "ensemble_sweep": "Opus and Sol complete readings", "continuity": "Whole-book continuity reading",
         "fable": "Fable final reading and comment review",
+        "opus_read": "Opus final reading and comment review",
         "astra": "Astra final reading and comment review",
         "final_astra": "Second Astra reading: remaining errors, publication blockers, verdict",
+        "astra_gate": "Opus meaning and correction gate on Astra's changes",
         "poetry_complete": "Verse mechanics proofread complete",
         "walkthrough_questions": "Final readers' questions put to Astra's review"}
     lines = ["# Galley proofreading report", "", f"Scope: {scope}.", "",
@@ -478,10 +495,19 @@ def _report(result, details, receipt=None):
             lines.append("No additional variant or register assumptions were recorded; no independent authority lookup is claimed.")
         lines += ["", "## Reading and verification counts", ""]
         applied = Counter(h["stage"] for h in result["history"] if h.get("applied"))
+        # The opening read's findings are screened and applied with the typed
+        # stage's; the gate applies nothing and only restores.
+        applied["opening_read"] = sum(1 for h in result["history"]
+                                      if h.get("applied") and h["applied"].get("origin") == "opening_read")
         for name, label in stage_labels.items():
-            if name in stages:
+            if name == "astra_gate" and name in stages:
+                gate = stages[name].get("gate", {})
+                restored = sum(len(v) for v in gate.get("rejected", {}).values())
+                lines.append(f"- {label}: {gate.get('changed_paragraphs', 0)} changed paragraphs judged, "
+                             f"{restored} returned to their pre-Astra text.")
+            elif name in stages:
                 lines.append(f"- {label}: {applied[name]} accepted proposals at that stage (later reviews may revise them).")
-        for name in ("fable", "astra", "final_astra"):
+        for name in ("opening_read", "fable", "opus_read", "astra", "final_astra"):
             counts = Counter()
             for window in stages.get(name, {}).get("coverage", []):
                 counts.update(window.get("focused_counts", {}))
