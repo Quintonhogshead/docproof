@@ -47,10 +47,15 @@ LOCAL_OWNER = "local"
 # behind the same gate. `/api/watch/agent-keys` is how that machine — which has
 # its own volume and cannot read the portal's keystore — is given the optional
 # lane keys an administrator set here; read-only, behind the same gate, and
-# limited to an explicit allow-list of key names. Nothing else writable belongs
-# in this set.
+# limited to an explicit allow-list of key names. The four `/api/watch/warden/*`
+# paths are the Warden monitoring agent's own machine routes, on the same
+# footing: no browser, no cookie, `app.routes.watch.warden_gate`'s own bearer
+# token instead, refused outright when no Warden token is configured. Nothing
+# else writable belongs in this set.
 _OPEN_PATHS = {"/api/login", "/api/watch/awaiting", "/api/watch/agent",
                "/api/watch/agent-keys",
+               "/api/watch/warden", "/api/watch/warden/flags/reset",
+               "/api/watch/warden/run", "/api/watch/warden/resend-completion",
                # Exact path only, with the existing agent bearer gate before
                # body parsing. Author content and settings remain session-gated.
                "/api/teasers/worker"}

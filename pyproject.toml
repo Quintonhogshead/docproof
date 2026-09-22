@@ -83,6 +83,7 @@ docproof-desktop = "app.desktop:main"
 docproof-canvas = "app.canvas_desktop:main"
 docproof-watch = "app.watch.cli:main"
 docproof-admin = "app.admin:main"
+docproof-warden = "app.warden.cli:main"
 docproof-serve = "app.serve:main"
 spell-and-check = "app.quest_site:main"
 
