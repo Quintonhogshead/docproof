@@ -1835,3 +1835,36 @@ def test_a_refused_contract_reaches_the_agent_as_exhausted_recovery(make_book, t
     assert result.outcome == "blocked"
     assert result.stopped_at == "fixed"
     assert result.recovery_exhausted is True
+
+
+def test_a_comma_edit_and_a_relative_pronoun_swap_cannot_both_read_one_clause(tmp_path, make_book):
+    """Georgis 2026-09-15: deleting the comma before "that" (restrictive) and
+    swapping that -> which (nonrestrictive) were both approved and shipped
+    "pillar which". The pronoun swap is dropped with a receipt; the comma
+    edit lands. A pair that agrees with itself is untouched."""
+    from galley.fixed_workflow import contradictory_relative_swaps
+    text = "I felt like a marble pillar, that had been gashed by time."
+    at = text.index(", that")
+    comma_out = {"id": "c", "para_id": "p1", "start": at, "end": at + 1, "before": ",", "replacement": "",
+                 "category": "unnecessary_comma", "models": [SONNET, LUNA], "format": "", "reason": "x"}
+    that_which = {"id": "w", "para_id": "p1", "start": at + 2, "end": at + 6, "before": "that", "replacement": "which",
+                  "category": "that_which", "models": [SONNET, LUNA], "format": "", "reason": "x"}
+    dropped = contradictory_relative_swaps([comma_out, that_which], {"p1": text})
+    assert [row["id"] for row, _ in dropped] == ["w"] and "comma edit stands" in dropped[0][1]
+    comma_in = {**comma_out, "start": at + 1, "end": at + 1, "before": "", "replacement": ","}
+    which_that = {**that_which, "before": "which", "replacement": "that"}
+    assert contradictory_relative_swaps([comma_in, that_which], {"p1": text}) == []
+    assert contradictory_relative_swaps([comma_out, which_that], {"p1": text}) == []
+    assert contradictory_relative_swaps([comma_in, which_that], {"p1": text})[0][0]["id"] == "w"
+    # A comma elsewhere in the sentence is not this clause's comma.
+    far = {**comma_out, "start": 0, "end": 0, "before": "", "replacement": ","}
+    assert contradictory_relative_swaps([far, which_that], {"p1": text}) == []
+    # Through the apply path: the text keeps the author's pronoun.
+    book = make_book(text)
+    flow = FixedWorkflow(book, tmp_path / "run", calls=Readers())
+    flow.original = flow.current = {"p1": text}
+    flow._apply("typed", [comma_out, that_which])
+    assert flow.current["p1"] == "I felt like a marble pillar that had been gashed by time."
+    receipts = [h for h in flow.history if h["stage"] == "typed" and "dropped" in h]
+    assert [h["dropped"]["id"] for h in receipts] == ["w"] and receipts[0]["reason"].startswith("guard:")
+    assert [h["applied"]["id"] for h in flow.history if h["stage"] == "typed" and "applied" in h] == ["c"]

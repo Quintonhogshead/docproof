@@ -580,3 +580,41 @@ def test_initial_and_completion_scans_carry_the_chapter_label_check(tmp_path):
                                                           identity=IDENTITY, stage="completion")
     assert [r["replacement"] for r in rows if r["category"] == "chapter_label"] == ["CHAPTER 1"]
     assert "chapter_labels" in {c["check"] for c in packet(evidence)["checks"]}
+
+
+def test_variant_sweep_respells_to_the_manuscripts_english():
+    """towards/grey/backwards on a U.S. run become tracked edits, one per
+    occurrence, quoted by sentence like every other house sweep. A name
+    (Mr. Grey, and the same surname opening a sentence), an all-capitals
+    token, a protected word and a hyphen-joined form are never proposed."""
+    paragraphs = [
+        para("p1", "I walked towards the receptionist. Towards evening, Mr. Grey went home in a grey coat, backwards. TOWARDS"),
+        para("p2", "Grey is my name. Amongst the greyhounds, whilst waiting, they leaned towards-ish."),
+        para("p3", "She strolled amongst them.", reviewable=False),
+    ]
+    rows = local._variant_findings(paragraphs, prepared(*paragraphs))
+    assert [(f.para_id, f.original_text, f.corrected_text) for f in rows] == [
+        ("p1", "I walked towards the receptionist.", "I walked toward the receptionist."),
+        ("p1", "Towards evening, Mr.", "Toward evening, Mr."),
+        ("p1", "Grey went home in a grey coat, backwards.", "Grey went home in a gray coat, backwards."),
+        ("p1", "Grey went home in a grey coat, backwards.", "Grey went home in a grey coat, backward."),
+        ("p2", "Amongst the greyhounds, whilst waiting, they leaned towards-ish.",
+         "Among the greyhounds, whilst waiting, they leaned towards-ish."),
+        ("p2", "Amongst the greyhounds, whilst waiting, they leaned towards-ish.",
+         "Amongst the greyhounds, while waiting, they leaned towards-ish."),
+    ]
+    assert all(f.error_type == "variant_spelling" and f.status == "validated" for f in rows)
+    # Without name evidence a sentence-initial form is respelled, capital kept.
+    lone = [para("p4", "Grey skies again.")]
+    assert [f.corrected_text for f in local._variant_findings(lone, prepared(*lone))] == ["Gray skies again."]
+    # The author's own protected word is left alone.
+    protected = SimpleNamespace(variant=load_variant("us"), spell=replace(SpellScan(), lexicon=("grey",)))
+    assert local._variant_findings(lone, protected) == []
+    # A U.K. run respells the other way and knows no U.S. adverb table.
+    uk = [para("p5", "A gray theater, backwards.")]
+    assert [f.corrected_text for f in local._variant_findings(uk, SimpleNamespace(variant=load_variant("uk"), spell=SpellScan()))] == [
+        "A grey theater, backwards.", "A gray theatre, backwards."]
+    # The rows ride the house sweep into the local packet as edits.
+    house, _ = local._house_findings(paragraphs, prepared(*paragraphs), configuration())
+    row = local._finding(next(f for f in house if f.error_type == "variant_spelling"), {p.para_id: p for p in paragraphs}, "local:sweeps")
+    assert row["action"] == "edit" and row["category"] == "variant_spelling" and row["replacement"] == "I walked toward the receptionist."
