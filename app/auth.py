@@ -56,6 +56,7 @@ _OPEN_PATHS = {"/api/login", "/api/watch/awaiting", "/api/watch/agent",
                "/api/watch/agent-keys",
                "/api/watch/warden", "/api/watch/warden/flags/reset",
                "/api/watch/warden/run", "/api/watch/warden/resend-completion",
+               "/api/watch/warden/retire",
                # Exact path only, with the existing agent bearer gate before
                # body parsing. Author content and settings remain session-gated.
                "/api/teasers/worker"}

@@ -129,7 +129,7 @@ def recent(token: str, *, query: str, max_results: int = 50,
     return out
 
 
-def _inbox_query(cfg: "WardenConfig", since: datetime) -> str:
+def _inbox_query(cfg: "WardenConfig", since: datetime, *, now: datetime | None = None) -> str:
     label = getattr(cfg, "inbox_label", "") or ""
     senders = [s for s in (getattr(cfg, "inbox_senders", None) or []) if s]
     clauses = []
@@ -138,29 +138,29 @@ def _inbox_query(cfg: "WardenConfig", since: datetime) -> str:
     if senders:
         clauses.append("from:(" + " OR ".join(senders) + ")")
     scope = f"({' OR '.join(clauses)}) " if clauses else ""
-    return f"{scope}{_newer_than(since)}"
+    return f"{scope}{_newer_than(since, now=now)}"
 
 
 def inbox(cfg: "WardenConfig", secrets: "Secrets", *, since: datetime,
-          opener) -> list[dict]:
+          opener, now: datetime | None = None) -> list[dict]:
     """Quinton's own inbox, scoped to `inbox_label` or a message from one of
     `inbox_senders` — the two ways a HubSpot notice or an author reply can
     reach him — read since `since`. Read-only: `google_inbox_refresh` cannot
     send, so a bug here can never turn into mail going out under his name."""
     token = _inbox_token(cfg, secrets, opener=opener)
-    results = recent(token, query=_inbox_query(cfg, since), max_results=50,
+    results = recent(token, query=_inbox_query(cfg, since, now=now), max_results=50,
                      opener=opener)
     return [{"id": r["id"], "from": r["from"], "subject": r["subject"],
              "date": r["date"], "snippet": r["snippet"]} for r in results]
 
 
 def replies(cfg: "WardenConfig", secrets: "Secrets", *, since: datetime,
-           opener) -> list[dict]:
+           opener, now: datetime | None = None) -> list[dict]:
     """Answers to Warden's own `[Warden]`-tagged mail, read back out of the
     notify mailbox that sent them — `-from:me` so an alert never shows up
     counted as its own reply."""
     token = _notify_token(cfg, secrets, opener=opener)
-    query = f"subject:{TAG} {_newer_than(since)} -from:me"
+    query = f"subject:{TAG} {_newer_than(since, now=now)} -from:me"
     return recent(token, query=query, max_results=50, opener=opener)
 
 

@@ -135,3 +135,13 @@ book refuses outright while Galley's heartbeat shows one claimed
 Nothing here ever deploys, sets a Fly secret, merges to `main`, or deletes
 anything in Drive or the job store — those have no verb at all, on purpose;
 `docproof-warden verb <anything-not-in-the-registry>` simply refuses.
+
+## Retiring a book
+
+`POST /api/watch/warden/retire` (bearer `DOCPROOF_WARDEN_TOKEN`) with
+`{"file_id": …, "reason": …}` marks a book `retired`: every DocWatch stage
+drops it from its listing until `{"file_id": …, "retire": false}` clears the
+mark. Nothing in Drive or HubSpot changes and the record's failure history
+stays, so it is the answer to "this one is past the pipeline, stop reporting
+it" — not a requeue (`flags/reset`) and never a delete. The Warden's
+`docwatch-retire` verb is tier 1: it runs after a "yes N" by text.

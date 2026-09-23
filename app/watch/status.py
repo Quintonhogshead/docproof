@@ -453,6 +453,8 @@ def _warden_files(root: Path) -> list[dict]:
             "job_id": rec.job_id,
             "completion_emailed": rec.completion_emailed,
             "hubspot_id": rec.hubspot_id,
+            "retired": rec.retired,
+            "retired_reason": rec.retired_reason,
         }
         if hasattr(rec, "mime_type"):
             row["mime_type"] = rec.mime_type
@@ -507,6 +509,8 @@ def _files(root: Path) -> list[dict]:
             "author": " ".join(p for p in (rec.author_first, rec.author_last) if p),
             "job_id": rec.job_id,
             "marked": rec.marked,
+            "retired": rec.retired,
+            "retired_reason": rec.retired_reason,
             "said": said,
             "plain_state": PLAIN_MARK.get(rec.marked) or (
                 job.plain_state() if job else "Being looked at"),

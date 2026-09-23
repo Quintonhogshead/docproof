@@ -123,7 +123,8 @@ def test_the_payload_shape(tmp_path, monkeypatch):
     assert set(row) == {
         "file_id", "name", "marked", "proof_marked", "corrections_marked",
         "attempts", "updated_at", "author_first", "author_last",
-        "subfolder_name", "job_id", "completion_emailed", "hubspot_id"}
+        "subfolder_name", "job_id", "completion_emailed", "hubspot_id",
+        "retired", "retired_reason"}
     assert row["file_id"] == "drive-1"
     assert row["marked"] == "formatted"
     assert row["author_first"] == "José"
@@ -301,3 +302,79 @@ def test_warden_resend_completion_finds_the_job_and_asks_notify(tmp_path, monkey
     # Notifications are off by default, so nothing was actually sent — this
     # only proves the route found the right job and asked notify about it.
     assert body["sent"] is False
+
+
+# --- retiring a book -----------------------------------------------------
+
+def test_warden_can_retire_and_unretire_a_book(tmp_path, monkeypatch):
+    monkeypatch.setenv(WARDEN_TOKEN_ENV, TOKEN)
+    app = make_app(tmp_path)
+    home = app.state.watch.home
+    seed(home, [FileRecord(file_id="oat", name="Oatman - Book Original.docx",
+                           marked="failed", attempts=3)])
+    client = TestClient(app)
+    answer = client.post("/api/watch/warden/retire",
+                         json={"file_id": "oat", "reason": "past this point in the pipeline"},
+                         headers={"Authorization": f"Bearer {TOKEN}"})
+    assert answer.status_code == 200, answer.text
+    assert answer.json() == {"file_id": "oat", "name": "Oatman - Book Original.docx",
+                             "retired": True, "reason": "past this point in the pipeline"}
+    back = WatchState.load(home / STATE_FILE).get("oat")
+    assert back.retired.startswith("the Warden 20")
+    assert back.retired_reason == "past this point in the pipeline"
+    assert back.marked == "failed" and back.attempts == 3        # history untouched
+
+    # the warden payload and the admin listing both say so
+    payload = client.get("/api/watch/warden",
+                         headers={"Authorization": f"Bearer {TOKEN}"}).json()
+    row = next(r for r in payload["watch"]["files"] if r["file_id"] == "oat")
+    assert row["retired"] and row["retired_reason"] == "past this point in the pipeline"
+
+    answer = client.post("/api/watch/warden/retire",
+                         json={"file_id": "oat", "retire": False},
+                         headers={"Authorization": f"Bearer {TOKEN}"})
+    assert answer.status_code == 200
+    assert answer.json()["retired"] is False
+    back = WatchState.load(home / STATE_FILE).get("oat")
+    assert back.retired == "" and back.retired_reason == ""
+
+
+def test_warden_retire_is_404_for_an_unknown_file(tmp_path, monkeypatch):
+    monkeypatch.setenv(WARDEN_TOKEN_ENV, TOKEN)
+    app = make_app(tmp_path)
+    seed(app.state.watch.home, [])
+    answer = TestClient(app).post("/api/watch/warden/retire",
+                                  json={"file_id": "nope"},
+                                  headers={"Authorization": f"Bearer {TOKEN}"})
+    assert answer.status_code == 404
+
+
+def test_warden_retire_needs_its_own_token(tmp_path, monkeypatch):
+    monkeypatch.setenv(WARDEN_TOKEN_ENV, TOKEN)
+    monkeypatch.setenv(AGENT_TOKEN_ENV, "the-agents-token-which-is-also-long-enough")
+    app = make_app(tmp_path)
+    seed(app.state.watch.home, [FileRecord(file_id="oat", name="Oatman.docx")])
+    answer = TestClient(app).post(
+        "/api/watch/warden/retire", json={"file_id": "oat"},
+        headers={"Authorization": "Bearer the-agents-token-which-is-also-long-enough"})
+    assert answer.status_code == 401
+
+
+def test_a_retired_file_is_dropped_from_every_listing(tmp_path):
+    from app.watch.drive import DriveFile
+    from app.watch.tick import drop_retired
+    state = WatchState(tmp_path / STATE_FILE)
+    state.record(FileRecord(file_id="oat", name="Oatman.docx", retired="the Warden 2026-09-23"))
+    state.record(FileRecord(file_id="live", name="Live.docx"))
+    docx = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    listing = [DriveFile(id="oat", name="Oatman.docx", mime_type=docx),
+               DriveFile(id="live", name="Live.docx", mime_type=docx),
+               DriveFile(id="new", name="New.docx", mime_type=docx)]
+    kept, dropped = drop_retired(listing, state)
+    assert [f.id for f in kept] == ["live", "new"]
+    assert dropped == {"oat"}
+    # an old state file without the field still loads, un-retired
+    raw = (tmp_path / STATE_FILE).read_text()
+    assert '"retired"' in raw
+    state2 = WatchState.load(tmp_path / STATE_FILE)
+    assert state2.get("live").retired == ""

@@ -40,6 +40,13 @@ class FileRecord:
     # here is what makes a resumed upload cost nothing.
     uploaded: dict[str, str] = field(default_factory=dict)
     marked: str = ""            # "" | "formatted" | "failed"
+    # Retired: a person (or the Warden, after a yes) said this book is past
+    # the point where the watcher should touch it. Every stage drops it from
+    # its listing while this is set; the failure history stays as it was, and
+    # clearing it puts the book back exactly where it stood. `retired` holds
+    # who and when, `retired_reason` their words.
+    retired: str = ""
+    retired_reason: str = ""
     # The CRM record this manuscript's key resolved to, written before prep so a
     # crash between the HubSpot lookup and the Drive marker still knows which
     # record to finish. Empty for a manuscript prepared before HubSpot was
