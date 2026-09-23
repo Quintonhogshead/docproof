@@ -20,16 +20,20 @@ from functools import partial
 
 from docproof.utils.files import write_atomic
 
-VERSION = "fixed-proofreading-v8"
+VERSION = "fixed-proofreading-v9"
 SONNET = "claude-sonnet-5"
-LUNA = "gpt-5.6-luna"
+# v9 (Quinton, 2026-09-23): GPT-6 Luna and Sol replace 5.6 in every Luna and
+# Sol role. On a 36-window proofreading bench (six human-proofread books) the 6
+# models found a few points fewer of the human's edits but made about half as
+# many wrong edits, ran 2.5-3x faster and cost half as much per token.
+LUNA = "gpt-6-luna"
 # Opus 5.5 took every Opus 5 and Fable role in v8 (Quinton, 2026-09-22): the
 # Story Sheet and the opening read, every dispute, broken-sentence repair, the
 # ensemble sweep, both halves of continuity, the first final read and the gate
 # on Astra's changes. It needs Claude Code 2.1.280 or newer; see
 # docproof.agent_lane.require_cli_for.
 OPUS = "claude-opus-5-5"
-SOL = "gpt-5.6-sol"
+SOL = "gpt-6-sol"
 ASTRA = "gpt-6-astra"
 # TypeSafe's System One judgment model. It proposes sites for the typed stage's
 # screen and never decides anything; see galley/fixed_jev.py.
@@ -124,13 +128,13 @@ def workflow_plan():
         {"stage": "typed", "model": f"{SONNET} + {LUNA}; disputes: {OPUS}; sites: {JEV}", "description": "Local proofreading checks, including LanguageTool, plus the typed ensemble, Jev's judged comma and confusion sites and the opening read's findings; number and currency review remains separate"},
         {"stage": "numbers", "model": f"{SONNET} + {LUNA}; disputes: {OPUS}", "description": "Review every extracted number in context against the existing house policy"},
         {"stage": "broken_repair", "model": OPUS, "description": "Repair triggered broken sentences with clear intended meaning"},
-        {"stage": "checks", "model": LUNA, "description": "Meaning preservation and correction checks through the ChatGPT subscription"},
+        {"stage": "checks", "model": LUNA, "description": "Meaning preservation and correction checks through the ChatGPT subscription, then code applies the house towards/amongst/-wards respellings"},
         {"stage": "ensemble_sweep", "model": f"{OPUS} + {SOL}; disputes: {OPUS}", "description": "Independent complete reads, followed by deterministic recurrence, casing and residual checks"},
         {"stage": "continuity", "model": f"{OPUS}; edits: {OPUS}", "description": "Whole-book continuity read with cited evidence; Opus rules on evidenced edits, unresolved contradictions become author questions"},
         {"stage": OPUS_READ_STAGE, "model": OPUS, "description": "Read the corrected book and decide every proposed Galley comment, then propagate its accepted corrections and casing decisions book-wide"},
         {"stage": "astra", "model": ASTRA, "description": "Read the Opus-corrected book and review every surviving comment, then run the final propagation and consistency sweep"},
         {"stage": FINAL_REVIEW_STAGE, "model": ASTRA, "description": "Second Astra reading of the finished book: correct what remains, list publication blockers, and decide needs_human by the fixed rule"},
-        {"stage": ASTRA_GATE_STAGE, "model": OPUS, "description": "Meaning and correction gate on every change the two Astra readings made; a rejected paragraph returns to its pre-Astra text"},
+        {"stage": ASTRA_GATE_STAGE, "model": OPUS, "description": "Meaning and correction gate on every change the two Astra readings made; a rejected paragraph returns to its pre-Astra text; code then reapplies the house respellings"},
     ]
 
 
@@ -1157,6 +1161,29 @@ class FixedWorkflow:
         self._checks(label + "_checks", snapshot)
         self._cancel()
         return evidence
+
+    def _house_respell(self, stage):
+        """Code applies the house towards/amongst/-wards respellings to the
+        current prose (galley.fixed_local.house_respell_rows): no screen reads
+        them and no check follows in the same stage, so nothing can drop or
+        restore them. Runs after the first checks, so every later snapshot
+        (and the Astra gate's restore point) already holds them, and again
+        after the gate for any a later reader reintroduced. Returns the
+        evidence for the stage record."""
+        from galley.fixed_local import house_respell_rows
+        self._cancel()
+        rows = house_respell_rows(self.prose_prepared, self.current, self.poetry_ids)
+        # The respellings are the house's, not a reader's: no later check is
+        # told they are pending.
+        pending, self.pending_categories = self.pending_categories, {}
+        try:
+            self._apply(stage, rows)
+        finally:
+            self.pending_categories = pending
+        applied = [h["applied"] for h in self.history if h.get("stage") == stage and h.get("applied")]
+        return {"proposed": len(rows), "applied": len(applied),
+                "sites": [{"para_id": r["para_id"], "start": r["start"], "before": r["before"],
+                           "replacement": r["replacement"]} for r in applied]}
 
     @staticmethod
     def _query_rider(stage):
@@ -2226,7 +2253,7 @@ class FixedWorkflow:
             self._record("broken_repair", coverage=repair_coverage)
             self._stage("checks")
             self._checks("checks", initial, evidence=opening_evidence)
-            self._record("checks")
+            self._record("checks", house_respell=self._house_respell("house_respell"))
             self._stage("ensemble_sweep")
             snapshot = dict(self.current)
             with ThreadPoolExecutor(max_workers=2) as pool:
@@ -2269,13 +2296,14 @@ class FixedWorkflow:
                     self._record(stage, coverage=read_coverage, local=completion)
             self._stage(ASTRA_GATE_STAGE)
             gate = self._astra_gate(pre_astra, astra_formats)
+            respell = self._house_respell("house_respell_final")
             # The press-method final scan covers the text that is delivered,
-            # which is the gate's.
+            # which is the gate's plus the final house respellings.
             from galley.press_checks import final_audit
             from galley.fixed_local import _paragraphs
             audit = final_audit(prose_prepared, _paragraphs(prose_prepared, self.current, self.poetry_ids), self.cfg)
             audit["accepted_sha256"] = _hash(self.current)
-            self._record(ASTRA_GATE_STAGE, press_audit=audit, gate=gate)
+            self._record(ASTRA_GATE_STAGE, press_audit=audit, gate=gate, house_respell=respell)
         return self._write_result(all_poetry)
 
     def _write_result(self, all_poetry):

@@ -46,6 +46,13 @@ MODELS: tuple[ModelInfo, ...] = (
     ModelInfo("claude-haiku-4-5", "anthropic", "Claude Haiku 4.5",
               "Fastest and cheapest. Good for spelling and typos.",
               1.00, 5.00, supports_effort=False),
+    # GPT-6 list prices, 2026-09-22 launch (OpenAI calls them permanent).
+    ModelInfo("gpt-6-sol", "openai", "ChatGPT 6 Sol",
+              "Most thorough of the ChatGPT models.",
+              2.00, 10.00),
+    ModelInfo("gpt-6-luna", "openai", "ChatGPT 6 Luna",
+              "Fastest and cheapest ChatGPT option.",
+              0.10, 0.50),
     ModelInfo("gpt-5.6-sol", "openai", "ChatGPT 5.6 Sol",
               "Most thorough of the ChatGPT models.",
               5.00, 30.00),

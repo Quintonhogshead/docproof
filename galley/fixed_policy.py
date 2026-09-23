@@ -69,6 +69,29 @@ VARIANT_RESPELL_US = {
 }
 VARIANT_SPELLING_CATEGORY = "variant_spelling"
 
+# The towards/amongst/-wards family is respelled by code on a U.S. or
+# Canadian run, never screened (galley.fixed_local.house_respell_rows). On
+# Immanuel (2026-09-22) the variant sweep above proposed every site and 14
+# still shipped: Luna and the Opus dispute ruling dropped them as "an
+# established variant, not a clear error", the book-wide harmonizer could not
+# carry the accepted swaps (the screen's span had shrunk to "st"), and the
+# meaning checks restored paragraphs where one had landed. Chicago and
+# Merriam-Webster head every form on the right. "forwards" is also a verb and
+# a noun, so code respells it only beside "backward(s)"; "upwards of" is left
+# to the readers. Every other form in VARIANT_RESPELL_US stays screened.
+HOUSE_RESPELL = {
+    "towards": "toward", "amongst": "among", "afterwards": "afterward",
+    "backwards": "backward", "forwards": "forward", "upwards": "upward",
+    "downwards": "downward", "inwards": "inward", "outwards": "outward",
+    "onwards": "onward", "homewards": "homeward", "heavenwards": "heavenward",
+    "skywards": "skyward", "earthwards": "earthward", "seawards": "seaward",
+    "shorewards": "shoreward", "landwards": "landward", "rearwards": "rearward",
+    "northwards": "northward", "southwards": "southward", "eastwards": "eastward",
+    "westwards": "westward", "leftwards": "leftward", "rightwards": "rightward",
+}
+# The Englishes whose house rules are Chicago's (galley.house_style).
+HOUSE_RESPELL_VARIANTS = frozenset({"us", "ca"})
+
 
 def variant_respellings(variant) -> dict[str, str]:
     """Every lowercase form the fixed lane respells for this English, mapped
@@ -225,7 +248,7 @@ def configuration(poetry: bool = False) -> Config:
     cfg.ensemble.enabled_override = None
     cfg.ensemble.detectors = ([] if poetry else [
         DetectorSpec(model="claude-sonnet-5", effort="low"),
-        DetectorSpec(model="gpt-5.6-luna", effort="low"),
+        DetectorSpec(model="gpt-6-luna", effort="low"),
     ])
     # Both recipes hand number and currency style to the dedicated number
     # stage; verse keeps the poetry-touch stage's own mechanics passes.
@@ -521,6 +544,7 @@ def poetry_samples(paragraphs: Mapping[str, str], count: int = 6,
 
 __all__ = ["configuration", "EXCLUDED_LOCAL_TYPES", "LOCAL_CANDIDATE_TYPES",
            "DIAGNOSTIC_ONLY_TYPES", "VARIANT_RESPELL_US", "VARIANT_SPELLING_CATEGORY",
+           "HOUSE_RESPELL", "HOUSE_RESPELL_VARIANTS",
            "variant_respellings", "JEV_PRESCREEN_RULE", "JEV_PRESCREEN_THRESHOLD",
            "NUMBER_POLICY", "PROOFREADING_POLICY", "VERSE_CATEGORIES",
            "extract_numbers", "number_proposal_problem", "poetry_samples", "verse_safe"]

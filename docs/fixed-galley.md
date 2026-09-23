@@ -50,7 +50,10 @@ so rejecting Galley's corrections restores the joined baseline. This is
 `fixed-intake-v2`. Clean files that need none of the three transformations
 keep their existing source identity; no baseline is created.
 
-The agreed sequence (`fixed-proofreading-v8`, 2026-09-22) is below. From v8,
+The agreed sequence (`fixed-proofreading-v9`, 2026-09-23) is below. From v9,
+"Luna" means **GPT-6 Luna** (`gpt-6-luna`) and "Sol" means **GPT-6 Sol**
+(`gpt-6-sol`) in every role; v9 is otherwise v8, and v8 workspaces cannot
+resume under it. From v8,
 "Opus" means **Opus 5.5** (`claude-opus-5-5`) everywhere: it took every Opus 5
 role and every Fable role. It needs Claude Code 2.1.280 or newer: the subagent
 lane runs the newest CLI on the machine (`docproof.agent_lane.cli_path`), and
@@ -87,7 +90,16 @@ every Opus read into a skipped review.
    replaces the number group in the typed pass.
 6. Opus repairs clearly broken sentences while preserving intended meaning.
 7. Luna checks meaning preservation and the correctness of proposed repairs
-   through the ChatGPT subscription.
+   through the ChatGPT subscription. Code then applies the house
+   towards/amongst/-wards respellings on a U.S. or Canadian book
+   (`house_respell`, recorded on the `checks` stage): no screen or check reads
+   them, so none can drop or restore them (Immanuel 2026-09-22 shipped 14 the
+   screen had dropped as "an established variant"). Narration and dialogue
+   are respelled alike, capitals kept; quoted Scripture and other old or cited
+   text, set-apart styles (epigraph, quote, extract), headings and running
+   heads, quotations in notes, mid-sentence capitals (titles, names),
+   all-capitals tokens, "forwards" away from "backward(s)" and "upwards of"
+   are left alone. amidst/whilst/grey stay with the screened variant sweep.
 8. Opus and Sol independently sweep every paragraph of the corrected book.
    Sol uses the saved ChatGPT subscription login. Unresolved proposals go to
    Sonnet and Luna screening, with Opus settling only disagreements from that pair.
@@ -126,8 +138,10 @@ every Opus read into a skipped review.
     and an Astra question whose quote left with the restored text moves to
     the whole paragraph. Nothing is asked when Astra changed nothing, and an
     unavailable gate read leaves the (already Luna-checked) text standing. The
-    gate never revisits the verdict. The press-method final audit runs on the
-    gate's text, which is the delivered text.
+    gate never revisits the verdict. Code then reapplies the house
+    respellings (`house_respell_final`, recorded on `astra_gate`) for any a
+    later reader wrote back, and the press-method final audit runs on that
+    text, which is the delivered text.
 
 ## The verdict
 

@@ -583,10 +583,11 @@ def test_initial_and_completion_scans_carry_the_chapter_label_check(tmp_path):
 
 
 def test_variant_sweep_respells_to_the_manuscripts_english():
-    """towards/grey/backwards on a U.S. run become tracked edits, one per
-    occurrence, quoted by sentence like every other house sweep. A name
-    (Mr. Grey, and the same surname opening a sentence), an all-capitals
-    token, a protected word and a hyphen-joined form are never proposed."""
+    """grey/whilst on a U.S. run become tracked edits, one per occurrence,
+    quoted by sentence like every other house sweep. A name (Mr. Grey, and the
+    same surname opening a sentence), an all-capitals token, a protected word
+    and a hyphen-joined form are never proposed. The towards/amongst/-wards
+    sites code respells itself (house_respell_rows) are not screened again."""
     paragraphs = [
         para("p1", "I walked towards the receptionist. Towards evening, Mr. Grey went home in a grey coat, backwards. TOWARDS"),
         para("p2", "Grey is my name. Amongst the greyhounds, whilst waiting, they leaned towards-ish."),
@@ -594,15 +595,13 @@ def test_variant_sweep_respells_to_the_manuscripts_english():
     ]
     rows = local._variant_findings(paragraphs, prepared(*paragraphs))
     assert [(f.para_id, f.original_text, f.corrected_text) for f in rows] == [
-        ("p1", "I walked towards the receptionist.", "I walked toward the receptionist."),
-        ("p1", "Towards evening, Mr.", "Toward evening, Mr."),
         ("p1", "Grey went home in a grey coat, backwards.", "Grey went home in a gray coat, backwards."),
-        ("p1", "Grey went home in a grey coat, backwards.", "Grey went home in a grey coat, backward."),
-        ("p2", "Amongst the greyhounds, whilst waiting, they leaned towards-ish.",
-         "Among the greyhounds, whilst waiting, they leaned towards-ish."),
         ("p2", "Amongst the greyhounds, whilst waiting, they leaned towards-ish.",
          "Amongst the greyhounds, while waiting, they leaned towards-ish."),
     ]
+    assert [(p.para_id, old, new) for p, _, _, old, new in local.house_respell_sites(paragraphs, prepared(*paragraphs))] == [
+        ("p1", "towards", "toward"), ("p1", "Towards", "Toward"), ("p1", "backwards", "backward"),
+        ("p2", "Amongst", "Among")]
     assert all(f.error_type == "variant_spelling" and f.status == "validated" for f in rows)
     # Without name evidence a sentence-initial form is respelled, capital kept.
     lone = [para("p4", "Grey skies again.")]
@@ -617,7 +616,91 @@ def test_variant_sweep_respells_to_the_manuscripts_english():
     # The rows ride the house sweep into the local packet as edits.
     house, _ = local._house_findings(paragraphs, prepared(*paragraphs), configuration())
     row = local._finding(next(f for f in house if f.error_type == "variant_spelling"), {p.para_id: p for p in paragraphs}, "local:sweeps")
-    assert row["action"] == "edit" and row["category"] == "variant_spelling" and row["replacement"] == "I walked toward the receptionist."
+    assert row["action"] == "edit" and row["category"] == "variant_spelling" and row["replacement"] == "Grey went home in a gray coat, backwards."
+
+
+def _respelled(*paragraphs, variant="us", lexicon=()):
+    source = SimpleNamespace(variant=load_variant(variant), spell=replace(SpellScan(), lexicon=lexicon))
+    return [(p.para_id, old, new) for p, _, _, old, new in local.house_respell_sites(list(paragraphs), source)]
+
+
+def test_house_respell_covers_narration_and_dialogue_and_keeps_capitals():
+    """Immanuel (2026-09-22) shipped these in narration after the screen
+    dropped them; dialogue follows the same house practice."""
+    assert _respelled(
+        para("p1", "They can see its headlamp stop, then slowly snake its way towards them."),
+        para("p2", "Amongst all the crumbs, however, he does find a penny."),
+        para("p3", "‘Go towards the light,’ she says, and afterwards he stands up and outwards."),
+        para("p4", "He rocked backwards and forwards. Onwards they went, upwards and inwards."),
+    ) == [("p1", "towards", "toward"), ("p2", "Amongst", "Among"), ("p3", "towards", "toward"),
+          ("p3", "afterwards", "afterward"), ("p3", "outwards", "outward"),
+          ("p4", "backwards", "backward"), ("p4", "forwards", "forward"), ("p4", "Onwards", "Onward"),
+          ("p4", "upwards", "upward"), ("p4", "inwards", "inward")]
+
+
+@pytest.mark.parametrize("variant, expected", [("us", 1), ("ca", 1), ("uk", 0), ("au", 0)])
+def test_house_respell_runs_only_on_us_and_canadian_books(variant, expected):
+    assert len(_respelled(para("p", "She leaned towards him."), variant=variant)) == expected
+
+
+def test_house_respell_leaves_protected_text_alone():
+    assert _respelled(
+        # A title or a name mid-sentence, an all-capitals token, a hyphen join.
+        para("t1", "She had read Towards Zero twice. TOWARDS THE END came next, towards-ish."),
+        # Quoted Scripture and liturgy, by its wording or by its citation.
+        para("s1", "He remembered, “Thou shalt go towards the mountain,” and went."),
+        para("s2", "“They went amongst the people” (Acts 20:25), he read aloud."),
+        para("s3", "And the LORD spake unto him, Go thou towards the sea."),
+        # Set-apart styles: an epigraph, a block quotation, a heading.
+        para("e1", "We go towards the light together.", style="Epigraph"),
+        para("e2", "We go towards the light together.", style="Quote"),
+        para("e3", "Towards the Sea", style="Heading1"),
+        # A verb or noun "forwards", and the idiom "upwards of".
+        para("f1", "He forwards the letter. Upwards of forty guests came; the forwards scored."),
+        # The author's own protected word, and a paragraph nobody reviews.
+        para("x1", "Afterwards, silence.", reviewable=False),
+    ) == []
+    assert _respelled(para("l1", "afterwards they left"), lexicon=("afterwards",)) == []
+    # A quotation in a note is bibliographic; the note's own prose is not.
+    note = ParagraphRef("fn1", "word/footnotes.xml", "footnote",
+                        "See “Moving towards peace,” cited towards the end.", "FootnoteText", True)
+    assert _respelled(note) == [("fn1", "towards", "toward")]
+    # A running head is never respelled.
+    head = ParagraphRef("h1", "word/header1.xml", "header", "walking towards home", "Header", True)
+    assert _respelled(head) == []
+
+
+def test_house_respell_rows_fix_only_the_sites_still_missed():
+    """Some sites were already respelled by an earlier stage and some were
+    not (Immanuel: P81/P91 fixed, P92 missed). Only the missed ones come back,
+    anchored on the current text, and applying them finishes the book."""
+    texts = {"a": "He walked toward the door and among the chairs, then towards the window.",
+             "b": "Amongst the guests, nobody moved toward her.",
+             "c": "She turned toward the sea."}
+    paragraphs = [para(pid, text) for pid, text in texts.items()]
+    rows = local.house_respell_rows(prepared(*paragraphs), texts)
+    assert [(r["para_id"], r["before"], r["replacement"]) for r in rows] == [
+        ("a", "towards", "toward"), ("b", "Amongst", "Among")]
+    assert all(r["category"] == "variant_spelling" and r["models"] == ["code"] and r["action"] == "edit"
+               for r in rows)
+    fixed = dict(texts)
+    for r in sorted(rows, key=lambda r: r["start"], reverse=True):
+        assert fixed[r["para_id"]][r["start"]:r["end"]] == r["before"]
+        fixed[r["para_id"]] = fixed[r["para_id"]][:r["start"]] + r["replacement"] + fixed[r["para_id"]][r["end"]:]
+    assert fixed == {"a": "He walked toward the door and among the chairs, then toward the window.",
+                     "b": "Among the guests, nobody moved toward her.", "c": "She turned toward the sea."}
+    assert local.house_respell_rows(prepared(*paragraphs), fixed) == []
+    # Poetry keeps its own sweep; the prose respell never crosses into it.
+    assert local.house_respell_rows(prepared(*paragraphs), texts, poetry_ids={"a", "b"}) == []
+
+
+def test_verse_keeps_its_screened_variant_proposals():
+    """Code respells prose only, so the verse sweep still proposes the
+    -wards forms for the screen instead of leaving them to nobody."""
+    lines = [para("v1", "I wander towards the sea")]
+    assert local._variant_findings(lines, prepared(*lines)) == []
+    [row] = local._variant_findings(lines, prepared(*lines), verse=True)
+    assert row.corrected_text == "I wander toward the sea"
 
 
 def test_possessive_scan_conforms_to_the_original_manuscripts_form(tmp_path):

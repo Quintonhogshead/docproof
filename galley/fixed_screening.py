@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-PAIR = ("claude-sonnet-5", "gpt-5.6-luna")
+PAIR = ("claude-sonnet-5", "gpt-6-luna")
 
 
 def decision_key(row):
