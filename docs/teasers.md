@@ -24,6 +24,22 @@ bounded factual corrections can be approved in the same review. Every approval
 is tied to the draft hash and complete manuscript coverage. All five options are
 presented in order without rankings.
 
+## Speed (v0.231.0)
+
+A book is read in full once. Portion readings run four at a time on one shared
+subscription session at medium effort; the session holds the login lock only for
+that batch, so Galley's calls interleave between batches. Every later check —
+the fact-sheet audit and each draft review — uses those saved readings plus the
+original passages their facts cite, never a second pass over the manuscript.
+A rejected fact selection is reselected in the same attempt (up to three rounds).
+A teaser outside 150–200 words or three paragraphs is rewritten immediately by
+the writer (up to four tries, told only the counts). Subscription outages — busy,
+unavailable, rate limited, CLI failure — retry in two minutes (fifteen once an
+outage persists or for a usage limit) and never count against the book or reach
+Sol as feedback. Counted failures back off to at most thirty minutes. Extraction
+damage and unsupported claims in the manuscript are recorded as limitations,
+not a reason to refuse.
+
 The shared Google folder is named exactly `author teasers`. Every book gets:
 
 - A native Google Doc with five options and the exact requested warning:
