@@ -248,7 +248,7 @@ def configuration(poetry: bool = False) -> Config:
     cfg.ensemble.enabled_override = None
     cfg.ensemble.detectors = ([] if poetry else [
         DetectorSpec(model="claude-sonnet-5", effort="low"),
-        DetectorSpec(model="gpt-5.6-luna", effort="low"),
+        DetectorSpec(model="gpt-6-luna", effort="low"),
     ])
     # Both recipes hand number and currency style to the dedicated number
     # stage; verse keeps the poetry-touch stage's own mechanics passes.

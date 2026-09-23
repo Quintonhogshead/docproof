@@ -234,19 +234,24 @@ _LOCAL_EVIDENCE_VERSIONS = {
     "fixed-proofreading-v8": {"typed": "initial", "ensemble_sweep": "completion",
                               "opus_read": "completion_opus_read", "astra": "completion_astra",
                               "final_astra": "completion_final_astra"},
+    # v9: v8's stages with GPT-6 Luna and Sol in every Luna and Sol role.
+    "fixed-proofreading-v9": {"typed": "initial", "ensemble_sweep": "completion",
+                              "opus_read": "completion_opus_read", "astra": "completion_astra",
+                              "final_astra": "completion_final_astra"},
 }
 # From v6 a book with any poetry carries a verse sweep packet on its typed
 # stage, and a poetry-only book runs the number stage and the checks.
-_VERSE_EVIDENCE_VERSIONS = {"fixed-proofreading-v6", "fixed-proofreading-v7", "fixed-proofreading-v8"}
+_VERSE_EVIDENCE_VERSIONS = {"fixed-proofreading-v6", "fixed-proofreading-v7", "fixed-proofreading-v8",
+                            "fixed-proofreading-v9"}
 # The prose stage list, by recipe version, and which stage carries the
 # press-method final audit (the last stage: its accepted text must be the
 # delivered text).
 _PROSE_STAGES = ["poetry", "story_sheet", "typed", "numbers", "broken_repair", "checks",
                  "ensemble_sweep", "continuity", "fable", "astra"]
-_FINAL_GATE_VERSIONS = {"fixed-proofreading-v7", "fixed-proofreading-v8"}
+_FINAL_GATE_VERSIONS = {"fixed-proofreading-v7", "fixed-proofreading-v8", "fixed-proofreading-v9"}
 # v8 opens with Opus 5.5's reading of the original, renames the first final
 # reading and closes with Opus 5.5's gate on Astra's changes.
-_OPUS_RECIPE_VERSIONS = {"fixed-proofreading-v8"}
+_OPUS_RECIPE_VERSIONS = {"fixed-proofreading-v8", "fixed-proofreading-v9"}
 _OPUS_PROSE_STAGES = ["poetry", "story_sheet", "opening_read", "typed", "numbers", "broken_repair", "checks",
                       "ensemble_sweep", "continuity", "opus_read", "astra", "final_astra", "astra_gate"]
 
