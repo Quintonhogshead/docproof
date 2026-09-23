@@ -25,6 +25,11 @@ Redding, Purpura, Paik, and Georgis precedents; full examples remain in history.
   grammatical agreement, and tense are mechanical even when a gate held them.
 - Under the book's US variant, preserve the measured house corrections for
   towards/amongst/-wards and generic university/pharmacy school/stadium capitals.
+  In the fixed lane (v0.232.0+) code applies towards/amongst/-wards itself on
+  US/CA books after the first checks and again after the Astra gate
+  (`galley.fixed_local.house_respell_rows`), narration and dialogue alike; it
+  skips quoted Scripture/old or cited text, set-apart styles, headings, notes'
+  quotations, mid-sentence capitals and all-caps tokens.
   Proper institutions/names and declared capitalized terms remain protected;
   do not Americanize a detected British book or lower an intentional name.
 - Do not rewrite a dangling modifier or gerund into a clause as line editing
