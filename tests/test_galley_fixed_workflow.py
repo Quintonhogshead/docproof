@@ -1969,3 +1969,57 @@ def test_astra_gate_moves_a_question_whose_quote_left_with_the_restored_text(mak
     # The rejected continuity edit is put to the author as a question.
     assert any(h.get("stage") == "astra_gate_demoted" for h in flow.history)
     assert any(q["stage"] == "astra_gate" for q in flow.questions)
+
+
+def test_house_respellings_survive_every_model_rejection_and_a_late_reintroduction(make_book, tmp_path):
+    """Immanuel (2026-09-22): the screen dropped towards/amongst as "an
+    established variant" and the checks restored paragraphs where one landed.
+    Code now applies them after the first checks and again after the Astra
+    gate, so every screen and check before the final reading can refuse and the book still ships the
+    house form; a final reader who writes "towards" back is corrected too."""
+    book = make_book("She walked towards the sea, and toward the rocks.",
+                     "Amongst the gulls, afterwards, he walk home.",
+                     "Nothing else happened.")
+
+    def handler(stage, model, payload, kwargs):
+        if "changes" in payload and not stage.startswith(("astra_gate", "final_astra")):
+            return {"decisions": [{"id": x["id"], "verdict": "reject", "reason": "An established variant."}
+                                  for x in payload["changes"]]}
+        if stage == "final_astra":
+            row = next(p for p in payload["paragraphs"] if "walk home" in p["text"])
+            return {"reviewed_ids": [x["id"] for x in payload["paragraphs"]],
+                    "findings": [finding(row["id"], "he walk home", "he walks towards home")],
+                    "comment_decisions": [], "editorial_verdict": "ready"}
+
+    readers = Readers(handler=handler)
+    result = FixedWorkflow(book, tmp_path / "run", calls=readers).run()
+    assert list(result["accepted"].values()) == [
+        "She walked toward the sea, and toward the rocks.",
+        "Among the gulls, afterward, he walks toward home.",
+        "Nothing else happened."]
+    early = [h["applied"] for h in result["history"] if h["stage"] == "house_respell" and h.get("applied")]
+    assert sorted((r["before"], r["replacement"]) for r in early) == [
+        ("Amongst", "Among"), ("afterwards", "afterward"), ("towards", "toward")]
+    stages = {s["stage"]: json.loads(Path(s["path"]).read_text()) for s in result["stages"]}
+    assert stages["checks"]["evidence"]["house_respell"]["applied"] == 3
+    assert [(x["before"], x["replacement"]) for x in stages["astra_gate"]["evidence"]["house_respell"]["sites"]] == [
+        ("towards", "toward")]
+    assert stages["astra_gate"]["evidence"]["press_audit"]["raw_signal_counts"].get("variant_spelling", 0) == 0
+    # No screen was ever asked about the respellings.
+    assert not any("towards" in json.dumps(x.get("payload", {}).get("sites", "")) for x in readers.events)
+
+
+def test_final_house_respell_corrects_a_reader_who_writes_the_british_form_back(make_book, tmp_path):
+    from types import SimpleNamespace
+    from docproof.spellscan import SpellScan
+    from docproof.variants import load_variant
+    flow = _flow(make_book, tmp_path, text="He walks home.")
+    flow.prose_prepared = SimpleNamespace(doc=flow.prose_prepared.doc, variant=load_variant("us"), spell=SpellScan())
+    flow.current = {"p": "He walks towards home, backwards and forwards."}
+    flow.pending_categories = {"p": {"grammar"}}
+    evidence = flow._house_respell("house_respell_final")
+    assert flow.current["p"] == "He walks toward home, backward and forward."
+    assert evidence["applied"] == 3 and [s["replacement"] for s in evidence["sites"]] == ["forward", "backward", "toward"]
+    # A reader's pending categories are left for the next check untouched.
+    assert flow.pending_categories == {"p": {"grammar"}}
+    assert flow._house_respell("house_respell_final")["proposed"] == 0

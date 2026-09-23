@@ -1,6 +1,7 @@
 """Local proofreading evidence for the fixed recipe; never edits or model calls.
 
-Every actionable result is only a proposal for the fixed Opus/Luna gates.
+Every actionable result is only a proposal for the fixed Opus/Luna gates,
+except the house respellings (house_respell_rows), which the workflow applies.
 LanguageTool failures are operational failures, never empty clean reads. Fully
 completed, source/configuration/version-bound packets are reused on resume.
 """
@@ -530,7 +531,7 @@ def _chapter_label_rows(paragraphs, cfg):
     return rows
 
 
-def _house_findings(paragraphs, prepared, cfg):
+def _house_findings(paragraphs, prepared, cfg, *, verse=False):
     from docproof.sweeps import run_sweeps, unclosed_quote_findings, heading_case_findings, heading_vocab_findings
     found, reports = run_sweeps(paragraphs, cfg.sweeps, prepared.variant, ellipsis_style=cfg.style.ellipsis)
     if cfg.style.unclosed_quote_queries:
@@ -541,7 +542,7 @@ def _house_findings(paragraphs, prepared, cfg):
         reports.append(report)
     if cfg.style.heading_vocab_queries:
         found += heading_vocab_findings(paragraphs, cfg.skip)
-    found += _variant_findings(paragraphs, prepared)
+    found += _variant_findings(paragraphs, prepared, verse=verse)
     return found, [asdict(report) for report in reports]
 
 
@@ -550,7 +551,7 @@ def _house_findings(paragraphs, prepared, cfg):
 _HONORIFIC = re.compile(r"\b(?:Mr|Mrs|Ms|Mx|Dr|St|Jr|Sr|Prof|Rev|Fr|Sgt|Capt|Lt|Col|Gen|Cpl|Pvt|Hon|Sen|Rep|Gov|Pres|Messrs|Mme|Mlle)\.\s*[“\"‘']?\Z")
 
 
-def _variant_findings(paragraphs, prepared):
+def _variant_findings(paragraphs, prepared, *, verse=False):
     """A tracked edit for every spelling the manuscript's English respells
     (towards -> toward, grey -> gray on a U.S. run), one per occurrence,
     quoted by its sentence like the other house sweeps. The screen still
@@ -564,6 +565,10 @@ def _variant_findings(paragraphs, prepared):
     table = variant_respellings(getattr(prepared, "variant", None))
     if not table:
         return []
+    # Code respells these in prose itself (house_respell_rows); screening
+    # them is what let fourteen of them ship on Immanuel. Verse keeps them.
+    handled = set() if verse else {(para.para_id, start) for para, start, _, _, _
+                                   in house_respell_sites(paragraphs, prepared)}
     protected = {w.lower() for w in getattr(getattr(prepared, "spell", None), "lexicon", ()) or ()}
     word = re.compile(r"(?<![\w'’\-‐‑])([^\W\d_]+)(?![\w'’\-‐‑])", re.UNICODE)
     # A form the book capitalizes anywhere mid-sentence is a name in this
@@ -583,7 +588,7 @@ def _variant_findings(paragraphs, prepared):
         for m in word.finditer(para.text):
             raw = m.group(1)
             key = raw.lower()
-            if key not in table or key in protected or raw.isupper():
+            if key not in table or key in protected or raw.isupper() or (para.para_id, m.start()) in handled:
                 continue
             if raw[:1].isupper() and (key in names or not _sentence_initial(para.text, m.start())):
                 continue
@@ -598,6 +603,101 @@ def _variant_findings(paragraphs, prepared):
                 f"(Merriam-Webster heads the U.S. form; the other is chiefly British).",
                 "high", status="validated"))
     return findings
+
+
+# Paragraph styles whose wording is quoted, set apart or a title: an
+# epigraph, a Scripture or document extract, a heading. Their -wards forms
+# stay as written.
+_RESPELL_SKIP_STYLE = re.compile(r"quot|epigraph|extract|scripture|verse|poem|poetry|block|citation|"
+                                 r"bibliograph|heading|title|toc|caption", re.I)
+_RESPELL_LOCATIONS = frozenset({"body", "table", "footnote", "endnote"})
+# Old wording: the King James Bible, liturgy, a period document.
+_ARCHAIC = re.compile(r"\b(?:thee|thou|thy|thine|hath|doth|dost|hast|shalt|saith|sayeth|verily|begat|"
+                      r"cometh|goeth|giveth|taketh|maketh|knoweth|loveth|seeth|sayest|knowest)\b", re.I)
+_SCRIPTURE_CITATION = re.compile(
+    r"\b(?:[1-3] ?)?(?:Genesis|Exodus|Leviticus|Numbers|Deuteronomy|Joshua|Judges|Ruth|Samuel|Kings|"
+    r"Chronicles|Ezra|Nehemiah|Esther|Job|Psalms?|Proverbs|Ecclesiastes|Song of (?:Songs|Solomon)|Isaiah|"
+    r"Jeremiah|Lamentations|Ezekiel|Daniel|Hosea|Joel|Amos|Obadiah|Jonah|Micah|Nahum|Habakkuk|Zephaniah|"
+    r"Haggai|Zechariah|Malachi|Matthew|Mark|Luke|John|Acts|Romans|Corinthians|Galatians|Ephesians|"
+    r"Philippians|Colossians|Thessalonians|Timothy|Titus|Philemon|Hebrews|James|Peter|Jude|Revelation)"
+    r"\.? \d+:\d+")
+_RESPELL_WORD = re.compile(r"(?<![\w'’\-‐‑])([^\W\d_]+)(?![\w\-‐‑])(?!['’]\w)", re.UNICODE)
+_BACKWARD_BEFORE = re.compile(r"\bbackwards?\s+(?:and|or)\s+\Z", re.I)
+_BACKWARD_AFTER = re.compile(r"\A\s+(?:and|or)\s+backwards?\b", re.I)
+
+
+def _respell_zones(para):
+    """The spans of `para` whose wording is protected, or None when the whole
+    paragraph is. A quotation of old or cited text (Scripture, liturgy, a
+    period document) is protected; so is every quotation in a note, where it
+    is bibliographic. Dialogue is not: the house respells it like narration."""
+    from docproof.smoothing import quote_spans
+    text = para.text
+    spans = quote_spans(text, "”’\"'")
+    cited = bool(_SCRIPTURE_CITATION.search(text))
+    inside = lambda at: any(lo <= at < hi for lo, hi in spans)
+    if any(not inside(m.start()) for m in _ARCHAIC.finditer(text)) or (cited and not spans):
+        return None
+    note = para.location in ("footnote", "endnote")
+    return [(lo, hi) for lo, hi in spans if note or cited or _ARCHAIC.search(text[lo:hi])]
+
+
+def house_respell_sites(paragraphs, prepared):
+    """(paragraph, start, end, old, new) for each towards/amongst/-wards form
+    code respells on a U.S. or Canadian run (galley.fixed_policy.HOUSE_RESPELL).
+
+    Capitalization is kept: a sentence-initial "Towards" becomes "Toward".
+    Never touched: another English; a poem, heading, running head or quoted
+    style; a quotation of Scripture or other old or cited text; a quotation in
+    a note; a capitalized form mid-sentence (a title or a name); an
+    all-capitals token; a word the spell scan protected as the author's own;
+    "forwards" anywhere but beside "backward(s)"; "upwards of"."""
+    from docproof.spellscan import _sentence_initial
+    from galley.fixed_policy import HOUSE_RESPELL, HOUSE_RESPELL_VARIANTS
+    if getattr(getattr(prepared, "variant", None), "key", None) not in HOUSE_RESPELL_VARIANTS:
+        return []
+    protected = {w.lower() for w in getattr(getattr(prepared, "spell", None), "lexicon", ()) or ()}
+    sites = []
+    for para in paragraphs:
+        text = para.text or ""
+        if (not getattr(para, "reviewable", True) or para.location not in _RESPELL_LOCATIONS
+                or _RESPELL_SKIP_STYLE.search(para.style or "")
+                or not any(word in text.lower() for word in HOUSE_RESPELL)):
+            continue
+        zones = _respell_zones(para)
+        if zones is None:
+            continue
+        for m in _RESPELL_WORD.finditer(text):
+            raw, key = m.group(1), m.group(1).lower()
+            if key not in HOUSE_RESPELL or key in protected or any(lo <= m.start() < hi for lo, hi in zones):
+                continue
+            if raw != key and (raw != key.capitalize() or not _sentence_initial(text, m.start())):
+                continue
+            if key == "forwards" and not (_BACKWARD_BEFORE.search(text[:m.start()])
+                                          or _BACKWARD_AFTER.search(text[m.end():])):
+                continue
+            if key == "upwards" and re.match(r"\s+of\b", text[m.end():]):
+                continue
+            fix = HOUSE_RESPELL[key]
+            sites.append((para, m.start(), m.end(), raw, fix.capitalize() if raw != key else fix))
+    return sites
+
+
+def house_respell_rows(prepared, texts, poetry_ids=()):
+    """The house respellings of `texts`' prose as rows the fixed workflow
+    applies itself: the one place this module's output is an edit rather than
+    a proposal. Rows already respelled produce nothing, so a book where some
+    sites were fixed and others missed gets exactly the missed ones."""
+    from galley.fixed_policy import VARIANT_SPELLING_CATEGORY
+    rows = []
+    for para, start, end, old, new in house_respell_sites(_paragraphs(prepared, texts, poetry_ids), prepared):
+        rows.append({"id": "respell-" + _hash([para.para_id, start, old, new])[:20], "para_id": para.para_id,
+                     "start": start, "end": end, "before": old, "replacement": new,
+                     "category": VARIANT_SPELLING_CATEGORY, "action": "edit", "format": "", "models": ["code"],
+                     "missing_knowledge": "",
+                     "reason": f"House spelling for this manuscript's English: “{new}”, not “{old}” "
+                               f"(Chicago and Merriam-Webster head the U.S. form; the other is chiefly British)."})
+    return rows
 
 
 def _consistency_findings(paragraphs, prepared, cfg, **overrides):
@@ -830,7 +930,7 @@ def collect_verse_candidates(prepared, texts, directory, *, identity, verse_ids,
         by_id = {p.para_id: p for p in paragraphs}
         if not paragraphs:
             return [], [], [], {"skipped": "no_verse"}
-        house, reports = _house_findings(paragraphs, prepared, cfg)
+        house, reports = _house_findings(paragraphs, prepared, cfg, verse=True)
         rows = [row for row in (_finding(f, by_id, "local:verse") for f in house) if row]
         checks = [_check("verse_sweeps", paragraphs, len(rows), sweeps=list(cfg.sweeps))]
         return _deduplicate(rows), checks, [], {"sweep_reports": reports}

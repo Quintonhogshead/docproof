@@ -87,7 +87,16 @@ every Opus read into a skipped review.
    replaces the number group in the typed pass.
 6. Opus repairs clearly broken sentences while preserving intended meaning.
 7. Luna checks meaning preservation and the correctness of proposed repairs
-   through the ChatGPT subscription.
+   through the ChatGPT subscription. Code then applies the house
+   towards/amongst/-wards respellings on a U.S. or Canadian book
+   (`house_respell`, recorded on the `checks` stage): no screen or check reads
+   them, so none can drop or restore them (Immanuel 2026-09-22 shipped 14 the
+   screen had dropped as "an established variant"). Narration and dialogue
+   are respelled alike, capitals kept; quoted Scripture and other old or cited
+   text, set-apart styles (epigraph, quote, extract), headings and running
+   heads, quotations in notes, mid-sentence capitals (titles, names),
+   all-capitals tokens, "forwards" away from "backward(s)" and "upwards of"
+   are left alone. amidst/whilst/grey stay with the screened variant sweep.
 8. Opus and Sol independently sweep every paragraph of the corrected book.
    Sol uses the saved ChatGPT subscription login. Unresolved proposals go to
    Sonnet and Luna screening, with Opus settling only disagreements from that pair.
@@ -126,8 +135,10 @@ every Opus read into a skipped review.
     and an Astra question whose quote left with the restored text moves to
     the whole paragraph. Nothing is asked when Astra changed nothing, and an
     unavailable gate read leaves the (already Luna-checked) text standing. The
-    gate never revisits the verdict. The press-method final audit runs on the
-    gate's text, which is the delivered text.
+    gate never revisits the verdict. Code then reapplies the house
+    respellings (`house_respell_final`, recorded on `astra_gate`) for any a
+    later reader wrote back, and the press-method final audit runs on that
+    text, which is the delivered text.
 
 ## The verdict
 

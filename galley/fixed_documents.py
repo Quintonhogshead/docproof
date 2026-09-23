@@ -507,6 +507,10 @@ def _report(result, details, receipt=None):
                              f"{restored} returned to their pre-Astra text.")
             elif name in stages:
                 lines.append(f"- {label}: {applied[name]} accepted proposals at that stage (later reviews may revise them).")
+        respelled = applied["house_respell"] + applied["house_respell_final"]
+        if respelled:
+            lines.append(f"- House spelling sweep (code, no model): {respelled} towards/amongst/-wards "
+                         "respellings applied as tracked edits.")
         for name in ("opening_read", "fable", "opus_read", "astra", "final_astra"):
             counts = Counter()
             for window in stages.get(name, {}).get("coverage", []):
