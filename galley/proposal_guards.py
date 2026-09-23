@@ -1,14 +1,16 @@
 """Refusals for proposals that are legal text but the wrong edit.
 
-Every guard here answers one question about one proposal and reads nothing else
-— no book, no run, no disk — so each is testable on its own and cheap enough to
+Every guard here answers one question about one proposal and reads nothing it
+is not handed — no run state, no disk — so each is testable on its own and cheap enough to
 run at the single chokepoint every applied edit passes
 (:meth:`galley.fixed_workflow.FixedWorkflow._apply`).
 
 The refusals are the Cooper QA's bad edits (2026-09-17): a time already written
 in 24-hour form converted to a meridiem, a plural pronoun narrowed to a
 singular one with only a plural antecedent in view, a comma pushed against an
-ellipsis, and a deliberately flat line of speech turned into a question. A
+ellipsis, and a deliberately flat line of speech turned into a question. The
+Immanuel QA (2026-09-22) added one that reads a book-level input, passed in
+explicitly: a name's possessive converted against the author's own form. A
 guard refuses only the clear case. A proposal it cannot judge belongs to the
 readers, not to Python: when the evidence points both ways these functions
 return None and the edit stands.
@@ -262,8 +264,22 @@ def _window(paragraph: str, start: int, end: int, replacement: str,
     return paragraph[lo:hi], paragraph[lo:start] + replacement + paragraph[end:hi]
 
 
+def possessive_against_author(before: str, replacement: str, paragraph: str,
+                              start: int, end: int, possessives) -> str | None:
+    """Refuse converting a name's possessive away from the manuscript's own
+    form (Immanuel, 2026-09-22: “Dolores’” 36 times, and seven scattered
+    reader edits to “Dolores’s”). ``possessives`` is the run's
+    docproof.consistency.PossessivePolicy, decided once from the original
+    text; it is the one input here that is not the proposal itself."""
+    if possessives is None or not getattr(possessives, "names", None):
+        return None
+    from docproof.consistency import possessive_conversion
+    after = paragraph[:start] + replacement + paragraph[end:]
+    return possessive_conversion(paragraph, after, possessives)
+
+
 def proposal_problem(before: str, replacement: str, paragraph: str,
-                     start: int, end: int) -> str | None:
+                     start: int, end: int, *, possessives=None) -> str | None:
     """Why this proposal must be refused, or None. Short enough to be a receipt."""
     if not all(isinstance(text, str) for text in (before, replacement, paragraph)):
         return None
@@ -272,7 +288,8 @@ def proposal_problem(before: str, replacement: str, paragraph: str,
     for reason in (time_24h_conversion(wide_before, wide_after),
                    comma_adjacent_ellipsis(wide_before, wide_after),
                    pronoun_number_change(before, replacement, paragraph, start, end),
-                   flat_tag_question(before, replacement, paragraph, start, end)):
+                   flat_tag_question(before, replacement, paragraph, start, end),
+                   possessive_against_author(before, replacement, paragraph, start, end, possessives)):
         if reason:
             return reason
     return None

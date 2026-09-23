@@ -147,7 +147,12 @@ paragraphs; only a real unresolved speaker-identity question may reach the autho
     "word_errors": """Actively inspect possessives/contractions and homophones: its/it's,
 their/there/they're, your/you're, whose/who's, lead/led, affect/effect,
 discreet/discrete, principal/principle, complement/compliment, and analogous
-near-homophones. Check agreement across long subjects (a bouquet of lilies
+near-homophones. The possessive of a name ending in s (Dolores’ or Dolores’s)
+is the author's choice, not a per-site error: never add or remove that s at a
+single site. Galley counts the manuscript's own forms and conforms the book as
+a set to the dominant one; Chicago's ’s applies only where the book shows no
+preference, and that too is the set's call. A ’ that closes single-quoted
+speech (‘Hi, Dolores’) is a quotation mark, not a possessive. Check agreement across long subjects (a bouquet of lilies
 sits; either of us is), collective nouns and there is/are using the variant
 and meaning. Read for missing/extra small words, wrong prepositions, missing
 word boundaries and joined sentences that spellcheck misses: 'to never to

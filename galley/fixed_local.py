@@ -611,6 +611,16 @@ def _consistency_findings(paragraphs, prepared, cfg, **overrides):
     return to_findings(find_inconsistencies(paragraphs, **options), paragraphs)
 
 
+def _possessive_findings(paragraphs, original):
+    """Possessives of names ending in s, conformed to the form the ORIGINAL
+    manuscript uses (docproof.consistency.possessive_policy). The decision is
+    the author's count, taken once from the source, so a stage that has
+    already changed some sites cannot shift it; the sites are this scan's
+    current-text occurrences in any other form."""
+    from docproof.consistency import find_possessive_drift, possessive_policy
+    return find_possessive_drift(paragraphs, possessive_policy(original))
+
+
 def _genre_findings(paragraphs, cfg):
     from docproof.genrescans import run_genre_scans
     settings = cfg.genre_scans.model_copy(deep=True)
@@ -642,7 +652,7 @@ def collect_local_candidates(prepared, texts, directory, *, identity, poetry_ids
         # Rescan cheap house/consistency checks over the complete input map so
         # paragraph styles skipped by the typed passes remain covered.
         house, reports = _house_findings(paragraphs, prepared, cfg)
-        consistency = _consistency_findings(paragraphs, prepared, cfg)
+        consistency = _consistency_findings(paragraphs, prepared, cfg) + _possessive_findings(paragraphs, texts)
         for name, found in (("sweeps", house + list(prepared.sweep_findings)),
                             ("consistency", consistency + list(prepared.consistency_findings)),
                             ("genre", _genre_findings(paragraphs, cfg) + list(getattr(prepared, "genre_findings", ()))),
@@ -868,7 +878,8 @@ def collect_completion_candidates(prepared, original, current, directory, *, ide
                               if s.anchor.delete_text.lower() == s.anchor.insert_text.lower()})
         house, reports = _house_findings(paragraphs, prepared, cfg)
         groups = {"house_sweeps": house,
-            "consistency": _consistency_findings(paragraphs, prepared, cfg, case_split_exclude=casing_keys),
+            "consistency": (_consistency_findings(paragraphs, prepared, cfg, case_split_exclude=casing_keys)
+                            + _possessive_findings(paragraphs, original)),
             "residuals": residual_queries(paragraphs, [], max_per_rule=ceiling),
             # Every row here is screened in context, so casing decisions
             # propagate as edits and the common-word query cap is lifted.

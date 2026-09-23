@@ -618,3 +618,21 @@ def test_variant_sweep_respells_to_the_manuscripts_english():
     house, _ = local._house_findings(paragraphs, prepared(*paragraphs), configuration())
     row = local._finding(next(f for f in house if f.error_type == "variant_spelling"), {p.para_id: p for p in paragraphs}, "local:sweeps")
     assert row["action"] == "edit" and row["category"] == "variant_spelling" and row["replacement"] == "I walked toward the receptionist."
+
+
+def test_possessive_scan_conforms_to_the_original_manuscripts_form(tmp_path):
+    """Dolores’ against Dolores’s is counted on the ORIGINAL text in both the
+    initial and the completion scans, so a stage that changed sites cannot
+    move the decision; each minority site is one edit row."""
+    source = prepared(para("p1", "It was Dolores’ hand."), para("p2", "He saw Dolores’ bag."),
+                      para("p3", "She took Dolores’ palm."), para("p4", "Into Dolores’s neck."))
+    rows, _ = collect(tmp_path, source)
+    [row] = [r for r in rows if r["category"] == "possessive_s"]
+    assert (row["para_id"], row["action"], row["replacement"]) == ("p4", "edit", "Into Dolores’ neck.")
+    texts = {p.para_id: p.text for p in source.doc.paragraphs}
+    # A reader changed two sites to the s form; the author's count still rules.
+    current = {**texts, "p1": "It was Dolores’s hand.", "p2": "He saw Dolores’s bag."}
+    rows, _ = local.collect_completion_candidates(source, texts, current, tmp_path / "local",
+                                                  identity=IDENTITY, stage="completion")
+    assert sorted((r["para_id"], r["replacement"]) for r in rows if r["category"] == "possessive_s") == [
+        ("p1", "It was Dolores’ hand."), ("p2", "He saw Dolores’ bag."), ("p4", "Into Dolores’ neck.")]

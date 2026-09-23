@@ -81,6 +81,8 @@ def reinstate_walkthrough_questions(book, workspace, *, progress=None, max_api_u
         raise FixedWorkflowError("The completed run belongs to a different source or fixed recipe")
     # Restore the finished state exactly as the run left it.
     flow.original, flow.current = result["original"], dict(result["accepted"])
+    from docproof.consistency import possessive_policy
+    flow.possessives = possessive_policy(flow.original)
     flow.questions, flow.formats = list(result["questions"]), list(result["formats"])
     flow.history, flow.stages = list(result["history"]), list(result["stages"])
     flow.needs_human = result["editorial_verdict"] == "needs_human"

@@ -9,7 +9,7 @@ import pytest
 from docx import Document
 
 from docproof.providers import ProviderResult
-from galley.fixed_workflow import (ASTRA, LUNA, OPUS, SOL, SONNET,
+from galley.fixed_workflow import (ASTRA, LUNA, OPUS, POSSESSIVE_CATEGORY, SOL, SONNET,
                                    FixedWorkflow, FixedWorkflowError, _candidate)
 
 
@@ -1969,3 +1969,70 @@ def test_astra_gate_moves_a_question_whose_quote_left_with_the_restored_text(mak
     # The rejected continuity edit is put to the author as a question.
     assert any(h.get("stage") == "astra_gate_demoted" for h in flow.history)
     assert any(q["stage"] == "astra_gate" for q in flow.questions)
+
+
+# --- possessives of names ending in s (Immanuel, 2026-09-22) -----------------
+
+def _possessive_flow(make_book, tmp_path, readers=None):
+    from docproof.consistency import possessive_policy
+    flow = _flow(make_book, tmp_path, readers)
+    flow.original = {"a": "It was Dolores’s hand.", "b": "He saw Dolores’s bag.", "c": "She took Dolores’ palm.",
+                     "d": "Dolores’ coat.", "e": "It is Dolores’ scarf.", "f": "It is Dolores’ hat.",
+                     "g": "It is Dolores’ glove.", "h": "It is Dolores’ shoe.", "i": "It is Dolores’ sock."}
+    flow.current = dict(flow.original)
+    flow.possessives = possessive_policy(flow.original)
+    return flow
+
+
+def _possessive_rows(flow):
+    return [_candidate(finding(pid, flow.current[pid], flow.current[pid].replace("Dolores’s", "Dolores’"),
+                               POSSESSIVE_CATEGORY), flow.current, "local:consistency") for pid in ("a", "b")]
+
+
+def test_screened_possessive_drop_moves_with_the_accepted_site(make_book, tmp_path):
+    def answer(stage, model, payload, kwargs):
+        assert stage == "typed_screen"
+        return {"decisions": [ruling(s, "apply" if s["para_id"] == "a" else "drop",
+                                     s["proposals"][0]["replacement"] if s["para_id"] == "a" else "")
+                              for s in payload["sites"]]}
+    flow = _possessive_flow(make_book, tmp_path, Readers(handler=answer))
+    flow._apply("typed", flow._adjudicate("typed", _possessive_rows(flow)))
+    assert flow.current["a"] == "It was Dolores’ hand." and flow.current["b"] == "He saw Dolores’ bag."
+    [log] = [h for h in flow.history if h["stage"] == "typed_harmonized"]
+    assert log["possessive"] == ["Dolores", "bare"]
+
+
+def test_a_screen_query_on_a_possessive_site_is_overruled_into_the_fix(make_book, tmp_path):
+    def answer(stage, model, payload, kwargs):
+        return {"decisions": [{**ruling(s, "query", ""), "question": "Dolores’ or Dolores’s?",
+                               "missing_knowledge": "The preferred possessive."} for s in payload["sites"]]}
+    flow = _possessive_flow(make_book, tmp_path, Readers(handler=answer))
+    flow._apply("typed", flow._adjudicate("typed", _possessive_rows(flow)))
+    assert flow.current["a"] == "It was Dolores’ hand." and flow.questions == []
+
+
+def test_screen_prompt_names_the_possessive_rule(make_book, tmp_path):
+    readers = Readers(handler=lambda stage, model, payload, kwargs: {"decisions": [
+        ruling(s, "drop", "") for s in payload["sites"]]})
+    flow = _possessive_flow(make_book, tmp_path, readers)
+    flow._adjudicate("typed", _possessive_rows(flow))
+    assert all("possessive_s" in e["system"] for e in readers.events if e["stage"] == "typed_screen")
+
+
+def test_apply_refuses_a_reader_edit_against_the_authors_possessive(make_book, tmp_path):
+    flow = _possessive_flow(make_book, tmp_path)
+    reader = _candidate(finding("c", "She took Dolores’ palm.", "She took Dolores’s palm.", "punctuation"),
+                        flow.current, OPUS)
+    flow._apply("astra", [reader])
+    assert flow.current["c"] == "She took Dolores’ palm."
+    [dropped] = [h for h in flow.history if "dropped" in h]
+    assert dropped["reason"].startswith("guard: the possessive of Dolores is “Dolores’”")
+
+
+def test_possessive_rows_bypass_the_jev_prescreen(make_book, tmp_path, monkeypatch):
+    from galley import jev as jev_lane
+    monkeypatch.setattr(jev_lane, "enabled", lambda: False)
+    flow = _possessive_flow(make_book, tmp_path)
+    rows = [{"para_id": "a", "category": POSSESSIVE_CATEGORY}, {"para_id": "b", "category": "grammar"}]
+    kept, evidence = flow._jev_prescreen(rows)
+    assert evidence is None and [r["category"] for r in kept] == ["grammar", POSSESSIVE_CATEGORY]
