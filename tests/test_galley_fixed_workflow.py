@@ -1472,7 +1472,7 @@ def test_number_policy_travels_only_with_number_work(make_book, tmp_path):
     assert flow._policy_for("continuity", "{}") == flow.base_policy
     assert flow.identity["policy_sha256"] == flow.identity["policy_sha256"]
     # The identity covers every contract, so a change to any of them starts a fresh workspace.
-    assert flow.identity["version"] == "fixed-proofreading-v8"
+    assert flow.identity["version"] == "fixed-proofreading-v9"
 
 
 def test_checks_carry_the_categories_of_accepted_corrections(make_book, tmp_path):
