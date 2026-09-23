@@ -138,7 +138,8 @@ def main():
                 log.exception("Teaser task will retry automatically")
                 if task:
                     try:
-                        client.call("error", task["id"], {"error": str(exc)})
+                        from app.teasers import is_transient
+                        client.call("error", task["id"], {"error": str(exc), "transient": is_transient(exc)})
                     except Exception:
                         log.exception("Could not save the teaser error")
             if args.once:

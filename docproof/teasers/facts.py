@@ -23,8 +23,11 @@ Adapt to the actual book: fiction, nonfiction, memoir, poetry or another form.
 Do not manufacture a protagonist, plot, promises, credentials or genre conventions.
 The writer will produce exactly three paragraphs, 150–200 words per option.
 Fill the private storysheet truthfully from the entire supplied source, including
-protected_revelations and conditional_disclosures. Set source_complete=false for
-material missing coverage, not merely literary ambiguity or chunk boundaries.
+protected_revelations and conditional_disclosures. Every portion of the manuscript
+is supplied. Set source_complete=false ONLY if a supplied portion is visibly cut
+off. Extraction damage, flattened tables, unsupported claims, or books, tests and
+materials the manuscript refers to are NOT gaps: list them in source_limitations,
+select facts only from what the text does support, and still fill every field.
 Title/author may be empty if absent from the manuscript. Keep the supporting
 WriterBrief context fields public-safe too. five_angles must match option angles.
 """
@@ -70,7 +73,8 @@ exists, describe it privately in feedback so Sol can reselect the facts.
                 attempt=attempt, validate=validate)
     if not check.accurate or not check.spoiler_safe:
         Path(work, "prepared-briefs.json").unlink(missing_ok=True)
-        raise ValueError("Sol must correct the selected facts: " + '; '.join(check.feedback))
+        from .pipeline import FactsRejected
+        raise FactsRejected("Sol must correct the selected facts: " + '; '.join(check.feedback))
     return story
 
 
@@ -97,14 +101,17 @@ No headings inside paragraphs, no commentary, no claims of authorship.
             "selected_facts": option.facts, "direction": option.direction}))
 
 
-def review_prompt(story, draft, source_reviews, issues, draft_hash, source_chunks=None):
+def review_prompt(story, draft, readings, issues, draft_hash, *, evidence=None, source_chunks=None):
     return SOURCE_RULE + ORIENTATION_RULE + """
-Check these five writer-generated teasers against Sol's selected public facts AND
-the whole manuscript coverage below. Each must be faithful, spoiler-safe, clear,
-150–200 words in exactly three paragraphs, and distinct in its chosen angle.
-No claim may go beyond its corresponding selected facts. Do not request stylistic
-rewrites when accurate copy already works. There is no model-generated guide to
-check: the separate house guide is fixed, so guidance_approved=true.
+Check these five writer-generated teasers against Sol's selected public facts and
+the whole book. For a long book you have Sol's complete ordered reading of every
+manuscript portion (narrative, facts with paragraph IDs, revelations) plus the
+original passages those facts cite; for a short book, the original source itself.
+Each teaser must be faithful, spoiler-safe, clear, 150–200 words in exactly three
+paragraphs, and distinct in its chosen angle. No claim may go beyond its
+corresponding selected facts. Do not request stylistic rewrites when accurate
+copy already works. There is no model-generated guide to check: the separate
+house guide is fixed, so guidance_approved=true.
 Return the supplied draft hash and every covered chunk ID. Review all five options.
 A recommended_option is required internally but is not shown or used to rank them.
 For localized factual corrections you may propose exact SmallEdits to teaser or
@@ -114,5 +121,5 @@ this same pass only if all checks pass afterwards. Otherwise leave edits=[] and
 explain issues privately for Sol to revise its public fact sheets. Never send
 private findings or rejected copy to the writer. Do not rewrite entire teasers.
 """ + data({"private_storysheet": story, "draft": draft, "draft_sha256": draft_hash,
-            "source_reviews": source_reviews, "original_source": source_chunks,
-            "required_fixes": issues})
+            "full_book_readings": readings, "cited_passages": evidence,
+            "original_source": source_chunks, "required_fixes": issues})

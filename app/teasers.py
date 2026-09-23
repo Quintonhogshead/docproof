@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
 import logging
+import re
 from pathlib import Path
 import sqlite3
 import time
@@ -34,6 +35,29 @@ STATES = ("queued", "brief_ready", "story_ready", "drafted", "approved")
 
 class TeaserError(ValueError):
     pass
+
+
+# Counted failures back off from two minutes to at most half an hour: a book
+# should finish the day it is formatted.
+MAX_BACKOFF_SECONDS = 30 * 60
+TRANSIENT_CATEGORIES = ("cli_failure", "cli_io", "cli_start", "timeout",
+                        "model_unavailable", "subscription_limit")
+
+
+def is_transient(error):
+    """A subscription or transport outage, as opposed to a problem with the book."""
+    text = str(error)
+    match = re.search(r"Codex subscription review stopped \((\w+)\)", text)
+    return bool((match and match.group(1) in TRANSIENT_CATEGORIES) or
+                "subscription reviewer is busy" in text or
+                "Subscription session" in text)
+
+
+def transient_delay(error, count):
+    if "subscription_limit" in str(error):
+        return 15 * 60
+    # Two minutes while it may be a blip; a longer outage is polled every 15.
+    return 120 if count <= 10 else 15 * 60
 
 
 @contextmanager
@@ -139,14 +163,23 @@ class Queue:
             task = self.get(task["id"])
         return task
 
-    def retry(self, task, error, *, delay=None, resume=None):
-        task["failures"] = task.get("failures", 0) + 1
+    def retry(self, task, error, *, delay=None, resume=None, counted=True):
+        """Schedule the task's next attempt. An uncounted (transient) failure —
+        the subscription busy, down, or rate limited — is not the book's fault:
+        it neither grows the backoff nor becomes Sol's editorial feedback."""
+        if counted:
+            task["failures"] = task.get("failures", 0) + 1
+            task["feedback"] = list(task.get("feedback", []))[-20:] + [error[:2000]]
+            task.pop("transient_failures", None)
+        else:
+            task["transient_failures"] = task.get("transient_failures", 0) + 1
+            if delay is None:
+                delay = transient_delay(error, task["transient_failures"])
         task["error"] = error[:2000]
-        task["feedback"] = list(task.get("feedback", []))[-20:] + [error[:2000]]
         task["resume_state"] = resume or task.get("resume_state") or (
             "story_ready" if task["state"] == "generating" else task["state"])
         task["retry_at"] = time.time() + (delay if delay is not None else
-                                        min(6 * 3600, 60 * 2 ** min(task["failures"], 8)))
+                                        min(MAX_BACKOFF_SECONDS, 60 * 2 ** min(task["failures"], 8)))
         task["progress"] = "Automatic retry scheduled; no editorial action required"
         self.save(task, "retry_wait")
 

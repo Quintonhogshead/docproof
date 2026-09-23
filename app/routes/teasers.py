@@ -76,7 +76,8 @@ def dispatch(app, message):
             task = deliver(queue, task, home)
         elif message.action == "error":
             if task["state"] not in ("complete", "retry_wait"):
-                queue.retry(task, str(message.payload.get("error", "Worker failed")))
+                error = str(message.payload.get("error", "Worker failed"))
+                queue.retry(task, error, counted=not (message.payload.get("transient") or teasers.is_transient(error)))
                 task = queue.get(task["id"])
         return {"task": task}
 
