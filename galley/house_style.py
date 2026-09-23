@@ -104,6 +104,13 @@ COMMON_RULES: tuple[str, ...] = (
     "forward, backward, afterward, among, amid, while, gray — not towards, "
     "forwards, backwards, afterwards, amongst, amidst, whilst, grey. "
     "Intentional variation, such as dialect in dialogue, is respected.",
+    "The possessive of a name ending in s follows the manuscript's own "
+    "consistent form: a book that writes “Dolores’” throughout keeps "
+    "“Dolores’” (and one that writes “Dolores’s” keeps that). Never add or "
+    "remove the s at a single site; the book is conformed as a set, and "
+    "Chicago's “Dolores’s” applies only where the manuscript shows no "
+    "preference. A ’ closing single-quoted speech (“‘Hi, Dolores’”) is not "
+    "a possessive.",
     "Author preference wins: a clearly communicated, consistently applied "
     "stylistic choice or intentional deviation is never an error.",
 )

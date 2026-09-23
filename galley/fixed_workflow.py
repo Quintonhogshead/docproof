@@ -81,6 +81,10 @@ FRONTIER_QUESTION_CATEGORIES = frozenset({"fact_logic", "continuity", "structure
 # adjudication moves with it. The Wilder run (2026-09-14) applied OK -> okay
 # at one of the book's two "OK"s and left "Is everything OK?" standing.
 CONSISTENCY_CATEGORIES = frozenset({"term_consistency", "case_split", "variant_spelling"})
+# Possessives of names ending in s (Dolores’ / Dolores’s) are one book-wide
+# decision, the author's count (docproof.consistency.possessive_policy): the
+# scan's sites move together, and code refuses any edit against the decision.
+POSSESSIVE_CATEGORY = "possessive_s"
 # A chapter or part label's number or style is mechanics the house corrects,
 # never an author question (Quinton, 2026-09-04): the code-generated
 # chapter_label rows are applied, and a screen's "query" on one is overruled.
@@ -523,26 +527,61 @@ def _label_site(site):
     return len(site["proposals"]) == 1 and site["proposals"][0]["category"] == LABEL_CATEGORY
 
 
+def _possessive_key(site):
+    """(name, target form) for a lone possessive_s site, else None. The scan's
+    minimal edit inserts or deletes the s right after “Name’”."""
+    if len(site["proposals"]) != 1 or site["proposals"][0]["category"] != POSSESSIVE_CATEGORY:
+        return None
+    proposal = site["proposals"][0]
+    named = re.search(r"([^\W\d_]+s)[’']\Z", site["paragraph"][:proposal["start"]])
+    change = (proposal["before"], proposal["replacement"])
+    target = {("", "s"): "s", ("s", ""): "bare"}.get(change)
+    return (named.group(1), target) if named and target else None
+
+
 def _harmonize_consistency(sites, agreed):
     """Decide consistency sites as a set. Every swap the screen applied at a
     consistency site (old -> new, whole words) is carried to each other
     consistency site of the same screen whose text still holds `old` and
     whose decision was drop. Returns the updated decisions and the log rows.
-    A query stands: the author was asked something specific."""
-    swaps = {}
+    A query stands: the author was asked something specific.
+
+    A possessive_s site is carried the same way by its (name, form) key: the
+    book's possessives of one name are one decision, so when the screen
+    applies the author's form at one site, the sites it dropped follow."""
+    swaps, possessives = {}, {}
     for site in sites:
         decision = agreed.get(site["id"])
-        if not _consistency_site(site) or not decision or decision.get("action") != "apply":
+        if not decision or decision.get("action") != "apply":
+            continue
+        key = _possessive_key(site)
+        if key and decision.get("replacement", "") == site["proposals"][0]["replacement"]:
+            possessives.setdefault(key, site["id"])
+        if not _consistency_site(site):
             continue
         swap = _word_swap(site["before"], decision.get("replacement", ""))
         if swap and swap[0] not in swaps:
             swaps[swap[0]] = (swap[1], site["id"])
-    if not swaps:
+    if not swaps and not possessives:
         return agreed, []
     updated, log = dict(agreed), []
     for site in sites:
         decision = agreed.get(site["id"])
-        if not _consistency_site(site) or not decision or decision.get("action") != "drop":
+        if not decision or decision.get("action") != "drop":
+            continue
+        key = _possessive_key(site)
+        if key in possessives:
+            name, form = key
+            updated[site["id"]] = {**decision, "action": "apply",
+                "replacement": site["proposals"][0]["replacement"],
+                "reason": (f"Book-wide consistency: the possessive of {name} takes the manuscript's own form "
+                           f"({'’s' if form == 's' else 'bare apostrophe'}), applied at another site of this "
+                           f"screen; the book's possessives of one name move together."),
+                "question": "", "missing_knowledge": ""}
+            log.append({"site": site["id"], "possessive": [name, form], "origin": possessives[key],
+                        "dropped_reason": decision.get("reason", "")})
+            continue
+        if not _consistency_site(site):
             continue
         for old, (new, origin) in swaps.items():
             pattern = re.compile(r"(?<![\w'’])" + re.escape(old) + r"(?![\w'’])")
@@ -712,6 +751,9 @@ class FixedWorkflow:
         self.jev = None
         self._jev_lock = threading.Lock()
         self.prose_prepared = None
+        # The manuscript's own possessive form per name ending in s, decided
+        # from the original text in _run before any stage edits it.
+        self.possessives = None
         self.source_marks = {}
         # Categories of the corrections applied to each paragraph since its
         # last check, so a check request can carry the policy they need.
@@ -992,6 +1034,13 @@ class FixedWorkflow:
         rows it did not answer through, and nothing it keeps is proof.
         """
         from galley import jev as jev_lane
+        # A possessive_s row is the book's count, not a rule a sentence can
+        # judge: Jev would weigh each site against Chicago alone and break the
+        # set up. It goes to the screen unjudged, as a set.
+        exempt = [row for row in rows if row.get("category") == POSSESSIVE_CATEGORY]
+        if exempt:
+            kept, evidence = self._jev_prescreen([row for row in rows if row.get("category") != POSSESSIVE_CATEGORY])
+            return kept + exempt, evidence
         if not rows:
             return rows, None
         if not jev_lane.enabled():
@@ -1157,6 +1206,10 @@ class FixedWorkflow:
             "Judge the text independently; another reader or a local flag is not proof of an error. "
             "A chapter_label site is a chapter or part label's number or style, mechanics the house corrects: "
             "apply it unless the span is not such a label, and never query it. "
+            "A possessive_s site conforms the possessive of a name ending in s (Dolores’ or Dolores’s) to the form the "
+            "manuscript itself uses, as counted across the whole book: the author's consistent form is correct even where "
+            "Chicago prefers the other. Apply it unless the span is not that name's possessive (a closing single quotation "
+            "mark, a plural, an 's contraction), and never query it. "
             "reason is one short sentence of at most 25 words; leave replacement, question and missing_knowledge empty unless the action needs them. "
             "Sites are named s01, s02, ... within this request; return each decision under exactly that name. "
             "action is apply, drop or query only: a proposal you accept is apply (never edit). Return every field of the decision "
@@ -1280,10 +1333,12 @@ class FixedWorkflow:
             decision = agreed[site["id"]]
             models = [OPUS] if site["id"] in disputed_ids else [SONNET, LUNA]
             self.history.append({"stage": stage + ("_disputes" if site["id"] in disputed_ids else "_screened"), "site": site, "decision": decision})
-            if decision["action"] == "query" and _label_site(site):
+            if decision["action"] == "query" and (_label_site(site) or _possessive_key(site)):
                 self.history.append({"stage": stage + "_label_query_overruled", "site": site["id"],
                                      "question": decision.get("question", ""),
-                                     "reason": "A chapter or part label's number or style is mechanics, never an author question"})
+                                     "reason": ("A chapter or part label's number or style is mechanics, never an author question"
+                                                if _label_site(site) else
+                                                "A name's possessive follows the manuscript's own count, never an author question")})
                 decision = {**decision, "action": "apply", "replacement": site["proposals"][0]["replacement"],
                             "question": "", "missing_knowledge": ""}
             if decision["action"] == "drop":
@@ -1525,7 +1580,8 @@ class FixedWorkflow:
             # agreed on can still be the wrong edit (Cooper, 2026-09-17). A
             # refusal is a dropped row with a receipt, never a run failure.
             if not row.get("format"):
-                problem = proposal_problem(row["before"], row["replacement"], before[pid], lo, hi)
+                problem = proposal_problem(row["before"], row["replacement"], before[pid], lo, hi,
+                                           possessives=self.possessives)
                 if problem:
                     self.history.append({"stage": stage, "dropped": row, "reason": "guard: " + problem})
                     continue
@@ -2105,6 +2161,10 @@ class FixedWorkflow:
         self.current = dict(self.original)
         if not any(x.strip() for x in self.original.values()):
             raise FixedWorkflowError("The manuscript contains no readable text")
+        from docproof.consistency import possessive_policy
+        self.possessives = possessive_policy(self.original)
+        if self.possessives.names:
+            self.history.append({"stage": "possessive_policy", **self.possessives.as_dict()})
         self._stage("poetry")
         self._classify()
         all_poetry = self.poetry_ids == set(self.original)

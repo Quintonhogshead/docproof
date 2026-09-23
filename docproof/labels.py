@@ -56,6 +56,7 @@ FREE_FORM: frozenset[str] = frozenset({
     "vessel_pronoun",     # consistency.py VESSEL_KEY — a ship called she, then it
     "dialect_spelling",   # consistency.py DIALECT_KEY — dinnae against dinna
     "compound_style",     # consistency.py COMPOUND_KEY — sat phone -> satphone
+    "possessive_s",       # consistency.py POSSESSIVE_KEY — Dolores’ against Dolores’s, fixed Galley only
     "callback_drift",     # callbacks.py CALLBACK_KEY — a misquoted callback
     "near_duplicate_name",# pipeline.py — protected-name pairs too close to call
     "unclosed_quote",     # sweeps.py — unbalanced-quotation queries

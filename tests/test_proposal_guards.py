@@ -146,3 +146,20 @@ def test_flat_tag_question_refuses_only_the_flat_tag_and_the_echo():
     assert flat_tag_question(",", "?", plain, 6, 7) is None
     # Nothing to do with a question mark: an ordinary comma-to-period fix.
     assert flat_tag_question(",", ".", flat, 7, 8) is None
+
+
+# --- the Immanuel possessives (2026-09-22) -----------------------------------
+
+def test_a_possessive_converted_against_the_authors_form_is_refused():
+    from docproof.consistency import possessive_policy
+    policy = possessive_policy({f"p{i}": f"It was Dolores’ {thing}." for i, thing in
+                                enumerate(("hand", "bag", "palm", "shoulder"))})
+    paragraph = "He waits for Dolores’ approval, which she gives tacitly with her broadest grin."
+    before, replacement, lo, hi = edit(paragraph, paragraph.replace("Dolores’", "Dolores’s"))
+    assert (before, replacement) == ("", "s")
+    assert "Dolores’" in proposal_problem(before, replacement, paragraph, lo, hi, possessives=policy)
+    # Without the run's policy the guard has nothing to judge by.
+    assert proposal_problem(before, replacement, paragraph, lo, hi) is None
+    # Other edits in the same paragraph are untouched.
+    before, replacement, lo, hi = edit(paragraph, paragraph.replace("tacitly ", ""))
+    assert proposal_problem(before, replacement, paragraph, lo, hi, possessives=policy) is None

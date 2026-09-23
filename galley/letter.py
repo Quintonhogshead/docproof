@@ -310,6 +310,7 @@ FAMILY_LABELS: dict[str, str] = {
     "numbers": "numbers in the house style (spelled to one hundred)",
     "hyphenation": "hyphenation (Merriam-Webster)",
     "apostrophe": "apostrophes and possessives",
+    "possessive_s": "possessives of names ending in s, in the author's own form",
     "subject_verb_agreement": "subject-verb agreement",
     "tense_shift": "isolated tense slips",
     "pronoun_agreement": "pronoun agreement",

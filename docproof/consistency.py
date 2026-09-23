@@ -51,9 +51,12 @@ and which channel it uses:
   closed compounds               sat phone / satphone              corrects
   ``find_figure_drift``          282.6 deg x9 against 282.8 deg x1 asks
   ``callbacks.find_callbacks``   a remembered line, misquoted      both
+  ``find_possessive_drift``      Dolores’ x36 against Dolores’s x1 corrects
 
-The five at the bottom came out of the Cooper QA, where each was a miss no
-per-paragraph review could structurally have caught. The ones that correct are
+The five above the last came out of the Cooper QA, where each was a miss no
+per-paragraph review could structurally have caught; the last came out of the
+Immanuel QA, where per-paragraph readers each applied Chicago's ’s at a few
+sites of a name the author wrote the other way throughout. The ones that correct are
 read by a caller that screens every proposal in context (Galley's fixed
 workflow); the figure scan corrects nothing at all, because house policy is that
 a numeric value is never changed to repair a contradiction.
@@ -2417,3 +2420,264 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
         findings.extend(callback_findings(report.callbacks, paragraphs))
 
     return findings
+
+
+# --- possessives of names ending in s -----------------------------------------
+
+# The key a possessive conformation carries. Like NAME_KEY it lives outside
+# config/error_types: the book's own count decides it, not a prompt.
+POSSESSIVE_KEY = "possessive_s"
+
+# The bar for an author preference: at least this many countable possessives,
+# at least this share of them in one form. Immanuel (2026-09-22) wrote
+# "Dolores’" 28 times and "Dolores’s" twice, 93%.
+POSSESSIVE_MIN_SITES = 3
+POSSESSIVE_DOMINANCE = 0.75
+
+# A word ending in s, then an apostrophe, then an optional s, then no letter.
+# Both apostrophes are read; a conformed site keeps the one it was written with.
+_POSSESSIVE_SITE = re.compile(
+    r"(?<![\w'’\-‐‑])(?P<name>[^\W\d_]+s)(?P<mark>[’'])(?P<s>s?)(?![^\W\d_'’])", re.UNICODE)
+# A capitalized word ending in s, anywhere, for the name and plural evidence.
+_S_WORD = re.compile(r"(?<![\w'’\-‐‑])[^\W\d_]+s(?![^\W\d_])", re.UNICODE)
+_CAP_WORD = re.compile(r"(?<![\w'’\-‐‑])[^\W\d_]+(?![^\W\d_])", re.UNICODE)
+_NEXT_WORD = re.compile(r"[\s ]+([^\W\d_]+)", re.UNICODE)
+# After "Dolores’s" these words read "Dolores is/has" as readily as a
+# possessive ("Dolores’s been", "Dolores’s a nurse"); so does any -ing word
+# ("Dolores’s singing"). Such a site is neither counted nor conformed.
+_CONTRACTION_NEXT = frozenset("""
+a an the been got gotten gone not never always just still already really so too
+very here there gonna in on at out up down off back over like right probably
+definitely only also all no
+""".split())
+# Fixed expressions that keep the bare apostrophe whatever the book does.
+_BARE_IDIOMS = {"achilles": {"heel", "heels", "tendon", "tendons"}}
+_HONORIFICS_S = frozenset({"mrs", "ms", "messrs"})
+# "the Petters’ window", "The McCoys’ Hang on Sloopy", "Los Almendros’": a name
+# after an article is a family, a band or a people, a PLURAL possessive, and
+# a plural possessive is never Petters’s.
+_PLURAL_ARTICLES = frozenset({"the", "los", "las", "les"})
+_WORD_BEFORE = re.compile(r"([^\W\d_]+)[\s ]+\Z", re.UNICODE)
+
+
+@dataclass(frozen=True)
+class PossessiveSite:
+    """One countable possessive of a name ending in s. ``start``..``end`` is
+    the whole possessive, name included (``Dolores’`` or ``Dolores’s``)."""
+    start: int
+    end: int
+    name: str
+    form: str           # "bare" (Dolores’) or "s" (Dolores’s)
+    mark: str           # the apostrophe as written
+
+
+@dataclass(frozen=True)
+class PossessivePreference:
+    name: str
+    form: str           # the form the book's text is conformed to
+    basis: str          # "name" | "book" | "chicago"
+    bare: int           # this name's countable bare possessives
+    s: int              # and its 's possessives
+
+
+@dataclass(frozen=True)
+class PossessivePolicy:
+    """The manuscript's own answer to Dolores’ versus Dolores’s, per name.
+    Decided once from the ORIGINAL text; every later stage reads it."""
+    names: Mapping[str, PossessivePreference]
+    book_bare: int
+    book_s: int
+
+    def form(self, name: str) -> str | None:
+        pref = self.names.get(name)
+        return pref.form if pref else None
+
+    def as_dict(self) -> dict:
+        return {"book": {"bare": self.book_bare, "s": self.book_s},
+                "names": {n: {"form": p.form, "basis": p.basis, "bare": p.bare, "s": p.s}
+                          for n, p in sorted(self.names.items())}}
+
+
+def _closing_quote(text: str, at: int) -> bool:
+    """Is the ’ at ``at`` (a word-final one) the close of single-quoted
+    speech rather than a possessive? UK dialogue ends ‘Hi, Dolores’ with the
+    same glyph the possessive uses. Walk the paragraph tracking open ‘ marks
+    the way the sweeps do; when one is open here, the ’ is a possessive only
+    if another closer follows before the next opener (‘Is that Dolores’
+    car?’). Otherwise it is, or may be, the closer, and is left alone."""
+    if text[at] != "’":
+        return False
+    open_count = 0
+    for i in range(at):
+        ch = text[i]
+        if ch == "‘":
+            open_count += 1
+        elif ch == "’" and open_count:
+            prev, nxt = text[i - 1] if i else "", text[i + 1] if i + 1 < len(text) else ""
+            if not (prev.isalpha() and nxt.isalpha()):
+                open_count -= 1
+    if not open_count:
+        return False
+    for j in range(at + 1, len(text)):
+        ch = text[j]
+        if ch == "‘":
+            return True
+        if ch == "’":
+            prev, nxt = text[j - 1], text[j + 1] if j + 1 < len(text) else ""
+            if not (prev.isalpha() and nxt.isalpha()):
+                return False
+    return True
+
+
+def _possessive_sites(text: str, names) -> list[PossessiveSite]:
+    """The countable possessives in one paragraph of the names in ``names``.
+    A site that may be a closing quotation mark, an 's contraction, a plural
+    (after "the") or a fixed expression is not a site: it is neither counted
+    nor changed."""
+    sites = []
+    for m in _POSSESSIVE_SITE.finditer(text):
+        name = m.group("name")
+        if name not in names:
+            continue
+        before = _WORD_BEFORE.search(text, max(0, m.start() - 12), m.start())
+        if before and before.group(1).lower() in _PLURAL_ARTICLES:
+            continue
+        nxt = _NEXT_WORD.match(text, m.end())
+        following = nxt.group(1).lower() if nxt else ""
+        if following and following in _BARE_IDIOMS.get(name.lower(), ()):
+            continue
+        if following == "sake":
+            continue                   # for Jesus’ sake: an idiom, not a count
+        if m.group("s"):
+            if following in _CONTRACTION_NEXT or following.endswith("ing"):
+                continue
+            form = "s"
+        else:
+            if _closing_quote(text, m.start("mark")):
+                continue
+            form = "bare"
+        sites.append(PossessiveSite(m.start(), m.end(), name, form, m.group("mark")))
+    return sites
+
+
+def _possessive_names(texts: Mapping[str, str]) -> set[str]:
+    """Capitalized words ending in s that the book uses as singular names.
+    A name is a word the book capitalizes somewhere mid-sentence (so a
+    sentence-initial "Thanks’" is not one). A word whose s is a plural — the
+    book also has the word without it (Smiths beside Smith, Joneses beside
+    Jones) — is left out, because Smiths’ must never become Smiths’s."""
+    caps, named = set(), set()
+    for text in texts.values():
+        text = text or ""
+        for m in _CAP_WORD.finditer(text):
+            word = m.group(0)
+            if word[:1].isupper():
+                caps.add(word)
+        for m in _S_WORD.finditer(text):
+            word = m.group(0)
+            if (len(word) >= 3 and word[:1].isupper() and not word.isupper()
+                    and word.lower() not in _HONORIFICS_S
+                    and not _sentence_initial(text, m.start())):
+                named.add(word)
+    return {w for w in named
+            if w[:-1] not in caps and not (w.endswith("es") and w[:-2] in caps)}
+
+
+def possessive_policy(texts: Mapping[str, str], *, min_sites: int = POSSESSIVE_MIN_SITES,
+                      dominance: float = POSSESSIVE_DOMINANCE) -> PossessivePolicy:
+    """Decide, from the manuscript as written, which possessive each name
+    ending in s takes. A name the author writes one way clearly (at least
+    ``min_sites`` countable possessives, at least ``dominance`` of them in one
+    form) keeps that form. Otherwise the book's pooled count over every such
+    name decides by the same bar. Only a book with no clear preference gets
+    Chicago's default, ’s. Chicago accepts both forms; the house rule that the
+    author's consistent choice is never an error is what makes this a count
+    and not a correction."""
+    names = _possessive_names(texts)
+    counts: dict[str, Counter] = defaultdict(Counter)
+    for text in texts.values():
+        for site in _possessive_sites(text or "", names):
+            counts[site.name][site.form] += 1
+    book = Counter()
+    for c in counts.values():
+        book.update(c)
+
+    def clear(c: Counter) -> str | None:
+        total = c["bare"] + c["s"]
+        if total < min_sites:
+            return None
+        top = "bare" if c["bare"] >= c["s"] else "s"
+        return top if c[top] / total >= dominance else None
+
+    book_form = clear(book)
+    prefs = {}
+    for name, c in counts.items():
+        own = clear(c)
+        form, basis = ((own, "name") if own else (book_form, "book") if book_form else ("s", "chicago"))
+        prefs[name] = PossessivePreference(name, form, basis, c["bare"], c["s"])
+    return PossessivePolicy(prefs, book["bare"], book["s"])
+
+
+def _possessive_reason(pref: PossessivePreference, policy: PossessivePolicy, target: str) -> str:
+    if pref.basis == "name":
+        return (f"The manuscript writes this name's possessive as “{target}” "
+                f"({pref.bare if pref.form == 'bare' else pref.s} of {pref.bare + pref.s} times); "
+                f"this one is brought in line with the author's form.")
+    if pref.basis == "book":
+        n = policy.book_bare if pref.form == "bare" else policy.book_s
+        style = "a bare apostrophe" if pref.form == "bare" else "’s"
+        return (f"The manuscript writes the possessive of names ending in s with {style} "
+                f"({n} of {policy.book_bare + policy.book_s} times); “{target}” follows the author's form.")
+    return (f"The manuscript shows no consistent form for possessives of names ending in s, "
+            f"so Chicago's default applies: “{target}”.")
+
+
+def find_possessive_drift(paragraphs: Sequence[ParagraphRef],
+                          policy: PossessivePolicy) -> list[Finding]:
+    """A tracked edit for every countable possessive not in its name's
+    decided form (``possessive_policy``), quoted by its sentence like the
+    other house sweeps. The set is one decision: a caller screening the sites
+    should move them together (Galley's fixed workflow does)."""
+    findings: list[Finding] = []
+    for para in paragraphs:
+        if not getattr(para, "reviewable", True) or not para.text:
+            continue
+        for site in _possessive_sites(para.text, policy.names):
+            pref = policy.names[site.name]
+            if site.form == pref.form:
+                continue
+            target = site.name + site.mark + ("s" if pref.form == "s" else "")
+            window, lo, occurrence = sentence_window(para.text, site.start, site.end)
+            corrected = window[:site.start - lo] + target + window[site.end - lo:]
+            findings.append(Finding(
+                finding_id=f"possessive-{len(findings) + 1}", chunk_id="house",
+                para_id=para.para_id, error_type=POSSESSIVE_KEY,
+                original_text=window, occurrence=occurrence, corrected_text=corrected,
+                explanation=_possessive_reason(pref, policy, target),
+                confidence="high", status="validated"))
+    return findings
+
+
+def possessive_conversion(before: str, after: str, policy: PossessivePolicy) -> str | None:
+    """Why a change from paragraph ``before`` to ``after`` converts a name's
+    possessive AWAY from its decided form, or None. Read on raw shapes, not
+    countable sites: adding an s after a closing quote is no better an edit.
+    Only a conversion counts (one shape up, the other down), so an added
+    closing quote or a restored missing word is not refused."""
+    for name, pref in policy.names.items():
+        if name not in before and name not in after:
+            continue
+        s_shape = re.compile(r"(?<![\w'’\-‐‑])" + re.escape(name) + r"[’']s(?![^\W\d_'’])")
+        bare_shape = re.compile(r"(?<![\w'’\-‐‑])" + re.escape(name) + r"[’'](?![^\W\d_'’])")
+        d_s = len(s_shape.findall(after)) - len(s_shape.findall(before))
+        d_bare = len(bare_shape.findall(after)) - len(bare_shape.findall(before))
+        wrong = d_s > 0 and d_bare < 0 if pref.form == "bare" else d_bare > 0 and d_s < 0
+        if wrong:
+            kept = f"{name}’" if pref.form == "bare" else f"{name}’s"
+            count = (f"{pref.bare} of {pref.bare + pref.s} times" if pref.basis == "name" and pref.form == "bare"
+                     else f"{pref.s} of {pref.bare + pref.s} times" if pref.basis == "name"
+                     else "names ending in s generally" if pref.basis == "book"
+                     else "Chicago's default, the book having no preference")
+            return (f"the possessive of {name} is “{kept}” in this book ({count}); "
+                    f"a single site is never converted against the author's form")
+    return None
