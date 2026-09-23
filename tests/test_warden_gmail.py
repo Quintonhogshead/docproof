@@ -211,7 +211,7 @@ def test_replies_query_tags_the_subject_and_excludes_self():
     cfg = FakeConfig()
     opener = fake_gmail(messages={})
 
-    gmail.replies(cfg, FakeSecrets(), since=NOW - timedelta(hours=1), opener=opener)
+    gmail.replies(cfg, FakeSecrets(), since=NOW - timedelta(hours=1), opener=opener, now=NOW)
 
     query = _list_query(opener)
     assert query.startswith("subject:[Warden]")
@@ -223,7 +223,7 @@ def test_replies_uses_the_notify_refresh_token():
     cfg = FakeConfig()
     opener = fake_gmail(messages={}, token_key="x")
 
-    gmail.replies(cfg, FakeSecrets(), since=NOW - timedelta(hours=1), opener=opener)
+    gmail.replies(cfg, FakeSecrets(), since=NOW - timedelta(hours=1), opener=opener, now=NOW)
 
     token_call = next(r for r in opener.calls
                       if "oauth2.googleapis.com" in r.full_url)

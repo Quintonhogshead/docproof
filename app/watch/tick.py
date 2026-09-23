@@ -75,6 +75,9 @@ class TickReport:
     # this pass. Stood aside, not failed — no marker is written, so the next
     # tick reconsiders — so it is counted apart from `failed`.
     waiting: int = 0
+    # Files a person retired (`FileRecord.retired`): listed by Drive, dropped
+    # before any stage sees them. Counted so the CLI can say so.
+    retired: int = 0
     prepped: list[str] = field(default_factory=list)
     # Books promo wrote copy for this pass, kept apart from `prepped` (which is
     # formatting) so a pass can say which stage did what.
@@ -525,7 +528,7 @@ def _deliver_approved_promo(token: str, ws: WatchSettings,
     `pending` here."""
     by_id = {f.id: f for f in listing}
     for rec in list(state.files.values()):
-        if rec.promo_marked != "pending" or not rec.promo_job_id:
+        if rec.retired or rec.promo_marked != "pending" or not rec.promo_job_id:
             continue
         job = store.get(rec.promo_job_id)
         if job is None or job.approval != "approved" or job.state != "done":
@@ -743,7 +746,7 @@ def _deliver_approved_plan(token: str, ws: WatchSettings,
     `pending` here."""
     by_id = {f.id: f for f in listing}
     for rec in list(state.files.values()):
-        if rec.plan_marked != "pending" or not rec.plan_job_id:
+        if rec.retired or rec.plan_marked != "pending" or not rec.plan_job_id:
             continue
         job = store.get(rec.plan_job_id)
         if job is None or job.approval != "approved" or job.state != "done":
@@ -1929,6 +1932,19 @@ def _refuse(token: str, ws: WatchSettings, file: DriveFile, job: Job, rec,
 
 
 
+def drop_retired(listing: list[DriveFile], state: WatchState) -> tuple[list[DriveFile], set[str]]:
+    """The listing minus every file whose record says `retired`, plus the ids
+    dropped. One filter, applied to each stage's listing before any stage
+    looks, so a retired book is invisible to formatting, proofing, promo, the
+    plan and corrections alike — and reappears everywhere the moment the
+    marker is cleared, since nothing else about the record changes."""
+    retired = {fid for fid, rec in state.files.items() if rec.retired}
+    if not retired:
+        return listing, set()
+    kept = [f for f in listing if f.id not in retired]
+    return kept, {f.id for f in listing if f.id in retired}
+
+
 def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
          mock: bool = False, opener=None, get_key=None) -> TickReport:
     """Look once, do what is there, and hand back what happened.
@@ -2211,6 +2227,10 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
             report=report, dry_run=dry_run)
     elif ws.proofing_enabled:
         proof_listing = listing
+
+    listing, dropped = drop_retired(listing, state)
+    proof_listing, dropped_proof = drop_retired(proof_listing, state)
+    report.retired = len(dropped | dropped_proof)
 
     seen = {f.id for f in listing}
     extra = [f for f in proof_listing if f.id not in seen]

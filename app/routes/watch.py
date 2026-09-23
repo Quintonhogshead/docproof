@@ -262,6 +262,18 @@ class WardenResendCompletion(BaseModel):
     file_id: str = Field(min_length=1, max_length=200)
 
 
+class WardenRetire(BaseModel):
+    """Retire a book from the watcher (or un-retire it): every stage drops it
+    from its listing while `FileRecord.retired` is set. Nothing in Drive or
+    HubSpot changes, and the record's history is kept, so this is the fix for
+    "this one is past the pipeline, stop reporting it" — not a requeue and not
+    a delete."""
+
+    file_id: str = Field(min_length=1, max_length=200)
+    reason: str = Field(default="", max_length=500)
+    retire: bool = True
+
+
 class CorrectionsRehearse(BaseModel):
     """Try the corrections stage on one HubSpot record, from the panel's
     "Waiting for corrections" table or its own inline form."""
@@ -1070,6 +1082,41 @@ def register(app: FastAPI) -> None:
         except FolderInUse:
             raise HTTPException(409, "Wait for the current automation check to finish.") from None
         return {"cleared": rec.file_id, "name": rec.name, "stage": update.stage}
+
+    @app.post("/api/watch/warden/retire")
+    def warden_retire(body: WardenRetire, request: Request) -> dict:
+        """The `docwatch-retire` verb: mark a book retired so no stage looks at
+        it again, or clear that mark. State only — no Drive flag, no HubSpot
+        write — so it is safe at any point in a pass except mid-write, which
+        the folder lock guards."""
+        from datetime import datetime, timezone
+
+        from ..lock import FolderInUse, FolderLock
+        from ..watch.state import STATE_FILE, WatchState
+        warden_gate(request)
+        watch: WatchRunner = app.state.watch
+        if watch.busy:
+            raise HTTPException(409, "Wait for the current automation check to finish.")
+        try:
+            with FolderLock(watch.home):
+                state = WatchState.load(Path(watch.home) / STATE_FILE)
+                rec = state.files.get(body.file_id)
+                if rec is None:
+                    raise HTTPException(404, "This book is no longer in the activity list.")
+                if body.retire:
+                    rec.retired = ("the Warden "
+                                   + datetime.now(timezone.utc).isoformat(timespec="seconds"))
+                    rec.retired_reason = body.reason.strip()
+                else:
+                    rec.retired = ""
+                    rec.retired_reason = ""
+                state.record(rec)
+        except FolderInUse:
+            raise HTTPException(409, "Wait for the current automation check to finish.") from None
+        log.info("the Warden %s %s (%s)%s.", "retired" if body.retire else "un-retired",
+                 rec.name, rec.file_id, f": {body.reason.strip()}" if body.reason.strip() else "")
+        return {"file_id": rec.file_id, "name": rec.name, "retired": bool(rec.retired),
+                "reason": rec.retired_reason}
 
     @app.post("/api/watch/warden/run")
     def warden_run(request: Request) -> dict:
