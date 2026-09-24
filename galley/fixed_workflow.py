@@ -965,6 +965,14 @@ class FixedWorkflow:
             if problem:
                 self._reject_proposal(stage, row, texts, model, problem)
                 return None
+        if candidate and candidate.get("format"):
+            from galley.fixed_policy import title_format_problem
+            # Roman evidence alone let whole sentences through (Immanuel):
+            # the quote must also be the title alone.
+            problem = title_format_problem(candidate["before"], texts[candidate["para_id"]])
+            if problem:
+                self._reject_proposal(stage, row, texts, model, problem)
+                return None
         if candidate and candidate.get("format") and formatting is not None:
             lo, hi, pid = candidate["start"], candidate["end"], candidate["para_id"]
             roman = [r for r in formatting[pid] if r["start"] < hi and r["end"] > lo]
@@ -1201,7 +1209,8 @@ class FixedWorkflow:
             "paragraphs holds shared current text and, when different, the original source; context holds related passages. "
             "Offsets are in the current paragraph. Apply only a clear proofreading correction; replacement replaces exactly "
             "the site's before span and preserves all unchanged text within it. Never include text outside that span. "
-            "For a sole formatting proposal, apply retains that proposed formatting and must leave before unchanged. "
+            "For a sole formatting proposal, apply retains that proposed formatting and must leave before unchanged; "
+            "drop it unless before is a long-work title alone, never a sentence, paragraph or note that names one. "
             "Query only a real proofreading problem requiring specific missing author knowledge. "
             "Judge the text independently; another reader or a local flag is not proof of an error. "
             "A chapter_label site is a chapter or part label's number or style, mechanics the house corrects: "
@@ -1319,7 +1328,7 @@ class FixedWorkflow:
         agreed, disputed = self._screen_candidates(stage, sites, rider=rider)
         windows = list(_windows(disputed, 20000))
         jobs = [(OPUS, partial(self._ask,stage + "_disputes", OPUS,
-                "Settle EVERY explicit disagreement between the Sonnet and Luna screening decisions. Both decisions are supplied in screening. Apply only a clear proofreading correction supported by context; you may reject every proposal. replacement replaces exactly the before span: preserve all unchanged text inside that span, and do not include text outside it. The span may cover a word, several sentences, or the entire paragraph. Drop false alarms, stylistic preferences and resolved issues. Query only an actual textual problem whose missing fact or intended meaning requires the author. A disagreement alone is not a query. Preserve formatting proposals only when a house rule requires them. " + rider,
+                "Settle EVERY explicit disagreement between the Sonnet and Luna screening decisions. Both decisions are supplied in screening. Apply only a clear proofreading correction supported by context; you may reject every proposal. replacement replaces exactly the before span: preserve all unchanged text inside that span, and do not include text outside it. The span may cover a word, several sentences, or the entire paragraph. Drop false alarms, stylistic preferences and resolved issues. Query only an actual textual problem whose missing fact or intended meaning requires the author. A disagreement alone is not a query. Preserve formatting proposals only when a house rule requires them and the span is a long-work title alone, never the sentence, paragraph or note around it. " + rider,
                 {"story_sheet": self.context, "sites": window}, DECISIONS, effort="high")) for window in windows]
         for window, result in zip(windows, self.scheduler.map(jobs)):
             result = self._drop_unreviewed(window) if result is None else result["decisions"]
@@ -1367,6 +1376,9 @@ class FixedWorkflow:
             if (xml_safe(row["replacement"]) != row["replacement"]
                     or (row.get("format") and row["replacement"] != row["before"])):
                 problem = "Adjudicated proposal has unsafe text or changes a formatting-only span"
+            elif row.get("format"):
+                from galley.fixed_policy import title_format_problem
+                problem = title_format_problem(row["before"], paragraph)
             if problem:
                 self._reject_proposal(stage + "_screened", decision,
                                       {site["para_id"]: paragraph}, "/".join(models), problem)
@@ -1555,7 +1567,7 @@ class FixedWorkflow:
             if len(group) != 1:
                 raise FixedWorkflowError("Unsettled overlapping corrections cannot be applied")
             unique.append(group[0])
-        from galley.fixed_policy import verse_safe
+        from galley.fixed_policy import title_format_problem, verse_safe
         from galley.proposal_guards import proposal_problem
         # Two agreed edits can still contradict each other about one clause
         # (Georgis, 2026-09-15); the batch is read as a whole before any of it
@@ -1579,12 +1591,14 @@ class FixedWorkflow:
             # The last gate before the text changes: a proposal every stage
             # agreed on can still be the wrong edit (Cooper, 2026-09-17). A
             # refusal is a dropped row with a receipt, never a run failure.
-            if not row.get("format"):
-                problem = proposal_problem(row["before"], row["replacement"], before[pid], lo, hi,
-                                           possessives=self.possessives)
-                if problem:
-                    self.history.append({"stage": stage, "dropped": row, "reason": "guard: " + problem})
-                    continue
+            # Whatever path a title italic took here (a reader, a local
+            # generator, a screening ruling), it italicizes the title alone.
+            problem = (title_format_problem(row["before"], before[pid]) if row.get("format") else
+                       proposal_problem(row["before"], row["replacement"], before[pid], lo, hi,
+                                        possessives=self.possessives))
+            if problem:
+                self.history.append({"stage": stage, "dropped": row, "reason": "guard: " + problem})
+                continue
             if row.get("format"):
                 self.formats.append({**row, "snapshot": before[pid], "stage": stage})
             else:
@@ -1965,7 +1979,8 @@ class FixedWorkflow:
                     continue
                 result = self._ask(stage + "_" + kind, LUNA,
                     ("Judge whether ALL changes preserve meaning, facts, voice, deliberate fragments and dialect. " if kind == "meaning" else
-                     "Judge whether ALL text AND formatting changes fix clear proofreading errors without new errors, stylistic rewriting, unnecessary changes or violations of house rules. ") +
+                     "Judge whether ALL text AND formatting changes fix clear proofreading errors without new errors, stylistic rewriting, unnecessary changes or violations of house rules. "
+                     "A title italic must cover the long-work title alone, never the sentence, paragraph or note around it. ") +
                     "Return one verdict per paragraph id. Approve only when the complete after paragraph is justified; otherwise reject. No new corrections or author comments. "
                     "categories names the proofreading categories of the corrections accepted in that paragraph. " + rider,
                     {"story_sheet": self.context, "changes": active,
@@ -2073,7 +2088,8 @@ class FixedWorkflow:
             windows = list(_windows(active, 16000))
             jobs = [(OPUS, partial(self._ask, ASTRA_GATE_STAGE + "_" + kind, OPUS,
                 ("Judge whether ALL changes preserve meaning, facts, voice, deliberate fragments and dialect. " if kind == "meaning" else
-                 "Judge whether ALL text AND formatting changes fix clear proofreading errors without new errors, stylistic rewriting, unnecessary changes or violations of house rules. ") +
+                 "Judge whether ALL text AND formatting changes fix clear proofreading errors without new errors, stylistic rewriting, unnecessary changes or violations of house rules. "
+                 "A title italic must cover the long-work title alone, never the sentence, paragraph or note around it. ") +
                 "before is the paragraph as the two Astra readings received it, after is their result, and source is the author's original. "
                 "Return one verdict per paragraph id. Approve only when the complete after paragraph is justified; otherwise reject, which returns the paragraph to before. "
                 "No new corrections or author comments. categories names the proofreading categories of the corrections Astra applied in that paragraph. " + FINAL_WALKTHROUGH_CHECK,
