@@ -35,7 +35,8 @@ _MAX_FILE_BYTES = 32 * 1024 * 1024
 # ChatGPT subscription login (the Codex transport), Luna included since
 # 2026-09-16. The API is not a default for any model; a caller may still
 # request it explicitly for Luna (tests and diagnostics), never as a fallback.
-_SUBSCRIPTION_MODELS = {"gpt-6-luna", "gpt-6-sol", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra"}
+# GPT-6 Luna and Sol are not here: Codex refuses them on a ChatGPT account.
+_SUBSCRIPTION_MODELS = {"gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra"}
 _API_ON_REQUEST = {"gpt-6-luna", "gpt-5.6-luna"}
 
 

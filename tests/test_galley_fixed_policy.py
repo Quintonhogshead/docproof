@@ -44,7 +44,7 @@ def test_fixed_recipe_cannot_launch_unscheduled_model_stages(poetry):
 def test_number_read_replaces_typed_number_group_without_pruning_other_mechanics():
     cfg = configuration()
     assert [(d.model, d.effort) for d in cfg.ensemble.detectors] == [
-        ("claude-sonnet-5", "low"), ("gpt-6-luna", "low")]
+        ("claude-sonnet-5", "low"), ("gpt-5.6-luna", "low")]
     assert "number_style" not in _flat_types(cfg)
     assert "currency_style" not in _flat_types(cfg)
     assert {"spelling", "subject_verb_agreement", "introductory_comma",

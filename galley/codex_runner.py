@@ -559,9 +559,7 @@ def run_structured(prompt: str, schema: dict, work_dir: Path, *, request_id: str
         raise AstraReviewError("The Codex review timeout must be a positive number of seconds.")
     allowed = {MODEL: {'low', 'medium', 'high', 'xhigh', 'max'},
                'gpt-5.6-luna': {'low', 'medium', 'high', 'xhigh', 'max'},
-               'gpt-5.6-sol': {'low', 'medium', 'high', 'xhigh', 'max'},
-               'gpt-6-luna': {'low', 'medium', 'high', 'xhigh', 'max'},
-               'gpt-6-sol': {'low', 'medium', 'high', 'xhigh', 'max'}}
+               'gpt-5.6-sol': {'low', 'medium', 'high', 'xhigh', 'max'}}
     if model not in allowed or reasoning_effort not in allowed[model]:
         raise AstraReviewError("Unsupported subscription model or reasoning effort.")
     schema = normalize_schema(schema)
