@@ -19,6 +19,7 @@ to touch.
 """
 from __future__ import annotations
 
+import calendar
 import logging
 import re
 from dataclasses import dataclass
@@ -1092,6 +1093,51 @@ def _sweep_time_of_day(text: str, variant=None) -> list[Hit]:
 
 
 
+# A formal date in day-month-year order ("11 April 1941"). House style sets a
+# U.S.-oriented manuscript's dates month day, year ("April 11, 1941"); the
+# Canadian variant takes the same U.S. pattern (config/variants/ca.yaml), and
+# the U.K./Australian variants already write day-month-year, so the sweep is
+# a no-op there. Gunn (2026-09-24): the numbers lane was told every date was
+# "legitimate" and left the whole family untouched, so a day-month-year date
+# never reached a reader at all.
+_FULL_MONTHS = frozenset(m.lower() for m in calendar.month_name if m)
+_FULL_MONTH_ALT = "|".join(sorted(_FULL_MONTHS, key=len, reverse=True))
+_DAY_MONTH_YEAR = re.compile(
+    rf"\b(?P<day>\d{{1,2}})[ \t ]+(?P<month>{_FULL_MONTH_ALT})[ \t ]+"
+    rf"(?P<year>\d{{4}})\b", re.IGNORECASE)
+
+
+def _dated_heading(text: str, start: int, end: int) -> bool:
+    """Whether the date is the paragraph's whole content — a diary or
+    epistolary entry's own dated heading — rather than a date mentioned in
+    running prose. An entry keeps the convention it is dated by; the sweep
+    only reorders a date sitting inside a sentence."""
+    return text.strip().rstrip(".:,") == text[start:end].strip()
+
+
+def _quoted_whole(text: str) -> bool:
+    """Whether the paragraph is one quotation from end to end — a letter,
+    telegram or other document reproduced verbatim, or a line of dialogue
+    quoting one. House style rewrites the book's own prose; it does not
+    rewrite the date inside someone else's exact words."""
+    t = text.strip()
+    return len(t) > 1 and t[0] in "\"“‘'" and t[-1] in "\"”’'"
+
+
+def _sweep_date_format(text: str, variant=None) -> list[Hit]:
+    if _oxford(variant) or _quoted_whole(text):
+        return []
+    hits: list[Hit] = []
+    for m in _DAY_MONTH_YEAR.finditer(text):
+        if _dated_heading(text, m.start(), m.end()):
+            continue
+        replacement = f"{m.group('month')} {int(m.group('day'))}, {m.group('year')}"
+        hits.append(Hit(m.start(), m.end(), replacement,
+                        "House style sets a U.S. date as month day, year."))
+    return hits
+
+
+
 # "god" (lowercase g) as the monotheistic deity in a fixed interjection —
 # "oh my god", "thank god". The leading word is what makes the reference the
 # proper name rather than a common noun, so the sweep never has to decide
@@ -1579,6 +1625,8 @@ SWEEPS: tuple[Sweep, ...] = (
           _sweep_nested_quote),
     Sweep("sweep_time_of_day", "Times of day (3:00 p.m. / 3:00 pm)",
           _sweep_time_of_day),
+    Sweep("sweep_date_format", "Date order (11 April 1941 -> April 11, 1941)",
+          _sweep_date_format),
     Sweep("sweep_deity_capital", "Deity capitalized in set expressions",
           _sweep_deity_capital),
     Sweep("sweep_dialogue_splice", "An action beat mistaken for a dialogue tag",
