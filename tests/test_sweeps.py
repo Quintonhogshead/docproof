@@ -345,6 +345,48 @@ def test_time_of_day_oxford_leaves_these_alone(text):
     assert not SWEEPS_BY_KEY["sweep_time_of_day"].scan(text, load_variant("uk"))
 
 
+# --- date order ----------------------------------------------------------------
+
+# House style sets a U.S.-oriented (or Canadian) manuscript's dates month day,
+# year; no variant means U.S., so the sweep fires with no variant passed too.
+@pytest.mark.parametrize("before,after", [
+    ("He was born on 11 April 1941.", "He was born on April 11, 1941."),
+    ("It happened on 4 July 1976 in Boston.", "It happened on July 4, 1976 in Boston."),
+    ("On 04 April 1941 the plant closed.", "On April 4, 1941 the plant closed."),
+])
+def test_date_order_us(before, after):
+    assert swept("sweep_date_format", before) == after
+
+
+@pytest.mark.parametrize("text", [
+    "He was born on April 11, 1941.",     # already month day, year: no match
+    "There were 11 April showers that year.",  # no year: not a date
+    "The 11th April crowd cheered.",      # an ordinal date, a different rule
+])
+def test_date_order_us_leaves_these_alone(text):
+    assert unchanged("sweep_date_format", text)
+
+
+def test_date_order_skips_a_dated_heading():
+    # A diary or letter's own dated heading keeps the convention it was
+    # entered under; the sweep only reorders a date inside running prose.
+    assert unchanged("sweep_date_format", "11 April 1941")
+    assert unchanged("sweep_date_format", "11 April 1941.")
+
+
+def test_date_order_skips_a_quoted_document():
+    # A letter or telegram reproduced whole keeps the date exactly as its
+    # source wrote it.
+    assert unchanged("sweep_date_format", "“Dated this 11 April 1941, yours truly.”")
+
+
+def test_date_order_oxford_leaves_these_alone():
+    from docproof.variants import load_variant
+    uk = load_variant("uk")
+    assert not SWEEPS_BY_KEY["sweep_date_format"].scan(
+        "He was born on 11 April 1941.", uk)
+
+
 # --- the deity capital -------------------------------------------------------
 
 @pytest.mark.parametrize("before,after", [
