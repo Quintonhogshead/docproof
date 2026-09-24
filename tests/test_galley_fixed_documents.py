@@ -91,6 +91,15 @@ def test_native_output_preserves_source_styles_tables_images_and_comments(manusc
                 assert source.read(name) == final.read(name)
 
 
+def test_a_delivered_title_italic_must_be_the_title_alone(manuscript, tmp_path):
+    original = fd.paragraph_views(manuscript)
+    title = next(pid for pid, text in original.items() if "Aeneid" in text)
+    sentence = [{"para_id": title, "snapshot": original[title], "start": 0, "end": len(original[title]),
+                 "format": "italic", "reason": "Book title."}]
+    with pytest.raises(fd.FixedDocumentError, match="not a title alone"):
+        fd.write_manuscripts(manuscript, tmp_path / "final", corrected(manuscript), formats=sentence)
+
+
 def test_final_question_on_inserted_word_maps_back_without_losing_text(manuscript, tmp_path):
     accepted = fd.paragraph_views(manuscript)
     pid = next(pid for pid, text in accepted.items() if text.startswith("Ann met"))

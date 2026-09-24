@@ -506,7 +506,14 @@ acknowledge every assigned site ID. The local tense profiler is a heuristic,
 not authority to rewrite a deliberately present-tense chapter. Applicable
 citation passages, real note locations and conservative formatting evidence
 support the final reads. Confirmed roman long-work titles can be proposed as
-tracked italics and pass through the correction gate. The final report records
+tracked italics and pass through the correction gate. The quoted span must be
+the title alone (`galley.fixed_policy.title_format_problem`): more than 15
+words, a whole paragraph of more than four words, a lowercase first word, an
+opener (She, This, What...) followed by prose, a sentence ending inside the
+span, or the sentence's own full stop rejects it at the reader gate, at
+screening and again at application, and delivery refuses one that slipped
+through (Immanuel italicized whole sentences, a paragraph and a footnote
+around the titles they named). The final report records
 actual final pattern counts, coverage and limitations, not assumed zeroes.
 
 Local checks cover spelling and near-miss words, all house punctuation sweeps,

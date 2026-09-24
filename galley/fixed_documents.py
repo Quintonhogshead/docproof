@@ -86,7 +86,7 @@ def write_manuscripts(source, destination, accepted, questions=(), formats=()):
     from docproof.reassembler import apply_tracked_changes, _MARKS
     from docproof.cleancopy import write_clean_copy
     from docproof.utils.xml_helpers import DocxPackage, walk_package, paragraph_text, qn
-    from galley.fixed_policy import configuration
+    from galley.fixed_policy import configuration, title_format_problem
     from galley.fixed_workflow import _locate
 
     source, destination = Path(source), Path(destination)
@@ -119,6 +119,11 @@ def write_manuscripts(source, destination, accepted, questions=(), formats=()):
         lo, hi = _back_span(original[pid], row["snapshot"], row["start"], row["end"], exact=True)
         if row["format"] not in _MARKS:
             raise FixedDocumentError("Unsupported proofreading format operation")
+        # The workflow drops these at application; a result that still carries
+        # one (an older run, a hand-edited result) never reaches the redline.
+        problem = title_format_problem(original[pid][lo:hi], original[pid])
+        if problem:
+            raise FixedDocumentError("An approved title italic is not a title alone: " + problem)
         key = (pid, lo, hi, row["format"])
         if key in format_keys:
             continue

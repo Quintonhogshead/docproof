@@ -192,6 +192,34 @@ def test_respell_sites_every_occurrence_as_its_own_ruling():
     assert {c.suggestion for c in respell} == {"gray", "travelers"}
 
 
+def test_us_respell_covers_the_catalogue_and_ochre_family():
+    """en_US Hunspell doesn't carry 'catalogued', so it reached adjudication
+    as a typo (delete 'u') and got dropped as 'correctly spelled'; 'ochre' is
+    a listed Merriam-Webster variant, so it was dropped the same way in the
+    typed dispute lane. Both need the respell channel, like grey/travellers."""
+    us = load_variant("us")
+    assert us.respell_map["catalogued"] == "cataloged"
+    assert us.respell_map["catalogues"] == "catalogs"
+    assert us.respell_map["cataloguing"] == "cataloging"
+    assert us.respell_map["ochre"] == "ocher"
+    assert us.respell_map["ochres"] == "ochers"
+
+
+def test_catalogued_and_ochre_reach_adjudication_as_a_respell_not_a_typo():
+    from docproof.adjudicate import generate
+    from docproof.models import ParagraphRef
+    ps = [ParagraphRef("body-0000", "word/document.xml", "body",
+                       "She catalogued the ochre paintings before cataloguing "
+                       "the rest.", "Normal")]
+    cands = generate(ps, respell=load_variant("us").respell_map)
+    by_word = {c.word: c for c in cands}
+    assert by_word["catalogued"].kind == "respell"
+    assert by_word["catalogued"].suggestion == "cataloged"
+    assert by_word["cataloguing"].suggestion == "cataloging"
+    assert by_word["ochre"].kind == "respell"
+    assert by_word["ochre"].suggestion == "ocher"
+
+
 # --- variant auto-detection (Galley default: variant: auto) -------------------
 
 from docproof.variants import detect_variant

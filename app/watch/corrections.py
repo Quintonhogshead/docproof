@@ -242,7 +242,7 @@ def _discover_hubspot(hs_token: str, token: str, ws: WatchSettings,
                         "period).", author, ready_at(entry, ws).isoformat())
                 continue
         work = _resolve(token, ws, record, opener=opener, report=report,
-                        submissions=submissions)
+                        submissions=submissions, hs_token=hs_token)
         if work is not None:
             entry = state.corrections_pending.get(record.id)
             if entry is not None and entry.source_name != work.idml.name:
@@ -698,8 +698,21 @@ def _locate(token: str, ws: WatchSettings, first: str, last: str, title: str,
     return _Located(interior=interior, listing=listing, idml=idml)
 
 
+def _author_from_title(hs_token: str, ws: WatchSettings, record, title: str,
+                       *, opener) -> tuple[str, str] | None:
+    """A ready record with no author name: the author its title names on the
+    project's other records (`hubspot.author_by_title`). The interior-design
+    corrections record is often made before anyone types the name in; the
+    project always has its title."""
+    return hubspot.author_by_title(
+        hs_token, ws.hubspot_object, ws.hubspot_corrections_book_property,
+        ws.hubspot_first_property, ws.hubspot_last_property, title,
+        exclude_id=record.id, opener=opener)
+
+
 def _resolve(token: str, ws: WatchSettings, record, *, opener, report,
-            submissions: list[dict] | None = None) -> Work | None:
+            submissions: list[dict] | None = None,
+            hs_token: str = "") -> Work | None:
     """`corrections_intake == "hubspot"`: resolve one ready record to the file
     to correct, reporting exactly the sentence hubspot mode always has for
     each way `_locate` can come up short — nothing here changed by adding form
@@ -708,16 +721,27 @@ def _resolve(token: str, ws: WatchSettings, record, *, opener, report,
     first = (record.properties.get(ws.hubspot_first_property) or "").strip()
     last = (record.properties.get(ws.hubspot_last_property) or "").strip()
     ready = ws.hubspot_corrections_ready_value
-    if not first or not last:
-        reason = ("its HubSpot record has no first or last name, so DocProof "
-                  "cannot tell which folder is the author's.")
-        log.warning("Needs a person: record %s (%s)", record.id, reason)
-        report.needs_human.append((f"HubSpot record {record.id}", reason))
-        report.waiting += 1
-        return None
-    author = folders.compose(first, last)
     prop = ws.hubspot_corrections_book_property
     title = (record.properties.get(prop) or "").strip() if prop else ""
+    if not first or not last:
+        found = _author_from_title(hs_token, ws, record, title, opener=opener)
+        if found is None:
+            if title:
+                reason = (f"its HubSpot record has no first or last name, and no "
+                          f"other record titled '{title}' names one author, so "
+                          f"DocProof cannot tell which folder is the author's.")
+            else:
+                reason = ("its HubSpot record has no first or last name, so "
+                          "DocProof cannot tell which folder is the author's.")
+            label = f"HubSpot record {record.id}" + (f" ('{title}')" if title else "")
+            log.warning("Needs a person: %s (%s)", label, reason)
+            report.needs_human.append((label, reason))
+            report.waiting += 1
+            return None
+        first, last = found
+        log.info("Record %s has no author name; its title %r names %s %s on "
+                 "the project's other records.", record.id, title, first, last)
+    author = folders.compose(first, last)
 
     located = _locate(token, ws, first, last, title, opener=opener)
     if located.why == "no-folder":
