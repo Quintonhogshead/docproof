@@ -50,10 +50,12 @@ so rejecting Galley's corrections restores the joined baseline. This is
 `fixed-intake-v2`. Clean files that need none of the three transformations
 keep their existing source identity; no baseline is created.
 
-The agreed sequence (`fixed-proofreading-v9`, 2026-09-23) is below. From v9,
-"Luna" means **GPT-6 Luna** (`gpt-6-luna`) and "Sol" means **GPT-6 Sol**
-(`gpt-6-sol`) in every role; v9 is otherwise v8, and v8 workspaces cannot
-resume under it. From v8,
+The agreed sequence (`fixed-proofreading-v10`, 2026-09-24) is below. "Luna"
+means **GPT-5.6 Luna** (`gpt-5.6-luna`) and "Sol" means **GPT-5.6 Sol**
+(`gpt-5.6-sol`) in every role. v9 (2026-09-23) had moved both to GPT-6, but
+Codex refuses `gpt-6-luna` and `gpt-6-sol` on a ChatGPT account, so every v9
+Luna and Sol read was skipped as `model_unavailable`; v10 is v9 with the 5.6
+models back, and v9 workspaces cannot resume under it. From v8,
 "Opus" means **Opus 5.5** (`claude-opus-5-5`) everywhere: it took every Opus 5
 role and every Fable role. It needs Claude Code 2.1.280 or newer: the subagent
 lane runs the newest CLI on the machine (`docproof.agent_lane.cli_path`), and

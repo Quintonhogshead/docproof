@@ -20,20 +20,20 @@ from functools import partial
 
 from docproof.utils.files import write_atomic
 
-VERSION = "fixed-proofreading-v9"
+VERSION = "fixed-proofreading-v10"
 SONNET = "claude-sonnet-5"
-# v9 (Quinton, 2026-09-23): GPT-6 Luna and Sol replace 5.6 in every Luna and
-# Sol role. On a 36-window proofreading bench (six human-proofread books) the 6
-# models found a few points fewer of the human's edits but made about half as
-# many wrong edits, ran 2.5-3x faster and cost half as much per token.
-LUNA = "gpt-6-luna"
+# v10 (Quinton, 2026-09-24): Luna and Sol are back on 5.6. v9 moved them to
+# GPT-6, but Codex refuses gpt-6-luna and gpt-6-sol on a ChatGPT account ("not
+# supported when using Codex with a ChatGPT account"), so every v9 Luna and Sol
+# read was skipped as model_unavailable. Astra stays on GPT-6.
+LUNA = "gpt-5.6-luna"
 # Opus 5.5 took every Opus 5 and Fable role in v8 (Quinton, 2026-09-22): the
 # Story Sheet and the opening read, every dispute, broken-sentence repair, the
 # ensemble sweep, both halves of continuity, the first final read and the gate
 # on Astra's changes. It needs Claude Code 2.1.280 or newer; see
 # docproof.agent_lane.require_cli_for.
 OPUS = "claude-opus-5-5"
-SOL = "gpt-6-sol"
+SOL = "gpt-5.6-sol"
 ASTRA = "gpt-6-astra"
 # TypeSafe's System One judgment model. It proposes sites for the typed stage's
 # screen and never decides anything; see galley/fixed_jev.py.
