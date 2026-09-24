@@ -10,7 +10,7 @@ The governing principle is: be clear about what makes the story worth entering, 
 
 Use the entire manuscript to understand the book. Do not assume that everything you learn belongs in the teaser. Full-manuscript knowledge should improve the accuracy of the promise, not expose the answers to the story's central questions.
 
-Do the analysis, comparison, and revision privately. Return the requested copy and concise editorial conclusions, not step-by-step reasoning, working notes, discarded drafts, or a numerical scoring exercise.
+Do the analysis, comparison, and revision privately. Return only the requested copy, not step-by-step reasoning, working notes, discarded drafts, or a numerical scoring exercise.
 
 
 1. INPUTS, DEFAULTS, AND EDITORIAL AUTHORITY
@@ -20,11 +20,11 @@ The manuscript will accompany this prompt as an attachment or pasted text. An op
 Use these defaults when no brief is supplied:
 
 - Format: back-cover teaser for a novel, adaptable when the manuscript clearly requires another form.
-- Primary-copy length: 140–190 words, excluding headings and optional hook lines. Stay within this range without padding; strengthen the concrete invitation when more detail is needed.
-- Presentation: two to four readable paragraphs; no bullet points within the teaser.
+- Primary-copy length: 150–200 words, excluding the angle label. Stay within this range without padding; strengthen the concrete invitation when more detail is needed.
+- Presentation: exactly three readable paragraphs; no bullet points within the teaser.
 - Tense and viewpoint: third-person present unless the book's voice or an explicit instruction makes another approach substantially better.
 - Spoiler policy: disclose the premise and necessary setup; protect discoveries, reversals, and resolutions the reader is meant to experience during the story.
-- Deliverables: five polished teasers with meaningfully different angles, one recommended option, three optional opening hooks, a brief editorial note, and teaser elements & best practices with an author modification checklist.
+- Deliverables: five polished teasers with meaningfully different angles. A fixed house guide accompanies them; do not write one.
 
 Do not require the user to complete a questionnaire before proceeding. Infer reasonable editorial choices from the manuscript and identify material uncertainties briefly. Follow explicit output instructions when they replace these defaults, including a request for only the finished teaser.
 
@@ -48,7 +48,7 @@ An existing synopsis or blurb may help locate an intended emphasis, but verify i
 
 3. BUILD A PRIVATE UNDERSTANDING OF THE WHOLE BOOK
 
-Before drafting, establish a compact internal account of the story. Sol returns this account as the structured internal storysheet. It stays private to Sol and never reaches Qwen or the author document. Sol then writes the complete finished author package in writer_brief.author_copy. Qwen receives only that copy to rephrase; Sol makes every editorial decision.
+Before drafting, establish a compact private account of the story. It never appears in the output.
 
 Identify the narrative center: the principal character, central relationship, family, group, or other organizing subject. Determine whether the book truly has one protagonist, two coequal leads, or an ensemble. Do not automatically promote the first viewpoint character into the sole lead.
 
@@ -105,9 +105,7 @@ Check for indirect spoilers as well as explicit ones. Singling out an apparently
 
 Avoid phrases such as “nothing is what it seems” as a substitute for spoiler judgment. They may both weaken specificity and announce that an apparent truth will collapse.
 
-When disclosure is genuinely ambiguous and no instruction resolves it, prefer the more conservative version that still communicates the premise. Briefly note the decision outside the reader-facing copy when useful.
-
-Do not reveal protected material in the editorial note by default. The note should explain the boundary without supplying the secret it protects.
+When disclosure is genuinely ambiguous and no instruction resolves it, prefer the more conservative version that still communicates the premise.
 
 
 6. FIND THE STRONGEST TRUTHFUL ANGLE
@@ -256,24 +254,11 @@ Check the requested length. When an exact maximum is specified, verify it before
 
 12. RETURN THE FINISHED DELIVERABLES
 
-The stage-specific JSON schema controls each model's output. The final author Google Doc contains:
-
-A. FIVE FINISHED TEASERS
-Exactly five teasers numbered 1–5, each 140–190 words in two to four paragraphs, with a short accurate angle label outside the copy. They must differ in emphasis and approach, not merely exchange synonyms. Sol identifies the recommended option, which appears first in the document. Every option remains truthful to the whole book. Do not invent a genre, conflict, or reader promise merely to create variety.
-
-B. OPTIONAL OPENING HOOKS
-Three distinct, grounded opening-line or tagline candidates, each 5–18 words. They are alternatives, never three lines to stack above a teaser. Protect revelations.
-
-C. EDITORIAL NOTE
-Aim for 60–100 words (180 maximum): explain the reader promise and how the options differ. Discuss only setup already present in the teasers. Do not enumerate withheld events or describe the actual resolution, even to explain why it is withheld. State real source limitations without inventing facts. Do not include scores, internal model workflow, private deliberation, or sales claims.
-
-D. TEASER ELEMENTS & BEST PRACTICES
-Explain the role of the opening, narrative center, disruption, central pressure, concrete stakes, and unresolved ending, adapting the terms to the book's actual shape. For each element, give its purpose and actionable advice specific to this manuscript. Add at least five practical best practices and a checklist of at least five checks an author can apply after modifying the copy. Explain how to retain the book's voice, preserve clarity and causal progression, avoid manufactured stakes, protect the spoiler boundary, and keep the word count and paragraph structure. Include practical advice and a checklist check for reading the chosen teaser on its own: introduce the people and things it uses naturally, preserve their connections to the conflict, and leave no unexplained names or titles. This guide is optional reading for the author, not a required approval task.
-Use only the public setup for book-specific examples. Advice such as "do not reveal [actual ending]" itself reveals the ending and is prohibited. Refer to general categories such as the final decision, the relationship's outcome, or the mystery's solution without naming what happens. Never copy the internal protected-revelations list into any author-facing field. Avoid universal rules demanding every detail in every option; authors should preserve the chosen angle's balance and factual fidelity.
+The JSON schema controls the output. The author Google Doc contains exactly five teasers numbered 1–5, each 150–200 words in exactly three paragraphs, with a short accurate angle label outside the copy. They must differ in emphasis and approach, not merely exchange synonyms. They are presented unranked. Every option remains truthful to the whole book. Do not invent a genre, conflict, or reader promise merely to create variety. Give the book's title and author exactly as the manuscript prints them, or leave either empty when the manuscript does not state it.
 
 13. AUTOMATED PRODUCTION RESPONSIBILITIES
-Sol (high, ChatGPT subscription) reads every manuscript portion, keeps the full storysheet and ending private, and writes all five finished teasers, hooks, the editorial note and the complete author guide. Sol decides every fact, angle, implication, sequence and spoiler boundary. Its finished public copy is checked for accuracy and spoilers before Qwen receives it. This copy editor directly corrects localized errors using the stage's bounded exact-edit contract; a small correction must not trigger an unnecessary whole-package rewrite. Qwen never receives manuscript passages, ending details, the protected-revelation list, private review feedback, rejected copy or an open-ended writing brief.
-Qwen 3.6 (DeepInfra) rephrases the finished copy. It may change wording and rhythm while preserving meaning, names, numbers, qualifications, sequence and structure. It must keep a phrase unchanged when rephrasing would change its meaning. It has no authority to select content, invent detail, heighten stakes, or resolve ambiguity. Sol checks the saved rephrasing against its original copy and the complete source. Sol may correct a name, short factual phrase or sentence through the bounded exact-edit contract and approve that corrected copy in the same pass. Exact corrections need evidence, valid locations and passing content checks; a small edit does not require another review call. Only unresolved substantive problems need another pass. No human editorial gate is required. Only a package that passes content checks and Sol approval is published. Preserve source references, model receipts and revision history internally.
+DeepSeek V4 Pro (DeepInfra, reasoning on) reads the entire manuscript in one pass and writes all five teasers. Every published word is its writing.
+Claude Opus 5.5 (Claude subscription) then reads the same entire manuscript and adjudicates each teaser for factual errors, hallucinations and spoilers of protected revelations. It corrects an error with the smallest exact edit that makes the copy true, citing a verbatim manuscript passage, and otherwise leaves the prose alone: style, rhythm and emphasis are not its to change. When a teaser cannot be made true by small edits, it is returned to DeepSeek to rewrite with the adjudicator's private note. No human editorial gate is required. Only a package that passes the content checks and the adjudication is published. Model receipts and revision history are preserved internally.
 
 FINAL STANDARD
 Be clear about what makes the story worth entering, and withhold what makes it worth finishing. Every teaser must offer a specific, truthful invitation into this manuscript.

@@ -1,8 +1,9 @@
-"""Sol selects public facts; DeepSeek writes five manuscript-grounded teasers."""
+"""DeepSeek V4 Pro reads the whole manuscript and writes five teasers; Opus 5.5
+checks them against the same manuscript and corrects errors with the smallest edit."""
 
-SOL_MODEL = "gpt-5.6-sol"
-SOL_EFFORT = "high"
-QWEN_MODEL = "Qwen/Qwen3.6-27B"
-DEEPSEEK_MODEL = "deepseek-ai/DeepSeek-V4-Flash-0731"
-VERSION = 3
+WRITER_MODEL = "deepseek-ai/DeepSeek-V4-Pro"
+WRITER_EFFORT = "high"
+ADJUDICATOR_MODEL = "claude-opus-5-5"
+ADJUDICATOR_EFFORT = "high"
+VERSION = 4
 AUTHOR_WARNING = "these are made by our staff, you should change them if you wish, talk to your Developmental Editor"
