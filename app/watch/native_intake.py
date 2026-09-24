@@ -326,7 +326,12 @@ def run_stage(token, home, ws, *, opener, hs_token, report, mock=False):
     # Discovery runs even while another worker owns InDesign. Claims and the
     # native operation are serialized by the existing per-home worker lock.
     collect(home, ws, hs_token, opener=opener, drive_token=token)
-    guarded = replace(ws, corrections_native_partial_upload=False, hubspot_write_back=False,
+    # `corrections_native_partial_upload` decides whether a book with designer
+    # or clarification items still delivers. Those outcomes exist only after the
+    # saved Book N.5 passed exact text verification and the full final review;
+    # a technical block has no trustworthy edition and is always held.
+    delivered = {'verified', 'designer_needed', 'clarification_needed'} if ws.corrections_native_partial_upload else {'verified'}
+    guarded = replace(ws, hubspot_write_back=False,
                       corrections_native_folder_property='_docproof_folder',
                       corrections_native_project_first_property='_docproof_first',
                       corrections_native_project_last_property='_docproof_last')
@@ -358,13 +363,13 @@ def run_stage(token, home, ws, *, opener, hs_token, report, mock=False):
             jid, job = _job(home, batch)
             if not job:
                 raise queue.QueueError('The native batch did not create a durable job receipt.')
-            if job.get('blocked') or job.get('held') or job.get('status') in {'technical_block', 'designer_needed', 'clarification_needed'}:
+            if job.get('blocked') or job.get('held') or job.get('status') not in delivered | {'awaiting_attachment'}:
                 queue.set_batch(home, batch['batch_id'], 'held', reason=str(job.get('reason') or job.get('held') or job.get('status')), job_id=jid)
             elif job.get('status') == 'awaiting_attachment':
                 queue.set_batch(home, batch['batch_id'], 'awaiting_attachment', reason='Waiting for all submitted files.', job_id=jid)
             elif job.get('local_complete') and not ws.corrections_native_auto_upload:
                 queue.set_batch(home, batch['batch_id'], 'local_complete', reason='Verified locally; uploads are disabled.', job_id=jid)
-            elif job.get('status') == 'verified':
+            elif job.get('status') in delivered:
                 queue.assert_active(home, batch['batch_id'])
                 if job.get('delivery_error'):
                     queue.set_batch(home, batch['batch_id'], 'delivery', reason='Delivery will resume from the saved result.', job_id=jid)

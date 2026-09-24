@@ -234,12 +234,18 @@ runtime causes a technical block and cannot yield a verified delivery.
 | Outcome | Delivery behavior |
 | --- | --- |
 | Verified | Deliver the completed half-step Book artifacts after remote identity/checksum readback. |
-| Designer needed | Hold the batch and reserve its book; no partial automatic upload. |
-| Clarification needed | Hold the batch and record the unresolved questions; no partial automatic upload. |
+| Designer needed | With `corrections_native_partial_upload` on, deliver the Book N.5 and its designer notes (remaining work named by page); otherwise hold the batch and reserve its book. |
+| Clarification needed | As designer needed: delivered with its questions in the notes when that setting is on, otherwise held. |
 | Technical block | Keep the evidence and error locally, hold the batch, and do not publish an unverified document. |
 
-The native workflow is verified-only. Partial automatic upload is disabled even
-when a job has a usable local artifact. A `local_complete` result means the
+By default the native workflow is verified-only. Turning on
+`corrections_native_partial_upload` ("Also deliver books that still need a
+designer or clarification") delivers designer-needed and clarification-needed
+books too. Those outcomes exist only after the saved Book N.5 passed exact
+saved-text verification and the complete final review, so the delivered book
+contains exactly the planned text changes; the designer notes list everything
+still to do, by page. A technical block has no trustworthy edition and is
+always held. A `local_complete` result means the
 local verification finished while delivery was disabled; it remains a book
 reservation until an explicit reviewed delivery step. A `held` result likewise
 requires a person to resolve the stated issue. The worker never automatically
