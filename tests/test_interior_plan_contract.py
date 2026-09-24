@@ -31,9 +31,15 @@ def seven_file_plan():
     return packet, snapshot, plan
 
 
+
+def _no_locators(plan):
+    """A plan without locators reads back with empty ones."""
+    return {**plan, 'instructions': [{**row, 'locate_story_id': '', 'locate_text': ''}
+                                     for row in plan['instructions']]}
+
 def test_seven_corrections_and_empty_notes_need_no_clarification(tmp_path):
     packet, snapshot, plan = seven_file_plan()
-    assert _validate_plan(plan, packet, snapshot) == plan
+    assert _validate_plan(plan, packet, snapshot) == _no_locators(plan)
     prompt = _plan_prompt(packet, snapshot, None, tmp_path/'packet.json', tmp_path/'snapshot.json')
     assert 'font_style="" and style_ranges=[]' in prompt
     assert 'never offsets in the full story' in prompt
@@ -64,4 +70,16 @@ def test_story_style_coordinates_are_rejected_but_replacement_spans_are_valid():
     with pytest.raises(InteriorAstraError, match='invalid style range'):
         _validate_plan(plan, packet, snapshot)
     plan['edits'][0]['style_ranges'] = [{'start': 0, 'end': 9, 'font_style': 'Italic'}]
-    assert _validate_plan(plan, packet, snapshot) == plan
+    assert _validate_plan(plan, packet, snapshot) == _no_locators(plan)
+
+
+def test_designer_locator_is_kept_only_for_an_exact_passage():
+    from docproof.interior.astra import _locators
+    stories = {'s1': {'id': 's1', 'text': 'Chapter One. The river bends.'}}
+    rows = [{'id': 'a', 'disposition': 'designer', 'locate_story_id': 's1', 'locate_text': 'The river'},
+            {'id': 'b', 'disposition': 'designer', 'locate_story_id': 's1', 'locate_text': 'not there'},
+            {'id': 'c', 'disposition': 'clarification', 'locate_story_id': 'nope', 'locate_text': 'The river'},
+            {'id': 'd', 'disposition': 'edit', 'locate_story_id': 's1', 'locate_text': 'The river'}]
+    kept = {r['id']: (r['locate_story_id'], r['locate_text'])
+            for r in _locators({'instructions': rows}, stories)['instructions']}
+    assert kept == {'a': ('s1', 'The river'), 'b': ('', ''), 'c': ('', ''), 'd': ('', '')}

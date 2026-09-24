@@ -73,6 +73,16 @@ def harness(tmp_path, monkeypatch):
                        'appProperties': app_properties, 'md5Checksum': hashlib.md5(body).hexdigest()}
         return fid
     monkeypatch.setattr(native.drive, 'upload', upload)
+    folders = {}
+    def find_children(_token, parent, *, name=None, folders_only=False, **kw):
+        return [DriveFile(fid, n, native.drive.FOLDER_MIME) for fid, (p, n) in folders.items()
+                if p == parent and n == name]
+    def create_folder(_token, parent, name, **kw):
+        fid = f'notes-{len(folders)}'
+        folders[fid] = (parent, name)
+        return fid
+    monkeypatch.setattr(native.drive, 'find_children', find_children)
+    monkeypatch.setattr(native.drive, 'create_folder', create_folder)
     monkeypatch.setattr(native.drive, '_json_call', lambda req, **kw: remote[urlparse(req.full_url).path.rsplit('/', 1)[-1]])
     def add(eid, urls=(), note='', pid='project', title='The Book'):
         events.append({'conversionId': eid, 'submittedAt': int(clock[0] * 1000), 'values': [
@@ -107,8 +117,14 @@ def test_seven_received_files_wait_three_hours_and_deliver_once(harness):
     assert job['book_identity']['author'] == 'Bill Sibley'  # proxy submitter did not select the book
     assert queue.status(h.tmp_path)['batches'][0]['state'] == 'delivered'
     assert queue.books(h.tmp_path)['project']['source_version'] == 4.5
+    # The new edition sits beside its source; everything else is designer notes.
+    assert h.folders == {'notes-0': ('interior', native.NOTES_FOLDER)}
+    parents = {row['name']: row['parents'] for row in h.remote.values()}
+    assert parents == {'Sibley - Book 4.5.indd': ['interior'], 'Sibley - Book 4.5.pdf': ['notes-0'],
+                       'Sibley - Book 4.5.report.json': ['notes-0'],
+                       'Sibley - Book 4.5.corrections.xlsx': ['notes-0']}
     h.run()
-    assert len(h.calls) == 1 and len(h.uploads) == 4
+    assert len(h.calls) == 1 and len(h.uploads) == 4 and len(h.folders) == 1
 
 
 @pytest.mark.parametrize('during_upload', [False, True])

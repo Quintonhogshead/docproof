@@ -300,7 +300,8 @@ def verify_uploads(token, home, batch, job, *, opener):
             'fields': 'id,name,parents,size,md5Checksum,sha256Checksum,appProperties,trashed', **drive.SHARED_DRIVE}), token),
             opener=opener, what='verify the uploaded native correction file')
         props = metadata.get('appProperties') or {}
-        if (metadata.get('id') != fid or metadata.get('name') != name or folder not in metadata.get('parents', [])
+        expected_folder = (job.get('upload_folders') or {}).get(name, folder)
+        if (metadata.get('id') != fid or metadata.get('name') != name or expected_folder not in metadata.get('parents', [])
                 or metadata.get('trashed') or int(metadata.get('size', -1)) != path.stat().st_size
                 or props.get(native.NATIVE_JOB_PROP) != job['job_id']
                 or props.get('docproof.native_hash') != native._hash(path)):

@@ -133,13 +133,14 @@ def test_xlsx_exact_source_text_long_rows_counts_and_no_executable_input(tmp_pat
                 return ''.join(cell.find('x:is', ns).itertext())
             v = cell.find('x:v', ns)
             return shared[int(v.text)] if cell.get('t') == 's' else v.text if v is not None else ''
-        rows = sorted(int(addr[1:]) for addr in cells if addr.startswith('C') and int(addr[1:]) >= 10)
-        assert ''.join(value(cells[f'C{r}']) for r in rows) == payload
+        # Column E: the requested wording, after the two new-edition page columns.
+        rows = sorted(int(addr[1:]) for addr in cells if addr.startswith('E') and int(addr[1:]) >= 10)
+        assert ''.join(value(cells[f'E{r}']) for r in rows) == payload
         assert value(cells['G4']) == '1'
         assert value(cells['G6']) == '0'
         for r in rows:
-            assert cells[f'C{r}'].find('x:f', ns) is None
-            assert cells[f'C{r}'].get('t') == 'inlineStr'
+            assert cells[f'E{r}'].find('x:f', ns) is None
+            assert cells[f'E{r}'].get('t') == 'inlineStr'
         assert root.find('.//x:pane', ns).get('topLeftCell') == 'C10'
         assert archive.testzip() is None
 

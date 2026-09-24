@@ -14,7 +14,7 @@ import tempfile
 from xml.dom import minidom
 from zipfile import ZipFile
 
-from .verify import check_saved, prepare_edits, validate_plan
+from .verify import check_saved, new_pages, prepare_edits, validate_plan
 
 
 def _load(work, name, issues):
@@ -60,6 +60,15 @@ def _location(row):
     if row.get('paragraph_id'):
         return 'Paragraph ' + str(row['paragraph_id']).rsplit('-', 1)[-1]
     return str(row.get('kind', '')).replace('_', ' ')
+
+
+def _page_cells(pages) -> dict:
+    """'New INDD page' is the page's name in InDesign's Pages panel (a roman
+    folio stays roman); 'New PDF page' counts from the first page of the PDF."""
+    if not pages:
+        return {'New INDD page': '', 'New PDF page': ''}
+    return {'New INDD page': ', '.join(p['page_name'] for p in pages),
+            'New PDF page': ', '.join(str(p['page']) for p in pages)}
 
 
 def build_audit(work: Path, result: dict, plan=None, *, context=None) -> dict:
@@ -116,6 +125,14 @@ def build_audit(work: Path, result: dict, plan=None, *, context=None) -> dict:
     except (ValueError, KeyError, TypeError, IndexError) as exc:
         issues.append(f'Saved-document verification could not be reproduced: {exc}')
     after = {str(r.get('id')): r for r in _rows(final.get('stories'))}
+    # Pages of the corrected edition, only once its saved text is proven to be
+    # exactly the planned text: then every offset maps to where it really is.
+    placed = {'edits': {}, 'instructions': {}}
+    if verification.get('integrity_passed'):
+        try:
+            placed = new_pages(baseline, final, edits, plan)
+        except (ValueError, KeyError, TypeError, IndexError) as exc:
+            issues.append(f'Corrected-edition pages could not be located: {exc}')
     inventory_complete = final.get('style_inventory_complete') is not False and baseline.get('style_inventory_complete') is not False
     formatting = bool(verification and inventory_complete and not any(
         not str(f).startswith(('Unavailable font:', 'Unresolved artwork:', 'The corrected document contains overflowing text.'))
@@ -146,7 +163,8 @@ def build_audit(work: Path, result: dict, plan=None, *, context=None) -> dict:
                         'Text confirmed': 'Yes' if proven else 'No',
                         'Formatting confirmed': 'Yes' if proven and formatting else 'Unconfirmed',
                         'Requested formatting': json.dumps({k: edit[k] for k in ('font_style', 'style_ranges') if edit.get(k)}, ensure_ascii=False),
-                        'Original offsets (0-based)': _join([f"{r['start']}:{r['end']}" for r in resolved_by_id[eid]])})
+                        'Original offsets (0-based)': _join([f"{r['start']}:{r['end']}" for r in resolved_by_id[eid]]),
+                        **_page_cells(placed['edits'].get(eid) if proven else None)})
     correction_rows = []
     for item in instructions:
         iid, disp = str(item.get('id', '')), item.get('disposition')
@@ -181,7 +199,8 @@ def build_audit(work: Path, result: dict, plan=None, *, context=None) -> dict:
             'Source locations': _join([_location(r) for r in refs]), 'Edit IDs': _join(ids),
             'Evidence IDs': _join(item.get('covered_evidence_ids', [])),
             'Final review coverage': 'Covered; whole-book verdict only' if review_complete and iid in reviewed_ids else 'Unconfirmed',
-            'Book outcome': str(result.get('status', 'unknown')).replace('_', ' ')})
+            'Book outcome': str(result.get('status', 'unknown')).replace('_', ' '),
+            **_page_cells(placed['instructions'].get(iid) if proven or disp in {'designer', 'clarification'} else None)})
     for eid in sorted(required):
         if len(coverage[eid]) != 1:
             row = by_evidence[eid]
