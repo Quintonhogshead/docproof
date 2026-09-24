@@ -102,10 +102,6 @@ def write_document(path: Path, draft, *, book_label: str):
         p.paragraph_format.space_after = Pt(4)
         p.add_run(label + ". ").bold = True
         p.add_run(text).font.size = Pt(10)
-    sources = doc.add_paragraph(guide.SOURCES)
-    for run in sources.runs:
-        run.font.size = Pt(8.5)
-        run.font.color.rgb = RGBColor.from_string("555555")
 
     doc.core_properties.title = (draft.title or book_label) + " — Author teasers"
     doc.core_properties.author = "DocProof"
