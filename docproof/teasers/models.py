@@ -1,76 +1,26 @@
+"""The teaser package, the adjudicator's ruling, and the checks both must pass."""
 from __future__ import annotations
 
 import hashlib
 import json
 import re
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
+
+# Every teaser: exactly three paragraphs, 150–200 words.
+PARAGRAPHS = 3
+MIN_WORDS, MAX_WORDS = 150, 200
+# "As minimally as possible", made checkable: each correction replaces a short
+# span, and an option needing more than this is a rewrite, not a correction.
+MAX_SPAN_WORDS = 35
+MAX_CORRECTED_WORDS_PER_OPTION = 60
+MAX_CORRECTIONS = 25
+# An evidence quote long enough to locate one passage, short enough to be a quote.
+MIN_EVIDENCE_WORDS, MAX_EVIDENCE_WORDS = 3, 80
 
 
 class Record(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class Fact(Record):
-    claim: str
-    paragraph_ids: list[int]
-
-
-class Reading(Record):
-    chunk_id: int
-    first_paragraph: int
-    last_paragraph: int
-    narrative: str
-    facts: list[Fact]
-    revelations: list[str]
-    source_limitations: list[str]
-
-
-class OptionBrief(Record):
-    number: int
-    angle: str
-    # Only facts selected for this particular public teaser; never exclusions.
-    facts: list[str]
-    direction: str
-
-
-class WriterBrief(Record):
-    option_briefs: list[OptionBrief] = Field(default_factory=list)
-    title: str = ""
-    author: str = ""
-    public_setup: str = ""
-    reader_promise: str = ""
-    central_pressure: str = ""
-    stakes: str = ""
-    genre_and_audience: str = ""
-    voice: str = ""
-    public_facts: list[str] = Field(default_factory=list)
-    five_angles: list[str] = Field(default_factory=list)
-    writing_instructions: str = ""
-    # An empty legacy default is refreshed before any rephrasing call.
-    author_copy: Draft = Field(default_factory=lambda: Draft(teasers=[], opening_hooks=[],
-        editorial_note="", elements=[], best_practices=[], modification_checklist=[]))
-
-
-class Storysheet(Record):
-    title: str
-    author: str
-    source_complete: bool
-    source_limitations: list[str]
-    reader_promise: str
-    narrative_center: str
-    premise: str
-    central_pressure: str
-    stakes: str
-    genre_and_audience: str
-    voice: str
-    public_facts: list[Fact]
-    conditional_disclosures: list[str]
-    protected_revelations: list[str]
-    five_angles: list[str]
-    qwen_instructions: str
-    # An empty legacy default requires regeneration before any writer call.
-    writer_brief: WriterBrief = Field(default_factory=WriterBrief)
 
 
 class Teaser(Record):
@@ -79,85 +29,40 @@ class Teaser(Record):
     paragraphs: list[str]
 
 
-class Element(Record):
-    name: str
-    purpose: str
-    book_specific_guidance: str
-
-
 class Draft(Record):
-    version: int = 1
+    """What the writer returns and what the author document prints."""
+    title: str
+    author: str
     teasers: list[Teaser]
-    opening_hooks: list[str]
-    editorial_note: str
-    elements: list[Element]
-    best_practices: list[str]
-    modification_checklist: list[str]
 
 
-WriterBrief.model_rebuild()
-Storysheet.model_rebuild()
-
-
-class SourceReview(Record):
-    chunk_id: int
-    draft_sha256: str
-    findings: list[str]
-    supported_details: list[str]
-
-
-class OptionCheck(Record):
-    number: int
-    accurate: bool
-    spoiler_safe: bool
-    clear: bool
-    faithful_voice: bool
-    distinct_angle: bool
-    feedback: str
-
-
-class SmallEdit(Record):
-    field: Literal["teaser", "angle", "hook", "editorial_note", "element_name",
-                   "element_purpose", "element_guidance", "best_practice", "checklist"]
-    index: int  # One-based option/item number; editorial_note uses 1.
-    paragraph: int  # One-based paragraph for teaser; all other fields use 1.
-    before: str
+class Correction(Record):
+    option: int
+    paragraph: int  # one-based, within that option
+    before: str     # exact text in that paragraph, matched once
     after: str
-    reason: str
-    paragraph_ids: list[int]
+    kind: Literal["factual_error", "hallucination", "spoiler"]
+    evidence: str   # verbatim manuscript passage that shows the problem
+    explanation: str
 
 
-class BriefReview(Record):
-    brief_sha256: str
-    accurate: bool
-    spoiler_safe: bool
-    feedback: list[str]
-    edits: list[SmallEdit] = Field(default_factory=list)
+class OptionRuling(Record):
+    number: int
+    ruling: Literal["accurate", "corrected", "rewrite"]
+    # Private. For a rewrite, what is wrong and what the book actually says.
+    note: str
 
 
-class Review(Record):
+class Adjudication(Record):
     draft_sha256: str
-    covered_chunk_ids: list[int]
-    approved: bool
-    recommended_option: int
-    options: list[OptionCheck]
-    guidance_approved: bool
-    feedback: list[str]
-    edits: list[SmallEdit] = Field(default_factory=list)
+    options: list[OptionRuling]
+    corrections: list[Correction]
 
 
 def digest(value) -> str:
     if isinstance(value, BaseModel):
         value = value.model_dump()
-    # Preserve hashes for queued version-one packages written before these fields existed.
-    def canonical(item):
-        if isinstance(item, dict):
-            return {k: canonical(v) for k, v in item.items()
-                    if not (k == "version" and v == 1) and not (k == "option_briefs" and v == [])}
-        if isinstance(item, list):
-            return [canonical(v) for v in item]
-        return item
-    return hashlib.sha256(json.dumps(canonical(value), sort_keys=True, ensure_ascii=False,
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
                                      separators=(",", ":")).encode()).hexdigest()
 
 
@@ -165,111 +70,127 @@ def word_count(text: str) -> int:
     return len(re.findall(r"\b[\w]+(?:[’'−-][\w]+)*\b", text))
 
 
-def teaser_issues(teaser: Teaser, *, version: int = 1) -> list[str]:
+def teaser_words(teaser: Teaser) -> int:
+    return word_count("\n\n".join(teaser.paragraphs))
+
+
+def teaser_issues(teaser: Teaser) -> list[str]:
     issues = []
-    text = "\n\n".join(teaser.paragraphs)
-    if (len(teaser.paragraphs) != 3 if version == 2 else not 2 <= len(teaser.paragraphs) <= 4) or any(not p.strip() for p in teaser.paragraphs):
-        issues.append(f"Option {teaser.number} needs {'three' if version == 2 else 'two to four'} nonempty paragraphs.")
-    low, high = (150, 200) if version == 2 else (140, 190)
-    if not low <= word_count(text) <= high:
-        issues.append(f"Option {teaser.number} has {word_count(text)} words; use {low}–{high}.")
+    if len(teaser.paragraphs) != PARAGRAPHS or any(not p.strip() for p in teaser.paragraphs):
+        issues.append(f"Option {teaser.number} has {len(teaser.paragraphs)} paragraphs; "
+                      f"it needs exactly {PARAGRAPHS} nonempty paragraphs.")
+    words = teaser_words(teaser)
+    if not MIN_WORDS <= words <= MAX_WORDS:
+        issues.append(f"Option {teaser.number} has {words} words; it needs {MIN_WORDS}–{MAX_WORDS}.")
     if not teaser.angle.strip():
-        issues.append(f"Option {teaser.number} needs an accurate angle label.")
+        issues.append(f"Option {teaser.number} needs an angle label.")
     return issues
 
 
 def draft_issues(draft: Draft) -> list[str]:
     issues = []
     if sorted(t.number for t in draft.teasers) != [1, 2, 3, 4, 5]:
-        issues.append("Supply exactly five teasers numbered 1 through 5.")
-    normalized = set()
-    for t in draft.teasers:
-        text = "\n\n".join(t.paragraphs)
-        key = " ".join(text.casefold().split())
-        if key in normalized:
+        return ["Supply exactly five teasers numbered 1 through 5."]
+    seen, angles = set(), set()
+    for t in sorted(draft.teasers, key=lambda t: t.number):
+        key = " ".join("\n\n".join(t.paragraphs).casefold().split())
+        if key in seen:
             issues.append(f"Option {t.number} duplicates another option.")
-        normalized.add(key)
-        issues.extend(teaser_issues(t, version=draft.version))
-    if draft.version == 2:
-        return issues
-    if len(draft.opening_hooks) != 3 or any(not 5 <= word_count(h) <= 18 for h in draft.opening_hooks):
-        issues.append("Supply three opening hooks, each 5–18 words.")
-    if not draft.editorial_note.strip() or word_count(draft.editorial_note) > 180:
-        issues.append("Supply a spoiler-safe editorial note of at most 180 words.")
-    if len(draft.elements) < 5 or any(not all((e.name.strip(), e.purpose.strip(),
-                                            e.book_specific_guidance.strip())) for e in draft.elements):
-        issues.append("Explain at least five teaser elements with book-specific editing advice.")
-    if len(draft.best_practices) < 5 or any(not s.strip() for s in draft.best_practices):
-        issues.append("Supply at least five usable best practices.")
-    if len(draft.modification_checklist) < 5 or any(not s.strip() for s in draft.modification_checklist):
-        issues.append("Supply at least five final editing checks.")
+        seen.add(key)
+        angle = " ".join(t.angle.casefold().split())
+        if angle and angle in angles:
+            issues.append(f"Option {t.number} repeats another option's angle.")
+        angles.add(angle)
+        issues.extend(teaser_issues(t))
     return issues
 
 
-def approval_issues(draft: Draft, review: Review, chunk_ids: list[int]) -> list[str]:
-    issues = draft_issues(draft)
-    if review.draft_sha256 != digest(draft):
-        issues.append("The review does not match the saved draft.")
-    if review.edits:
-        issues.append("Proposed corrections must be applied before this approval can publish.")
-    if sorted(review.covered_chunk_ids) != sorted(chunk_ids):
-        issues.append("The review did not account for the complete manuscript.")
-    if not review.approved or not review.guidance_approved:
-        issues.append("Sol has not approved all author-facing content.")
-    if review.recommended_option not in range(1, 6):
-        issues.append("Choose a recommended option from 1 through 5.")
-    if sorted(o.number for o in review.options) != [1, 2, 3, 4, 5]:
-        issues.append("Sol must review all five options.")
-    if any(not all((o.accurate, o.spoiler_safe, o.clear, o.faithful_voice,
-                    o.distinct_angle)) for o in review.options):
-        issues.append("One or more options failed editorial review.")
-    return issues
+def _words(text: str) -> str:
+    """Punctuation-, case- and quote-style-blind form, for locating a quotation."""
+    return " " + " ".join(re.findall(r"\w+", text.casefold())) + " "
 
 
-def apply_small_edits(draft: Draft, edits: list[SmallEdit], paragraph_ids: set[int], *,
-                      max_edits: int = 5, max_words: int = 80) -> Draft:
-    """Apply a bounded, exact edit batch atomically; never accept replacement packages."""
-    if not 1 <= len(edits) <= max_edits:
-        raise ValueError(f"Sol may make at most {max_edits} small corrections per review.")
-    if any(sum(word_count(getattr(e, side)) for e in edits) > max_words for side in ("before", "after")):
-        raise ValueError(f"The correction batch exceeds {max_words} words; Sol must revise the copy.")
+class Manuscript:
+    """The accepted manuscript text, searchable for verbatim evidence."""
+
+    def __init__(self, text: str):
+        self.text = text
+        self._normalized = _words(text)
+
+    def quotes(self, passage: str) -> bool:
+        return _words(passage).strip() != "" and _words(passage) in self._normalized
+
+    def states(self, value: str) -> bool:
+        """A title or author name the manuscript itself prints."""
+        return bool(value.strip()) and self.quotes(value)
+
+
+def bibliographic(draft: Draft, manuscript: Manuscript) -> Draft:
+    """Keep a title or author only when the manuscript prints it; never guess."""
+    return draft.model_copy(update={
+        "title": draft.title.strip() if manuscript.states(draft.title) else "",
+        "author": draft.author.strip() if manuscript.states(draft.author) else ""})
+
+
+def apply_adjudication(draft: Draft, ruling: Adjudication, manuscript: Manuscript) -> Draft:
+    """Apply the adjudicator's corrections atomically, or refuse the whole ruling.
+
+    Returns the corrected package. Options ruled `rewrite` are left as they
+    were for the writer; everything else must pass the content checks after
+    the edits."""
+    if ruling.draft_sha256 != digest(draft):
+        raise ValueError("The adjudication is for a different draft.")
+    if sorted(o.number for o in ruling.options) != [1, 2, 3, 4, 5]:
+        raise ValueError("Rule on each of the five options exactly once.")
+    rulings = {o.number: o for o in ruling.options}
+    if len(ruling.corrections) > MAX_CORRECTIONS:
+        raise ValueError(f"At most {MAX_CORRECTIONS} corrections; an option that needs more is a rewrite.")
+    for number, option in rulings.items():
+        count = sum(c.option == number for c in ruling.corrections)
+        if option.ruling == "corrected" and not count:
+            raise ValueError(f"Option {number} is ruled corrected but has no corrections.")
+        if option.ruling != "corrected" and count:
+            raise ValueError(f"Option {number} is ruled {option.ruling}; "
+                             "only an option ruled corrected may carry corrections.")
+        if option.ruling == "rewrite" and not option.note.strip():
+            raise ValueError(f"Option {number} is ruled rewrite; the note must say what is wrong.")
     result = draft.model_copy(deep=True)
-    for edit in edits:
-        if (not edit.before.strip() or not edit.after.strip() or edit.before == edit.after or
-                any(word_count(s) > 40 or len(s) > 320 or "\n" in s for s in (edit.before, edit.after))):
-            raise ValueError("Each correction must replace a name, phrase or short sentence (at most 40 words).")
-        if not edit.reason.strip() or not edit.paragraph_ids or not set(edit.paragraph_ids) <= paragraph_ids:
-            raise ValueError("Each correction needs a reason and valid manuscript evidence.")
-        if edit.index < 1 or edit.paragraph < 1 or (edit.field != "teaser" and edit.paragraph != 1):
-            raise ValueError("Correction locations use one-based item and paragraph numbers.")
-        try:
-            index = edit.index - 1
-            if edit.field in ("teaser", "angle"):
-                option = next(t for t in result.teasers if t.number == edit.index)
-                target, key = ((option.paragraphs, edit.paragraph - 1) if edit.field == "teaser"
-                               else (option, "angle"))
-            elif edit.field == "editorial_note":
-                if edit.index != 1:
-                    raise IndexError
-                target, key = result, "editorial_note"
-            elif edit.field.startswith("element_"):
-                target = result.elements[index]
-                key = {"element_name": "name", "element_purpose": "purpose",
-                       "element_guidance": "book_specific_guidance"}[edit.field]
-            else:
-                target, key = getattr(result, {"hook": "opening_hooks", "best_practice": "best_practices",
-                                              "checklist": "modification_checklist"}[edit.field]), index
-            text = target[key] if isinstance(target, list) else getattr(target, key)
-        except (IndexError, StopIteration):
-            raise ValueError("The correction points to a missing field or paragraph.") from None
-        if text.count(edit.before) != 1:
-            raise ValueError("A correction must match exactly once at its stated location.")
-        replacement = text.replace(edit.before, edit.after, 1)
-        if isinstance(target, list):
-            target[key] = replacement
-        else:
-            setattr(target, key, replacement)
-    issues = draft_issues(result)
+    teasers = {t.number: t for t in result.teasers}
+    changed = {}
+    for c in ruling.corrections:
+        where = f"Option {c.option} paragraph {c.paragraph}"
+        if c.option not in teasers or not 1 <= c.paragraph <= len(teasers[c.option].paragraphs):
+            raise ValueError(f"{where} does not exist.")
+        if (not c.before.strip() or not c.after.strip() or c.before == c.after or
+                "\n" in c.before or "\n" in c.after):
+            raise ValueError(f"{where}: a correction replaces a nonempty span with a different one; "
+                             "to delete words, include a neighbouring word in both before and after.")
+        if word_count(c.before) > MAX_SPAN_WORDS or word_count(c.after) > MAX_SPAN_WORDS:
+            raise ValueError(f"{where}: each side of a correction is at most {MAX_SPAN_WORDS} words.")
+        if not c.explanation.strip():
+            raise ValueError(f"{where}: explain the error.")
+        if not MIN_EVIDENCE_WORDS <= word_count(c.evidence) <= MAX_EVIDENCE_WORDS:
+            raise ValueError(f"{where}: evidence is one quoted passage of "
+                             f"{MIN_EVIDENCE_WORDS}–{MAX_EVIDENCE_WORDS} words.")
+        if not manuscript.quotes(c.evidence):
+            raise ValueError(f"{where}: the evidence is not a verbatim manuscript passage: {c.evidence[:120]!r}")
+        paragraphs = teasers[c.option].paragraphs
+        text = paragraphs[c.paragraph - 1]
+        if text.count(c.before) != 1:
+            raise ValueError(f"{where}: {c.before[:80]!r} must appear exactly once in that paragraph "
+                             f"(found {text.count(c.before)}).")
+        paragraphs[c.paragraph - 1] = text.replace(c.before, c.after, 1)
+        changed[c.option] = changed.get(c.option, 0) + word_count(c.before)
+    for number, words in changed.items():
+        if words > MAX_CORRECTED_WORDS_PER_OPTION:
+            raise ValueError(f"Option {number}: corrections replace {words} words; more than "
+                             f"{MAX_CORRECTED_WORDS_PER_OPTION} is a rewrite, not a correction.")
+    issues = [i for i in draft_issues(result)
+              if not any(i.startswith(f"Option {n} ") for n, o in rulings.items() if o.ruling == "rewrite")]
     if issues:
-        raise ValueError("Small corrections did not resolve the package requirements: " + "; ".join(issues))
+        raise ValueError("After the corrections: " + "; ".join(issues))
     return result
+
+
+def rewrite_options(ruling: Adjudication) -> dict[int, str]:
+    return {o.number: o.note for o in ruling.options if o.ruling == "rewrite"}

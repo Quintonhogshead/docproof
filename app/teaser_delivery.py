@@ -10,8 +10,7 @@ from docproof.teasers.document import write_document
 from docproof.teasers import AUTHOR_WARNING
 from importlib.resources import files, as_file
 import hashlib
-from docproof.teasers.models import Draft, Review, Storysheet, approval_issues
-from .teasers import TeaserError, lock
+from .teasers import TeaserError, approval_issues, current_draft, lock
 from .watch import drive
 from .watch.settings import GOOGLE_KEY, WatchSettings, google_client
 
@@ -114,13 +113,7 @@ def verify_document(token, file_id, draft, folder_id, *, opener=drive._open_url)
     url = drive._url(f"{drive.API}/files/{file_id}/export", {"mimeType": "text/plain"})
     text = drive._call(drive._request(url, token), opener=opener, what="read back the teaser Google Doc").decode("utf-8-sig")
     normalized = " ".join(text.split())
-    required = [p for t in draft.teasers for p in t.paragraphs]
-    if draft.version == 2:
-        required.append(AUTHOR_WARNING)
-    else:
-        required += ["Teaser elements & best practices", draft.editorial_note, *draft.opening_hooks,
-                     *draft.best_practices, *draft.modification_checklist]
-        required += [v for e in draft.elements for v in (e.name, e.purpose, e.book_specific_guidance)]
+    required = [p for t in draft.teasers for p in t.paragraphs] + [AUTHOR_WARNING]
     if any(" ".join(value.split()) not in normalized for value in required):
         raise TeaserError("The Google Doc readback is missing some approved teaser content.")
     return metadata["webViewLink"]
@@ -131,17 +124,15 @@ def deliver(queue, task, home, *, token=None, opener=drive._open_url):
         return task
     if task["state"] != "approved":
         raise TeaserError("Only an approved teaser package can be uploaded.")
-    draft = Draft.model_validate(task["drafts"][-1]["content"])
-    review = Review.model_validate(task["reviews"][-1])
-    issues = approval_issues(draft, review, [c["id"] for c in task["chunks"]])
+    issues = approval_issues(task)
     if issues:
         raise TeaserError("Upload withheld: " + "; ".join(issues))
     token = token or token_for(home, opener=opener)
     folder_id = ensure_folder(queue, token, opener=opener)
     path = queue.root / task["id"] / ("Author teasers-" + task["drafts"][-1]["sha256"][:16] + ".docx")
+    draft = current_draft(task)
     if not path.exists():
-        write_document(path, Storysheet.model_validate(task["storysheet"]), draft, review,
-                       book_label=task["book_label"])
+        write_document(path, draft, book_label=task["book_label"])
     file_id = task.get("document_id")
     if not file_id:
         # Reconcile an upload whose acknowledgement was lost before retrying.
@@ -157,8 +148,7 @@ def deliver(queue, task, home, *, token=None, opener=drive._open_url):
         task["document_id"] = file_id
         queue.save(task)
     task["document_url"] = verify_document(token, file_id, draft, folder_id, opener=opener)
-    if draft.version == 2:
-        deliver_guides(queue, task, token, folder_id, opener=opener)
+    deliver_guides(queue, task, token, folder_id, opener=opener)
     task["folder_url"] = "https://drive.google.com/drive/folders/" + folder_id
     task["progress"] = "Five teasers and the editing guide are ready"
     task.pop("upload_session", None)
@@ -205,4 +195,6 @@ def deliver_guides(queue, task, token, folder_id, *, opener=drive._open_url):
 
 
 def delivery_key(task):
-    return task["id"] + ("-v3" if task.get("version") == 3 else "")
+    # A book restarted under a new workflow gets its own document.
+    version = task.get("version", 1)
+    return task["id"] + (f"-v{version}" if version >= 3 else "")

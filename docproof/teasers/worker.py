@@ -1,4 +1,5 @@
-"""Fly-only worker. Sol uses the cloud ChatGPT login; Qwen and Drive stay on the web machine."""
+"""Fly-only worker: DeepSeek V4 Pro writes, Opus 5.5 adjudicates, the web machine
+checks, stores and delivers."""
 from __future__ import annotations
 
 import argparse
@@ -13,11 +14,12 @@ import urllib.request
 from urllib.parse import urlparse
 import uuid
 
-from app.teasers import lock, current_writer_brief
-from . import pipeline
-from .models import Draft, Storysheet, Review, digest
+from app.teasers import lock
+from . import adjudicator, writer
+from .models import Draft
 
 log = logging.getLogger(__name__)
+PROTOCOL = 4
 
 
 class Client:
@@ -31,7 +33,7 @@ class Client:
 
     def call(self, action, task_id="", payload=None):
         request = urllib.request.Request(self.url + "/api/teasers/worker", method="POST",
-            data=json.dumps({"protocol": 3, "action": action, "worker": self.worker,
+            data=json.dumps({"protocol": PROTOCOL, "action": action, "worker": self.worker,
                             "task_id": task_id, "payload": payload or {}}).encode(),
             headers={"Authorization": "Bearer " + self.token, "Content-Type": "application/json"})
         try:
@@ -47,7 +49,7 @@ class Client:
             raise
 
 
-def process(task, client, home, *, runner=None):
+def process(task, client, home, *, write_with=None, adjudicate_with=None):
     work = Path(home) / "books" / task["id"]
     work.mkdir(parents=True, exist_ok=True)
     stop = threading.Event()
@@ -72,30 +74,27 @@ def process(task, client, home, *, runner=None):
 
     thread = threading.Thread(target=heartbeat, daemon=True)
     thread.start()
+    manuscript = task["manuscript"]
     try:
-        if task["state"] == "queued":
-            story = pipeline.analyze(task["chunks"], work, runner=runner, progress=progress,
-                                     feedback=task.get("feedback"), attempt=task.get("failures", 0),
-                                     public_briefs=task.get("version", 1) == 3)
-            task = client.call("story", task["id"], story.model_dump())["task"]
-        while task["state"] in ("brief_ready", "story_ready", "drafted", "approved"):
-            if task["state"] == "brief_ready":
-                story = Storysheet.model_validate(task["storysheet"])
-                brief = pipeline.revise_writer_brief(story, current_writer_brief(task), task.get("feedback", []),
-                    task["chunks"], work, runner=runner, progress=progress, attempt=task.get("failures", 0))
-                task = client.call("brief", task["id"], {"brief": brief.model_dump(),
-                    "draft_sha256": task["drafts"][-1]["sha256"],
-                    "review_sha256": digest(Review.model_validate(task["reviews"][-1]))})["task"]
-            elif task["state"] == "story_ready":
-                progress("Writing five distinct teasers from Sol's selected facts")
-                task = client.call("draft", task["id"])["task"]
+        while task["state"] in ("queued", "revise", "drafted", "approved"):
+            if task["state"] == "queued":
+                draft, receipts = writer.write(manuscript, work, writer=write_with,
+                                               attempt=task.get("failures", 0), progress=progress)
+                task = client.call("draft", task["id"], {"draft": draft.model_dump(),
+                                                         "receipts": receipts})["task"]
+            elif task["state"] == "revise":
+                current = Draft.model_validate(task["drafts"][-1]["content"])
+                notes = {int(n): note for n, note in task["rewrite"]["notes"].items()}
+                draft, receipts = writer.rewrite(manuscript, current, notes, work,
+                                                 writer=write_with, progress=progress)
+                task = client.call("draft", task["id"], {"draft": draft.model_dump(),
+                                                         "receipts": receipts})["task"]
             elif task["state"] == "drafted":
-                story = Storysheet.model_validate(task["storysheet"])
-                story.writer_brief = current_writer_brief(task)
                 draft = Draft.model_validate(task["drafts"][-1]["content"])
-                review = pipeline.review(story, draft, task["chunks"], work,
-                                         runner=runner, progress=progress, attempt=task.get("failures", 0))
-                task = client.call("review", task["id"], review.model_dump())["task"]
+                ruling, _, receipts = adjudicator.adjudicate(manuscript, draft, work,
+                                                             lane=adjudicate_with, progress=progress)
+                task = client.call("adjudication", task["id"], {"ruling": ruling.model_dump(),
+                                                                "receipts": receipts})["task"]
             elif task["state"] == "approved":
                 progress("Uploading and verifying the author Google Doc")
                 task = client.call("deliver", task["id"])["task"]
@@ -114,8 +113,6 @@ def main():
         raise SystemExit("The production teaser worker runs on Fly, never on a user's Mac.")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args.home.mkdir(parents=True, exist_ok=True)
-    # Share the existing serialized cloud login; do not copy an interactive auth cache.
-    os.environ.setdefault("GALLEY_CODEX_HOME", "/data/galley-codex")
     identity = args.home / "worker-id.txt"
     with lock(args.home / "worker.lock"):
         if not identity.exists():
@@ -139,7 +136,11 @@ def main():
                 if task:
                     try:
                         from app.teasers import is_transient
-                        client.call("error", task["id"], {"error": str(exc), "transient": is_transient(exc)})
+                        from docproof.agent_lane import AgentLaneUnavailable
+                        from docproof.subscription_limits import UsageLimitError
+                        transient = isinstance(exc, (writer.WriterUnavailable, AgentLaneUnavailable,
+                                                     UsageLimitError)) or is_transient(exc)
+                        client.call("error", task["id"], {"error": str(exc), "transient": transient})
                     except Exception:
                         log.exception("Could not save the teaser error")
             if args.once:
