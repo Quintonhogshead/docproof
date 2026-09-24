@@ -560,25 +560,25 @@ def test_a_book_ready_for_proofing_is_never_formatted_as_well(tmp_path, galley,
 
 # --- needs_human --------------------------------------------------------------
 
-def test_needs_human_moves_the_record_to_needs_human_pr_and_tells_a_person(
+def test_needs_human_leaves_hubspot_alone_and_tells_a_person(
         tmp_path, galley, needs_human):
-    """The other verdict, and it moves the record too — to "Needs Human PR",
-    the option that puts the book in front of a human proofreader. Exactly one
-    PATCH, and the reason still reaches the owner by email, because the CRM
-    value says what and only the email says why."""
-    ws = proof_ws(notify_email="quinton@atmospherepress.com")
+    """Quinton, 2026-09-24: when the Astra review judges a book unclean, say
+    why and do not write to HubSpot. No PATCH at all, even with a needs-human
+    value configured; the record stays at ready, and the reason is kept on the
+    state record (for DocWarden) and still reaches the owner by email."""
+    ws = proof_ws(notify_email="quinton@atmospherepress.com",
+                  hubspot_proof_needs_human_value="Needs Human PR")
     opener = fake_drive(folder(f_1=drive_entry(BOOK)), docx=MANUSCRIPT,
                         hubspot={"Johnson": ready_to_proof()})
 
     report = run(tmp_path, ws, opener)
 
     assert report.proofed == [BOOK]                # it was read
-    assert len(patches(opener)) == 1               # written exactly once
-    assert hs_props(opener)["docproof"] == "Needs Human PR"
-    assert json.loads(patches(opener)[0].data)["properties"] == {
-        "docproof": "Needs Human PR"}
+    assert patches(opener) == []                   # and nothing was written
+    assert hs_props(opener)["docproof"] == "Ready for Proofing"
 
     assert [n for n, _ in report.needs_human] == [BOOK]
+    assert "left at 'Ready for Proofing'" in report.needs_human[0][1]
     assert "most sentences must be rewritten" in report.needs_human[0][1]
     assert len(opener.emails) == 1
     raw = _mail(opener)
@@ -586,14 +586,15 @@ def test_needs_human_moves_the_record_to_needs_human_pr_and_tells_a_person(
     assert "To: quinton@atmospherepress.com" in raw
 
     rec = WatchState.load(tmp_path / "state.json").get("f-1")
-    assert rec.proof_outcome == "needs_human" and rec.proof_hubspot_done is True
+    assert rec.proof_outcome == "needs_human" and rec.proof_hubspot_done is False
+    assert "most sentences must be rewritten" in rec.proof_outcome_reason
     assert opener.files["f-1"]["appProperties"][PROOF_PROP] == PROOF_HUMAN
 
 
-def test_the_outcome_that_ships_carries_the_needs_human_value(tmp_path, galley,
-                                                              needs_human):
-    """The verdict the folder shows and the value the CRM got are the same
-    decision, so outcome.json names it too."""
+def test_the_outcome_that_ships_names_no_hubspot_value_for_needs_human(
+        tmp_path, galley, needs_human):
+    """The verdict the folder shows and what the CRM got are the same
+    decision: nothing was written, so outcome.json names nothing to write."""
     ws = proof_ws()
     opener = fake_drive(folder(f_1=drive_entry(BOOK)), docx=MANUSCRIPT,
                         hubspot={"Johnson": ready_to_proof()})
@@ -603,7 +604,7 @@ def test_the_outcome_that_ships_carries_the_needs_human_value(tmp_path, galley,
     uploaded = [fid for fid, e in opener.files.items() if e["name"] == OUTCOME][0]
     payload = json.loads(opener.content[uploaded].decode())
     assert payload["outcome"] == "needs_human"
-    assert payload["hubspot"]["value"] == "Needs Human PR"
+    assert not payload.get("hubspot")
 
 
 def test_a_book_left_for_a_human_is_not_read_again(tmp_path, galley,
@@ -647,7 +648,8 @@ def test_app_needs_human_run_reuses_results_when_delivery_retries(
     second = run(tmp_path, ws, opener)
     assert second.proofed == [BOOK]
     assert len(app_needs_human_job) == 1
-    assert hs_props(opener)["docproof"] == "Needs Human PR"
+    assert hs_props(opener)["docproof"] == "Ready for Proofing"
+    assert patches(opener) == []
     assert "required evidence missing" in json.loads(
         opener.content[[fid for fid, e in opener.files.items()
                         if e["name"] == OUTCOME][0]].decode())["reason"]
@@ -679,8 +681,24 @@ def test_a_finished_book_in_the_author_folder_never_sends_the_pass_into_old_book
     assert report.awaiting_proof == [] and galley == []
     assert opener.files["old-1"]["appProperties"].get(PROOF_PROP) is None
     assert opener.files["m-1"]["appProperties"][PROOF_PROP] == PROOF_HUMAN
-    assert [name for name, _ in report.stuck_ready] == ["Quinton Johnson"]
+    # Sent to a human proofreader, so ready is where it belongs: not stuck.
+    assert report.stuck_ready == []
     assert WatchState.load(tmp_path / "state.json").files.get("old-1") is None
+
+
+def test_a_clean_book_still_at_ready_is_reported_stuck(tmp_path, galley):
+    """Only the needs-human verdict leaves ready on purpose. A clean book whose
+    record never moved is still a write-back a person should look at."""
+    ws = sub_proof_ws(proof_runner="external")
+    opener = fake_drive({SUB: author_folder("Quinton Johnson"),
+                         "m-1": in_sub(BOOK, props={PROOF_PROP: PROOF_DONE})},
+                        docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_to_proof()})
+
+    report = run(tmp_path, ws, opener)
+
+    assert galley == []
+    assert [name for name, _ in report.stuck_ready] == ["Quinton Johnson"]
 
 
 def test_an_old_book_folder_with_its_book_2_beside_the_book_1_is_left_alone(
@@ -755,21 +773,26 @@ def test_external_mode_picks_the_verdict_up_when_it_lands(tmp_path, galley):
     assert opener.files["f-1"]["appProperties"][PROOF_PROP] == PROOF_DONE
 
 
-def test_an_external_needs_human_verdict_moves_the_record_too(tmp_path, galley):
+def test_an_external_needs_human_verdict_writes_nothing_either(tmp_path, galley):
     """A practitioner's `needs_human` is acted on exactly as the app runner's
-    is: one PATCH to "Needs Human PR", from the watcher's settings — note the
-    hand-off file here names no value at all."""
+    is: no PATCH, even when the hand-off file itself names "Needs Human PR" —
+    that block is decoration, and this verdict never writes."""
     ws = proof_ws(proof_runner="external")
     opener = fake_drive(folder(f_1=drive_entry(BOOK)), docx=MANUSCRIPT,
                         hubspot={"Johnson": ready_to_proof()})
 
     run(tmp_path, ws, opener)
     _hand_off(opener, {"outcome": "needs_human",
-                       "reason": "the book needs a human", "hubspot": {}})
+                       "reason": "the book needs a human",
+                       "hubspot": {"object": "0-970", "property": "docproof",
+                                   "value": "Needs Human PR"}})
     report = run(tmp_path, ws, opener)
 
-    assert len(patches(opener)) == 1
-    assert hs_props(opener)["docproof"] == "Needs Human PR"
+    assert patches(opener) == []
+    assert hs_props(opener)["docproof"] == "Ready for Proofing"
+    rec = WatchState.load(tmp_path / "state.json").get("f-1")
+    assert rec.proof_outcome == "needs_human"
+    assert rec.proof_outcome_reason == "the book needs a human"
     assert [n for n, _ in report.needs_human] == [BOOK]
     assert "the book needs a human" in report.needs_human[0][1]
 
@@ -1001,7 +1024,7 @@ def test_the_cli_turns_proofing_on_and_off(tmp_path, capsys):
     assert ws.hubspot_proof_needs_human_value == "Needs Human PR"
     printed = capsys.readouterr().out
     assert "Proofing on" in printed and "Ready for Proofing" in printed
-    assert "Needs Human PR" in printed
+    assert "stays at ready" in printed
     assert "Book 1" in printed and "Book 2" in printed
 
     cli.main(["--home", str(tmp_path), "init", "--disable-proofing"])

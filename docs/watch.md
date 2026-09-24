@@ -203,7 +203,7 @@ needs **write** on that object and the done value must be a real option on the
 property — HubSpot rejects a value that is not in the list.
 
 The ready/done values are named `format_*` because there is a second set on the
-same property: `Ready for Proofing` → `Proofing Complete` or `Needs Human PR`,
+same property: `Ready for Proofing` → `Proofing Complete` (clean books only),
 which drives the proofing stage below. One dropdown, one value at a time, so a
 book is never in two stages at once.
 
@@ -271,7 +271,7 @@ value pair:
 | stage | reads | an editor sets | DocProof writes | and hands back |
 |---|---|---|---|---|
 | formatting | `<surname> - Book Original` | `Ready for Formatting` | `Formatting Complete` | `<surname> - book 0` |
-| proofing | `<surname> - Book 1` | `Ready for Proofing` | `Proofing Complete` **or** `Needs Human PR` | `<surname> - Book 2` |
+| proofing | `<surname> - Book 1` | `Ready for Proofing` | `Proofing Complete` (clean only) | `<surname> - Book 2` |
 
 It is **off by default**, and nothing reads the proofing values until it is on,
 so an existing install is unchanged until somebody switches it on. It needs the
@@ -398,28 +398,24 @@ DocProof *accepts* is looser than what it *writes*: a practitioner who answered
 a `Book One` with `Johnson - Book 2 - outcome.json` has still answered, and the
 book is not left unread over a house-style disagreement.
 
-**The verdict decides the CRM write, and both verdicts write.** `outcome.json`
-says either `done` or `needs_human`:
+**Only a clean verdict writes the CRM.** `outcome.json` says either `done` or
+`needs_human`:
 
-- `done` — nothing left the loop can find or decide. The record moves to
+- `done` — the Astra review judged the book clean. The record moves to
   `Proofing Complete`.
-- `needs_human` — the book has major grammatical problems and most of its
-  sentences must be rewritten, which is not a job a mechanical proofread should
-  pretend to have finished. The record moves to `Needs Human PR` — the option
-  that puts the book in front of a human proofreader — **and** the reason
-  reaches you in the needs-a-person email (below). The CRM value says what; only
-  the email says why.
+- `needs_human` — the second Astra reading still found more core mechanical
+  errors than the ceiling, or named a publication blocker. HubSpot is **not**
+  written: the record stays at `Ready for Proofing`, the redline is still
+  delivered, and DocWarden texts the owner why (the reason is on the state
+  record and in the review evidence). The book is also named in the
+  needs-a-person email. It is not reported as a stuck write-back.
 
-Either way the book leaves `Ready for Proofing`, because a book left sitting at
-ready is one nobody would notice. Exactly one PATCH per book, whichever verdict
-it was.
+Exactly one PATCH per clean book; none for a book sent to a person.
 
-The one exception is a press whose dropdown has no "needs a human" option:
-**clear the needs-a-human value** (in the panel, or with
-`--hubspot-proof-needs-human-value ''`) and that verdict writes nothing at all.
-The book stays at `Ready for Proofing` for a person to pick up, and the reason
-still reaches you by email. A blank value is never *written* — that would blank
-the status property rather than move it.
+`hubspot_proof_needs_human_value` (and `--hubspot-proof-needs-human-value`)
+is still accepted so older settings files load, but DocWatch no longer writes
+it. The fixed Galley lane may still name `Needs Human PR` in the `hubspot` block
+of its own `outcome.json`; that block is informational only (below).
 
 `outcome.json` also carries a `hubspot` block naming the property and value. It
 is there for a person reading the file; DocProof does not obey it. The property

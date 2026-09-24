@@ -173,9 +173,9 @@ def main(argv=None) -> int:
                      help="the status value DocProof sets once the proofread "
                           "is back and clean (default 'Proofing Complete')")
     ini.add_argument("--hubspot-proof-needs-human-value",
-                     help="the status value DocProof sets when the proofread "
-                          "says the book needs a human proofreader (default "
-                          "'Needs Human PR')")
+                     help="kept for older settings; no longer written — a "
+                          "book that needs a human proofreader stays at the "
+                          "ready value")
     ini.add_argument("--proof-tier", choices=["T0", "T1", "T2", "T3", "T4"],
                      help="how hard the app runner reads (default T2)")
     ini.add_argument("--proof-budget", type=float,
@@ -509,8 +509,8 @@ def cmd_init(args, home: Path) -> int:
                     "hand-off")
         print(f"Proofing on: "
               f"'{ws.hubspot_proof_ready_value or '— not set'}' → "
-              f"'{ws.hubspot_proof_done_value or '— not set'}' (or "
-              f"'{ws.hubspot_proof_needs_human_value or '— not set'}') "
+              f"'{ws.hubspot_proof_done_value or '— not set'}' on a clean "
+              f"Astra verdict; a book for a human proofreader stays at ready "
               f"({who})"
               + ("  (READ-ONLY: the verdict is delivered, the record is not "
                  "moved)" if not ws.proof_write_back else ""))

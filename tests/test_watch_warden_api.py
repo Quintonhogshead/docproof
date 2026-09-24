@@ -121,7 +121,8 @@ def test_the_payload_shape(tmp_path, monkeypatch):
 
     row = body["files"][0]
     assert set(row) == {
-        "file_id", "name", "marked", "proof_marked", "corrections_marked",
+        "file_id", "name", "marked", "proof_marked", "proof_outcome",
+        "proof_reason", "corrections_marked",
         "attempts", "updated_at", "author_first", "author_last",
         "subfolder_name", "job_id", "completion_emailed", "hubspot_id",
         "retired", "retired_reason"}
@@ -132,6 +133,22 @@ def test_the_payload_shape(tmp_path, monkeypatch):
     assert row["hubspot_id"] == "hs-1"
     assert row["job_id"] == "job-1"
     assert row["completion_emailed"] is True
+
+
+def test_each_row_carries_the_proofing_verdict_and_why(tmp_path, monkeypatch):
+    """DocWarden texts the owner why a book was sent to a human proofreader,
+    so the verdict and its reason ride on the compact row."""
+    monkeypatch.setenv(WARDEN_TOKEN_ENV, TOKEN)
+    app = make_app(tmp_path)
+    seed(app.state.watch.home, [FileRecord(
+        file_id="drive-3", name="Oda - Book 1", proof_marked="human",
+        proof_outcome="needs_human",
+        proof_outcome_reason="152 core mechanical errors (ceiling 25)")])
+    row = TestClient(app).get(
+        "/api/watch/warden",
+        headers={"Authorization": f"Bearer {TOKEN}"}).json()["files"][0]
+    assert row["proof_outcome"] == "needs_human"
+    assert row["proof_reason"] == "152 core mechanical errors (ceiling 25)"
 
 
 def test_the_answer_carries_no_settings_secrets(tmp_path, monkeypatch):
