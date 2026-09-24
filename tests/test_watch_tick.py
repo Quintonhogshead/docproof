@@ -2110,3 +2110,36 @@ def test_proofing_moves_the_record_by_default(tmp_path):
 
     assert hs_props(opener)["docproof"] == "Proofing Complete"
     assert rec.proof_hubspot_done is True
+
+
+# --- a ready record with no author name: the project's title names the author --
+
+def test_a_nameless_ready_record_takes_its_author_from_the_projects_other_records(
+        tmp_path, provider):
+    ws = sub_ws()
+    opener = fake_drive({
+        SUB: author_folder("Quinton Johnson"),
+        "m-1": in_sub("Johnson - Book Original.docx"),
+    }, docx=MANUSCRIPT, hubspot={
+        "Nameless": {"docproof": "Ready for Formatting", "book_title": "The Blue Door"},
+        "Earlier": {"firstname": "Quinton", "lastname": "Johnson", "book_title": "The Blue Door",
+                    "docproof": "Contract Signed"}})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == ["Johnson - Book Original.docx"]
+    assert not any("no first or last name" in r for _, r in report.needs_human)
+
+
+def test_a_nameless_ready_record_with_no_named_twin_asks_a_person_by_title(tmp_path, provider):
+    ws = sub_ws()
+    opener = fake_drive({SUB: author_folder("Quinton Johnson"),
+                         "m-1": in_sub("Johnson - Book Original.docx")},
+                        docx=MANUSCRIPT, hubspot={
+        "Nameless": {"docproof": "Ready for Formatting", "book_title": "The Blue Door"}})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == []
+    [(label, reason)] = report.needs_human
+    assert "'The Blue Door'" in label and "titled 'The Blue Door'" in reason

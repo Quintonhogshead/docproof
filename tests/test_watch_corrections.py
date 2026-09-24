@@ -986,3 +986,37 @@ def test_form_intake_pending_summary_carries_first_last_and_mode(
     row = rows2[0]
     assert row["first"] == "Quinton" and row["last"] == "Johnson"
     assert row["mode"] == "form"
+
+
+# --- a ready record with no author name: the project's title names the author --
+
+def test_a_nameless_record_takes_its_author_from_the_projects_other_records(tmp_path):
+    # The interior-design corrections record is often made before anyone types
+    # the name in; the project always has its title, and the book's earlier
+    # records carry the author.
+    opener = make_opener(tmp_path, hubspot={
+        "Nameless": ready(firstname="", lastname="", book_title="The Blue Door"),
+        "Proofing": {"firstname": "Quinton", "lastname": "Johnson",
+                     "book_title": "The Blue Door", "docproof": "Formatting Complete"}})
+    report = run(tmp_path, ws(), opener)
+    assert "Johnson - Book 3.5.idml" in uploads_in(opener)
+    assert not any("no first or last name" in r for _, r in report.needs_human)
+
+
+def test_a_nameless_record_whose_title_names_no_one_asks_a_person_by_title(tmp_path):
+    opener = make_opener(tmp_path, hubspot={
+        "Nameless": ready(firstname="", lastname="", book_title="The Blue Door")})
+    report = run(tmp_path, ws(), opener)
+    assert uploads_in(opener) == {}
+    [(label, reason)] = [(n, r) for n, r in report.needs_human if "no first or last name" in r]
+    assert "'The Blue Door'" in label and "titled 'The Blue Door'" in reason
+
+
+def test_a_title_two_authors_share_is_never_guessed(tmp_path):
+    opener = make_opener(tmp_path, hubspot={
+        "Nameless": ready(firstname="", lastname="", book_title="Collected Poems"),
+        "A": {"firstname": "Quinton", "lastname": "Johnson", "book_title": "Collected Poems"},
+        "B": {"firstname": "Ana", "lastname": "Aragón", "book_title": "Collected Poems"}})
+    report = run(tmp_path, ws(), opener)
+    assert uploads_in(opener) == {}
+    assert any("no first or last name" in r for _, r in report.needs_human)
