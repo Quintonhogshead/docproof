@@ -444,6 +444,10 @@ def _warden_files(root: Path) -> list[dict]:
             "name": rec.name,
             "marked": rec.marked,
             "proof_marked": rec.proof_marked,
+            # The proofing verdict and its reason: DocWarden texts the owner
+            # why a book was sent to a human proofreader.
+            "proof_outcome": rec.proof_outcome,
+            "proof_reason": rec.proof_outcome_reason,
             "corrections_marked": rec.corrections_marked,
             "attempts": rec.attempts,
             "updated_at": rec.updated_at,

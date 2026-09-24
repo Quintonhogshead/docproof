@@ -4,7 +4,8 @@ The Galley agent hands the author folder the redline alone and files the record
 — including "<surname> - Book Two - outcome.json" — under the archive, tagging
 each file with the source Book 1's Drive id. The ticker finds the verdict by
 that tag, not by folder, and applies it exactly as it would one dropped beside
-the book: HubSpot moves, the Book 1 is marked done, the email says so.
+the book: a clean verdict moves HubSpot and marks the Book 1 done; a
+needs-human one leaves HubSpot at ready and says why.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import json
 from app.watch import proof as prooflib
 from app.watch.archive import SOURCE_PROP
 from app.watch.stages import PROOF_AWAITING, PROOF_DONE, PROOF_PROP
+from app.watch.state import WatchState
 
 from .fakes import fake_drive
 from .test_watch_proof import (MANUSCRIPT, author_folder, hs_props, in_sub,
@@ -69,7 +71,12 @@ def test_a_needs_human_verdict_in_the_archive_is_applied_too(tmp_path):
                       name="Smith - Book Two - outcome.json", source_id="m-a")
     report = run(tmp_path, ws, opener)
     assert report.proofed == ["Smith - Book 1.docx"]
-    assert hs_props(opener, "john")["docproof"] == "Needs Human PR"
+    # Applied, but never written: only a clean Astra verdict moves HubSpot.
+    assert hs_props(opener, "john")["docproof"] == "Ready for Proofing"
+    assert [n for n, _ in report.needs_human] == ["Smith - Book 1.docx"]
+    rec = WatchState.load(tmp_path / "state.json").get("m-a")
+    assert rec.proof_outcome == "needs_human"
+    assert rec.proof_outcome_reason == "27 core mechanical errors remained."
 
 
 def test_only_this_books_outcome_counts(tmp_path):

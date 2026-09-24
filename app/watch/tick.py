@@ -918,10 +918,9 @@ def _one_proof(token: str, home: Path, ws: WatchSettings, file: DriveFile,
     report.proofed.append(file.name)
     # The verdict is assessed BEFORE the upload, so outcome.json is written into
     # the results folder and then goes to Drive with everything else — one file,
-    # one set of numbers, whichever side reads it.
-    verdict = proof.assess(
-        job, done_value=ws.hubspot_proof_done_value,
-        needs_human_value=ws.hubspot_proof_needs_human_value)
+    # one set of numbers, whichever side reads it. No needs-human value: that
+    # verdict writes nothing to HubSpot, so its outcome.json names nothing.
+    verdict = proof.assess(job, done_value=ws.hubspot_proof_done_value)
     uploaded = proof.upload_outputs(token, file, job, ws, rec, state,
                                     folder_files,
                                     dest_folder_id=dest_folder_id,
@@ -986,8 +985,14 @@ def _apply_proof_outcome(hs_token: str | None, token: str, ws: WatchSettings,
                          verdict: "proof.Verdict", *, opener,
                          report: TickReport) -> None:
     """Apply the outcome to CRM, record progress, then mark the Drive
-    manuscript. Avoid duplicate CRM writes and include human-review reasons
-    in notifications.
+    manuscript.
+
+    Only a clean Astra verdict (`done`) writes HubSpot. A `needs_human` verdict
+    never does, whatever `hubspot_proof_needs_human_value` says (Quinton,
+    2026-09-24: when Astra judges a book unclean, tell me why and do not write
+    to HubSpot). The record stays at the ready value, the reason goes on the
+    state record and the Drive marker for DocWarden to explain, and the book
+    is still named in the needs-a-person email.
     """
     rec.proof_outcome = verdict.outcome
     rec.proof_outcome_reason = verdict.reason
@@ -1004,23 +1009,11 @@ def _apply_proof_outcome(hs_token: str | None, token: str, ws: WatchSettings,
               or "the proofread finished but the book needs a human "
                  "proofreader.")
     log.warning("Needs a person: %s (%s)", file.name, reason)
-    _finish_hubspot_proof(hs_token, ws, file, rec, state,
-                          value=ws.hubspot_proof_needs_human_value,
-                          opener=opener)
-    if not (ws.hubspot_write_back and ws.proof_write_back):
-        # Say what actually happened. The email is the only place a person sees
-        # this verdict before opening the CRM, so it must not claim a move the
-        # switches forbade.
-        moved = (f"Proofing write-back is off, so HubSpot was left at "
-                 f"'{ws.hubspot_proof_ready_value}' for a person.")
-    else:
-        moved = (f"HubSpot was moved to '{ws.hubspot_proof_needs_human_value}'."
-                 if ws.hubspot_proof_needs_human_value
-                 else f"No value is configured for that verdict, so HubSpot was "
-                      f"left at '{ws.hubspot_proof_ready_value}' for a person.")
     report.needs_human.append(
         (file.name,
-         f"was proofread and needs a human proofreader: {reason} {moved}"))
+         f"was proofread and needs a human proofreader: {reason} HubSpot was "
+         f"left at '{ws.hubspot_proof_ready_value}'; only a clean Astra "
+         f"verdict moves it."))
     proof.mark_source(token, file, rec, state, status=PROOF_HUMAN,
                       reason=reason, opener=opener)
 
@@ -1028,9 +1021,9 @@ def _apply_proof_outcome(hs_token: str | None, token: str, ws: WatchSettings,
 def _finish_hubspot_proof(hs_token: str | None, ws: WatchSettings,
                           file: DriveFile, rec, state: WatchState, *,
                           value: str, opener) -> None:
-    """Move the status property to `value` on the book just proofread — either
-    the proofing done value or the needs-a-human one, whichever the verdict
-    named.
+    """Move the status property to `value` on the book just proofread: the
+    proofing done value, the only verdict that writes (see
+    `_apply_proof_outcome`).
 
     The promo/plan twin, with the same guards: read-only mode leaves the CRM
     untouched, and a blank value is refused rather than blanking the property.
@@ -1109,6 +1102,10 @@ class DiscoveryStage:
     # novel's worth of model time and "which file is the book" must never be a
     # guess.
     label_always: bool = False
+    # A finished intake whose verdict sent it to a person and deliberately left
+    # HubSpot at ready (proofing's `needs_human`). Such a record is not stuck,
+    # so it is not reported as a write-back that never happened.
+    held_for_person: Callable[[DriveFile], bool] = lambda f: False
 
 
 def format_stage(ws: WatchSettings) -> DiscoveryStage:
@@ -1148,6 +1145,8 @@ def proof_stage(ws: WatchSettings) -> DiscoveryStage:
         source_stage=naming.PROOF_SOURCE_STAGE,
         source_name=naming.is_proof_source_name,
         label_always=True,
+        held_for_person=lambda f: (f.app_properties.get(PROOF_PROP)
+                                   == PROOF_HUMAN),
     )
 
 
@@ -1320,7 +1319,13 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
         intake present but unfinished was already reported when the run
         failed, so it is not raised again."""
         ready = stage.ready_value
-        if intake_done:
+        if intake_done and all(stage.held_for_person(f) for f in intake_files
+                               if stage.already_done(f)):
+            # Left at ready on purpose: the verdict sent it to a person, and
+            # HubSpot is not written for that verdict. Not a stuck write-back.
+            log.info("Waiting: %s is flagged ready and its book is waiting on "
+                     "a human proofreader.", author)
+        elif intake_done:
             log.info("Waiting: %s is flagged ready but its book is already "
                      "%s; the status did not move off ready.", author,
                      stage.done_word)

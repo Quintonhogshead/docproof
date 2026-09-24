@@ -98,8 +98,8 @@ PLAN_FAILED = "failed"
 PROOF_AWAITING = "awaiting"
 PROOF_DONE = "done"
 # The book needs a human proofreader. Terminal for DocProof — it will not be
-# re-run and re-charged. HubSpot moves to the configured needs-human value
-# (normally "Needs Human PR"); a blank value or read-only mode leaves it alone.
+# re-run and re-charged. HubSpot is never written for this verdict: the record
+# stays at "Ready for Proofing" and DocWarden tells the owner why.
 PROOF_HUMAN = "human"
 PROOF_FAILED = "failed"
 PROOF_TERMINAL = (PROOF_DONE, PROOF_HUMAN, PROOF_FAILED)

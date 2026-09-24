@@ -282,11 +282,11 @@ class WatchSettings:
     # corrections keep their own gates. See `tick._discover_by_name`.
     format_intake: str = "hubspot"
     # The proofing values, on the same dropdown. One value in — "Ready for
-    # Proofing" — and two ways out, because a proofread ends at one of two
-    # verdicts and both of them move the book on: "Proofing Complete" when the
-    # loop finished it, "Needs Human PR" when the book needs a human
-    # proofreader. Neither leaves it sitting at ready, so nothing waits in a
-    # queue nobody is reading.
+    # Proofing" — and one way out: "Proofing Complete", written only when the
+    # Astra review judges the book clean. A `needs_human` verdict writes nothing
+    # and leaves the book at ready (Quinton, 2026-09-24); DocWarden texts him
+    # why. `hubspot_proof_needs_human_value` is kept so older settings files
+    # and the CLI still load, but DocWatch no longer writes it.
     #
     # Spelled out rather than left blank because these are the press's actual
     # option values (on the Projects object the internal value equals the label

@@ -792,7 +792,7 @@ def test_the_proofing_drawer_and_its_script_name_the_same_elements():
     for element in ("wf-config-proof", "wf-proof-setup", "wf-proof-save",
                     "wf-proof-note", "proof-enabled", "proof-runner",
                     "proof-runner-hint", "proof-ready", "proof-done",
-                    "proof-needs-human", "proof-awaiting-block",
+                    "proof-awaiting-block",
                     "proof-awaiting", "proof-awaiting-empty",
                     "proof-verdicts", "proof-verdicts-empty"):
         assert f'id="{element}"' in page, element
