@@ -123,7 +123,7 @@ def test_verified_review_requires_all_instructions_and_pages(monkeypatch, tmp_pa
 
 
 def test_large_inputs_are_file_backed_instead_of_duplicated_in_prompt(monkeypatch, tmp_path):
-    monkeypatch.setattr('docproof.interior.astra.sys.platform', 'darwin')
+    monkeypatch.setattr('docproof.interior.astra.sys.platform', 'linux')
     packet, snapshot = _inputs()
     packet["evidence"][0]["text"] = "correction " * 20000
     snapshot["stories"][0]["text"] = "A teh sentence."
@@ -154,3 +154,40 @@ def test_recorded_packet_errors_block_verified_status(monkeypatch, tmp_path):
     result = AstraReviewer().review(packet, {}, {"required_review_pages": [1]},
                                     [{"id": "e-a", "instruction_id": "i-a"}], tmp_path)
     assert result["status"] == "clarification_needed"
+
+
+@pytest.mark.parametrize("platform", ["win32", "darwin"])
+def test_corrections_desktops_get_the_evidence_tools(monkeypatch, tmp_path, platform):
+    monkeypatch.setattr('docproof.interior.astra.sys.platform', platform)
+    packet, snapshot = _inputs()
+    prompts = []
+
+    def fake(prompt, schema, work_dir, *, request_id):
+        prompts.append(prompt)
+        return {"instructions": [{"id": "i-a", "source_ids": ["source-a"],
+                                   "disposition": "clarification", "reason": "review",
+                                   "edit_ids": [], "covered_evidence_ids": ["evidence-a"]}],
+                "edits": [], "questions": [], "designer_reasons": []}
+
+    monkeypatch.setattr(galley.codex_runner, "run_structured", fake)
+    AstraReviewer().plan(packet, snapshot, tmp_path)
+    assert "docproof_evidence MCP tools" in prompts[0]
+    assert (tmp_path / "astra-evidence.json").is_file()
+
+
+def test_other_platforms_keep_the_file_prompt(monkeypatch, tmp_path):
+    monkeypatch.setattr('docproof.interior.astra.sys.platform', 'linux')
+    packet, snapshot = _inputs()
+    prompts = []
+
+    def fake(prompt, schema, work_dir, *, request_id):
+        prompts.append(prompt)
+        return {"instructions": [{"id": "i-a", "source_ids": ["source-a"],
+                                   "disposition": "clarification", "reason": "review",
+                                   "edit_ids": [], "covered_evidence_ids": ["evidence-a"]}],
+                "edits": [], "questions": [], "designer_reasons": []}
+
+    monkeypatch.setattr(galley.codex_runner, "run_structured", fake)
+    AstraReviewer().plan(packet, snapshot, tmp_path)
+    assert "docproof_evidence" not in prompts[0]
+    assert not (tmp_path / "astra-evidence.json").exists()
