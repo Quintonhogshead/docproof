@@ -160,7 +160,9 @@ def publish(queue, task, token, draft, *, opener=drive._open_url):
     """Upload the one document, verify it where it landed, and mark the book complete."""
     folder_id = ensure_author_folder(queue, task, token, ensure_folder(queue, token, opener=opener),
                                      opener=opener)
-    path = queue.root / task["id"] / ("Author teasers-" + digest(draft)[:16] + ".docx")
+    # The layout is part of the name: a document built before the guide was added never passes for one.
+    path = queue.root / task["id"] / ("Author teasers-" + digest({"draft": draft.model_dump(),
+                                                                   "layout": LAYOUT})[:16] + ".docx")
     if not path.exists():
         write_document(path, draft, book_label=task["book_label"])
     file_id = task.get("document_id")
@@ -169,6 +171,8 @@ def publish(queue, task, token, draft, *, opener=drive._open_url):
         matches = drive.search_files(token,
             f"trashed = false and '{folder_id}' in parents and appProperties has "
             f"{{ key='docproof.teaser' and value='{delivery_key(task)}' }}", opener=opener)
+        replaced = {f for old in task.get("superseded_files", []) for f in old.values()}
+        matches = [m for m in matches if m.id not in replaced]
         if len(matches) > 1:
             raise TeaserError("Multiple documents claim this teaser run; review the destination folder.")
         if matches:
@@ -180,6 +184,7 @@ def publish(queue, task, token, draft, *, opener=drive._open_url):
     task["document_url"] = verify_document(token, file_id, draft, folder_id, opener=opener)
     task["folder_url"] = "https://drive.google.com/drive/folders/" + folder_id
     task["combined"] = True
+    task["layout"] = LAYOUT
     task["progress"] = "The five teasers and the dos and don’ts are ready"
     task.pop("upload_session", None)
     task.pop("error", None)
@@ -198,6 +203,9 @@ def delivered_draft(task):
 
 
 SUPERSEDED = ("document_id", "guide_xlsx_id", "guide_pdf_id")
+# Bump when the document's contents change; redeliver() then rebuilds every delivered book.
+# 2 added the dos and don'ts; 3 removed its attribution paragraph.
+LAYOUT = 3
 
 
 def redeliver(queue, task, home, *, token=None, opener=drive._open_url):
@@ -207,7 +215,7 @@ def redeliver(queue, task, home, *, token=None, opener=drive._open_url):
     if task["state"] != "complete":
         raise TeaserError("Only a delivered book can be redelivered.")
     token = token or token_for(home, opener=opener)
-    if not task.get("combined"):
+    if not (task.get("combined") and task.get("layout") == LAYOUT):
         draft = delivered_draft(task)
         old = {k: task.pop(k) for k in SUPERSEDED if task.get(k)}
         if old:

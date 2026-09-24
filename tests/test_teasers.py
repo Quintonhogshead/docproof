@@ -498,6 +498,7 @@ def test_one_document_holds_five_unranked_options_then_the_two_page_guide(tmp_pa
     assert len(doc.tables) == 2 and text.index("Option 5") < text.index("Dos and don’ts for your teaser: the story")
     assert all(value in cells for row in guide.STORY + guide.CRAFT for value in row)
     assert "Sol" not in " ".join(cells) and "DeepSeek" not in " ".join(cells)
+    assert "Reedsy" not in text and "BookBub" not in text
     assert text.startswith("The Ferry Ledger\nAda Smith") and AUTHOR_WARNING in text
     assert text.index("Option 1") < text.index("Option 2") < text.index("Option 5")
     assert all(p in text for t in draft.teasers for p in t.paragraphs)
@@ -609,7 +610,7 @@ def test_books_delivered_as_separate_files_are_redelivered_as_one_document(queue
     published, trashed = [], []
     def publish(queue_, task_, token, draft, **kw):
         published.append(draft)
-        task_.update(document_id="new-doc", combined=True)
+        task_.update(document_id=f"new-doc-{len(published)}", combined=True)
         queue_.save(task_, "complete")
         return queue_.get(task_["id"])
     monkeypatch.setattr(delivery, "publish", publish)
@@ -618,8 +619,38 @@ def test_books_delivered_as_separate_files_are_redelivered_as_one_document(queue
     assert published[0].title == "The Ferry Ledger" and published[0].teasers == package().teasers
     assert trashed == ["old-doc", "old-xlsx", "old-pdf"] and "guide_url" not in task
     # Running it again publishes nothing new and never trashes the combined document.
+    task["layout"] = delivery.LAYOUT
+    queue.save(task)
+    delivery.redeliver(queue, queue.get(task["id"]), queue.root.parent, token="google")
+    assert len(published) == 1 and "new-doc-1" not in trashed
+    # A combined document in an older layout is rebuilt, and only then replaced.
+    task = queue.get(task["id"])
+    task["layout"] = delivery.LAYOUT - 1
+    queue.save(task)
     delivery.redeliver(queue, task, queue.root.parent, token="google")
-    assert len(published) == 1 and "new-doc" not in trashed
+    assert len(published) == 2 and trashed[-1] == "new-doc-1" and "new-doc-2" not in trashed
+
+
+def test_redelivery_never_reuses_an_old_layout_or_a_replaced_upload(queued, monkeypatch, tmp_path):
+    from app import teaser_delivery as delivery
+    queue, _, task = queued
+    task = drafted(queue, task)
+    draft = Draft.model_validate(task["drafts"][-1]["content"])
+    task = accept_adjudication(queue, task, {"ruling": ruling_for(draft).model_dump()})
+    # The first delivery's cached file, named by the draft hash alone, predates the guide.
+    stale = queue.root / task["id"] / ("Author teasers-" + task["drafts"][-1]["sha256"][:16] + ".docx")
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_bytes(b"old layout")
+    task["superseded_files"] = [{"document_id": "bad-upload"}]
+    uploaded = []
+    monkeypatch.setattr(delivery, "ensure_folder", lambda *a, **k: "root")
+    monkeypatch.setattr(delivery, "ensure_author_folder", lambda *a, **k: "smith")
+    monkeypatch.setattr(delivery.drive, "search_files", lambda *a, **k: [SimpleNamespace(id="bad-upload")])
+    monkeypatch.setattr(delivery, "resume_import",
+                        lambda queue, task, token, folder, path, **k: uploaded.append(Path(path).read_bytes()) or "new")
+    monkeypatch.setattr(delivery, "verify_document", lambda *a, **k: "https://docs.google.com/document/d/new")
+    task = delivery.publish(queue, task, "google", draft)
+    assert task["document_id"] == "new" and uploaded and uploaded[0] != b"old layout"
 
 
 def test_google_upload_recovers_lost_completion_without_second_document(queued, tmp_path):

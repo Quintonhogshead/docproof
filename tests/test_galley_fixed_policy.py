@@ -266,3 +266,66 @@ def test_number_policy_spells_out_bare_hours_and_never_adds_minutes():
     assert "bare hour" in NUMBER_POLICY.lower()
     assert "At three?" in NUMBER_POLICY
     assert "never given “:00”" in NUMBER_POLICY or "never given \":00\"" in NUMBER_POLICY
+
+
+# --- title italics are the title alone (Immanuel, Book 1) --------------------
+
+# Spans the Immanuel readers had italicized, each around the title it named.
+IMMANUEL_SENTENCES = [
+    "This quote is attributed either to Pablo Picasso or Richard Kelly’s Donnie Darko.",  # a whole footnote
+    "This is for me the spinning dreidel in Inception.",
+    # The production span ran on to 132 characters.
+    "The breakfast scene in Alien where the baby alien tears its way out of John Hurt’s gut: th…",
+    "She’s listening to Fall of Troy’s album Doppelgänger, the song Mouths Like Sidewinder Missles.",
+    "What are the giants called in Gulliver’s Travels? She can’t remember.",  # a whole paragraph
+]
+TITLES = [
+    "El Comercio", "New York Times", "The New York Times", "New York Times Magazine", "New York Post",
+    "Spartacus", "The Big Lebowski", "Tron", "Vogue", "L’Idiot", "The Idiot", "Best Tea/Bitter Tea",
+    "Best Tea/Bitter Tea (Alternate Realities on a Night Train to Calcutta)",
+    "Star Wars: Episode IV – A New Hope", "Who’s Afraid of Virginia Woolf?", "Eats, Shoots & Leaves",
+    "Harry Potter and the Philosopher’s Stone", "Moby-Dick; or, The Whale",
+    # Openers, abbreviations and inner stops that belong to the title.
+    "This Is Spinal Tap", "What Maisie Knew", "It", "She’s Gotta Have It", "Mr. Smith Goes to Washington",
+    "Dr. Strangelove or: How I Learned to Stop Worrying and Love the Bomb", "E.T. the Extra-Terrestrial",
+    "Mamma Mia! Here We Go Again", "Tick, Tick... Boom!", "Kill Bill: Vol. 1", "Cien años de soledad",
+    "2001: A Space Odyssey",
+]
+
+
+@pytest.mark.parametrize("span", IMMANUEL_SENTENCES)
+def test_a_sentence_around_a_title_is_not_a_title(span):
+    from galley.fixed_policy import title_format_problem
+    assert title_format_problem(span)
+    assert title_format_problem(span, span)
+
+
+@pytest.mark.parametrize("span, problem", [
+    (IMMANUEL_SENTENCES[0], "opens with “This”"),
+    (IMMANUEL_SENTENCES[2], "18 words"),
+    (IMMANUEL_SENTENCES[3], "opens with “She”"),
+    ("someone", "lowercase"),
+    ("the New York Times", "lowercase"),
+    ("The Idiot. She read it twice", "sentence ends inside"),
+    ("Ulysses.", "full stop"),
+    ("“Ulysses.”", "full stop"),
+])
+def test_title_format_problem_names_the_signal(span, problem):
+    from galley.fixed_policy import title_format_problem
+    assert problem in title_format_problem(span)
+
+
+@pytest.mark.parametrize("title", TITLES)
+def test_a_title_alone_passes_in_running_text_and_as_its_own_line(title):
+    from galley.fixed_policy import title_format_problem
+    assert title_format_problem(title) is None
+    assert title_format_problem(title, f"She had {title} open on the train again.") is None
+    if len(title.split()) <= 4:
+        assert title_format_problem(title, title) is None
+
+
+def test_a_whole_paragraph_of_more_than_a_few_words_is_not_a_title():
+    from galley.fixed_policy import title_format_problem
+    title = "Harry Potter and the Philosopher’s Stone"
+    assert "whole paragraph" in title_format_problem(title, title)
+    assert title_format_problem(title, "She read " + title + ".") is None
