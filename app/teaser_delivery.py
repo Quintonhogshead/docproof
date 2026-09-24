@@ -1,4 +1,4 @@
-"""Create a native Google Doc in one shared Author teasers folder."""
+"""One native Google Doc per book, in its author's subfolder of the shared author teasers folder."""
 from __future__ import annotations
 
 import json
@@ -6,10 +6,10 @@ from pathlib import Path
 import urllib.error
 from urllib.parse import urlparse
 
-from docproof.teasers.document import write_document
+from docproof.teasers.document import GUIDE_TITLE, write_document
+from docproof.teasers import guide
+from docproof.teasers.models import Draft, digest
 from docproof.teasers import AUTHOR_WARNING
-from importlib.resources import files, as_file
-import hashlib
 from .teasers import TeaserError, approval_issues, current_draft, lock
 from .watch import drive
 from .watch.settings import GOOGLE_KEY, WatchSettings, google_client
@@ -51,6 +51,31 @@ def ensure_folder(queue, token, *, opener=drive._open_url):
         if not confirmed.is_folder or confirmed.name != "author teasers":
             raise TeaserError("Google did not verify the exact author teasers folder name.")
         queue.configure(folder_id=folder_id)
+        return folder_id
+
+
+def author_name(task):
+    """The author part of a formatting file name: "North-Gandy - Book Original" → "North-Gandy"."""
+    return task["book_label"].split(" - ")[0].strip() or task["book_label"]
+
+
+def ensure_author_folder(queue, task, token, root_id, *, opener=drive._open_url):
+    """The author's subfolder of the shared folder, found by name or created once."""
+    name = author_name(task)
+    with lock(queue.root / "delivery.lock"):
+        saved = task.get("author_folder_id")
+        if saved:
+            folder = drive.get_file(token, saved, with_parents=True, opener=opener)
+            if folder.is_folder and folder.name == name and root_id in (folder.parents or []):
+                return saved
+        matches = [f for f in drive.find_children(token, root_id, name=name, folders_only=True, opener=opener)
+                   if f.name == name]
+        if len(matches) > 1:
+            raise TeaserError(f"There are several {name!r} folders in author teasers; keep one.")
+        folder_id = matches[0].id if matches else drive.create_folder(
+            token, root_id, name, app_properties={"docproof.teasers.author": name[:100]}, opener=opener)
+        task["author_folder_id"] = folder_id
+        queue.save(task)
         return folder_id
 
 
@@ -113,7 +138,8 @@ def verify_document(token, file_id, draft, folder_id, *, opener=drive._open_url)
     url = drive._url(f"{drive.API}/files/{file_id}/export", {"mimeType": "text/plain"})
     text = drive._call(drive._request(url, token), opener=opener, what="read back the teaser Google Doc").decode("utf-8-sig")
     normalized = " ".join(text.split())
-    required = [p for t in draft.teasers for p in t.paragraphs] + [AUTHOR_WARNING]
+    required = [p for t in draft.teasers for p in t.paragraphs] + [AUTHOR_WARNING, GUIDE_TITLE]
+    required += [text for row in guide.STORY + guide.CRAFT for text in row]
     if any(" ".join(value.split()) not in normalized for value in required):
         raise TeaserError("The Google Doc readback is missing some approved teaser content.")
     return metadata["webViewLink"]
@@ -127,10 +153,14 @@ def deliver(queue, task, home, *, token=None, opener=drive._open_url):
     issues = approval_issues(task)
     if issues:
         raise TeaserError("Upload withheld: " + "; ".join(issues))
-    token = token or token_for(home, opener=opener)
-    folder_id = ensure_folder(queue, token, opener=opener)
-    path = queue.root / task["id"] / ("Author teasers-" + task["drafts"][-1]["sha256"][:16] + ".docx")
-    draft = current_draft(task)
+    return publish(queue, task, token or token_for(home, opener=opener), current_draft(task), opener=opener)
+
+
+def publish(queue, task, token, draft, *, opener=drive._open_url):
+    """Upload the one document, verify it where it landed, and mark the book complete."""
+    folder_id = ensure_author_folder(queue, task, token, ensure_folder(queue, token, opener=opener),
+                                     opener=opener)
+    path = queue.root / task["id"] / ("Author teasers-" + digest(draft)[:16] + ".docx")
     if not path.exists():
         write_document(path, draft, book_label=task["book_label"])
     file_id = task.get("document_id")
@@ -148,50 +178,49 @@ def deliver(queue, task, home, *, token=None, opener=drive._open_url):
         task["document_id"] = file_id
         queue.save(task)
     task["document_url"] = verify_document(token, file_id, draft, folder_id, opener=opener)
-    deliver_guides(queue, task, token, folder_id, opener=opener)
     task["folder_url"] = "https://drive.google.com/drive/folders/" + folder_id
-    task["progress"] = "Five teasers and the editing guide are ready"
+    task["combined"] = True
+    task["progress"] = "The five teasers and the dos and don’ts are ready"
     task.pop("upload_session", None)
     task.pop("error", None)
     queue.save(task, "complete")
     return queue.get(task["id"])
 
 
-def deliver_guides(queue, task, token, folder_id, *, opener=drive._open_url):
-    """Copy the approved two-page guide per book; verify bytes and destination."""
-    for extension, mime in (("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-                            ("pdf", "application/pdf")):
-        resource = files("config.teasers").joinpath("dos-and-donts." + extension)
-        key = "guide_" + extension
-        file_id = task.get(key + "_id")
-        if not file_id:
-            matches = drive.search_files(token,
-                f"trashed = false and '{folder_id}' in parents and appProperties has "
-                f"{{ key='docproof.teaser.guide' and value='{task['id']}-{extension}' }}", opener=opener)
-            if len(matches) > 1:
-                raise TeaserError("Multiple guide files claim this book; check the destination folder.")
-            if matches:
-                file_id = matches[0].id
-            else:
-                with as_file(resource) as path:
-                    file_id = drive.upload(token, folder_id, path,
-                        name=task["book_label"] + " — Teaser dos and donts." + extension,
-                        app_properties={"docproof.teaser.guide": task["id"] + "-" + extension},
-                        mime_type=mime, opener=opener)
-            task[key + "_id"] = file_id
-            queue.save(task)
-        metadata = drive._json_call(drive._request(drive._url(f"{drive.API}/files/{file_id}",
-            {"fields": "id,mimeType,webViewLink,parents,trashed,md5Checksum", **drive.SHARED_DRIVE}), token),
-            opener=opener, what="verify the two-page teaser guide")
-        expected = hashlib.md5(resource.read_bytes()).hexdigest()
-        if (metadata.get("mimeType") != mime or metadata.get("trashed") or
-                folder_id not in metadata.get("parents", []) or metadata.get("md5Checksum") != expected or
-                not metadata.get("webViewLink")):
-            raise TeaserError("Google did not verify the complete two-page guide in the destination folder.")
-        task[key + "_url"] = metadata["webViewLink"]
-        if extension == "pdf":
-            task["guide_url"] = metadata["webViewLink"]
+def delivered_draft(task):
+    """The package a completed book was published with, under any workflow."""
+    if task.get("version", 1) >= 4:
+        return current_draft(task)
+    content = task["drafts"][-1]["content"]
+    story = task.get("storysheet") or {}
+    return Draft(title=story.get("title", ""), author=story.get("author", ""),
+                 teasers=[{k: t[k] for k in ("number", "angle", "paragraphs")} for t in content["teasers"]])
+
+
+SUPERSEDED = ("document_id", "guide_xlsx_id", "guide_pdf_id")
+
+
+def redeliver(queue, task, home, *, token=None, opener=drive._open_url):
+    """Replace a book delivered as a document plus separate guide files with the
+    one combined document in its author's folder. The old files go to the
+    Drive trash, where they can still be restored."""
+    if task["state"] != "complete":
+        raise TeaserError("Only a delivered book can be redelivered.")
+    token = token or token_for(home, opener=opener)
+    if not task.get("combined"):
+        draft = delivered_draft(task)
+        old = {k: task.pop(k) for k in SUPERSEDED if task.get(k)}
+        if old:
+            task.setdefault("superseded_files", []).append(old)
+        for key in ("document_url", "guide_url", "guide_xlsx_url", "guide_pdf_url", "upload_session"):
+            task.pop(key, None)
         queue.save(task)
+        task = publish(queue, task, token, draft, opener=opener)
+    for files_ in task.get("superseded_files", []):
+        for file_id in files_.values():
+            if file_id != task["document_id"]:
+                drive.trash(token, file_id, opener=opener)
+    return task
 
 
 def delivery_key(task):

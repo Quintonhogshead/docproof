@@ -109,7 +109,7 @@ app = ["static/*", "static/art/*", "static/canvas/*", "static/canvas/vendor/*"]
 "galley.practitioner" = ["*.md", "*.sh", "skills/*/*", "galley-bin/*", "fly/*", "references/*.md", "references/history/*.md"]
 config = ["*.yaml"]
 "config.galley" = ["*.json"]
-"config.teasers" = ["*.md", "*.xlsx", "*.pdf"]
+"config.teasers" = ["*.md"]
 # Stage and genre presets: `galley routes`/`--stage`/`--genre` resolve these
 # under resource_root(), so a wheel without them fails the plan gate on Fly
 # with "Unknown stage preset 'mechanical-wave'" and no book can run.
