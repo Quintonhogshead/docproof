@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import queue
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -1316,10 +1317,8 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
                      "but not yet prepared (a prior run may have failed).",
                      author)
         else:
-            log.info("Waiting: %s is flagged ready but %s.", author,
-                     missing_detail)
-            report.missing_source.append(
-                (author, f"flagged '{ready}' but {missing_detail}."))
+            _report_missing(report, state, ws, stage, author, missing_detail,
+                            dry_run=dry_run)
 
     if not manuscripts:
         _unprepared("its folder is empty" if not contents else
@@ -1454,12 +1453,32 @@ def _discover_nested(token: str, ws: WatchSettings, record, first: str,
                               report=report)
         report.waiting += 1
         return
-    ready = stage.ready_value
     detail = (f"none of its {len(book_folders)} book folder(s) holds a "
               f"'{last} - {stage.source_stage}'")
+    _report_missing(report, state, ws, stage, author, detail, dry_run=dry_run)
+    report.waiting += 1
+
+
+def _report_missing(report: TickReport, state: WatchState, ws: WatchSettings,
+                    stage: DiscoveryStage, author: str, detail: str, *,
+                    dry_run: bool) -> None:
+    """A ready author with no source file in the folder. Reported (and so
+    emailed) only once it has stayed missing `missing_source_grace_hours`:
+    people flip the status to ready before the manuscript is in Drive, so a
+    fresh flip is usually "not uploaded yet". A dry run previews everything."""
+    ready = stage.ready_value
+    grace = float(getattr(ws, "missing_source_grace_hours", 0) or 0)
+    if grace > 0 and not dry_run:
+        waited = state.missing_for(f"{stage.name}:{author.casefold()}",
+                                   datetime.now(timezone.utc))
+        state.save()
+        if waited < grace:
+            log.info("Waiting: %s is flagged ready but %s; giving the upload "
+                     "until %.0f h after it was first seen (%.1f h so far).",
+                     author, detail, grace, waited)
+            return
     log.info("Waiting: %s is flagged ready but %s.", author, detail)
     report.missing_source.append((author, f"flagged '{ready}' but {detail}."))
-    report.waiting += 1
 
 
 def _report_failed_intake(author: str, file: DriveFile, *,

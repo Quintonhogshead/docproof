@@ -31,6 +31,8 @@ from app.watch.state import WatchState
 
 from .conftest import FIXTURES
 from .fakes import TaggingProvider, drive_entry, fake_drive, http_error
+import json
+from datetime import datetime, timedelta, timezone
 
 FOLDER = "1AbCdEfGhIjKlMnOp"
 MANUSCRIPT = (FIXTURES / "googledoc.docx").read_bytes()
@@ -1264,7 +1266,7 @@ def test_require_source_label_waits_when_only_a_draft_is_present(tmp_path, provi
     """The labelled intake file is not there yet, so no draft is prepared by
     mistake — but the ready author is now reported as missing its Book Original,
     so a person is emailed to upload or rename it."""
-    ws = sub_ws(require_source_label=True)
+    ws = sub_ws(require_source_label=True, missing_source_grace_hours=0)
     opener = fake_drive({SUB: author_folder("Quinton Johnson"),
                          "m-1": in_sub("Johnson - Draft Two.docx")},
                         docx=MANUSCRIPT,
@@ -1281,7 +1283,7 @@ def test_a_ready_author_with_an_empty_folder_is_flagged_missing(tmp_path,
                                                                 provider):
     """Flagged ready with the folder still empty: nothing is prepared, and the
     author is reported so a person knows the Book Original never arrived."""
-    ws = sub_ws(require_source_label=True)
+    ws = sub_ws(require_source_label=True, missing_source_grace_hours=0)
     opener = fake_drive({SUB: author_folder("Quinton Johnson")},
                         docx=MANUSCRIPT,
                         hubspot={"Johnson": ready_author("Quinton", "Johnson")})
@@ -1367,7 +1369,7 @@ def test_a_placed_book_0_without_a_book_original_is_flagged_missing(tmp_path,
     "Oda - Book Original" for DocProof to work from. The output-looking name must
     not silently mark the author as handled: with no intake file present, the
     ready author is reported, not skipped. (The bug this fixes.)"""
-    ws = sub_ws(require_source_label=True)
+    ws = sub_ws(require_source_label=True, missing_source_grace_hours=0)
     opener = fake_drive(
         {SUB: author_folder("Ola Oda"),
          "m-1": in_sub("Oda - Book 0.docx")},   # a human's output name, no marker
@@ -1529,7 +1531,7 @@ def test_a_multi_book_author_with_no_book_original_is_flagged_missing(
     """Ready, and its book folders are there, but not one holds a
     "<surname> - Book Original": the author is reported missing its Book Original,
     the same as an empty author folder, so a person uploads or renames it."""
-    ws = sub_ws(require_source_label=True)
+    ws = sub_ws(require_source_label=True, missing_source_grace_hours=0)
     opener = fake_drive({
         SUB: author_folder("Quinton Johnson"),
         "bf-1": author_folder("Wolves of the Yard", parent=SUB),
@@ -2110,3 +2112,47 @@ def test_proofing_moves_the_record_by_default(tmp_path):
 
     assert hs_props(opener)["docproof"] == "Proofing Complete"
     assert rec.proof_hubspot_done is True
+
+
+# --- flagged ready before the manuscript is in Drive: a day's grace ------------
+
+def test_a_fresh_flip_with_no_book_original_waits_a_day_before_it_is_reported(tmp_path, provider):
+    # People flip the status to ready before the file is in Drive; the first
+    # passes after a flip are "not uploaded yet", not a problem worth an email.
+    ws = sub_ws(require_source_label=True)          # default grace: 24 h
+    opener = fake_drive({SUB: author_folder("Quinton Johnson")}, docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    first = run(tmp_path, ws, opener)
+    assert first.missing_source == [] and first.waiting >= 1
+
+    state_path = tmp_path / "state.json"
+    raw = json.loads(state_path.read_text())
+    [key] = raw["missing_since"]
+    day_ago = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+    raw["missing_since"][key]["first_seen"] = day_ago
+    state_path.write_text(json.dumps(raw))
+
+    later = run(tmp_path, ws, opener)
+    assert [a for a, _ in later.missing_source] == ["Quinton Johnson"]
+
+
+def test_a_file_that_arrives_inside_the_grace_is_never_reported(tmp_path, provider):
+    ws = sub_ws(require_source_label=True)
+    files = {SUB: author_folder("Quinton Johnson")}
+    opener = fake_drive(files, docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+    assert run(tmp_path, ws, opener).missing_source == []
+    opener.files["m-1"] = in_sub("Johnson - Book Original.docx")
+    report = run(tmp_path, ws, opener)
+    assert report.missing_source == [] and report.prepped == ["Johnson - Book Original.docx"]
+
+
+def test_a_gap_after_the_file_arrived_starts_the_count_again():
+    from app.watch.state import WatchState
+    state = WatchState("/nonexistent/state.json")
+    t0 = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    assert state.missing_for("proofing:quinton johnson", t0) == 0
+    assert state.missing_for("proofing:quinton johnson", t0 + timedelta(hours=30)) == 30
+    # seen again five days later: the file came and went; a new gap
+    assert state.missing_for("proofing:quinton johnson", t0 + timedelta(days=5)) == 0

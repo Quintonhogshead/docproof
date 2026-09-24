@@ -203,6 +203,9 @@ class WatchState:
         # by the HubSpot record id, not the file id: a book has not been
         # matched to a Drive export yet while it sits here.
         self.corrections_pending: dict[str, "PendingCorrections"] = {}
+        # Ready authors seen with no source file, keyed "<stage>:<author>":
+        # {"first_seen", "last_seen"} (ISO, UTC) — see `missing_for`.
+        self.missing_since: dict[str, dict[str, str]] = {}
 
     @classmethod
     def load(cls, path: str | Path) -> "WatchState":
@@ -246,7 +249,28 @@ class WatchState:
             except TypeError as e:
                 log.warning("Skipping malformed pending-corrections entry "
                             "%s (%s)", record_id, e)
+        for key, entry in (raw.get("missing_since") or {}).items():
+            if isinstance(entry, dict) and entry.get("first_seen") and entry.get("last_seen"):
+                state.missing_since[key] = {"first_seen": str(entry["first_seen"]),
+                                            "last_seen": str(entry["last_seen"])}
         return state
+
+    def missing_for(self, key: str, now: datetime) -> float:
+        """Hours this ready author has been missing its source file, counted
+        from the first pass that found it missing. A sighting more than two
+        days after the last one starts the count again: the file arrived in
+        between, and this is a new gap. Not saved until asked."""
+        entry = self.missing_since.get(key) or {}
+        try:
+            first = datetime.fromisoformat(entry["first_seen"])
+            last = datetime.fromisoformat(entry["last_seen"])
+        except (KeyError, ValueError):
+            first = last = now
+        if (now - last).total_seconds() > 2 * 86400:
+            first = now
+        self.missing_since[key] = {"first_seen": first.isoformat(),
+                                   "last_seen": now.isoformat()}
+        return (now - first).total_seconds() / 3600
 
     def get(self, file_id: str) -> FileRecord:
         """This file's record, empty if it has none. Not saved until asked."""
@@ -290,6 +314,7 @@ class WatchState:
             "files": {k: asdict(v) for k, v in self.files.items()},
             "corrections_pending": {k: asdict(v)
                                     for k, v in self.corrections_pending.items()},
+            "missing_since": self.missing_since,
         }, indent=2)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         staging = self.path.with_name(self.path.name + ".writing")
