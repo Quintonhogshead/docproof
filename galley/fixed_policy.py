@@ -442,6 +442,79 @@ def number_proposal_problem(before: str, replacement: str, category: str = "numb
     return None
 
 
+# Words a title-cased title keeps lowercase, English and the common articles
+# and particles of the languages whose titles a manuscript names.
+_TITLE_MINOR = frozenset(
+    "a an the and but or nor for so yet of in on at to by up as from with into onto upon over "
+    "via per vs than off out down like till unto amid "
+    "de del della di da du des la le les el los las lo il et y e en à au aux "
+    "von van der den dem und zu im am".split())
+# Openers that begin a sentence far more often than a title. "This Is Spinal
+# Tap" and "What Maisie Knew" stay titles: an opener counts only when the
+# words after it read as prose.
+_SENTENCE_OPENERS = frozenset(
+    "i he she it we they you this that these those there here what who why how when where which".split())
+# A period after one of these, an initial or an initialism ends no sentence.
+_ABBREVIATIONS = frozenset("mr mrs ms dr st jr sr mt ft vs vol no pt pp ch ed eds inc ltd co".split())
+_CLOSERS = re.escape("\"”’'»)]")
+# Dr. Strangelove's full title runs to 13 words; a longer span is a passage.
+_TITLE_MAX_WORDS = 15
+
+
+def _bare(word: str) -> str:
+    """A word without its surrounding punctuation or contraction ('She’s' -> 'She')."""
+    word = re.sub(r"^\W+|\W+$", "", word)
+    return re.sub(r"[’'](?:s|re|m|ll|d|ve)$|n[’']t$", "", word, flags=re.I)
+
+
+def _prose(words: list[str]) -> bool:
+    """A lowercase word a title-cased title would capitalize: running prose."""
+    bare = [_bare(word) for word in words]
+    return any(w and w[0].islower() and w.lower() not in _TITLE_MINOR for w in bare)
+
+
+def _sentence_stop(token: str, stop: str) -> bool:
+    """Whether `token` + `stop` ends a sentence rather than an abbreviation,
+    an initial ("J. R. R."), an initialism ("E.T.") or an ellipsis."""
+    if set(stop) <= {"!", "?"}:
+        return True
+    if stop != ".":
+        return False
+    bare = re.sub(r"^\W+", "", token)
+    return not ("." in bare or len(bare) == 1 or bare.lower() in _ABBREVIATIONS)
+
+
+def title_format_problem(span: str, paragraph: str = "") -> str | None:
+    """Why a title-italics span is not plausibly a title alone, or None.
+
+    A reader proposes long-work italics by quoting the title, and the gate
+    once checked only that the quote was roman. Immanuel (Book 1) came back
+    with whole sentences, a paragraph and a footnote italicized around the
+    title they named ("This is for me the spinning dreidel in
+    Inception."). `paragraph` is the text the span sits in; a span that is
+    the whole of a paragraph of more than a few words is a passage.
+    """
+    words = span.split()
+    if not words:
+        return "A title-italics span is empty"
+    if len(words) > _TITLE_MAX_WORDS:
+        return f"A title-italics span of {len(words)} words is a passage, not a title"
+    if paragraph and span.strip() == paragraph.strip() and len(words) > 4:
+        return "A title-italics span may not be a whole paragraph"
+    first = _bare(words[0])
+    if first.islower():
+        return "A title-italics span that begins with a lowercase word starts mid-sentence"
+    if first.lower() in _SENTENCE_OPENERS and _prose(words[1:]):
+        return f"A title-italics span that opens with “{first}” and reads as prose is a sentence"
+    for m in re.finditer(rf"(\S+?)([.!?]+)[{_CLOSERS}]*(?=\s+\S)", span):
+        if _sentence_stop(m.group(1), m.group(2)) and _prose(span[m.end():].split()):
+            return "A sentence ends inside the title-italics span"
+    m = re.search(rf"(\S+?)(\.+)[{_CLOSERS}]*$", span)
+    if m and _sentence_stop(m.group(1), m.group(2)):
+        return "A title-italics span may not carry the sentence's full stop"
+    return None
+
+
 def extract_numbers(paragraphs: Mapping[str, str]) -> list[dict]:
     """Extract complete surface forms with source offsets and local context.
 
@@ -547,4 +620,5 @@ __all__ = ["configuration", "EXCLUDED_LOCAL_TYPES", "LOCAL_CANDIDATE_TYPES",
            "HOUSE_RESPELL", "HOUSE_RESPELL_VARIANTS",
            "variant_respellings", "JEV_PRESCREEN_RULE", "JEV_PRESCREEN_THRESHOLD",
            "NUMBER_POLICY", "PROOFREADING_POLICY", "VERSE_CATEGORIES",
-           "extract_numbers", "number_proposal_problem", "poetry_samples", "verse_safe"]
+           "extract_numbers", "number_proposal_problem", "poetry_samples", "title_format_problem",
+           "verse_safe"]

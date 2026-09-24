@@ -570,8 +570,8 @@ def test_formatting_enters_correction_check_and_rejected_format_is_removed(make_
         if stage == "check_correction":
             assert payload["changes"][0]["format_proposals"][0]["format"] == "italic"
             return {"decisions": [{"id": "p", "verdict": "reject", "reason": "No house basis."}]}
-    flow = _flow(make_book, tmp_path, Readers(handler=handler))
-    row = _candidate(finding("p", "someone", "someone", "format"), flow.current, OPUS,
+    flow = _flow(make_book, tmp_path, Readers(handler=handler), text="He waited with Ulysses.")
+    row = _candidate(finding("p", "Ulysses", "Ulysses", "format"), flow.current, OPUS,
                      format_types={"format": "italic"})
     before = flow._apply("opus_read", [row])
     flow._checks("check", before)
@@ -1028,28 +1028,87 @@ def test_rejected_proposal_stage_evidence_is_stable_across_reader_completion_ord
     assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize("defect", ["scope", "control", "format_text", "format_unknown", "format_italic"])
+@pytest.mark.parametrize("defect", ["scope", "control", "format_text", "format_unknown", "format_italic",
+                                    "format_sentence"])
 def test_invalid_model_proposal_drops_only_bad_suggestion(make_book, tmp_path, defect):
-    flow = _flow(make_book, tmp_path)
-    bad = finding("p", "someone", "someone", "format")
+    flow = _flow(make_book, tmp_path, text="He waited with Ulysses.")
+    bad = finding("p", "Ulysses", "Ulysses", "format")
     options = {"format_types": {"format": "italic"},
                "formatting": {"p": [{"start": 0, "end": len(flow.current["p"]), "italic": False}]}}
     if defect == "scope":
         options["allowed_categories"] = {"broken_sentence"}
     elif defect == "control":
-        bad["replacement"] = "some\x00one"
+        bad["replacement"] = "Ulys\x00ses"
     elif defect == "format_text":
         bad["replacement"] = "Mary"
     elif defect == "format_unknown":
         options["formatting"]["p"][0]["italic"] = None
-    else:
+    elif defect == "format_italic":
         options["formatting"]["p"][0]["italic"] = True
+    else:
+        bad["quote"] = bad["replacement"] = flow.current["p"]
     assert flow._reader_candidate("opus_read", bad, flow.current, OPUS, **options) is None
     good = flow._reader_candidate("opus_read", finding("p", "waited", "waits"), flow.current, OPUS)
     flow._apply("opus_read", [good])
-    assert flow.current["p"] == "He waits for someone."
+    assert flow.current["p"] == "He waits with Ulysses."
     assert flow.formats == flow.questions == []
     assert flow.history[0]["rejected_proposal"]["finding"] == bad
+
+
+# Immanuel (Book 1): each span was roman, so the gate italicized the sentence,
+# footnote or paragraph around the title. The paragraphs around the second to
+# fourth spans are stand-ins; the spans themselves are the production quotes.
+IMMANUEL_ITALICS = [
+    ("This quote is attributed either to Pablo Picasso or Richard Kelly’s Donnie Darko.", None, "Donnie Darko"),
+    ("He remembers it now. This is for me the spinning dreidel in Inception.",
+     "This is for me the spinning dreidel in Inception.", "Inception"),
+    ("The breakfast scene in Alien where the baby alien tears its way out of John Hurt’s gut: th… It stays.",
+     "The breakfast scene in Alien where the baby alien tears its way out of John Hurt’s gut: th…", "Alien"),
+    ("She’s listening to Fall of Troy’s album Doppelgänger, the song Mouths Like Sidewinder Missles. Twice.",
+     "She’s listening to Fall of Troy’s album Doppelgänger, the song Mouths Like Sidewinder Missles.", "Doppelgänger"),
+    ("What are the giants called in Gulliver’s Travels? She can’t remember.", None, "Gulliver’s Travels"),
+]
+
+
+@pytest.mark.parametrize("paragraph, span, title", IMMANUEL_ITALICS)
+def test_title_italics_gate_takes_the_title_and_rejects_the_sentence_around_it(make_book, tmp_path,
+                                                                                 paragraph, span, title):
+    flow = _flow(make_book, tmp_path, text=paragraph)
+    options = {"format_types": {"format": "italic"},
+               "formatting": {"p": [{"start": 0, "end": len(paragraph), "italic": False}]}}
+    bad = finding("p", span or paragraph, span or paragraph, "format")
+    assert flow._reader_candidate("opus_read", bad, flow.current, OPUS, **options) is None
+    rejected = flow.history[-1]["rejected_proposal"]
+    assert rejected["finding"] == bad and rejected["status"] == "rejected_invalid_proposal"
+    assert "title-italics span" in rejected["reason"] or "sentence ends" in rejected["reason"]
+    good = flow._reader_candidate("opus_read", finding("p", title, title, "format"), flow.current, OPUS, **options)
+    assert (good["before"], good["format"]) == (title, "italic")
+    flow._apply("opus_read", [good])
+    assert [(f["before"], f["format"]) for f in flow.formats] == [(title, "italic")]
+
+
+def test_a_sentence_italic_is_dropped_at_application_whatever_path_it_took(make_book, tmp_path):
+    sentence = "This is for me the spinning dreidel in Inception."
+    flow = _flow(make_book, tmp_path, text="He remembers it now. " + sentence)
+    row = _candidate(finding("p", sentence, sentence, "format"), flow.current, OPUS,
+                     format_types={"format": "italic"})
+    before = flow._apply("opus_read", [row])
+    assert flow.current == before and flow.formats == []
+    assert flow.history[-1]["dropped"] == row
+    assert flow.history[-1]["reason"].startswith("guard: ") and "“This”" in flow.history[-1]["reason"]
+
+
+def test_a_screen_cannot_approve_a_sentence_as_a_title_italic(make_book, tmp_path):
+    sentence = "What are the giants called in Gulliver’s Travels? She can’t remember."
+    def answer(stage, model, payload, kwargs):
+        assert stage == "typed_screen"
+        return {"decisions": [ruling(s, "apply", s["proposals"][0]["replacement"]) for s in payload["sites"]]}
+    flow = _flow(make_book, tmp_path, Readers(handler=answer), text=sentence)
+    rows = [_candidate(finding("p", sentence, sentence, "format"), flow.current, SONNET,
+                       format_types={"format": "italic"})]
+    assert flow._adjudicate("typed", rows) == []
+    [rejected] = [h["rejected_proposal"] for h in flow.history if h.get("rejected_proposal")]
+    assert "whole paragraph" in rejected["reason"]
 
 
 @pytest.mark.parametrize("defect", ["blank_question", "blank_knowledge", "control", "missing_quote"])
@@ -1092,9 +1151,9 @@ def test_invalid_check_adjudication_restores_text_and_removes_disputed_format(ma
             return {"decisions": [{"id": "p", "verdict": "reject", "reason": "Unsafe edit."}]}
         if stage == "check_meaning_disputes":
             return {"decisions": [ruling({"id": "p"}, "apply", "Bad\x00paragraph.")]}
-    flow = _flow(make_book, tmp_path, Readers(handler=handler))
+    flow = _flow(make_book, tmp_path, Readers(handler=handler), text="He waited with Ulysses.")
     before = flow._apply("opus_read", [_candidate(finding("p", "waited", "waits"), flow.current, OPUS),
-                                  _candidate(finding("p", "someone", "someone", "format"), flow.current, OPUS,
+                                  _candidate(finding("p", "Ulysses", "Ulysses", "format"), flow.current, OPUS,
                                              format_types={"format": "italic"})])
     flow._checks("check", before)
     assert flow.current == before
