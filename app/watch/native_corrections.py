@@ -32,6 +32,10 @@ log = logging.getLogger("docproof.app.watch.native_corrections")
 
 NATIVE_MARKER = "docproof.native_corrections"
 NATIVE_JOB_PROP = "docproof.native_job"
+# Everything a correction round delivers except the new edition itself — the
+# spreadsheet, PDF, report and package — goes in this subfolder of the book's
+# Interior Design folder, so the folder a designer opens holds only books.
+NOTES_FOLDER = "InDesign Correction Designer notes"
 NATIVE_SOURCE_PROP = "docproof.native_source"
 NATIVE_STATUS_PROP = "docproof.native_status"
 _BOOK = re.compile(r"^(?P<surname>.+?)\s*[-\u2013\u2014]\s*Book\s*(?P<number>\d+(?:\.5)?)\s*\.indd$", re.I)
@@ -434,6 +438,19 @@ def _asset_sibling_folders(token: str, ws, record, folder_id: str, *, opener) ->
                 if entry.id != folder_id and entry.id not in sibling_ids:
                     sibling_ids.append(entry.id)
     return sibling_ids
+
+
+def notes_folder(token: str, folder_id: str, *, opener) -> str:
+    """The book's designer-notes subfolder, made the first time it is needed."""
+    found = drive.find_children(token, folder_id, name=NOTES_FOLDER, folders_only=True, opener=opener)
+    if found:
+        return sorted(found, key=lambda f: (f.modified_time, f.id))[0].id
+    return drive.create_folder(token, folder_id, NOTES_FOLDER, opener=opener)
+
+
+def upload_destinations(names: list[str], indd_name: str, folder_id: str, notes_id: str) -> dict[str, str]:
+    """The new INDD beside its source; every other artifact in the notes folder."""
+    return {name: folder_id if name == indd_name else notes_id for name in names}
 
 
 def _artifact_paths(result: dict, source: Path, out_dir: Path, next_name: str) -> list[tuple[Path, str]]:
@@ -1042,11 +1059,22 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
             _write_json(job_dir / "job.json", job)
             report.needs_human.append((source.name, reason))
             return
-        foreign = next((entry for entry in latest
-                        if entry.name in names
-                        and (entry.app_properties.get(NATIVE_JOB_PROP) != job["job_id"]
-                             or entry.app_properties.get("docproof.native_hash")
-                             != hashes.get(entry.name))), None)
+        indd_name = native_filename(source_info.surname, result_version)
+        if job.get("upload_folders"):
+            destinations = job["upload_folders"]
+        else:
+            notes_id = notes_folder(token, folder_id, opener=opener)
+            destinations = upload_destinations(names, indd_name, folder_id, notes_id)
+            job["upload_folders"] = destinations
+            _write_json(job_dir / "job.json", job)
+        remote = {folder_id: latest}
+        for dest in set(destinations.values()) - {folder_id}:
+            remote[dest] = drive.list_folder(token, dest, opener=opener)
+        placed = [entry for name in names for entry in remote[destinations[name]] if entry.name == name]
+        foreign = next((entry for entry in placed
+                        if (entry.app_properties.get(NATIVE_JOB_PROP) != job["job_id"]
+                            or entry.app_properties.get("docproof.native_hash")
+                            != hashes.get(entry.name))), None)
         if foreign is not None:
             reason = f"Drive already contains {foreign.name} without this native job receipt"
             job["status"] = "clarification_needed"
@@ -1057,14 +1085,14 @@ def _run_one(token: str, home: Path, ws, work, *, mock: bool, opener,
         for path, name in artifacts:
             if batch:
                 native_queue.assert_active(home, batch['batch_id'])
-            existing = next((f for f in latest if f.name == name and
+            existing = next((f for f in placed if f.name == name and
                              f.app_properties.get(NATIVE_JOB_PROP) == job["job_id"]
                              and f.app_properties.get("docproof.native_hash") == hashes[name]), None)
             if existing is not None:
                 job.setdefault("uploaded", {})[name] = existing.id
                 continue
             remote_control.require(home)
-            fid = drive.upload(token, folder_id, path, name=name,
+            fid = drive.upload(token, destinations[name], path, name=name,
                                mime_type="application/octet-stream",
                                app_properties={NATIVE_JOB_PROP: job["job_id"],
                                                NATIVE_SOURCE_PROP: source.id,

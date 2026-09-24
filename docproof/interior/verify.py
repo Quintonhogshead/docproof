@@ -183,3 +183,63 @@ def check_saved(baseline: dict, final: dict, edits: list[dict]) -> dict:
             "stories_checked": len(expected), "edits_checked": len(resolved),
             "pages_before": baseline.get("page_count", baseline.get("pages")),
             "pages_after": final.get("page_count", final.get("pages"))}
+
+
+def _final_offset(resolved: list[dict], story_id: str, offset: int) -> int:
+    """Where a baseline story offset sits in the corrected story's text."""
+    shift = 0
+    for row in resolved:
+        if row["story_id"] == story_id and row["end"] <= offset:
+            shift += len(row["replacement"]) - (row["end"] - row["start"])
+    return offset + shift
+
+
+def _page_at(story: dict | None, offset: int) -> dict | None:
+    """The page of the frame holding `offset` in a saved story, or None when
+    the snapshot has no frame map or the text sits in overset."""
+    frames = [f for f in (story or {}).get("frames") or [] if isinstance(f, dict)]
+    for index, frame in enumerate(frames):
+        start, end = frame.get("start"), frame.get("end")
+        if type(start) is not int or type(end) is not int:
+            continue
+        last = index == len(frames) - 1
+        if start <= offset < end or (last and offset == end):
+            if type(frame.get("page")) is int:
+                return {"page": frame["page"], "page_name": str(frame.get("page_name") or frame["page"])}
+            return None
+    return None
+
+
+def new_pages(baseline: dict, final: dict, edits: list[dict], plan: dict | None = None) -> dict:
+    """Pages of the corrected edition for each edit and each located note.
+
+    Returns ``{"edits": {edit_id: [page, ...]}, "instructions": {id: [page, ...]}}``
+    where a page is ``{"page": <1-based PDF page>, "page_name": <InDesign page
+    name>}``. Only meaningful once the saved text has been verified against the
+    same edits; callers show nothing when it has not.
+    """
+    _, resolved = prepare_edits(baseline, edits)
+    before, after = stories(baseline), stories(final)
+    found: dict[str, list[dict]] = {}
+    for row in resolved:
+        start = _final_offset(resolved, row["story_id"], row["start"])
+        page = _page_at(after.get(row["story_id"]), start)
+        if page and page not in found.setdefault(row["id"], []):
+            found[row["id"]].append(page)
+    notes: dict[str, list[dict]] = {}
+    for instruction in (plan or {}).get("instructions", []) or []:
+        if not isinstance(instruction, dict):
+            continue
+        iid = str(instruction.get("id", ""))
+        pages = []
+        for eid in instruction.get("edit_ids", []) or []:
+            pages += [p for p in found.get(eid, []) if p not in pages]
+        sid, text = str(instruction.get("locate_story_id") or ""), instruction.get("locate_text")
+        if not pages and sid in before and isinstance(text, str) and text:
+            at = before[sid]["text"].find(text)
+            if at >= 0:
+                page = _page_at(after.get(sid), _final_offset(resolved, sid, at))
+                if page:
+                    pages.append(page)
+        notes[iid] = pages
+    return {"edits": found, "instructions": notes}

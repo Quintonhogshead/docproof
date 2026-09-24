@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -73,6 +74,16 @@ def harness(tmp_path, monkeypatch):
                        'appProperties': app_properties, 'md5Checksum': hashlib.md5(body).hexdigest()}
         return fid
     monkeypatch.setattr(native.drive, 'upload', upload)
+    folders = {}
+    def find_children(_token, parent, *, name=None, folders_only=False, **kw):
+        return [DriveFile(fid, n, native.drive.FOLDER_MIME) for fid, (p, n) in folders.items()
+                if p == parent and n == name]
+    def create_folder(_token, parent, name, **kw):
+        fid = f'notes-{len(folders)}'
+        folders[fid] = (parent, name)
+        return fid
+    monkeypatch.setattr(native.drive, 'find_children', find_children)
+    monkeypatch.setattr(native.drive, 'create_folder', create_folder)
     monkeypatch.setattr(native.drive, '_json_call', lambda req, **kw: remote[urlparse(req.full_url).path.rsplit('/', 1)[-1]])
     def add(eid, urls=(), note='', pid='project', title='The Book'):
         events.append({'conversionId': eid, 'submittedAt': int(clock[0] * 1000), 'values': [
@@ -107,8 +118,14 @@ def test_seven_received_files_wait_three_hours_and_deliver_once(harness):
     assert job['book_identity']['author'] == 'Bill Sibley'  # proxy submitter did not select the book
     assert queue.status(h.tmp_path)['batches'][0]['state'] == 'delivered'
     assert queue.books(h.tmp_path)['project']['source_version'] == 4.5
+    # The new edition sits beside its source; everything else is designer notes.
+    assert h.folders == {'notes-0': ('interior', native.NOTES_FOLDER)}
+    parents = {row['name']: row['parents'] for row in h.remote.values()}
+    assert parents == {'Sibley - Book 4.5.indd': ['interior'], 'Sibley - Book 4.5.pdf': ['notes-0'],
+                       'Sibley - Book 4.5.report.json': ['notes-0'],
+                       'Sibley - Book 4.5.corrections.xlsx': ['notes-0']}
     h.run()
-    assert len(h.calls) == 1 and len(h.uploads) == 4
+    assert len(h.calls) == 1 and len(h.uploads) == 4 and len(h.folders) == 1
 
 
 @pytest.mark.parametrize('during_upload', [False, True])
@@ -427,3 +444,46 @@ def test_front_matter_must_confirm_title_and_author():
         verify_identity({'page_texts': [{'text': 'The Book\nSomebody Else'}]}, book)
     with pytest.raises(ValueError, match='title'):
         verify_identity({'page_texts': [{'text': 'Another Book\nBill Sibley'}]}, book)
+
+
+def _pass(h, ws):
+    report = TickReport()
+    native.run_stage('drive', h.tmp_path, ws, None, None, None, mock=False,
+                     opener=lambda *_: pytest.fail('Unexpected network request'), hs_token='hs', report=report)
+    return report
+
+
+@pytest.mark.parametrize('partial', [True, False])
+@pytest.mark.parametrize('outcome', ['designer_needed', 'clarification_needed'])
+def test_designer_work_delivers_with_its_notes_only_when_enabled(harness, monkeypatch, partial, outcome):
+    h = harness
+    ws = replace(h.ws, corrections_native_partial_upload=partial)
+    workflow = native._call_workflow
+    def unresolved(*args):
+        result = workflow(*args)
+        return {**result, 'status': outcome, 'reasons': ['Move the chapter opener to a new page.']}
+    monkeypatch.setattr(native, '_call_workflow', unresolved)
+    h.add('1', note='Please start chapter two on a new page.')
+    _pass(h, ws)
+    h.clock[0] += 10800
+    _pass(h, ws)
+    batch = queue.status(h.tmp_path)['batches'][0]
+    if partial:
+        assert batch['state'] == 'delivered' and len(h.uploads) == 4
+        parents = {row['name']: row['parents'] for row in h.remote.values()}
+        assert parents['Sibley - Book 4.5.indd'] == ['interior']
+        assert parents['Sibley - Book 4.5.corrections.xlsx'] == ['notes-0']
+        assert queue.books(h.tmp_path)['project']['source_version'] == 4.5
+    else:
+        assert batch['state'] == 'held' and not h.uploads
+
+
+def test_technical_block_is_held_even_when_designer_work_delivers(harness, monkeypatch):
+    h = harness
+    ws = replace(h.ws, corrections_native_partial_upload=True)
+    monkeypatch.setattr(native, '_call_workflow', lambda *a: {'status': 'technical_block', 'reasons': ['InDesign stopped.']})
+    h.add('1', note='Fix a typo.')
+    _pass(h, ws)
+    h.clock[0] += 10800
+    _pass(h, ws)
+    assert queue.status(h.tmp_path)['batches'][0]['state'] == 'held' and not h.uploads

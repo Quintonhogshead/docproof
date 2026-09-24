@@ -10,8 +10,8 @@ const { Workbook, SpreadsheetFile } = await import(pathToFileURL(require.resolve
 const data = JSON.parse(await fs.readFile(input, 'utf8'));
 const wb = Workbook.create();
 const columns = {
-  Corrections: ['Instruction', 'Status', 'Requested correction / source wording', 'Reason / remaining work', 'Saved text confirmed', 'Formatting confirmed', 'Source files', 'Source locations', 'Edit IDs', 'Evidence IDs', 'Final review coverage', 'Book outcome'],
-  Changes: ['Instruction', 'Edit', 'Story', 'Original text', 'Requested replacement', 'Saved replacement', 'Expected occurrences', 'Confirmed occurrences', 'Text confirmed', 'Formatting confirmed', 'Requested formatting', 'Original offsets (0-based)'],
+  Corrections: ['Instruction', 'Status', 'New INDD page', 'New PDF page', 'Requested correction / source wording', 'Reason / remaining work', 'Saved text confirmed', 'Formatting confirmed', 'Source files', 'Source locations', 'Edit IDs', 'Evidence IDs', 'Final review coverage', 'Book outcome'],
+  Changes: ['Instruction', 'Edit', 'New INDD page', 'New PDF page', 'Story', 'Original text', 'Requested replacement', 'Saved replacement', 'Expected occurrences', 'Confirmed occurrences', 'Text confirmed', 'Formatting confirmed', 'Requested formatting', 'Original offsets (0-based)'],
   Evidence: ['Evidence', 'Source file', 'Location', 'Required', 'Coverage', 'Instructions', 'Complete extracted content', 'Source ID'],
   Files: ['Slot', 'Submission', 'Filename', 'Receipt', 'Duplicate of slot', 'Bytes', 'SHA-256', 'File ID', 'Source IDs', 'Read errors'],
   'Run details': ['Check', 'Result'],

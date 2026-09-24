@@ -523,6 +523,24 @@ function storyPages(story) {
     }
     return pages;
 }
+// Which characters of the story each of its frames holds, and on which page.
+// Offsets are story character indexes, the same coordinates as story text and
+// edit offsets, so a saved edit can be placed on its page in the new edition.
+function storyFrames(story) {
+    var rows = [], frames;
+    try { frames = story.textContainers; } catch (e) { return rows; }
+    for (var i = 0; i < frames.length; i++) {
+        try {
+            var points = frames[i].insertionPoints;
+            if (!points.length) continue;
+            var page = null, name = "";
+            try { page = pageNumber(frames[i].parentPage); name = text(frames[i].parentPage.name); } catch (e2) {}
+            rows.push({start: Number(points[0].index), end: Number(points[-1].index),
+                       page: page, page_name: name});
+        } catch (e3) {}
+    }
+    return rows;
+}
 function pageTexts(doc) {
     var rows = [];
     for (var i = 0; i < doc.pages.length; i++) {
@@ -568,7 +586,8 @@ function audit(doc) {
         var paragraphs = paragraphInventory(story, out.style_inventory_errors);
         var sr = {id: text(story.id), text: text(story.contents),
                   style_ranges: attachParagraphStyles(styleRanges(story, out.style_inventory_errors), paragraphs),
-                  paragraphs: paragraphs, pages: storyPages(story)};
+                  paragraphs: paragraphs, pages: storyPages(story),
+                  frames: storyFrames(story)};
         out.stories.push(sr);
         if (over) out.overset.push(sr.id);
     }

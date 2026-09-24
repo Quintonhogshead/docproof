@@ -164,13 +164,21 @@ stops before the native apply stage.
 6. Compare every PDF page, then have Astra visually review changed pages and adjacent pages against the original evidence.
 7. Recheck the source revision and conflicting newer editions. Read back and verify the remote checksums and file identities before any HubSpot writeback or registry/book-version advance. Only then can the verified INDD, PDF, correction spreadsheet, JSON report, and portable package ZIP be delivered.
 
+Delivery keeps the book's `Interior Design` folder for books: only the new
+`Writer - Book 4.5.indd` is uploaded beside its source. The PDF, corrections
+spreadsheet, JSON report and package ZIP go into an `InDesign Correction
+Designer notes` subfolder of that same `Interior Design` folder, created the
+first time the book is delivered and reused afterwards. Every file is read back
+from its own destination before the book advances.
+
 The package contains the verified INDD/PDF/IDML, reports, copied links and document fonts, and original submitted attachments. Corrections requiring frame movement, artwork redesign, or unsupported layout operations remain explicitly recorded for a designer.
 
 ## Corrections spreadsheet
 
 Every new local workflow outcome includes `correction-audit.xlsx`, downloadable
-as **Corrections spreadsheet**. Delivery names it alongside the book, for example
-`Writer - Book 4.5.corrections.xlsx`, and includes it in the portable package.
+as **Corrections spreadsheet**. Delivery names it after the book, for example
+`Writer - Book 4.5.corrections.xlsx`, puts it in the designer-notes folder, and
+includes it in the portable package.
 The workbook is required and hash-protected: missing or changed spreadsheets
 block delivery, and a retry reuses the completed report rather than rewriting it.
 Older jobs without this artifact require reviewed recovery before delivery.
@@ -179,9 +187,20 @@ The report is built locally from saved evidence and receipts without another
 model request. Its five sheets contain:
 
 - **Corrections:** every planned instruction plus explicit uncovered evidence,
-  source wording, status, reason, saved-text/formatting confirmation and source references.
-- **Changes:** every proposed edit, exact before/replacement wording, confirmed
-  saved replacement, occurrence counts, formatting requests and story offsets.
+  its page in the new edition, source wording, status, reason,
+  saved-text/formatting confirmation and source references.
+- **Changes:** every proposed edit, its page in the new edition, exact
+  before/replacement wording, confirmed saved replacement, occurrence counts,
+  formatting requests and story offsets.
+
+**New INDD page** is the page's name in InDesign's Pages panel for the delivered
+`Book N.5` (a roman front-matter folio stays roman); **New PDF page** counts from
+the first page of its PDF. Both come from the reopened, saved document: each
+story records which characters every text frame holds and on which page, and an
+edit's corrected position is looked up there. They are filled only once the
+saved text is proven to be exactly the planned text. Designer and clarification
+items are placed by a short exact passage the planner quotes at the spot needing
+work; an item without one, or text left in overset, has no page.
 - **Evidence:** every extracted evidence unit, including context, source location,
   coverage and preserved correction wording/formatting metadata.
 - **Files:** every submitted attachment slot, including missing files and duplicate
@@ -215,12 +234,18 @@ runtime causes a technical block and cannot yield a verified delivery.
 | Outcome | Delivery behavior |
 | --- | --- |
 | Verified | Deliver the completed half-step Book artifacts after remote identity/checksum readback. |
-| Designer needed | Hold the batch and reserve its book; no partial automatic upload. |
-| Clarification needed | Hold the batch and record the unresolved questions; no partial automatic upload. |
+| Designer needed | With `corrections_native_partial_upload` on, deliver the Book N.5 and its designer notes (remaining work named by page); otherwise hold the batch and reserve its book. |
+| Clarification needed | As designer needed: delivered with its questions in the notes when that setting is on, otherwise held. |
 | Technical block | Keep the evidence and error locally, hold the batch, and do not publish an unverified document. |
 
-The native workflow is verified-only. Partial automatic upload is disabled even
-when a job has a usable local artifact. A `local_complete` result means the
+By default the native workflow is verified-only. Turning on
+`corrections_native_partial_upload` ("Also deliver books that still need a
+designer or clarification") delivers designer-needed and clarification-needed
+books too. Those outcomes exist only after the saved Book N.5 passed exact
+saved-text verification and the complete final review, so the delivered book
+contains exactly the planned text changes; the designer notes list everything
+still to do, by page. A technical block has no trustworthy edition and is
+always held. A `local_complete` result means the
 local verification finished while delivery was disabled; it remains a book
 reservation until an explicit reviewed delivery step. A `held` result likewise
 requires a person to resolve the stated issue. The worker never automatically
