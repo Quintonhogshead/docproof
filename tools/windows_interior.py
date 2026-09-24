@@ -30,7 +30,15 @@ def configure(home: Path):
             os.environ['PATH']=str(bundled)+os.pathsep+os.environ.get('PATH','')
 
 
-def rehearsal(home: Path, *, astra=False):
+def run_jsx(script: Path):
+    """Run one ExtendScript file in the desktop's InDesign through COM."""
+    from docproof.platform_io import run_bounded
+    return run_bounded([sys.executable, '-m', 'docproof.interior.com_runner', str(script)],
+                       capture_output=True, encoding='utf-8', timeout=90,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+
+
+def rehearsal(home: Path, *, astra=False, run_jsx=run_jsx, label='Windows'):
     from docproof.interior.native import InDesignWorker
     from docproof.interior.workflow import digest, run_local, save_json
     from docproof.interior.verify import prepare_edits, check_saved
@@ -39,7 +47,7 @@ def rehearsal(home: Path, *, astra=False):
         check_login()
     work = home / 'rehearsals' / uuid.uuid4().hex
     work.mkdir(parents=True)
-    source = work / 'Windows Test - Book 1.indd'
+    source = work / f'{label} Test - Book 1.indd'
     script = work / 'create-test.jsx'
     # A disposable document, always closed; user documents are never selected.
     script.write_text('''var d=null; try {
@@ -48,16 +56,13 @@ def rehearsal(home: Path, *, astra=False):
       d.documentPreferences.pageWidth="6in"; d.documentPreferences.pageHeight="9in";
       d.documentPreferences.facingPages=false;
       var f=d.pages[0].textFrames.add(); f.geometricBounds=["36pt","36pt","500pt","390pt"];
-      f.contents="Windows correction rehearsal\\rThis sentnce describes a quiet river.\\rThe original edition must remain unchanged.";
+      f.contents="%s correction rehearsal\\rThis sentnce describes a quiet river.\\rThe original edition must remain unchanged.";
       f.parentStory.texts[0].appliedFont=app.fonts.itemByName("Arial\\tRegular");
       f.parentStory.texts[0].pointSize=12;
       d.save(out); "OK";
     } finally { if(d!==null) d.close(SaveOptions.NO); }
-    ''' % json.dumps(str(source), ensure_ascii=True), encoding='ascii')
-    from docproof.platform_io import run_bounded
-    r = run_bounded([sys.executable, '-m', 'docproof.interior.com_runner', str(script)],
-                       capture_output=True, encoding='utf-8', timeout=90,
-                       creationflags=subprocess.CREATE_NO_WINDOW)
+    ''' % (json.dumps(str(source), ensure_ascii=True), label), encoding='ascii')
+    r = run_jsx(script)
     if r.returncode or not source.is_file():
         raise RuntimeError('InDesign could not create the rehearsal document: ' + r.stderr[-800:])
     original_hash = digest(source)
@@ -74,7 +79,7 @@ def rehearsal(home: Path, *, astra=False):
                {'id':'style', 'story_id':story['id'], 'find':'quiet river', 'replacement':'quiet river', 'expected_count':1, 'font_style':'Italic'}]
         prepare_edits(baseline, raw)
         edits = raw
-        output = work / 'Windows Test - Book 2.indd'
+        output = work / f'{label} Test - Book 2.indd'
         worker.apply(source, output, edits, work / 'native-job')
         final = worker.verify(output, work / 'reopened')
         verification = check_saved(baseline, final, edits)

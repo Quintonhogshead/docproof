@@ -383,6 +383,16 @@ def _artifact_ref(value: dict, keys: tuple[str, ...]) -> str | None:
     return None
 
 
+# The desktops that run the native worker: the Windows laptop and the Mac
+# corrections computer. Both launch the read-only evidence MCP server beside
+# the Codex CLI; anywhere else (CI, the Fly image) keeps the plain file prompt.
+_EVIDENCE_TOOL_PLATFORMS = frozenset({'win32', 'darwin'})
+
+
+def _scoped_tools() -> bool:
+    return sys.platform in _EVIDENCE_TOOL_PLATFORMS
+
+
 def _evidence_tools(root: Path, documents: dict[str, Path], packet: dict, final: dict | None = None) -> str:
     from .evidence_server import write_manifest
     images = {}
@@ -436,7 +446,7 @@ class AstraReviewer:
                        'An unambiguous submitted strike-through deletion is text evidence, not a layout change.\n')
         if self.planning_note:
             prompt += '\n' + self.planning_note + '\n'
-        scoped_tools = sys.platform == 'win32'
+        scoped_tools = _scoped_tools()
         if scoped_tools:
             prompt += _evidence_tools(Path(work_dir), {'packet': packet_path, 'baseline': snapshot_path}, packet, snapshot)
             prompt += ('Limit each correction to its indicated passage. Do not broaden a quoted correction to other occurrences '
@@ -529,7 +539,7 @@ class AstraReviewer:
                                 Path(baseline_pdf) if baseline_pdf else baseline_json_path,
                                 Path(final_pdf) if final_pdf else final_json_path)
         prompt += f'\nCompact review summary: {summary_path}.\n'
-        scoped_tools = sys.platform == 'win32'
+        scoped_tools = _scoped_tools()
         if scoped_tools:
             prompt += _evidence_tools(root, {'packet': packet_path, 'baseline': baseline_json_path,
                                             'final': final_json_path, 'review-summary': summary_path}, packet, final)
