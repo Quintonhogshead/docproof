@@ -184,6 +184,7 @@ def publish(queue, task, token, draft, *, opener=drive._open_url):
     task["document_url"] = verify_document(token, file_id, draft, folder_id, opener=opener)
     task["folder_url"] = "https://drive.google.com/drive/folders/" + folder_id
     task["combined"] = True
+    task["layout"] = LAYOUT
     task["progress"] = "The five teasers and the dos and don’ts are ready"
     task.pop("upload_session", None)
     task.pop("error", None)
@@ -202,8 +203,9 @@ def delivered_draft(task):
 
 
 SUPERSEDED = ("document_id", "guide_xlsx_id", "guide_pdf_id")
-# Bump when the document's contents change shape; version 2 added the dos and don'ts.
-LAYOUT = 2
+# Bump when the document's contents change; redeliver() then rebuilds every delivered book.
+# 2 added the dos and don'ts; 3 removed its attribution paragraph.
+LAYOUT = 3
 
 
 def redeliver(queue, task, home, *, token=None, opener=drive._open_url):
@@ -213,7 +215,7 @@ def redeliver(queue, task, home, *, token=None, opener=drive._open_url):
     if task["state"] != "complete":
         raise TeaserError("Only a delivered book can be redelivered.")
     token = token or token_for(home, opener=opener)
-    if not task.get("combined"):
+    if not (task.get("combined") and task.get("layout") == LAYOUT):
         draft = delivered_draft(task)
         old = {k: task.pop(k) for k in SUPERSEDED if task.get(k)}
         if old:

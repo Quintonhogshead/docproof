@@ -498,6 +498,7 @@ def test_one_document_holds_five_unranked_options_then_the_two_page_guide(tmp_pa
     assert len(doc.tables) == 2 and text.index("Option 5") < text.index("Dos and don’ts for your teaser: the story")
     assert all(value in cells for row in guide.STORY + guide.CRAFT for value in row)
     assert "Sol" not in " ".join(cells) and "DeepSeek" not in " ".join(cells)
+    assert "Reedsy" not in text and "BookBub" not in text
     assert text.startswith("The Ferry Ledger\nAda Smith") and AUTHOR_WARNING in text
     assert text.index("Option 1") < text.index("Option 2") < text.index("Option 5")
     assert all(p in text for t in draft.teasers for p in t.paragraphs)
@@ -609,7 +610,7 @@ def test_books_delivered_as_separate_files_are_redelivered_as_one_document(queue
     published, trashed = [], []
     def publish(queue_, task_, token, draft, **kw):
         published.append(draft)
-        task_.update(document_id="new-doc", combined=True)
+        task_.update(document_id=f"new-doc-{len(published)}", combined=True)
         queue_.save(task_, "complete")
         return queue_.get(task_["id"])
     monkeypatch.setattr(delivery, "publish", publish)
@@ -618,8 +619,16 @@ def test_books_delivered_as_separate_files_are_redelivered_as_one_document(queue
     assert published[0].title == "The Ferry Ledger" and published[0].teasers == package().teasers
     assert trashed == ["old-doc", "old-xlsx", "old-pdf"] and "guide_url" not in task
     # Running it again publishes nothing new and never trashes the combined document.
+    task["layout"] = delivery.LAYOUT
+    queue.save(task)
+    delivery.redeliver(queue, queue.get(task["id"]), queue.root.parent, token="google")
+    assert len(published) == 1 and "new-doc-1" not in trashed
+    # A combined document in an older layout is rebuilt, and only then replaced.
+    task = queue.get(task["id"])
+    task["layout"] = delivery.LAYOUT - 1
+    queue.save(task)
     delivery.redeliver(queue, task, queue.root.parent, token="google")
-    assert len(published) == 1 and "new-doc" not in trashed
+    assert len(published) == 2 and trashed[-1] == "new-doc-1" and "new-doc-2" not in trashed
 
 
 def test_redelivery_never_reuses_an_old_layout_or_a_replaced_upload(queued, monkeypatch, tmp_path):

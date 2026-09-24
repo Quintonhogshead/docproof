@@ -1,7 +1,8 @@
 """The two-page dos and don'ts that closes every author's teaser document.
 
-House guidance for authors revising a teaser, distilled on 2026-09-20 from the
-sources listed at the end and edited for authors on 2026-09-24. Page one is
+House guidance for authors revising a teaser, distilled on 2026-09-20 from Reedsy,
+Jane Friedman/IngramSpark and BookBub craft guidance, and edited for authors
+on 2026-09-24. The author document carries no attribution paragraph. Page one is
 about the story a teaser tells; page two is about the writing and revision."""
 
 INTRODUCTION = ("Use these pages when you revise the option you choose. Each row pairs "
@@ -77,8 +78,3 @@ APPLYING = [
      "These pages cover the teaser itself. Endorsements, the author biography, the barcode, and retail "
      "details are separate parts of the cover."),
 ]
-
-SOURCES = ("Adapted from Reedsy, “How to Write a Book Blurb” and “How to Build a Book Back Cover”; "
-           "Jane Friedman and IngramSpark on compelling back-cover copy; and BookBub on blurb anatomy, "
-           "copy tests, and how its editors write featured-deal blurbs. BookBub’s findings concern short "
-           "promotional emails: their craft lessons inform this guide, their numbers do not describe print covers.")
