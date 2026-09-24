@@ -258,8 +258,10 @@ live Fly site immediately, without reverting or redeploying code:
 fly secrets set DOCPROOF_EXAMINATION_GRAPH=0 -a atmosphere-docproof
 ```
 
-Fly restarts the app with the kill switch set. It overrides the YAML default
-and any old job's per-run feature choice. To re-enable the shipped setting:
+Fly restarts the app with the kill switch set: every machine, the Galley
+`agent` included, since secrets are app-wide and `fly secrets` has no
+process-group filter. It overrides the YAML default and any old job's per-run
+feature choice. To re-enable the shipped setting:
 
 ```bash
 fly secrets unset DOCPROOF_EXAMINATION_GRAPH -a atmosphere-docproof

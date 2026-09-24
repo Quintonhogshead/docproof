@@ -50,17 +50,31 @@ harness itself reads.
    | `google_inbox_refresh` | `DOCPROOF_GOOGLE_INBOX_REFRESH` | Quinton's inbox, read-only |
    | `fly_token` | `FLY_API_TOKEN` | optional — the `fly` CLI may already be logged in |
 
-5. **`DOCPROOF_WARDEN_TOKEN` must also be set as a Fly secret on the `app`
-   process group** — the server side of the same bearer:
+5. **`DOCPROOF_WARDEN_TOKEN` must also be set as a Fly secret** — the server
+   side of the same bearer. Use the same value the Mini's Keychain (or
+   environment) holds under `warden_token`.
+
+   **Setting any Fly secret restarts every machine in the app, the Galley
+   `agent` included.** Fly secrets are app-wide, and neither `fly secrets set`
+   nor `fly secrets import` takes a process-group flag (flyctl 0.4.107). On
+   2026-09-24, importing this very token rolled both the `agent` and the `app`
+   machine. So check that Galley is idle first — the Warden's `status` shows
+   Galley's phase, or confirm the agent has no claimed book — and then:
 
    ```
-   fly secrets set DOCPROOF_WARDEN_TOKEN="$TOKEN" -a atmosphere-docproof
+   echo "DOCPROOF_WARDEN_TOKEN=$TOKEN" | fly secrets import -a atmosphere-docproof
    ```
 
-   Use the same value the Mini's Keychain (or environment) holds under
-   `warden_token`. This does not trigger the agent-group release Galley
-   worries about — `fly secrets set` on the `app` group alone redeploys only
-   `app`, per `fly-deploy-app-vs-agent.md`.
+   If Galley is mid-book, stage the secret instead. It is stored without
+   restarting anything and takes effect at the next deploy (the next push to
+   `main`, which releases `app` only):
+
+   ```
+   echo "DOCPROOF_WARDEN_TOKEN=$TOKEN" | fly secrets import --stage -a atmosphere-docproof
+   ```
+
+   Until that deploy the server does not know the token, so the Warden's
+   `/api/watch/warden*` calls are refused.
 
 6. **`docproof-warden init`** — writes `~/.docproof-warden/warden.yaml` with
    defaults if one is not already there, and prints which of the secrets
