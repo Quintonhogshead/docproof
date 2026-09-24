@@ -622,6 +622,28 @@ def test_books_delivered_as_separate_files_are_redelivered_as_one_document(queue
     assert len(published) == 1 and "new-doc" not in trashed
 
 
+def test_redelivery_never_reuses_an_old_layout_or_a_replaced_upload(queued, monkeypatch, tmp_path):
+    from app import teaser_delivery as delivery
+    queue, _, task = queued
+    task = drafted(queue, task)
+    draft = Draft.model_validate(task["drafts"][-1]["content"])
+    task = accept_adjudication(queue, task, {"ruling": ruling_for(draft).model_dump()})
+    # The first delivery's cached file, named by the draft hash alone, predates the guide.
+    stale = queue.root / task["id"] / ("Author teasers-" + task["drafts"][-1]["sha256"][:16] + ".docx")
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_bytes(b"old layout")
+    task["superseded_files"] = [{"document_id": "bad-upload"}]
+    uploaded = []
+    monkeypatch.setattr(delivery, "ensure_folder", lambda *a, **k: "root")
+    monkeypatch.setattr(delivery, "ensure_author_folder", lambda *a, **k: "smith")
+    monkeypatch.setattr(delivery.drive, "search_files", lambda *a, **k: [SimpleNamespace(id="bad-upload")])
+    monkeypatch.setattr(delivery, "resume_import",
+                        lambda queue, task, token, folder, path, **k: uploaded.append(Path(path).read_bytes()) or "new")
+    monkeypatch.setattr(delivery, "verify_document", lambda *a, **k: "https://docs.google.com/document/d/new")
+    task = delivery.publish(queue, task, "google", draft)
+    assert task["document_id"] == "new" and uploaded and uploaded[0] != b"old layout"
+
+
 def test_google_upload_recovers_lost_completion_without_second_document(queued, tmp_path):
     from app.teaser_delivery import resume_import
     queue, _, task = queued
