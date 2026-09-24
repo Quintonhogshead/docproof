@@ -160,7 +160,9 @@ def publish(queue, task, token, draft, *, opener=drive._open_url):
     """Upload the one document, verify it where it landed, and mark the book complete."""
     folder_id = ensure_author_folder(queue, task, token, ensure_folder(queue, token, opener=opener),
                                      opener=opener)
-    path = queue.root / task["id"] / ("Author teasers-" + digest(draft)[:16] + ".docx")
+    # The layout is part of the name: a document built before the guide was added never passes for one.
+    path = queue.root / task["id"] / ("Author teasers-" + digest({"draft": draft.model_dump(),
+                                                                   "layout": LAYOUT})[:16] + ".docx")
     if not path.exists():
         write_document(path, draft, book_label=task["book_label"])
     file_id = task.get("document_id")
@@ -169,6 +171,8 @@ def publish(queue, task, token, draft, *, opener=drive._open_url):
         matches = drive.search_files(token,
             f"trashed = false and '{folder_id}' in parents and appProperties has "
             f"{{ key='docproof.teaser' and value='{delivery_key(task)}' }}", opener=opener)
+        replaced = {f for old in task.get("superseded_files", []) for f in old.values()}
+        matches = [m for m in matches if m.id not in replaced]
         if len(matches) > 1:
             raise TeaserError("Multiple documents claim this teaser run; review the destination folder.")
         if matches:
@@ -198,6 +202,8 @@ def delivered_draft(task):
 
 
 SUPERSEDED = ("document_id", "guide_xlsx_id", "guide_pdf_id")
+# Bump when the document's contents change shape; version 2 added the dos and don'ts.
+LAYOUT = 2
 
 
 def redeliver(queue, task, home, *, token=None, opener=drive._open_url):
