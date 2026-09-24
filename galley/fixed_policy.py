@@ -615,10 +615,40 @@ def poetry_samples(paragraphs: Mapping[str, str], count: int = 6,
     return result
 
 
+# A sentence ends and another begins on the same line. Soft line breaks are
+# never a sentence boundary here: a stanza of one-sentence lines is verse.
+_SENTENCE_BREAK = re.compile(r"[.!?][\"'”’)\]]*[ \t]+[\"'“‘(\[]*[A-Z]")
+_CHAPTER_HEADING = re.compile(
+    r"\s*chapter\s+(\d+|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve"
+    r"|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\b", re.I)
+# More than this share of prose-shaped paragraphs, or any chapter heading,
+# and a whole-book poetry verdict drawn from a few samples is not trusted.
+PROSE_SHARE_LIMIT = 0.10
+
+
+def prose_shape(paragraphs: Mapping[str, str]) -> dict:
+    """How much of a manuscript is shaped like prose, whatever its line breaks.
+
+    A paragraph is prose-shaped when one of its lines is longer than the
+    short-line limit poetry_samples uses and holds two sentences. Black
+    (2026-09-24) was a memoir of 2,182 paragraphs, 1,392 soft line breaks and
+    33 "Chapter N:" headings that six samples called poetry; the verse route
+    then skipped every spelling, grammar and whole-book reading."""
+    items = [value for value in paragraphs.values() if value.strip()]
+    prose = sum(any(len(line.strip()) > 90 and _SENTENCE_BREAK.search(line)
+                    for line in value.splitlines()) for value in items)
+    chapters = sum(len(value.strip()) <= 80 and bool(_CHAPTER_HEADING.match(value)) for value in items)
+    share = prose / len(items) if items else 0.0
+    return {"paragraphs": len(items), "prose_paragraphs": prose, "chapter_headings": chapters,
+            "prose_share": round(share, 4),
+            "prose_shaped": share > PROSE_SHARE_LIMIT or chapters > 0}
+
+
 __all__ = ["configuration", "EXCLUDED_LOCAL_TYPES", "LOCAL_CANDIDATE_TYPES",
            "DIAGNOSTIC_ONLY_TYPES", "VARIANT_RESPELL_US", "VARIANT_SPELLING_CATEGORY",
            "HOUSE_RESPELL", "HOUSE_RESPELL_VARIANTS",
            "variant_respellings", "JEV_PRESCREEN_RULE", "JEV_PRESCREEN_THRESHOLD",
            "NUMBER_POLICY", "PROOFREADING_POLICY", "VERSE_CATEGORIES",
-           "extract_numbers", "number_proposal_problem", "poetry_samples", "title_format_problem",
+           "extract_numbers", "number_proposal_problem", "poetry_samples", "PROSE_SHARE_LIMIT", "prose_shape",
+           "title_format_problem",
            "verse_safe"]

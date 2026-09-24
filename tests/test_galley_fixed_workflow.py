@@ -843,6 +843,57 @@ def test_poetry_runs_the_verse_sweep_and_no_prose_collector(make_book, tmp_path,
     assert saved["evidence"]["verse_local"]["proposal_count"] == 0
 
 
+def _memoir():
+    """Black's shape: chapter headings, prose paragraphs, soft-broken lines."""
+    prose = ("I was accidently diagnosed that winter, and nobody in the family would say the word out loud. "
+             "My mother called it a phase. My father called it nothing at all.")
+    lyric = "A song lyrics\nstuck in my head\nall the way home"
+    return ["Chapter 1: Borderline", prose, lyric, prose.replace("winter", "spring"),
+            "Chapter 2: Apparently", lyric, prose.replace("winter", "summer")]
+
+
+def _collection():
+    return ["The Harbor", "Salt on the rail.\nGulls argue the tide.\nI keep my hands still.",
+            "Morning", "The kettle knows\nbefore I do\nthat the house is cold.",
+            "Night Shift", "Stars, then streetlights.\nThen nothing. Then you."]
+
+
+def test_a_prose_shaped_book_is_not_sent_down_the_verse_route_on_a_sample_verdict(make_book, tmp_path):
+    """Black (2026-09-24): six samples called a memoir poetry and it skipped
+    every spelling, grammar and whole-book reading. A book with chapter
+    headings or prose-shaped paragraphs is classified paragraph by paragraph."""
+    from galley.fixed_policy import prose_shape
+    assert prose_shape(dict(enumerate(_memoir())))["prose_shaped"]
+
+    def handler(stage, model, payload, kwargs):
+        if stage == "poetry_sections":
+            return {"paragraphs": [{"id": row["id"], "poetry": "\n" in row["text"]} for row in payload]}
+
+    readers = Readers(poetry=True, handler=handler)
+    result = FixedWorkflow(make_book(*_memoir()), tmp_path / "memoir", calls=readers).run()
+    assert not result["poetry_only"]
+    classification = json.loads((tmp_path / "memoir/stages/poetry.json").read_text())["evidence"]["classification"]
+    assert classification["classification"] == "mixed" and classification["downgraded_from"] == "poetry"
+    assert classification["shape"]["chapter_headings"] == 2
+    stages = {x["stage"] for x in readers.events}
+    assert {"poetry_sections", "story_sheet", "astra"} <= stages
+    assert [row["stage"] for row in result["stages"]][-1] == "astra_gate"
+
+
+def test_a_poetry_collection_keeps_the_verse_route_and_says_so_before_delivery(make_book, tmp_path):
+    from galley.fixed_documents import ROUTED_AS_VERSE, _report, package_outcome
+    from galley.fixed_policy import prose_shape
+    shape = prose_shape(dict(enumerate(_collection())))
+    assert not shape["prose_shaped"] and shape["prose_paragraphs"] == 0
+    readers = Readers(poetry=True)
+    result = FixedWorkflow(make_book(*_collection()), tmp_path / "collection", calls=readers).run()
+    assert result["poetry_only"]
+    assert "poetry_sections" not in {x["stage"] for x in readers.events}
+    outcome, reason = package_outcome(result)
+    assert outcome == "done" and reason.startswith(ROUTED_AS_VERSE)
+    assert ROUTED_AS_VERSE in _report(result, [])
+
+
 def test_local_collector_cannot_emit_a_candidate_in_embedded_poetry(
         make_book, tmp_path, monkeypatch):
     def handler(stage, model, payload, kwargs):
