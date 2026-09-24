@@ -492,6 +492,14 @@ def set_app_properties(token: str, file_id: str, props: dict[str, str], *,
     _json_call(request, opener=opener, what="mark a file as done")
 
 
+def trash(token: str, file_id: str, *, opener=_open_url) -> None:
+    """Move a file to Drive's trash, where its owner can still restore it."""
+    url = _url(f"{API}/files/{file_id}", {"fields": "id", **SHARED_DRIVE})
+    request = _request(url, token, data=json.dumps({"trashed": True}).encode(), method="PATCH",
+                       content_type="application/json")
+    _json_call(request, opener=opener, what="move a replaced file to the trash")
+
+
 def update_media(token: str, file_id: str, path: str | Path, *,
                  mime_type: str = DOCX_MIME, opener=_open_url) -> None:
     """Replace a file's contents in place, keeping its id.

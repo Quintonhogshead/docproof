@@ -450,10 +450,10 @@ def test_worker_runs_a_book_from_queue_to_delivery(queued, tmp_path, monkeypatch
 
     monkeypatch.setattr(delivery, "token_for", lambda home, **kw: "google")
     monkeypatch.setattr(delivery, "ensure_folder", lambda *a, **k: "folder")
+    monkeypatch.setattr(delivery, "ensure_author_folder", lambda *a, **k: "smith")
     monkeypatch.setattr(delivery.drive, "search_files", lambda *a, **k: [])
     monkeypatch.setattr(delivery, "resume_import", lambda *a, **k: "doc")
     monkeypatch.setattr(delivery, "verify_document", lambda *a, **k: "https://docs.google.com/document/d/doc")
-    monkeypatch.setattr(delivery, "deliver_guides", lambda *a, **k: None)
     first = package(t4=teaser(4, lead="Finn forged the will. "))
     w, _ = fake_writer(first, package(t4=teaser(4, 175)))
 
@@ -489,10 +489,15 @@ def test_old_workers_are_told_to_upgrade(tmp_path, monkeypatch):
 
 # ---- the document and Google delivery -------------------------------------
 
-def test_document_has_the_warning_five_unranked_options_and_nothing_internal(tmp_path):
+def test_one_document_holds_five_unranked_options_then_the_two_page_guide(tmp_path):
+    from docproof.teasers import guide
     draft = package()
     doc = Document(write_document(tmp_path / "teasers.docx", draft, book_label="Smith - Book Original"))
     text = "\n".join(p.text for p in doc.paragraphs)
+    cells = [c.text for table in doc.tables for row in table.rows for c in row.cells]
+    assert len(doc.tables) == 2 and text.index("Option 5") < text.index("Dos and don’ts for your teaser: the story")
+    assert all(value in cells for row in guide.STORY + guide.CRAFT for value in row)
+    assert "Sol" not in " ".join(cells) and "DeepSeek" not in " ".join(cells)
     assert text.startswith("The Ferry Ledger\nAda Smith") and AUTHOR_WARNING in text
     assert text.index("Option 1") < text.index("Option 2") < text.index("Option 5")
     assert all(p in text for t in draft.teasers for p in t.paragraphs)
@@ -511,15 +516,18 @@ def test_delivery_requires_adjudication_and_is_idempotent(queued, monkeypatch):
     draft = Draft.model_validate(task["drafts"][-1]["content"])
     task = accept_adjudication(queue, task, {"ruling": ruling_for(draft).model_dump()})
     calls = []
-    monkeypatch.setattr(delivery, "ensure_folder", lambda *a, **kw: "folder")
+    monkeypatch.setattr(delivery, "ensure_folder", lambda *a, **kw: "root")
+    monkeypatch.setattr(delivery, "ensure_author_folder",
+                        lambda queue, task, token, root, **kw: calls.append(("author", root)) or "smith")
     monkeypatch.setattr(delivery.drive, "search_files", lambda *a, **kw: [])
-    monkeypatch.setattr(delivery, "resume_import", lambda *a, **kw: calls.append("upload") or "doc")
+    monkeypatch.setattr(delivery, "resume_import",
+                        lambda queue, task, token, folder, path, **kw: calls.append(("upload", folder)) or "doc")
     monkeypatch.setattr(delivery, "verify_document", lambda *a, **kw: "https://docs.google.com/document/d/doc/edit")
-    monkeypatch.setattr(delivery, "deliver_guides", lambda *a, **kw: calls.append("guides"))
     task = deliver(queue, task, queue.root.parent, token="google")
     assert task["state"] == "complete" and delivery.delivery_key(task).endswith("-v4")
+    assert task["folder_url"].endswith("/smith")
     deliver(queue, task, queue.root.parent, token="google")
-    assert calls == ["upload", "guides"]
+    assert calls == [("author", "root"), ("upload", "smith")]
 
 
 def test_delivery_is_withheld_from_an_unbound_package(queued, monkeypatch):
@@ -536,7 +544,10 @@ def test_delivery_is_withheld_from_an_unbound_package(queued, monkeypatch):
 def test_readback_requires_every_paragraph_and_the_warning():
     from app import teaser_delivery as delivery
     draft = package()
-    body = "\n".join([AUTHOR_WARNING] + [p for t in draft.teasers for p in t.paragraphs])
+    from docproof.teasers import guide
+    from docproof.teasers.document import GUIDE_TITLE
+    body = "\n".join([AUTHOR_WARNING, GUIDE_TITLE] + [p for t in draft.teasers for p in t.paragraphs] +
+                     ["\t".join(row) for row in guide.STORY + guide.CRAFT])
     meta = {"mimeType": delivery.drive.GOOGLE_DOC_MIME, "parents": ["folder"], "webViewLink": "https://x"}
     def opener(request):
         return io.BytesIO(body.encode() if "export" in request.full_url else json.dumps(meta).encode())
@@ -544,29 +555,6 @@ def test_readback_requires_every_paragraph_and_the_warning():
     body = body.replace(AUTHOR_WARNING, "")
     with pytest.raises(TeaserError, match="missing"):
         delivery.verify_document("token", "doc", draft, "folder", opener=opener)
-
-
-def test_delivery_waits_for_both_guides_and_reuses_saved_ids(queued, monkeypatch):
-    from app import teaser_delivery as delivery
-    queue, _, task = queued
-    uploaded, records = [], {}
-    def upload(token, folder_id, path, **kwargs):
-        file_id = Path(path).suffix[1:]
-        uploaded.append(file_id)
-        records[file_id] = {"mimeType": kwargs["mime_type"], "parents": [folder_id],
-                            "md5Checksum": hashlib.md5(Path(path).read_bytes()).hexdigest(),
-                            "webViewLink": "https://drive.google.com/file/d/" + file_id}
-        return file_id
-    monkeypatch.setattr(delivery.drive, "search_files", lambda *a, **k: [])
-    monkeypatch.setattr(delivery.drive, "upload", upload)
-    monkeypatch.setattr(delivery.drive, "_json_call",
-                        lambda request, **k: records[request.full_url.split("/files/")[1].split("?")[0]])
-    delivery.deliver_guides(queue, task, "token", "folder")
-    delivery.deliver_guides(queue, task, "token", "folder")
-    assert uploaded == ["xlsx", "pdf"] and task["guide_url"].endswith("/pdf")
-    records["pdf"]["md5Checksum"] = "wrong"
-    with pytest.raises(ValueError, match="complete two-page guide"):
-        delivery.deliver_guides(queue, task, "token", "folder")
 
 
 def test_folder_search_rejects_case_insensitive_name_match(queued, monkeypatch):
@@ -582,6 +570,56 @@ def test_folder_search_rejects_case_insensitive_name_match(queued, monkeypatch):
     assert delivery.ensure_folder(queue, "token") == "new"
     assert delivery.ensure_folder(queue, "token") == "new"
     assert created == ["author teasers"]
+
+
+def test_each_author_gets_one_subfolder_found_by_name_or_made_once(queued, monkeypatch):
+    from app import teaser_delivery as delivery
+    queue, _, task = queued
+    assert delivery.author_name(task) == "Smith"
+    folders, created = {}, []
+    def find_children(token, parent, *, name, folders_only, **kw):
+        return [SimpleNamespace(id=i, name=n) for i, (n, p) in folders.items() if n == name and p == parent]
+    def create_folder(token, parent, name, **kw):
+        created.append(name)
+        folders["f" + str(len(created))] = (name, parent)
+        return "f" + str(len(created))
+    def get_file(token, file_id, **kw):
+        name, parent = folders[file_id]
+        return SimpleNamespace(id=file_id, name=name, is_folder=True, parents=[parent])
+    monkeypatch.setattr(delivery.drive, "find_children", find_children)
+    monkeypatch.setattr(delivery.drive, "create_folder", create_folder)
+    monkeypatch.setattr(delivery.drive, "get_file", get_file)
+    assert delivery.ensure_author_folder(queue, task, "token", "root") == "f1"
+    assert delivery.ensure_author_folder(queue, task, "token", "root") == "f1"
+    other = {**task, "id": "b" * 32, "book_label": "Smith - Book Two"}
+    other.pop("author_folder_id", None)
+    assert delivery.ensure_author_folder(queue, other, "token", "root") == "f1"
+    assert created == ["Smith"]
+
+
+def test_books_delivered_as_separate_files_are_redelivered_as_one_document(queued, monkeypatch):
+    from app import teaser_delivery as delivery
+    queue, _, task = queued
+    # A v3 book: Sol's storysheet, a version-2 package and three separate files in the shared folder.
+    task.update(version=3, storysheet={"title": "The Ferry Ledger", "author": ""},
+                drafts=[{"content": {"version": 2, "teasers": [t.model_dump() for t in package().teasers],
+                                     "opening_hooks": [], "editorial_note": ""}}],
+                document_id="old-doc", guide_xlsx_id="old-xlsx", guide_pdf_id="old-pdf", guide_url="x")
+    queue.save(task, "complete")
+    published, trashed = [], []
+    def publish(queue_, task_, token, draft, **kw):
+        published.append(draft)
+        task_.update(document_id="new-doc", combined=True)
+        queue_.save(task_, "complete")
+        return queue_.get(task_["id"])
+    monkeypatch.setattr(delivery, "publish", publish)
+    monkeypatch.setattr(delivery.drive, "trash", lambda token, file_id, **kw: trashed.append(file_id))
+    task = delivery.redeliver(queue, queue.get(task["id"]), queue.root.parent, token="google")
+    assert published[0].title == "The Ferry Ledger" and published[0].teasers == package().teasers
+    assert trashed == ["old-doc", "old-xlsx", "old-pdf"] and "guide_url" not in task
+    # Running it again publishes nothing new and never trashes the combined document.
+    delivery.redeliver(queue, task, queue.root.parent, token="google")
+    assert len(published) == 1 and "new-doc" not in trashed
 
 
 def test_google_upload_recovers_lost_completion_without_second_document(queued, tmp_path):
