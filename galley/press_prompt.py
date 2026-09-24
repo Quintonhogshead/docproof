@@ -117,9 +117,10 @@ of Oxford versus generic the university; south as direction versus West Coast
 as a proper region. Preserve intentional display capitalization and heading
 styles. Long-work titles—books, films, plays, albums, TV series, newspapers,
 paintings and video games—take italics where they are actually titles in roman
-text. Do not italicize an ordinary phrase, an already italic title, or a whole
-paragraph. Short works use the variant's quotation marks. Formatting evidence
-must establish roman text; unknown/inherited formatting is not proof of absence.""",
+text. Italicize the title alone: never an ordinary phrase, an already italic
+title, or the sentence, paragraph or note around a title. Short works use the
+variant's quotation marks. Formatting evidence must establish roman text;
+unknown/inherited formatting is not proof of absence.""",
     "dialogue": """Examine dialogue tags systematically, not just obvious capitalization.
 For a closing quote followed by he/she/they/we/it/you and a real reporting verb:
 comma, question mark, exclamation mark or ellipsis + lowercase pronoun is valid;
@@ -212,10 +213,14 @@ extra passes or instructions to other agents. Galley owns scheduling, tracked
 changes, the change report, source-preservation audits and final certification.
 For a confirmed roman long-work title use category=format, action=edit,
 replacement exactly equal to quote; this means italicize that exact title.
-No other formatting operation is supported. Resolve all assigned comments:
-drop false, duplicate, stylistic, stale, already corrected or book-answerable
-questions; retain only specific necessary author decisions. Do not invent
-queries to explain limitations. Correct text or leave it, with precision first.
+The quote is the title ALONE (Inception, not "the spinning dreidel in
+Inception."): never the sentence, clause, paragraph or note that names it, and
+nothing outside the title itself (the film, an author's name, the sentence's
+full stop). Code rejects a longer span. No other formatting operation is
+supported. Resolve all assigned comments: drop false, duplicate, stylistic,
+stale, already corrected or book-answerable questions; retain only specific
+necessary author decisions. Do not invent queries to explain limitations.
+Correct text or leave it, with precision first.
 """
 
 FINAL_WALKTHROUGH = """FINAL WALK-THROUGH SCOPE (this read only)
