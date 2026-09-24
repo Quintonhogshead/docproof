@@ -45,6 +45,12 @@ respell:
   moustache: mustache
   moustaches: mustaches
   pyjamas: pajamas
+  catalogue: catalog
+  catalogued: cataloged
+  catalogues: catalogs
+  cataloguing: cataloging
+  ochre: ocher
+  ochres: ochers
 authorities:
   - The Chicago Manual of Style, 17th edition
   - Merriam-Webster, for spelling
