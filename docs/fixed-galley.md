@@ -72,7 +72,12 @@ every Opus read into a skipped review.
    the number stage and the meaning/correction checks — and finishes without
    the prose stages or requiring a ChatGPT login. In a mixed book the
    whole-book readers see the verse too, and their verse proposals pass the
-   same mechanics-only gate.
+   same mechanics-only gate. A whole-book poetry verdict from the samples is
+   not trusted when the book is shaped like prose — more than 10 percent of
+   its paragraphs hold two sentences on one long line, or any line is a
+   "Chapter N" heading (the Black memoir, 2026-09-24) — and every paragraph
+   is classified instead. A book that does take the verse route says
+   "Routed as verse" in its outcome reason and at the top of its report.
 3. Opus creates the Story Sheet, then opens the proofread (`opening_read`):
    it reads the whole untouched manuscript under the final readers' brief —
    the same windowed read, walk-through scope and focused sites as the final

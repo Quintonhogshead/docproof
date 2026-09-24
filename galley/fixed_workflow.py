@@ -833,7 +833,7 @@ class FixedWorkflow:
         return self.editorial_policy
 
     def _classify(self):
-        from galley.fixed_policy import poetry_samples
+        from galley.fixed_policy import poetry_samples, prose_shape
         samples = poetry_samples(self.original)
         schema = _object(classification=_enum("poetry", "prose", "mixed", "uncertain"), reason=S)
         result = self._ask("poetry", SONNET,
@@ -842,6 +842,16 @@ class FixedWorkflow:
         if result is None:
             self.poetry_ids = set(self.original)
             result = {"classification": "unavailable", "reason": "Protect all text with the verse route: house mechanics only."}
+        if result["classification"] == "poetry":
+            # Six samples cannot send a whole book down the verse route when
+            # the book itself is shaped like prose: classify every paragraph.
+            shape = prose_shape(self.original)
+            if shape["prose_shaped"]:
+                result = {"classification": "mixed", "downgraded_from": "poetry", "shape": shape,
+                          "reason": (f"Samples read as poetry, but {shape['prose_paragraphs']} of "
+                                     f"{shape['paragraphs']} paragraphs are prose-shaped and "
+                                     f"{shape['chapter_headings']} are chapter headings; classified "
+                                     f"paragraph by paragraph. Sample verdict: {result['reason']}")}
         if result["classification"] == "poetry":
             self.poetry_ids = set(self.original)
         elif result["classification"] in {"mixed", "uncertain"}:

@@ -278,6 +278,14 @@ def _audit_stage(version):
     return "final_astra" if version in _FINAL_GATE_VERSIONS else "astra"
 
 
+# A whole book on the verse route skipped every prose reading, so a person
+# should see that before it is delivered (Black, 2026-09-24: a memoir went
+# out "Proofing Complete" with no spelling, grammar or Astra reading).
+ROUTED_AS_VERSE = ("Routed as verse: the whole book was classified as poetry and took house mechanics "
+                   "only, with no Story Sheet, grammar or spelling sweeps, sentence repair, whole-book "
+                   "readings or Astra verdict. Confirm it is a poetry collection before delivery.")
+
+
 def package_outcome(result) -> tuple[str, str]:
     """The delivery outcome and its reason for a completed fixed result.
 
@@ -294,6 +302,8 @@ def package_outcome(result) -> tuple[str, str]:
         reason = review["reason"]
     else:
         reason = "Fixed proofreading complete; every required reading and output check passed."
+    if result.get("poetry_only"):
+        reason = ROUTED_AS_VERSE + " " + reason
     if skipped:
         reason += (f" {skipped} model review(s) were unavailable and skipped; their unverified suggestions "
                    "were discarded and the skipped reads are recorded in the review evidence.")
@@ -427,6 +437,7 @@ def _report(result, details, receipt=None):
         "poetry_complete": "Verse mechanics proofread complete",
         "walkthrough_questions": "Final readers' questions put to Astra's review"}
     lines = ["# Galley proofreading report", "", f"Scope: {scope}.", "",
+             *([ROUTED_AS_VERSE, ""] if result["poetry_only"] else []),
              f"{len(edits)} tracked corrections across {paragraphs} paragraphs; {len(result['questions'])} author questions.", "",
              "## Corrections", ""]
     for x in edits:
