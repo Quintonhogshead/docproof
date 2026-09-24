@@ -1175,7 +1175,8 @@ def _discover(token: str, hs_token: str | None, ws: WatchSettings,
     listing — never one shared one — because a book flagged "Ready for Proofing"
     must not fall into the formatting pass's ungated `run_prep`."""
     want = [p for p in (ws.hubspot_status_property, ws.hubspot_key_property,
-                        ws.hubspot_first_property, ws.hubspot_last_property)
+                        ws.hubspot_first_property, ws.hubspot_last_property,
+                        ws.hubspot_corrections_book_property)
             if p]
     try:
         ready = hubspot.find_by_value(
@@ -1196,7 +1197,7 @@ def _discover(token: str, hs_token: str | None, ws: WatchSettings,
         seen_records.add(record.id)
         _discover_ready(token, ws, record, state, listing, routes, cache,
                         stage=stage, opener=opener, report=report,
-                        dry_run=dry_run)
+                        dry_run=dry_run, hs_token=hs_token or "")
 
     # A book already in flight — its record id is on the state file and it is
     # not yet delivered — is re-listed from the folder it recorded, whether or
@@ -1216,7 +1217,8 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
                     listing: list[DriveFile], routes: dict[str, str],
                     cache: dict[tuple[str, str], str | None], *,
                     stage: DiscoveryStage, opener,
-                    report: TickReport, dry_run: bool) -> None:
+                    report: TickReport, dry_run: bool,
+                    hs_token: str = "") -> None:
     """One ready record: resolve its author's folder, find the one manuscript in
     it, and route that manuscript's outputs back into the same folder.
 
@@ -1227,12 +1229,30 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
     first = (record.properties.get(ws.hubspot_first_property) or "").strip()
     last = (record.properties.get(ws.hubspot_last_property) or "").strip()
     if not first or not last:
-        reason = ("its HubSpot record has no first or last name, so DocProof "
-                  "cannot tell which folder is the author's.")
-        log.warning("Needs a person: record %s (%s)", record.id, reason)
-        report.needs_human.append((f"HubSpot record {record.id}", reason))
-        report.waiting += 1
-        return
+        # The project always has its title; the book's other records carry the
+        # author a freshly made ready record may not have yet.
+        prop = ws.hubspot_corrections_book_property
+        title = (record.properties.get(prop) or "").strip() if prop else ""
+        found = hubspot.author_by_title(
+            hs_token, ws.hubspot_object, prop, ws.hubspot_first_property,
+            ws.hubspot_last_property, title, exclude_id=record.id,
+            opener=opener)
+        if found is None:
+            if title:
+                reason = (f"its HubSpot record has no first or last name, and no "
+                          f"other record titled '{title}' names one author, so "
+                          f"DocProof cannot tell which folder is the author's.")
+            else:
+                reason = ("its HubSpot record has no first or last name, so "
+                          "DocProof cannot tell which folder is the author's.")
+            label = f"HubSpot record {record.id}" + (f" ('{title}')" if title else "")
+            log.warning("Needs a person: %s (%s)", label, reason)
+            report.needs_human.append((label, reason))
+            report.waiting += 1
+            return
+        first, last = found
+        log.info("Record %s has no author name; its title %r names %s %s on "
+                 "the project's other records.", record.id, title, first, last)
 
     key = (first.casefold(), last.casefold())
     if key not in cache:

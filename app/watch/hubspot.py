@@ -178,6 +178,39 @@ def find_by_value(token: str, object_type: str, prop: str, value: str, *,
             return records
 
 
+def author_by_title(token: str, object_type: str, title_prop: str,
+                    first_prop: str, last_prop: str, title: str, *,
+                    exclude_id: str = "", opener=_open_url
+                    ) -> tuple[str, str] | None:
+    """The one author the other records with exactly this title name.
+
+    A ready record is often made before anyone types the author's name in, but
+    the project always has its title, and the book's other records carry the
+    author. None when nothing else names an author, when two records name
+    different ones (a shared title is never guessed at), or when HubSpot does
+    not answer; a bad token still raises, as everywhere."""
+    if not (token and title and title_prop and first_prop and last_prop):
+        return None
+    try:
+        records = find_by_value(token, object_type, title_prop, title,
+                                want_properties=[first_prop, last_prop],
+                                opener=opener)
+    except HubSpotAuthError:
+        raise
+    except HubSpotError as e:
+        log.info("Could not look up the records titled %r (%s).", title, e)
+        return None
+    named: dict[str, tuple[str, str]] = {}
+    for record in records:
+        if record.id == exclude_id:
+            continue
+        first = (record.properties.get(first_prop) or "").strip()
+        last = (record.properties.get(last_prop) or "").strip()
+        if first and last:
+            named[f"{first} {last}".casefold()] = (first, last)
+    return next(iter(named.values())) if len(named) == 1 else None
+
+
 def set_properties(token: str, object_type: str, record_id: str,
                    props: dict[str, str], *, allow, opener=_open_url) -> None:
     """Write these properties onto the record, leaving the rest as they were.
