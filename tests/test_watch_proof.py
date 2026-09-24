@@ -499,7 +499,7 @@ def test_a_book_1_for_the_wrong_surname_is_never_read(tmp_path, galley):
     A `Book 1` in Johnson's folder that belongs to somebody else is not
     Johnson's book, and a proofread costs a novel's worth of model time, so it
     is left for a person rather than guessed at."""
-    ws = sub_proof_ws(require_source_label=False)
+    ws = sub_proof_ws(require_source_label=False, missing_source_grace_hours=0)
     opener = fake_drive({SUB: author_folder("Quinton Johnson"),
                          "m-1": in_sub("Okafor - Book 1.docx")},
                         docx=MANUSCRIPT,

@@ -461,6 +461,12 @@ class WatchSettings:
     # seconds`), so an install running both reads the same wait either way.
     # See `corrections.hold_or_release`.
     corrections_quiet_seconds: int = 10800
+    # A ready author whose folder has no source file yet ("flagged ready but no
+    # Book Original") is only reported, and emailed, once it has stayed missing
+    # this long: people flip the status to ready before the manuscript is in
+    # Drive, so the first passes after a flip are usually "not uploaded yet".
+    # 0 reports it on the first pass, as before.
+    missing_source_grace_hours: float = 24.0
     # Only read in `corrections_intake == "hubspot"` — form mode always reads
     # the form itself, by definition, so this switch has nothing left to do
     # there. Off by default, matching the native adapter's own switch: a ready
